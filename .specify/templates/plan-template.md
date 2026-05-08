@@ -31,7 +31,12 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- Ensure complete traceability for all operations (Principle I: Trazabilidad completa)
+- Implement data security measures for sensitive information (Principle II: Seguridad de datos)
+- Design intuitive and responsive user interface (Principle III: Interfaz intuitiva)
+- Write maintainable and scalable code (Principle IV: Código mantenible y escalable)
+- Ensure compliance with Ley de Contrataciones N° 32069 (Principle V: Cumplimiento normativo)
+- Adhere to technical constraints: Frontend (HTML5, CSS3, Bootstrap 5, JavaScript), Backend (Python con Django), Database (PostgreSQL), Authentication (JWT), Reports (PDF via html2pdf, Excel via SheetJS)
 
 ## Project Structure
 

@@ -1,50 +1,62 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+
+Version change: none → 1.0.0
+
+List of modified principles: All principles added (5 new)
+
+Added sections: Technical Constraints, Development Workflow
+
+Removed sections: none
+
+Templates requiring updates: plan-template.md (constitution checks need to be added for new principles)
+
+Follow-up TODOs: none
+-->
+
+# SGC Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Trazabilidad completa
+Cada operación debe ser registrada y auditable
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Seguridad de datos
+Protección de información sensible
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Interfaz intuitiva
+Experiencia de usuario responsive y amigable
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Código mantenible y escalable
+Facilitar futuras mejoras
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Cumplimiento normativo
+Adherencia a la Ley de Contrataciones N° 32069 vigente en el PERU
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Additional Constraints
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+| # | Principio | Descripción |
+| 1 | Trazabilidad completa | Cada operación debe ser registrada y auditable |
+| 2 | Seguridad de datos | Protección de información sensible |
+| 3 | Interfaz intuitiva | Experiencia de usuario responsive y amigable |
+| 4 | Código mantenible y escalable | Facilitar futuras mejoras |
+| 5 | Cumplimiento normativo | Adherencia a la Ley de Contrataciones N° 32069 |
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
-
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+## Technical Constraints
+Frontend: HTML5, CSS3, Bootstrap 5, JavaScript Backend: Python con Django Base de datos: PostgreSQL Autenticación: JWT Reportes: PDF (html2pdf) y Excel (SheetJS)
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+La constitución prevalece sobre cualquier otra práctica de desarrollo
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+Las modificaciones requieren:
+- Documentación detallada del cambio
+- Aprobación del administrador del sistema
+- Plan de migración con impacto evaluado
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+Versiones de la constitución deben ser numeradas y trackeadas en Git
+
+Revisión semestral obligatoria de la constitución
+
+Cualquier violación debe ser justificada por escrito
+
+**Version**: 1.0.0 | **Ratified**: 2026-01-15 | **Last Amended**: 2026-05-07
