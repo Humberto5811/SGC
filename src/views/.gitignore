@@ -1,0 +1,14 @@
+# Dependencias
+node_modules/
+
+# Archivos de build
+dist/
+build/
+
+# Archivos temporales
+*.log
+*.tmp
+
+# Configuración local
+.env
+.vscode/
