@@ -1,0 +1,31 @@
+:root {
+  --bg-page: #f8f9fa;
+  --sidebar-bg: #ffffff;
+}
+
+body {
+  background-color: var(--bg-page);
+  color: #212529;
+}
+
+.sidebar {
+  min-height: calc(100vh - 56px);
+}
+
+.nav-link.active {
+  font-weight: 600;
+  background-color: #e9ecef;
+  border-radius: 0.35rem;
+}
+
+.card {
+  border: 0;
+}
+
+.table-responsive {
+  overflow-x: auto;
+}
+
+.alert {
+  margin-top: 1rem;
+}
