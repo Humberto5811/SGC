@@ -1,94 +1,34 @@
-// src/views/decContratacionesView.js
-import { renderTable } from '../components/DataTable.js';
-import { contratacionService } from '../services/contratacionService.js';
-
 function renderDecContratacionesView() {
-  const contrataciones = contratacionService.list();
-  const rows = contrataciones.map((item) => [
-    item.id,
-    item.tipo || '-',
-    item.estado || '-',
-    new Date(item.createdAt).toLocaleDateString(),
-  ]);
-
   return `
-    <div class="d-flex justify-content-between align-items-center mb-4">
-      <div>
-        <h1 class="h3">Contrataciones - DEC</h1>
-        <p class="text-muted">Cree, publique y gestione procesos de contratación.</p>
-      </div>
-      <button class="btn btn-primary" id="newContratacionBtn">Nueva contratación</button>
-    </div>
-
-    <div class="card shadow-sm mb-4">
-      <div class="card-body">
-        ${renderTable(['ID', 'Tipo', 'Estado', 'Creado'], rows)}
-      </div>
-    </div>
-
-    <div id="contratacionFormContainer"></div>
-  `;
-}
-
-function showContratacionForm() {
-  const container = document.getElementById('contratacionFormContainer');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="card shadow-sm mt-4">
-      <div class="card-body">
-        <h5 class="card-title">Nueva contratación</h5>
-        <form id="contratacionForm">
-          <div class="row">
-            <div class="col-md-6 mb-3">
-              <label class="form-label">Tipo de contratación</label>
-              <select name="tipo" class="form-select" required>
-                <option value="">Seleccione</option>
-                <option value="CON_REQUERIMIENTO">Con requerimiento</option>
-                <option value="SIN_REQUERIMIENTO">Sin requerimiento</option>
-              </select>
-            </div>
-            <div class="col-md-6 mb-3">
-              <label class="form-label">Descripción</label>
-              <input name="descripcion" class="form-control" required />
-            </div>
-          </div>
-          <button type="submit" class="btn btn-success">Guardar contratación</button>
-        </form>
+    <div class="container mt-4">
+      <h2>Gestión de Contrataciones</h2>
+      <p class="text-muted">Módulo para la gestión de contrataciones - DEC</p>
+      
+      <div class="card mt-4">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0">Procesos de Contratación</h5>
+        </div>
+        <div class="card-body">
+          <button class="btn btn-success mb-3" onclick="alert(\'Nuevo proceso de contratación en desarrollo\')">
+            + Nuevo Proceso
+          </button>
+          <table class="table table-striped">
+            <thead>
+              <tr><th>N° Proceso</th><th>Descripción</th><th>Tipo</th><th>Estado</th><th>Monto</th><th>Acciones</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>CON-001</td><td>Compra de equipos</td><td>Bienes</td><td><span class="badge bg-info">En proceso</span></td><td>S/ 15,000</td><td><button class="btn btn-sm btn-primary">Ver</button></td></tr>
+              <tr><td>CON-002</td><td>Servicio de limpieza</td><td>Servicios</td><td><span class="badge bg-success">Adjudicado</span></td><td>S/ 45,000</td><td><button class="btn btn-sm btn-primary">Ver</button></td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   `;
-
-  const form = document.getElementById('contratacionForm');
-  if (form) {
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const tipo = form.tipo.value;
-      const descripcion = form.descripcion.value.trim();
-      if (!tipo || !descripcion) return;
-
-      contratacionService.create({
-        tipo,
-        descripcion,
-        estado: 'BORRADOR',
-        createdAt: Date.now()
-      });
-
-      // 🔹 Re-renderizamos la vista para actualizar la tabla
-      const app = document.getElementById('app');
-      if (app) {
-        app.innerHTML = renderDecContratacionesView();
-        initDecContratacionesView();
-      }
-    });
-  }
 }
 
-function initDecContratacionesView() {
-  const button = document.getElementById('newContratacionBtn');
-  if (button) {
-    button.addEventListener('click', () => showContratacionForm());
-  }
+function initDecContratacionesView() { 
+  console.log("Vista de Contrataciones inicializada");
 }
 
 export { renderDecContratacionesView, initDecContratacionesView };

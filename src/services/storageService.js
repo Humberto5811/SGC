@@ -1,38 +1,22 @@
-import { STORAGE_KEYS, DEFAULT_USERS } from '../utils/constants.js';
-
-const defaultData = {
-  [STORAGE_KEYS.USERS]: DEFAULT_USERS,
-  [STORAGE_KEYS.REQUERIMIENTOS]: [],
-  [STORAGE_KEYS.CONTRATACIONES]: [],
-};
-
-class StorageService {
-  initialize() {
-    Object.keys(defaultData).forEach((key) => {
-      if (!localStorage.getItem(key)) {
-        localStorage.setItem(key, JSON.stringify(defaultData[key]));
-      }
-    });
-  }
-
-  get(key) {
-    const raw = localStorage.getItem(key);
-    try {
-      return raw ? JSON.parse(raw) : null;
-    } catch (error) {
-      console.error('Storage parse error', key, error);
-      return null;
+export const storageService = {
+  initialize: () => {
+    if (!localStorage.getItem('users')) {
+      const defaultUsers = [
+        { dni: 'admin', nombre: 'Administrador', rol: 'admin', email: 'admin@sgc.pe' },
+        { dni: 'au', nombre: 'Usuario AU', rol: 'au', email: 'au@sgc.pe' },
+        { dni: 'dec', nombre: 'Usuario DEC', rol: 'dec', email: 'dec@sgc.pe' }
+      ];
+      localStorage.setItem('users', JSON.stringify(defaultUsers));
+      console.log('✅ Usuarios inicializados');
     }
-  }
-
-  set(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
-  }
-
-  remove(key) {
-    localStorage.removeItem(key);
-  }
-}
-
-const storageService = new StorageService();
-export { storageService };
+    if (!localStorage.getItem('areas')) {
+      localStorage.setItem('areas', JSON.stringify(['Administración', 'Logística', 'Operaciones']));
+    }
+    if (!localStorage.getItem('metas')) {
+      localStorage.setItem('metas', JSON.stringify(['Meta 1', 'Meta 2', 'Meta 3']));
+    }
+  },
+  getUsers: () => JSON.parse(localStorage.getItem('users') || '[]'),
+  getAreas: () => JSON.parse(localStorage.getItem('areas') || '[]'),
+  getMetas: () => JSON.parse(localStorage.getItem('metas') || '[]')
+};

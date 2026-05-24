@@ -1,22 +1,18 @@
-import { authService } from '../services/authService.js';
-
-function renderNavbar() {
-  const user = authService.getCurrentUser();
+﻿export function renderNavbar() {
+  const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
   return `
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary sticky-top">
+    <nav class="navbar navbar-dark bg-dark fixed-top">
       <div class="container-fluid">
-        <a class="navbar-brand" href="#/dashboard">SGC</a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent">
-          <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarContent">
-          <ul class="navbar-nav me-auto mb-2 mb-lg-0"></ul>
-          <span class="navbar-text text-white me-3">${user ? `Hola, ${user.nombre}` : 'Invitado'}</span>
-          ${user ? '<button class="btn btn-outline-light btn-sm" data-action="logout">Cerrar sesión</button>' : ''}
+        <span class="navbar-brand">
+          SGC - Sistema de Gestión de Contrataciones
+        </span>
+        <div class="d-flex align-items-center">
+          ${currentUser ? `<span class="text-white me-3 d-none d-sm-inline">Rol: ${currentUser.rol}</span>` : ''}
+          ${currentUser ? `<span class="text-white me-3 d-none d-md-inline">${currentUser.nombre || currentUser.dni}</span>` : ''}
+          ${currentUser ? `<button class="btn btn-outline-light btn-sm" data-action="logout">Salir</button>` : ''}
         </div>
       </div>
     </nav>
+    <div style="height: 56px;"></div>
   `;
 }
-
-export { renderNavbar };

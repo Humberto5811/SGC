@@ -1,30 +1,75 @@
-const STORAGE_KEYS = {
-  USERS: 'sgc_users',
-  CURRENT_USER: 'sgc_current_user',
-  REQUERIMIENTOS: 'sgc_requerimientos',
-  CONTRATACIONES: 'sgc_contrataciones',
-};
-
-const APP_ROLES = {
-  ADMIN: 'ADMIN',
-  DEC: 'DEC',
-  AU: 'AU',
-  PROVEEDOR: 'PROVEEDOR',
-};
-
-const ROUTE_ROLES = {
+export const ROUTE_ROLES = {
   login: [],
-  dashboard: [],
-  'au/requerimientos': [APP_ROLES.AU],
-  'dec/contrataciones': [APP_ROLES.DEC],
-  'admin/usuarios': [APP_ROLES.ADMIN],
+  dashboard: ['admin', 'usuario', 'au', 'dec'],
+  'admin/usuarios': ['admin'],
+  'au/requerimientos/registro': ['au', 'admin'],
+  'au/requerimientos/evaluacion': ['au', 'admin'],
+  'dec/actos': ['dec', 'admin'],
+  'dec/invitaciones': ['dec', 'admin'],
+  'dec/consultas': ['dec', 'admin'],
+  'dec/cotizaciones': ['dec', 'admin'],
+  'dec/ccp': ['dec', 'admin'],
+  'dec/cuadro': ['dec', 'admin'],
+  ejecucion: ['dec', 'admin', 'au'],
+  'ejecucion/registro': ['dec', 'admin'],
+  'ejecucion/presentacion': ['dec', 'admin'],
+  'ejecucion/ampliacion': ['dec', 'admin'],
+  'ejecucion/pago': ['dec', 'admin'],
+  'mantenimiento/catalogo': ['admin'],
+  'mantenimiento/fichas': ['admin'],
+  'mantenimiento/configuracion': ['admin'],
+  'mantenimiento/metas': ['admin'],
+  'mantenimiento/usuarios': ['admin'],
+  'mantenimiento/ordenes': ['admin'],
+  'mantenimiento/siaf': ['admin'],
+  'mantenimiento/bienes': ['admin'],
+  'mantenimiento/servicios': ['admin'],
+  'mantenimiento/locacion': ['admin'],
+  'mantenimiento/licitaciones': ['admin'],
+  'mantenimiento/concurso': ['admin'],
+  'mantenimiento/logotipos': ['admin'],
+  'mantenimiento/entidad': ['admin']
 };
 
-const DEFAULT_USERS = [
-  { id: 'u1', dni: '12345678', nombre: 'Admin General', rol: APP_ROLES.ADMIN, email: 'admin@sgc.pe', password: 'admin123' },
-  { id: 'u2', dni: '23456789', nombre: 'Operador DEC', rol: APP_ROLES.DEC, email: 'dec@sgc.pe', password: 'dec123' },
-  { id: 'u3', dni: '34567890', nombre: 'Operador AU', rol: APP_ROLES.AU, email: 'au@sgc.pe', password: 'au123' },
-  { id: 'u4', dni: '45678901', nombre: 'Proveedor Simulado', rol: APP_ROLES.PROVEEDOR, email: 'prov@sgc.pe', password: 'prov123' },
+export const DEFAULT_USERS = [
+  { dni: 'admin', nombre: 'Administrador', rol: 'admin', email: 'admin@sgc.pe' },
+  { dni: 'au', nombre: 'Usuario AU', rol: 'au', email: 'au@sgc.pe' },
+  { dni: 'dec', nombre: 'Usuario DEC', rol: 'dec', email: 'dec@sgc.pe' },
+  { dni: 'usuario', nombre: 'Usuario General', rol: 'usuario', email: 'usuario@sgc.pe' }
 ];
 
-export { STORAGE_KEYS, APP_ROLES, ROUTE_ROLES, DEFAULT_USERS };
+export const DEFAULT_AREAS = ['Administraci?n', 'Log?stica', 'Operaciones', 'Finanzas'];
+export const DEFAULT_METAS = ['Meta 1', 'Meta 2', 'Meta 3'];
+
+export const STORAGE_KEYS = {
+  USERS: 'users',
+  CURRENT_USER: 'currentUser',
+  AREAS: 'areas',
+  METAS: 'metas',
+  REQUERIMIENTOS: 'requerimientos',
+  CONTRATACIONES: 'contrataciones',
+  EJECUCIONES: 'ejecuciones',
+  CATALOGO: 'catalogo',
+  FICHAS_TECNICAS: 'fichasTecnicas',
+  CONFIGURACION_DOC: 'configuracionDoc',
+  ORDENES: 'ordenes',
+  SIAF: 'siaf',
+  LOGOTIPOS: 'logotipos',
+  ENTIDAD: 'entidad'
+};
+
+export const TIPOS_CONTRATACION = {
+  BIENES: 'bienes',
+  SERVICIOS: 'servicios',
+  LOCACION: 'locacion',
+  LICITACION: 'licitacion',
+  CONCURSO: 'concurso'
+};
+
+export const ESTADOS = {
+  PENDIENTE: 'pendiente',
+  EN_PROCESO: 'en_proceso',
+  APROBADO: 'aprobado',
+  RECHAZADO: 'rechazado',
+  COMPLETADO: 'completado'
+};

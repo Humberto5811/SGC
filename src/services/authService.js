@@ -1,38 +1,47 @@
-import { STORAGE_KEYS } from '../utils/constants.js';
-import { storageService } from './storageService.js';
-import { state } from '../state.js';
-
-class AuthService {
-  login(dni, password) {
-    const users = storageService.get(STORAGE_KEYS.USERS) || [];
-    const user = users.find((item) => item.dni === dni && item.password === password);
+export const authService = {
+  getCurrentUser: () => {
+    const user = localStorage.getItem('currentUser');
+    return user ? JSON.parse(user) : null;
+  },
+  
+  setCurrentUser: (user) => {
+    localStorage.setItem('currentUser', JSON.stringify(user));
+  },
+  
+  login: (dni, password) => {
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const user = users.find(u => u.dni === dni);
     if (user) {
-      storageService.set(STORAGE_KEYS.CURRENT_USER, user);
-      state.set('currentUser', user);
-      return user;
+      authService.setCurrentUser(user);
+      return { success: true, user };
     }
-    return null;
-  }
-
-  logout() {
-    storageService.remove(STORAGE_KEYS.CURRENT_USER);
-    state.set('currentUser', null);
-  }
-
-  getCurrentUser() {
-    if (state.get('currentUser')) {
-      return state.get('currentUser');
-    }
-    return storageService.get(STORAGE_KEYS.CURRENT_USER);
-  }
-
-  restoreSession() {
-    const user = storageService.get(STORAGE_KEYS.CURRENT_USER);
+    return { success: false, error: 'Usuario no encontrado' };
+  },
+  
+  logout: () => {
+    localStorage.removeItem('currentUser');
+    window.location.hash = '#/login';
+  },
+  
+  isAuthenticated: () => {
+    return authService.getCurrentUser() !== null;
+  },
+  
+  restoreSession: () => {
+    const user = authService.getCurrentUser();
     if (user) {
-      state.set('currentUser', user);
+      return { success: true, user };
     }
+    return { success: false };
+  },
+  
+  hasRole: (role) => {
+    const user = authService.getCurrentUser();
+    return user && user.rol === role;
+  },
+  
+  hasAnyRole: (roles) => {
+    const user = authService.getCurrentUser();
+    return user && roles.includes(user.rol);
   }
-}
-
-const authService = new AuthService();
-export { authService };
+};
