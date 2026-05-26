@@ -5,8 +5,8 @@ function renderLoginView() {
         <div class="col-md-4">
           <div class="card shadow">
             <div class="card-header bg-primary text-white text-center">
-              <h4 class="mb-0">SGC - Sistema de Gesti?n de Contrataciones</h4>
-              <small>Ley N? 32069</small>
+              <h4 class="mb-0">SGC - Sistema de Gesti&oacute;n de Contrataciones</h4>
+              <small>Ley N&ordm; 32069</small>
             </div>
             <div class="card-body">
               <form id="loginForm">
@@ -15,8 +15,8 @@ function renderLoginView() {
                   <input type="text" id="dni" class="form-control" placeholder="Ingrese su DNI" required>
                 </div>
                 <div class="mb-3">
-                  <label class="form-label">Contrase?a</label>
-                  <input type="password" id="password" class="form-control" placeholder="Ingrese su contrase?a" required>
+                  <label class="form-label">Contrase&ntilde;a</label>
+                  <input type="password" id="password" class="form-control" placeholder="Ingrese su contrase&ntilde;a" required>
                 </div>
                 <div id="errorMsg" class="alert alert-danger d-none"></div>
                 <button type="submit" class="btn btn-primary w-100">Ingresar</button>
@@ -40,7 +40,7 @@ function initLoginView() {
       // Obtener usuarios del localStorage
       const users = JSON.parse(localStorage.getItem('users') || '[]');
       
-      // Buscar usuario por DNI (sin validar contrase?a por ahora)
+      // Buscar usuario por DNI (sin validar contrase&ntilde;a por ahora)
       const user = users.find(u => u.dni === dni);
       
       if (user) {
@@ -49,7 +49,7 @@ function initLoginView() {
         console.log('Usuario autenticado:', user);
         // Redirigir al dashboard
         window.location.hash = '#/dashboard';
-        // Forzar recarga de la aplicaci?n
+        // Forzar recarga de la aplicaci&oacute;n
         window.location.reload();
       } else {
         // Mostrar error

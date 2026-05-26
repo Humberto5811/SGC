@@ -49,18 +49,21 @@ import { renderEntidadView, initEntidadView } from './views/institucional/entida
 
 const defaultRoute = 'login';
 
+// Todas las rutas del sistema
 const routes = {
+  // Autenticación
   login: { render: renderLoginView, init: initLoginView },
+  
+  // Dashboard principal
   dashboard: { render: renderDashboardView, init: initDashboardView },
 
-  // Administración
-  'admin/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
-
-  // Requerimientos
+  // ========== REQUERIMIENTOS ==========
+  'requerimientos': { render: renderRegistroRequerimientoView, init: initRegistroRequerimientoView },
   'au/requerimientos/registro': { render: renderRegistroRequerimientoView, init: initRegistroRequerimientoView },
   'au/requerimientos/evaluacion': { render: renderEvaluacionRequerimientoView, init: initEvaluacionRequerimientoView },
 
-  // Contrataciones
+  // ========== CONTRATACIONES ==========
+  'contrataciones': { render: renderActosPreparativosView, init: initActosPreparativosView },
   'dec/actos': { render: renderActosPreparativosView, init: initActosPreparativosView },
   'dec/invitaciones': { render: renderInvitacionesView, init: initInvitacionesView },
   'dec/consultas': { render: renderConsultasView, init: initConsultasView },
@@ -68,37 +71,44 @@ const routes = {
   'dec/ccp': { render: renderCcpView, init: initCcpView },
   'dec/cuadro': { render: renderCuadroComparativoView, init: initCuadroComparativoView },
 
-  // Ejecución
-  ejecucion: { render: renderEjecucionView, init: initEjecucionView },
+  // ========== EJECUCIÓN ==========
+  'ejecucion': { render: renderEjecucionView, init: initEjecucionView },
   'ejecucion/registro': { render: renderRegistroOrdenView, init: initRegistroOrdenView },
   'ejecucion/presentacion': { render: renderPresentacionEntregableView, init: initPresentacionEntregableView },
   'ejecucion/ampliacion': { render: renderAmpliacionResolucionView, init: initAmpliacionResolucionView },
   'ejecucion/pago': { render: renderDerivacionPagoView, init: initDerivacionPagoView },
 
-  // Mantenimiento - Registros de datos
+  // ========== MANTENIMIENTO - REGISTRO DE DATOS ==========
+  'mantenimiento': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
+  'admin/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
+  'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
   'mantenimiento/fichas': { render: renderFichasTecnicasView, init: initFichasTecnicasView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },
   'mantenimiento/metas': { render: renderMetasAreasView, init: initMetasAreasView },
-  'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/ordenes': { render: renderOrdenesView, init: initOrdenesView },
   'mantenimiento/siaf': { render: renderSiafView, init: initSiafView },
 
-  // Mantenimiento - Glosas
+  // ========== MANTENIMIENTO - GLOSAS DE REQUERIMIENTOS ==========
   'mantenimiento/bienes': { render: renderFormatoBienesView, init: initFormatoBienesView },
   'mantenimiento/servicios': { render: renderFormatoServiciosView, init: initFormatoServiciosView },
   'mantenimiento/locacion': { render: renderFormatoLocacionView, init: initFormatoLocacionView },
   'mantenimiento/licitaciones': { render: renderFormatoLicitacionesView, init: initFormatoLicitacionesView },
   'mantenimiento/concurso': { render: renderFormatoConcursoView, init: initFormatoConcursoView },
 
-  // Mantenimiento - Institucional
+  // ========== MANTENIMIENTO - INSTITUCIONAL ==========
   'mantenimiento/logotipos': { render: renderLogotiposView, init: initLogotiposView },
   'mantenimiento/entidad': { render: renderEntidadView, init: initEntidadView }
 };
 
 function parseHash() {
   const hash = location.hash.replace(/^#\/?/, '');
-  return hash || defaultRoute;
+  // Si el hash está vacío, ir a dashboard (si hay usuario) o login
+  if (!hash) {
+    const currentUser = authService.getCurrentUser();
+    return currentUser ? 'dashboard' : 'login';
+  }
+  return hash;
 }
 
 function getCurrentRoute() {
@@ -118,32 +128,53 @@ function canAccessRoute(route, action = 'view') {
 }
 
 function initRouter(onRouteChange) {
+  // Manejar cambio de hash
   window.addEventListener('hashchange', () => {
     const route = getCurrentRoute();
+    
+    // Verificar acceso
     if (!canAccessRoute(route)) {
-      location.hash = '#/dashboard';
+      const currentUser = authService.getCurrentUser();
+      location.hash = currentUser ? '#/dashboard' : '#/login';
       return;
     }
+    
     const routeConfig = routes[route];
     if (routeConfig) {
-      onRouteChange(routeConfig.render, routeConfig.init);
+      onRouteChange();
     } else {
-      location.hash = '#/dashboard';
+      // Ruta no encontrada, ir a dashboard
+      const currentUser = authService.getCurrentUser();
+      location.hash = currentUser ? '#/dashboard' : '#/login';
     }
   });
 
-  if (!location.hash) {
-    location.hash = '#/login';
+  // Inicializar hash si no existe
+  if (!location.hash || location.hash === '#') {
+    const currentUser = authService.getCurrentUser();
+    location.hash = currentUser ? '#/dashboard' : '#/login';
   }
 
+  // Verificar acceso a la ruta inicial
   const route = getCurrentRoute();
-  const routeConfig = routes[route];
-  if (routeConfig) {
-    onRouteChange(routeConfig.render, routeConfig.init);
+  if (!canAccessRoute(route)) {
+    const currentUser = authService.getCurrentUser();
+    location.hash = currentUser ? '#/dashboard' : '#/login';
   } else {
-    location.hash = '#/dashboard';
+    const routeConfig = routes[route];
+    if (routeConfig) {
+      onRouteChange();
+    } else {
+      const currentUser = authService.getCurrentUser();
+      location.hash = currentUser ? '#/dashboard' : '#/login';
+    }
   }
 }
 
-// 🔹 Exportar funciones y rutas
-export { initRouter, getCurrentRoute, canAccessRoute, routes };
+// Función para obtener la configuración de una ruta
+function getRouteConfig(route) {
+  return routes[route] || null;
+}
+
+// Exportar funciones
+export { initRouter, getCurrentRoute, canAccessRoute, routes, getRouteConfig };

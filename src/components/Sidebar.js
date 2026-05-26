@@ -3,90 +3,132 @@
   const userRole = currentUser?.rol;
   
   const menuStructure = [
-    { path: 'dashboard', label: 'Dashboard', icon: '🏠', roles: ['admin', 'au', 'dec', 'usuario'] },
+    { path: 'dashboard', label: 'Dashboard', icon: 'bi-grid-3x3-gap-fill', roles: ['admin', 'au', 'dec', 'usuario'] },
     { 
-      label: 'Requerimientos', icon: '📋', roles: ['au', 'admin'],
+      label: 'Requerimientos', icon: 'bi-file-text', roles: ['au', 'admin'],
       submenu: [
-        { path: 'au/requerimientos/registro', label: 'Registro de Requerimientos' },
-        { path: 'au/requerimientos/evaluacion', label: 'Evaluación de Requerimientos' }
+        { path: 'au/requerimientos/registro', label: 'Registro de Requerimientos', icon: 'bi-pencil-square' },
+        { path: 'au/requerimientos/evaluacion', label: 'Evaluación de Requerimientos', icon: 'bi-check-circle' }
       ]
     },
     { 
-      label: 'Contrataciones', icon: '📄', roles: ['dec', 'admin'],
+      label: 'Contrataciones', icon: 'bi-cart-check', roles: ['dec', 'admin'],
       submenu: [
-        { path: 'dec/actos', label: 'Actos Preparativos' },
-        { path: 'dec/invitaciones', label: 'Invitaciones' },
-        { path: 'dec/consultas', label: 'Consultas' },
-        { path: 'dec/cotizaciones', label: 'Cotizaciones' },
-        { path: 'dec/ccp', label: 'CCP' },
-        { path: 'dec/cuadro', label: 'Cuadro Comparativo' }
+        { path: 'dec/actos', label: 'Actos Preparativos', icon: 'bi-file-earmark-text' },
+        { path: 'dec/invitaciones', label: 'Invitaciones', icon: 'bi-envelope' },
+        { path: 'dec/consultas', label: 'Consultas', icon: 'bi-question-circle' },
+        { path: 'dec/cotizaciones', label: 'Cotizaciones', icon: 'bi-calculator' },
+        { path: 'dec/ccp', label: 'CCP', icon: 'bi-people' },
+        { path: 'dec/cuadro', label: 'Cuadro Comparativo', icon: 'bi-table' }
       ]
     },
     { 
-      label: 'Ejecución', icon: '⚙️', roles: ['dec', 'admin'],
+      label: 'Ejecución', icon: 'bi-graph-up', roles: ['dec', 'admin'],
       submenu: [
-        { path: 'ejecucion/registro', label: 'Registro de Orden' },
-        { path: 'ejecucion/presentacion', label: 'Presentación Entregable' },
-        { path: 'ejecucion/ampliacion', label: 'Ampliación Resolución' },
-        { path: 'ejecucion/pago', label: 'Derivación de Pago' }
+        { path: 'ejecucion/registro', label: 'Registro de Orden', icon: 'bi-clipboard-check' },
+        { path: 'ejecucion/presentacion', label: 'Presentación Entregable', icon: 'bi-file-check' },
+        { path: 'ejecucion/ampliacion', label: 'Ampliación Resolución', icon: 'bi-calendar-plus' },
+        { path: 'ejecucion/pago', label: 'Derivación de Pago', icon: 'bi-credit-card' }
       ]
     },
     { 
-      label: 'Mantenimiento', icon: '🔧', roles: ['admin'],
+      label: 'Mantenimiento', icon: 'bi-wrench', roles: ['admin'],
       submenu: [
         { 
           label: '📝 Registro de Datos',
+          icon: 'bi-database',
           submenu: [
-            { path: 'mantenimiento/usuarios', label: 'Usuarios y Permisos' },
-            { path: 'mantenimiento/catalogo', label: 'Catálogo SIGAMEF' },
-            { path: 'mantenimiento/fichas', label: 'Fichas Técnicas' },
-            { path: 'mantenimiento/configuracion', label: 'Configuración Documentaria' },
-            { path: 'mantenimiento/metas', label: 'Metas y Áreas' },
-            { path: 'mantenimiento/ordenes', label: 'Órdenes' },
-            { path: 'mantenimiento/siaf', label: 'SIAF' }
+            { path: 'mantenimiento/usuarios', label: 'Usuarios y Permisos', icon: 'bi-people' },
+            { path: 'mantenimiento/catalogo', label: 'Catálogo SIGAMEF', icon: 'bi-book' },
+            { path: 'mantenimiento/fichas', label: 'Fichas Técnicas', icon: 'bi-card-list' },
+            { path: 'mantenimiento/configuracion', label: 'Configuración Documentaria', icon: 'bi-gear' },
+            { path: 'mantenimiento/metas', label: 'Metas y Áreas', icon: 'bi-bullseye' },
+            { path: 'mantenimiento/ordenes', label: 'Órdenes', icon: 'bi-receipt' },
+            { path: 'mantenimiento/siaf', label: 'SIAF', icon: 'bi-bank' }
           ]
         },
         { 
           label: '📑 Glosas de Requerimientos',
+          icon: 'bi-file-text',
           submenu: [
-            { path: 'mantenimiento/bienes', label: 'Formato Bienes' },
-            { path: 'mantenimiento/servicios', label: 'Formato Servicios' },
-            { path: 'mantenimiento/locacion', label: 'Formato Locación' },
-            { path: 'mantenimiento/licitaciones', label: 'Formato Licitaciones' },
-            { path: 'mantenimiento/concurso', label: 'Formato Concurso' }
+            { path: 'mantenimiento/bienes', label: 'Formato Bienes', icon: 'bi-box' },
+            { path: 'mantenimiento/servicios', label: 'Formato Servicios', icon: 'bi-tools' },
+            { path: 'mantenimiento/locacion', label: 'Formato Locación', icon: 'bi-building' },
+            { path: 'mantenimiento/licitaciones', label: 'Formato Licitaciones', icon: 'bi-hammer' },
+            { path: 'mantenimiento/concurso', label: 'Formato Concurso', icon: 'bi-trophy' }
           ]
         },
         { 
           label: '🏛️ Institucional',
+          icon: 'bi-building',
           submenu: [
-            { path: 'mantenimiento/logotipos', label: 'Logotipos' },
-            { path: 'mantenimiento/entidad', label: 'Datos de la Entidad' }
+            { path: 'mantenimiento/logotipos', label: 'Logotipos', icon: 'bi-image' },
+            { path: 'mantenimiento/entidad', label: 'Datos de la Entidad', icon: 'bi-info-circle' }
           ]
         }
       ]
     }
   ];
   
-  function renderNestedSubmenu(items, level = 0) {
-    let html = '<ul class="nav flex-column" style="padding-left: ' + (level * 15) + 'px;">';
+  // Función para verificar si una ruta está activa o si algún subitem está activo
+  function isRouteActive(itemPath, subitems) {
+    if (currentRoute === itemPath) return true;
+    if (subitems) {
+      for (const sub of subitems) {
+        if (sub.path && currentRoute === sub.path) return true;
+        if (sub.submenu) {
+          for (const sub2 of sub.submenu) {
+            if (sub2.path && currentRoute === sub2.path) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  
+  // Función para verificar si un submenú debe estar abierto
+  function shouldBeOpen(item) {
+    if (item.path && currentRoute === item.path) return true;
+    if (item.submenu) {
+      for (const sub of item.submenu) {
+        if (sub.path && currentRoute === sub.path) return true;
+        if (sub.submenu) {
+          for (const sub2 of sub.submenu) {
+            if (sub2.path && currentRoute === sub2.path) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  
+  // Función para renderizar submenús anidados
+  function renderNestedSubmenu(items, level = 0, parentId = '') {
+    let html = `<ul class="nav-submenu level-${level}" data-parent="${parentId}" style="padding-left: ${level * 16}px;">`;
     for (const item of items) {
       if (item.submenu) {
-        const subId = 'sidemenu_' + Math.random().toString(36).substr(2, 8);
-        html += `<li class="nav-item">
-          <div class="nav-link text-white-50" style="cursor: pointer; font-size: 0.85em;" onclick="document.getElementById('${subId}').style.display = document.getElementById('${subId}').style.display === 'none' ? 'block' : 'none'">
-            ${item.label} <span style="float: right;">▶</span>
+        const isOpen = shouldBeOpen(item);
+        const submenuId = `submenu_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+        const hasActiveChild = shouldBeOpen(item);
+        
+        html += `<li class="nav-subitem">
+          <div class="nav-sublink has-submenu" data-submenu="${submenuId}">
+            <i class="bi ${item.icon || 'bi-folder'}"></i>
+            <span>${item.label}</span>
+            <i class="bi bi-chevron-down chevron-sub ${isOpen ? 'rotated' : ''}"></i>
           </div>
-          <div id="${subId}" style="display: none;">
-            ${renderNestedSubmenu(item.submenu, level + 1)}
+          <div id="${submenuId}" class="submenu-container" style="${isOpen ? 'display: block;' : 'display: none;'}">
+            ${renderNestedSubmenu(item.submenu, level + 1, submenuId)}
           </div>
         </li>`;
       } else if (item.path) {
         const isActive = currentRoute === item.path;
         const activeClass = isActive ? 'active' : '';
-        html += `<li class="nav-item">
-          <a class="nav-link text-white-50 ${activeClass}" href="#/${item.path}" style="font-size: 0.85em; padding: 5px 10px;">
-            • ${item.label}
-          </a>
+        html += `<li class="nav-subitem">
+          <div class="nav-sublink ${activeClass}" data-route="${item.path}">
+            <i class="bi ${item.icon || 'bi-dot'}"></i>
+            <span>${item.label}</span>
+          </div>
         </li>`;
       }
     }
@@ -94,35 +136,117 @@
     return html;
   }
   
-  let html = '<div class="sidebar" style="position: fixed; top: 56px; left: 0; width: 280px; height: calc(100% - 56px); background-color: #343a40; overflow-y: auto;">';
-  html += '<ul class="nav flex-column p-3">';
+  // Construir el HTML completo del sidebar - SOLO SE AUMENTÓ EL PADDING SUPERIOR
+  let html = `
+    <div class="sidebar" style="width: 280px; position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); box-shadow: 2px 0 8px rgba(0,0,0,0.05);">
+      <div style="padding: 50px 16px 20px 16px; border-bottom: 1px solid #dadce0; margin-bottom: 8px;">
+        <h4 style="margin: 0; font-weight: 600; background: linear-gradient(135deg, #1a73e8, #34a853); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+          <i class="bi bi-file-text" style="background: none; -webkit-text-fill-color: #1a73e8;"></i> SGC
+        </h4>
+        <small style="color: #5f6368; display: block; margin-top: 4px;">Sistema de Gestión de Contrataciones</small>
+      </div>
+      <nav style="padding: 0 12px 20px 12px;">
+  `;
   
   for (const item of menuStructure) {
     if (item.roles && !item.roles.includes(userRole)) continue;
     
-    if (item.submenu) {
-      const menuId = 'mainmenu_' + Math.random().toString(36).substr(2, 8);
-      html += `<li class="nav-item mb-2">
-        <div class="nav-link text-white" style="cursor: pointer; font-weight: bold;" onclick="document.getElementById('${menuId}').style.display = document.getElementById('${menuId}').style.display === 'none' ? 'block' : 'none'">
-          ${item.icon} ${item.label} <span style="float: right;">▶</span>
+    const hasSubmenu = item.submenu && item.submenu.length > 0;
+    const isActive = isRouteActive(item.path, item.submenu);
+    const isOpen = shouldBeOpen(item);
+    const menuId = `menu_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+    
+    if (hasSubmenu) {
+      html += `
+        <div class="nav-item">
+          <div class="nav-link ${isActive ? 'active' : ''}" data-menu="${menuId}">
+            <i class="bi ${item.icon}"></i>
+            <span>${item.label}</span>
+            <i class="bi bi-chevron-down chevron ${isOpen ? 'rotated' : ''}"></i>
+          </div>
+          <div id="${menuId}" class="submenu-container" style="${isOpen ? 'display: block;' : 'display: none;'}">
+            ${renderNestedSubmenu(item.submenu, 1, menuId)}
+          </div>
         </div>
-        <div id="${menuId}" style="display: none;">
-          ${renderNestedSubmenu(item.submenu, 1)}
-        </div>
-      </li>`;
+      `;
     } else {
-      const isActive = currentRoute === item.path;
-      const activeClass = isActive ? 'active bg-primary' : '';
-      html += `<li class="nav-item mb-2">
-        <a class="nav-link text-white ${activeClass}" href="#/${item.path}">
-          ${item.icon} ${item.label}
-        </a>
-      </li>`;
+      const activeClass = isActive ? 'active' : '';
+      html += `
+        <div class="nav-item">
+          <div class="nav-link ${activeClass}" data-route="${item.path}">
+            <i class="bi ${item.icon}"></i>
+            <span>${item.label}</span>
+          </div>
+        </div>
+      `;
     }
   }
   
-  html += '</ul></div>';
-  html += '<style>.sidebar .nav-link.active { background-color: #0d6efd; border-radius: 5px; } .sidebar .nav-link:hover { background-color: #495057; border-radius: 5px; }</style>';
+  html += `
+      </nav>
+    </div>
+  `;
   
   return html;
 }
+
+// Función para inicializar los eventos del sidebar (llamar después de renderizar)
+export function initSidebar() {
+  // Manejar clics en menús principales
+  document.querySelectorAll('.nav-link[data-menu]').forEach(link => {
+    link.removeEventListener('click', handleMainMenuClick);
+    link.addEventListener('click', handleMainMenuClick);
+  });
+  
+  // Manejar clics en submenús (primer nivel)
+  document.querySelectorAll('.nav-sublink[data-submenu]').forEach(sublink => {
+    sublink.removeEventListener('click', handleSubmenuClick);
+    sublink.addEventListener('click', handleSubmenuClick);
+  });
+  
+  // Manejar clics en items de navegación (sin submenú)
+  document.querySelectorAll('.nav-link[data-route], .nav-sublink[data-route]').forEach(item => {
+    item.removeEventListener('click', handleNavigationClick);
+    item.addEventListener('click', handleNavigationClick);
+  });
+}
+
+// Manejador para clic en menú principal
+function handleMainMenuClick(e) {
+  e.stopPropagation();
+  const menuId = this.dataset.menu;
+  const submenuContainer = document.getElementById(menuId);
+  const chevron = this.querySelector('.chevron');
+  
+  if (submenuContainer) {
+    const isVisible = submenuContainer.style.display === 'block';
+    submenuContainer.style.display = isVisible ? 'none' : 'block';
+    if (chevron) chevron.classList.toggle('rotated');
+  }
+}
+
+// Manejador para clic en submenús (que tienen más submenús)
+function handleSubmenuClick(e) {
+  e.stopPropagation();
+  const submenuId = this.dataset.submenu;
+  const submenuContainer = document.getElementById(submenuId);
+  const chevron = this.querySelector('.chevron-sub');
+  
+  if (submenuContainer) {
+    const isVisible = submenuContainer.style.display === 'block';
+    submenuContainer.style.display = isVisible ? 'none' : 'block';
+    if (chevron) chevron.classList.toggle('rotated');
+  }
+}
+
+// Manejador para clic en items de navegación
+function handleNavigationClick(e) {
+  e.stopPropagation();
+  const route = this.dataset.route;
+  if (route) {
+    window.location.hash = `#/${route}`;
+  }
+}
+
+// Exportar funciones globales para que funcionen los onclick
+window.initSidebar = initSidebar;
