@@ -136,7 +136,7 @@
     return html;
   }
   
-  // Construir el HTML completo del sidebar - SOLO SE AUMENTÓ EL PADDING SUPERIOR
+  // Construir el HTML completo del sidebar
   let html = `
     <div class="sidebar" style="width: 280px; position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); box-shadow: 2px 0 8px rgba(0,0,0,0.05);">
       <div style="padding: 50px 16px 20px 16px; border-bottom: 1px solid #dadce0; margin-bottom: 8px;">
@@ -153,6 +153,7 @@
     
     const hasSubmenu = item.submenu && item.submenu.length > 0;
     const isActive = isRouteActive(item.path, item.submenu);
+    // Mostrar el submenú si la ruta actual está dentro de él
     const isOpen = shouldBeOpen(item);
     const menuId = `menu_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
     
@@ -211,31 +212,82 @@ export function initSidebar() {
   });
 }
 
-// Manejador para clic en menú principal
+// Manejador para clic en menú principal - MODIFICADO: solo un submenú abierto a la vez
 function handleMainMenuClick(e) {
   e.stopPropagation();
-  const menuId = this.dataset.menu;
-  const submenuContainer = document.getElementById(menuId);
-  const chevron = this.querySelector('.chevron');
+  const currentMenuId = this.dataset.menu;
+  const currentSubmenu = document.getElementById(currentMenuId);
+  const currentChevron = this.querySelector('.chevron');
   
-  if (submenuContainer) {
-    const isVisible = submenuContainer.style.display === 'block';
-    submenuContainer.style.display = isVisible ? 'none' : 'block';
-    if (chevron) chevron.classList.toggle('rotated');
+  // Verificar si el submenú actual está visible
+  const isCurrentlyVisible = currentSubmenu && currentSubmenu.style.display === 'block';
+  
+  // CERRAR TODOS LOS OTROS SUBMENÚS
+  document.querySelectorAll('.nav-link[data-menu]').forEach(link => {
+    const menuId = link.dataset.menu;
+    const submenu = document.getElementById(menuId);
+    const chevron = link.querySelector('.chevron');
+    
+    // Saltar el menú actual
+    if (menuId === currentMenuId) return;
+    
+    // Cerrar otros submenús
+    if (submenu && submenu.style.display === 'block') {
+      submenu.style.display = 'none';
+      if (chevron) chevron.classList.remove('rotated');
+    }
+  });
+  
+  // Abrir o cerrar el menú actual
+  if (currentSubmenu) {
+    if (isCurrentlyVisible) {
+      // Cerrar el menú actual
+      currentSubmenu.style.display = 'none';
+      if (currentChevron) currentChevron.classList.remove('rotated');
+    } else {
+      // Abrir el menú actual
+      currentSubmenu.style.display = 'block';
+      if (currentChevron) currentChevron.classList.add('rotated');
+    }
   }
 }
 
-// Manejador para clic en submenús (que tienen más submenús)
+// Manejador para clic en submenús (que tienen más submenús) - MODIFICADO: comportamiento similar
 function handleSubmenuClick(e) {
   e.stopPropagation();
-  const submenuId = this.dataset.submenu;
-  const submenuContainer = document.getElementById(submenuId);
-  const chevron = this.querySelector('.chevron-sub');
+  const currentSubmenuId = this.dataset.submenu;
+  const currentSubmenuContainer = document.getElementById(currentSubmenuId);
+  const currentChevron = this.querySelector('.chevron-sub');
   
-  if (submenuContainer) {
-    const isVisible = submenuContainer.style.display === 'block';
-    submenuContainer.style.display = isVisible ? 'none' : 'block';
-    if (chevron) chevron.classList.toggle('rotated');
+  // Verificar si el submenú actual está visible
+  const isCurrentlyVisible = currentSubmenuContainer && currentSubmenuContainer.style.display === 'block';
+  
+  // CERRAR OTROS SUBMENÚS DEL MISMO NIVEL (opcional, comentado para mantener anidamiento)
+  // Si quieres que los submenús anidados también se cierren entre sí, descomenta esto:
+  /*
+  const parentItem = this.closest('.nav-item');
+  if (parentItem) {
+    parentItem.querySelectorAll('.nav-sublink[data-submenu]').forEach(sublink => {
+      const submenuId = sublink.dataset.submenu;
+      const submenu = document.getElementById(submenuId);
+      const chevron = sublink.querySelector('.chevron-sub');
+      if (submenuId !== currentSubmenuId && submenu && submenu.style.display === 'block') {
+        submenu.style.display = 'none';
+        if (chevron) chevron.classList.remove('rotated');
+      }
+    });
+  }
+  */
+  
+  // Abrir o cerrar el submenú actual
+  if (currentSubmenuContainer) {
+    if (isCurrentlyVisible) {
+      currentSubmenuContainer.style.display = 'none';
+      if (currentChevron) currentChevron.classList.remove('rotated');
+    } else {
+      currentSubmenuContainer.style.display = 'block';
+      if (currentChevron) currentChevron.classList.add('rotated');
+    }
   }
 }
 

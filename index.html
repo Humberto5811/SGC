@@ -15,6 +15,49 @@
     
     <!-- Estilos personalizados MEJORADOS -->
     <link rel="stylesheet" href="src/styles.css">
+    
+    <!-- CAMBIO 1: Estilos adicionales para garantizar visualización de submenús -->
+    <style>
+        /* Asegurar que los submenús sean visibles */
+        .submenu-container {
+            display: none;
+        }
+        .submenu-container[style*="display: block"] {
+            display: block !important;
+        }
+        /* Mejorar la indentación visual de los submenús */
+        .nav-submenu {
+            list-style: none;
+            padding-left: 24px !important;
+            margin: 0;
+        }
+        .nav-subitem {
+            margin: 4px 0;
+        }
+        .nav-sublink {
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .nav-sublink:hover {
+            background-color: rgba(26, 115, 232, 0.08);
+        }
+        .nav-sublink.active {
+            background-color: #e8f0fe;
+            color: #1a73e8;
+        }
+        .chevron, .chevron-sub {
+            margin-left: auto;
+            transition: transform 0.2s;
+        }
+        .chevron.rotated, .chevron-sub.rotated {
+            transform: rotate(180deg);
+        }
+    </style>
 </head>
 <body>
     <!-- Botón de menú responsive mejorado -->

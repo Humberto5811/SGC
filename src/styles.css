@@ -89,13 +89,13 @@ body {
   border-left: 3px solid #1a73e8;
 }
 
-/* Submenús */
+/* Submenús - MODIFICADO: ahora visibles por defecto */
 .nav-submenu {
   list-style: none;
   padding-left: 48px;
   margin: 4px 0 8px 0;
-  max-height: 0;
-  overflow: hidden;
+  max-height: 500px;     /* Cambiado de 0 a 500px para mostrar submenús */
+  overflow: visible;     /* Cambiado de hidden a visible */
   transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -138,6 +138,21 @@ body {
   border-left: 2px solid #1a73e8;
 }
 
+/* Estilo para submenús que tienen más submenús */
+.nav-sublink.has-submenu {
+  font-weight: 500;
+  color: #3c4043;
+}
+
+.nav-sublink.has-submenu .chevron-sub {
+  margin-left: auto;
+  transition: transform 0.2s ease;
+}
+
+.nav-sublink.has-submenu .chevron-sub.rotated {
+  transform: rotate(180deg);
+}
+
 /* Icono de flecha para submenús */
 .nav-link .chevron {
   margin-left: auto;
@@ -152,6 +167,20 @@ body {
 .nav-link.active-parent {
   background: #e8f0fe;
   color: #1a73e8;
+}
+
+/* Contenedor de submenús - aseguramos visibilidad */
+.submenu-container {
+  display: block;
+}
+
+/* Niveles anidados de submenús */
+.nav-submenu.level-1 {
+  padding-left: 24px;
+}
+
+.nav-submenu.level-2 {
+  padding-left: 40px;
 }
 
 /* ========== BOTONES MODERNOS ========== */
