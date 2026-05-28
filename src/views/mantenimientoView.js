@@ -1,4 +1,41 @@
-function renderMantenimientoView() {
+import { renderCatalogoSigamefView, initCatalogoSigamefView } from './registroDatos/catalogoSigamefView.js';
+import { renderUsuariosPermisosView, initUsuariosPermisosView } from './registroDatos/usuariosPermisosView.js';
+import { renderFichasTecnicasView, initFichasTecnicasView } from './registroDatos/fichasTecnicasView.js';
+import { renderConfiguracionDocView, initConfiguracionDocView } from './registroDatos/configuracionDocView.js';
+import { renderMetasAreasView, initMetasAreasView } from './registroDatos/metasAreasView.js';
+import { renderOrdenesView, initOrdenesView } from './registroDatos/ordenesView.js';
+import { renderSiafView, initSiafView } from './registroDatos/siafView.js';
+import { renderFormatoBienesView, initFormatoBienesView } from './glosasRequerimientos/formatoBienesView.js';
+import { renderFormatoServiciosView, initFormatoServiciosView } from './glosasRequerimientos/formatoServiciosView.js';
+import { renderFormatoLocacionView, initFormatoLocacionView } from './glosasRequerimientos/formatoLocacionView.js';
+import { renderFormatoLicitacionesView, initFormatoLicitacionesView } from './glosasRequerimientos/formatoLicitacionesView.js';
+import { renderFormatoConcursoView, initFormatoConcursoView } from './glosasRequerimientos/formatoConcursoView.js';
+import { renderLogotiposView, initLogotiposView } from './institucional/logotiposView.js';
+import { renderEntidadView, initEntidadView } from './institucional/entidadView.js';
+
+const subRoutes = {
+  'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
+  'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
+  'mantenimiento/fichas': { render: renderFichasTecnicasView, init: initFichasTecnicasView },
+  'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },
+  'mantenimiento/metas': { render: renderMetasAreasView, init: initMetasAreasView },
+  'mantenimiento/ordenes': { render: renderOrdenesView, init: initOrdenesView },
+  'mantenimiento/siaf': { render: renderSiafView, init: initSiafView },
+  'mantenimiento/bienes': { render: renderFormatoBienesView, init: initFormatoBienesView },
+  'mantenimiento/servicios': { render: renderFormatoServiciosView, init: initFormatoServiciosView },
+  'mantenimiento/locacion': { render: renderFormatoLocacionView, init: initFormatoLocacionView },
+  'mantenimiento/licitaciones': { render: renderFormatoLicitacionesView, init: initFormatoLicitacionesView },
+  'mantenimiento/concurso': { render: renderFormatoConcursoView, init: initFormatoConcursoView },
+  'mantenimiento/logotipos': { render: renderLogotiposView, init: initLogotiposView },
+  'mantenimiento/entidad': { render: renderEntidadView, init: initEntidadView }
+};
+
+export function renderMantenimientoView(currentRoute) {
+  const sub = subRoutes[currentRoute];
+  if (sub) {
+    return sub.render();
+  }
+
   const users = JSON.parse(localStorage.getItem('users') || '[]');
   let tableRows = '';
   users.forEach(u => {
@@ -7,7 +44,7 @@ function renderMantenimientoView() {
       <button class="btn btn-sm btn-danger" onclick="alert('Eliminar usuario: ${u.dni}')">Eliminar</button>
     </td></tr>`;
   });
-  
+
   return `
     <div class="container mt-4">
       <h2>Mantenimiento del Sistema</h2>
@@ -39,8 +76,11 @@ function renderMantenimientoView() {
   `;
 }
 
-function initMantenimientoView() { 
+export function initMantenimientoView(currentRoute) {
+  const sub = subRoutes[currentRoute];
+  if (sub) {
+    sub.init();
+    return;
+  }
   console.log("Vista de Mantenimiento inicializada");
 }
-
-export { renderMantenimientoView, initMantenimientoView };
