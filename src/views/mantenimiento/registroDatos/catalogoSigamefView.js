@@ -1,5 +1,2 @@
-function renderCatalogoSigamefView() {
-  return `<h1 class="h3">Catálogo SIGAMEF</h1><p class="text-muted">Vista inicial del catálogo SIGAMEF.</p>`;
-}
-function initCatalogoSigamefView() { console.log("Catálogo SIGAMEF inicializado"); }
-export { renderCatalogoSigamefView, initCatalogoSigamefView };
+// Re-exportar desde la ubicación principal
+export { renderCatalogoSigamefView, initCatalogoSigamefView } from '../../registroDatos/catalogoSigamefView.js';
