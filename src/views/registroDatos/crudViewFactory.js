@@ -17,9 +17,16 @@ const PAGE_SIZE = 50;
  * @param {Array}  cfg.fields      campos del formulario {name,label,type,required,col,options,step}
  * @param {Array}  cfg.columns     columnas de la tabla {name,label,type}
  * @param {boolean}[cfg.excel]     mostrar importar/exportar Excel
+ * @param {string} [cfg.importPath] ruta de importación masiva (ej: '/fichanet/import'). Si se define,
+ *                                  Importar Excel envía todas las filas en lote a ese endpoint.
+ * @param {Function}[cfg.onPrint]   si se define, agrega un botón de impresión por fila; recibe el item.
+ * @param {string} [cfg.printTitle] tooltip del botón de impresión.
  */
 export function createCrudView(cfg) {
   const { resource, title, icon = 'bi-table', subtitle = '', fields, columns, excel = false } = cfg;
+  const importPath = cfg.importPath || null;
+  const onPrint = typeof cfg.onPrint === 'function' ? cfg.onPrint : null;
+  const printTitle = cfg.printTitle || 'Imprimir / PDF';
 
   // Adaptador de API: por defecto usa las rutas REST estándar /<resource>.
   // Se puede sobreescribir (ej. Glosas, cuyo path incluye :tipo).
@@ -58,9 +65,12 @@ export function createCrudView(cfg) {
         const align = (c.type === 'money') ? ' class="text-end"' : (c.type === 'bool' ? ' class="text-center"' : '');
         return `<td${align}>${fmtCell(item, c)}</td>`;
       }).join('');
+      const printBtn = onPrint
+        ? `<button class="btn btn-sm btn-outline-dark me-1 ${resource}-print" data-id="${item.id}" title="${printTitle}"><i class="bi bi-printer"></i></button>`
+        : '';
       return `<tr>${tds}
         <td class="text-center" style="white-space:nowrap;">
-          <button class="btn btn-sm btn-outline-primary me-1 ${resource}-edit" data-id="${item.id}" title="Editar"><i class="bi bi-pencil-square"></i></button>
+          ${printBtn}<button class="btn btn-sm btn-outline-primary me-1 ${resource}-edit" data-id="${item.id}" title="Editar"><i class="bi bi-pencil-square"></i></button>
           <button class="btn btn-sm btn-outline-danger ${resource}-del" data-id="${item.id}" title="Eliminar"><i class="bi bi-trash"></i></button>
         </td></tr>`;
     }).join('');
@@ -299,7 +309,39 @@ export function createCrudView(cfg) {
     })();
   }
 
+  // Importación masiva: mapea TODOS los encabezados del Excel (en minúsculas) a
+  // las columnas de la tabla y envía las filas en un solo lote al endpoint /import.
+  function bulkImport(file) {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!raw.length) { alert('El archivo no contiene datos.'); return; }
+        const rows = raw.map((r) => {
+          const rec = {};
+          Object.keys(r).forEach((k) => { rec[k.toLowerCase().trim()] = r[k]; });
+          return rec;
+        });
+        const mode = state.total > 0
+          ? (confirm(`Se encontraron ${rows.length} registros.\n\nACEPTAR = REEMPLAZAR los datos actuales (${state.total}).\nCANCELAR = AGREGAR a los existentes.`) ? 'replace' : 'append')
+          : 'replace';
+        const resp = await api.post(importPath, { rows, mode });
+        state.page = 1; state.search = '';
+        const si = document.getElementById(id('search')); if (si) si.value = '';
+        await refresh();
+        alert(`Importación exitosa: ${resp.inserted} registros ${mode === 'replace' ? 'cargados' : 'agregados'}.`);
+      } catch (err) {
+        console.error('Error al importar Excel (masivo):', err);
+        alert('Error al importar: ' + (err.message || 'verifique el formato del archivo.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   function importExcel(file) {
+    if (importPath) { bulkImport(file); return; }
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
@@ -340,6 +382,10 @@ export function createCrudView(cfg) {
   }
 
   function onClick(e) {
+    if (onPrint) {
+      const pr = e.target.closest(`.${resource}-print`);
+      if (pr) { e.preventDefault(); const it = state.rows.find((r) => String(r.id) === String(pr.dataset.id)); if (it) onPrint(it); return; }
+    }
     const edit = e.target.closest(`.${resource}-edit`);
     if (edit) { e.preventDefault(); const it = state.rows.find((r) => String(r.id) === String(edit.dataset.id)); openModal(it); return; }
     const del = e.target.closest(`.${resource}-del`);

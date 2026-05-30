@@ -129,6 +129,45 @@ CREATE TABLE IF NOT EXISTS glosas (
 );
 CREATE INDEX IF NOT EXISTS idx_glosas_tipo ON glosas (tipo);
 
+-- ============ FICHA NET ============
+-- Columnas con los mismos nombres (en minúsculas) que los encabezados del Excel
+-- de origen, para que la importación masiva sea directa.
+-- Todas las columnas de datos son TEXT porque la fuente (Excel) contiene
+-- valores de longitud muy variable (algunos campos superan los miles de
+-- caracteres), por lo que TEXT garantiza una importación masiva sin errores.
+CREATE TABLE IF NOT EXISTS ficha_net (
+  id                      SERIAL PRIMARY KEY,
+  idfichanet              TEXT,
+  idcartcod               TEXT,
+  idcartcodigosiga        TEXT,
+  dscartnombre            TEXT,
+  dscclasdescripcion      TEXT,
+  dscartpresentacion      TEXT,
+  dspesomolecular         TEXT,
+  dsporcentajepureza      TEXT,
+  dsformula               TEXT,
+  dsdensidad              TEXT,
+  dsph                    TEXT,
+  dstemperatura           TEXT,
+  idclase                 TEXT,
+  dsclase                 TEXT,
+  idsubclase              TEXT,
+  dssubclase              TEXT,
+  dscartdocumentos        TEXT,
+  dscartcaracteristica    TEXT,
+  dscartfechavencimiento  TEXT,
+  stcartestado            TEXT,
+  dscartobservaciones     TEXT,
+  dafechacreacion         TEXT,
+  dsusuariocrea           TEXT,
+  nu_version              TEXT,
+  created_at              TIMESTAMP DEFAULT NOW(),
+  updated_at              TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fichanet_codigo_trgm ON ficha_net USING gin (idcartcodigosiga gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_fichanet_nombre_trgm ON ficha_net USING gin (dscartnombre gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_fichanet_clase_trgm ON ficha_net USING gin (dsclase gin_trgm_ops);
+
 -- ============ ENTIDAD (registro único de datos institucionales) ============
 CREATE TABLE IF NOT EXISTS entidad (
   id           SERIAL PRIMARY KEY,

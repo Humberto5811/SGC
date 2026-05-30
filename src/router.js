@@ -35,6 +35,7 @@ import { renderConfiguracionDocView, initConfiguracionDocView } from './views/re
 import { renderMetasAreasView, initMetasAreasView } from './views/registroDatos/metasAreasView.js';
 import { renderOrdenesView, initOrdenesView } from './views/registroDatos/ordenesView.js';
 import { renderSiafView, initSiafView } from './views/registroDatos/siafView.js';
+import { renderFichaNetView, initFichaNetView } from './views/registroDatos/fichaNetView.js';
 
 // Mantenimiento - Glosas de Requerimientos
 import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
@@ -88,6 +89,7 @@ const routes = {
   'mantenimiento/metas': { render: renderMetasAreasView, init: initMetasAreasView },
   'mantenimiento/ordenes': { render: renderOrdenesView, init: initOrdenesView },
   'mantenimiento/siaf': { render: renderSiafView, init: initSiafView },
+  'mantenimiento/fichanet': { render: renderFichaNetView, init: initFichaNetView },
 
   // ========== MANTENIMIENTO - GLOSAS DE REQUERIMIENTOS ==========
   'mantenimiento/bienes': { render: renderFormatoBienesView, init: initFormatoBienesView },

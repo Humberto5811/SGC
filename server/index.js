@@ -12,6 +12,7 @@ import authRouter from './routes/auth.js';
 import catalogoRouter from './routes/catalogo.js';
 import glosasRouter from './routes/glosas.js';
 import entidadRouter from './routes/entidad.js';
+import fichanetRouter from './routes/fichanet.js';
 
 dotenv.config();
 
@@ -32,6 +33,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/catalogo', catalogoRouter);
 app.use('/api/glosas', glosasRouter);
 app.use('/api/entidad', entidadRouter);
+app.use('/api/fichanet', fichanetRouter);
 
 // CRUD genéricos para submódulos simples
 app.use('/api/fichas', crudRouter({
