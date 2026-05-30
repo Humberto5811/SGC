@@ -1,5 +1,6 @@
-function renderFormatoServiciosView() {
-  return `<h1 class="h3">Formato Servicios</h1><p class="text-muted">Vista en construcción.</p>`;
-}
-function initFormatoServiciosView() { console.log("Formato Servicios inicializado"); }
+import { createGlosaView } from './glosaFactory.js';
+
+const view = createGlosaView('servicios', 'Formato Servicios', 'bi-tools');
+const renderFormatoServiciosView = view.render;
+const initFormatoServiciosView = view.init;
 export { renderFormatoServiciosView, initFormatoServiciosView };

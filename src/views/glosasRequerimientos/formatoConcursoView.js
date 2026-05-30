@@ -1,5 +1,6 @@
-function renderFormatoConcursoView() {
-  return `<h1 class="h3">Formato Concurso</h1><p class="text-muted">Vista en construcción.</p>`;
-}
-function initFormatoConcursoView() { console.log("Formato Concurso inicializado"); }
+import { createGlosaView } from './glosaFactory.js';
+
+const view = createGlosaView('concurso', 'Formato Concurso', 'bi-trophy');
+const renderFormatoConcursoView = view.render;
+const initFormatoConcursoView = view.init;
 export { renderFormatoConcursoView, initFormatoConcursoView };

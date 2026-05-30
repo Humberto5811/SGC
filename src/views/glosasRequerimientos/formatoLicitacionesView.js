@@ -1,5 +1,6 @@
-function renderFormatoLicitacionesView() {
-  return `<h1 class="h3">Formato Licitaciones</h1><p class="text-muted">Vista en construcción.</p>`;
-}
-function initFormatoLicitacionesView() { console.log("Formato Licitaciones inicializado"); }
+import { createGlosaView } from './glosaFactory.js';
+
+const view = createGlosaView('licitaciones', 'Formato Licitaciones', 'bi-hammer');
+const renderFormatoLicitacionesView = view.render;
+const initFormatoLicitacionesView = view.init;
 export { renderFormatoLicitacionesView, initFormatoLicitacionesView };

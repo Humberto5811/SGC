@@ -1,56 +1,38 @@
 // =====================================================
-// Catálogo SIGAMEF - Vista completa con CRUD e Import/Export Excel
+// Catálogo SIGAMEF - Vista con CRUD e Import/Export Excel
+// Conectado al backend (PostgreSQL) con paginación y búsqueda server-side.
 // =====================================================
+import { api } from '../../services/apiService.js';
 
-const STORAGE_KEY = 'catalogoSigamef';
 const PAGE_SIZE = 50;
 
-let catalogoData = [];
-let filteredData = [];
+let pageRows = [];        // filas de la página actual (desde la API)
 let currentPage = 1;
-let editingIndex = -1;
+let totalRecords = 0;
+let totalPages = 1;
+let searchTerm = '';
+let editingId = null;
+let loadError = '';
 
-function loadData() {
+async function fetchPage() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    catalogoData = raw ? JSON.parse(raw) : [];
+    const resp = await api.list('catalogo', { page: currentPage, pageSize: PAGE_SIZE, search: searchTerm });
+    pageRows = resp.data || [];
+    totalRecords = resp.total || 0;
+    totalPages = resp.totalPages || 1;
+    if (currentPage > totalPages) { currentPage = totalPages; }
+    loadError = '';
   } catch (e) {
-    console.error('Error al cargar catálogo SIGAMEF:', e);
-    catalogoData = [];
+    console.error('Error al cargar catálogo desde la API:', e);
+    pageRows = [];
+    totalRecords = 0;
+    totalPages = 1;
+    loadError = e.message || 'No se pudo conectar con el servidor.';
   }
-}
-
-function saveData() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(catalogoData));
-  } catch (e) {
-    console.warn('No se pudo guardar en localStorage (posible límite de tamaño). Los datos se mantienen en memoria para esta sesión.', e);
-    alert('Advertencia: Los datos son demasiado grandes para almacenar localmente. Se mantienen en memoria para esta sesión. Puede exportar a Excel para guardar.');
-  }
-}
-
-function applyFilter(searchText) {
-  const term = (searchText || '').toLowerCase().trim();
-  if (!term) {
-    filteredData = [...catalogoData];
-  } else {
-    filteredData = catalogoData.filter(item =>
-      (item.item_bien || '').toLowerCase().includes(term) ||
-      (item.nombre_item || '').toLowerCase().includes(term) ||
-      (item.tipo_bien || '').toLowerCase().includes(term) ||
-      (item.unidad_medida || '').toLowerCase().includes(term)
-    );
-  }
-  currentPage = 1;
 }
 
 function getTotalPages() {
-  return Math.max(1, Math.ceil(filteredData.length / PAGE_SIZE));
-}
-
-function getPageData() {
-  const start = (currentPage - 1) * PAGE_SIZE;
-  return filteredData.slice(start, start + PAGE_SIZE);
+  return Math.max(1, totalPages);
 }
 
 function checkIcon(val) {
@@ -58,27 +40,32 @@ function checkIcon(val) {
 }
 
 function renderTableRows() {
-  const pageData = getPageData();
-  if (pageData.length === 0) {
+  if (loadError) {
+    return `<tr><td colspan="10" class="text-center text-danger py-4">
+      <i class="bi bi-exclamation-triangle"></i> ${loadError}<br>
+      <small class="text-muted">Verifique que el servidor backend esté corriendo (npm run server).</small>
+    </td></tr>`;
+  }
+  if (pageRows.length === 0) {
     return `<tr><td colspan="10" class="text-center text-muted py-4">No se encontraron registros</td></tr>`;
   }
-  return pageData.map((item, idx) => {
-    const globalIdx = catalogoData.indexOf(item);
+  return pageRows.map((item) => {
+    const precio = parseFloat(item.precio_unitario) || 0;
     return `<tr>
       <td class="small">${item.tipo_bien || ''}</td>
       <td class="small fw-bold">${item.item_bien || ''}</td>
       <td class="small">${item.nombre_item || ''}</td>
       <td class="small">${item.unidad_medida || ''}</td>
-      <td class="small text-end">${typeof item.precio_unitario === 'number' ? item.precio_unitario.toFixed(2) : '0.00'}</td>
+      <td class="small text-end">${precio.toFixed(2)}</td>
       <td class="text-center">${checkIcon(item.ficha_tecnica)}</td>
       <td class="text-center">${checkIcon(item.acuerdo_marco)}</td>
       <td class="text-center">${checkIcon(item.producto_controlado)}</td>
       <td class="text-center">${checkIcon(item.ficha_homologada)}</td>
       <td class="text-center" style="white-space:nowrap;">
-        <button class="btn btn-sm btn-outline-primary me-1 btn-catalogo-edit" data-idx="${globalIdx}" title="Editar">
+        <button class="btn btn-sm btn-outline-primary me-1 btn-catalogo-edit" data-id="${item.id}" title="Editar">
           <i class="bi bi-pencil-square"></i>
         </button>
-        <button class="btn btn-sm btn-outline-danger btn-catalogo-delete" data-idx="${globalIdx}" title="Eliminar">
+        <button class="btn btn-sm btn-outline-danger btn-catalogo-delete" data-id="${item.id}" title="Eliminar">
           <i class="bi bi-trash"></i>
         </button>
       </td>
@@ -293,7 +280,7 @@ function renderCatalogoSigamefView() {
   `;
 }
 
-function refreshTable() {
+function renderTable() {
   const tbody = document.getElementById('catalogoBody');
   const pagContainer = document.getElementById('paginationContainer');
   const pagInfo = document.getElementById('paginationInfo');
@@ -304,14 +291,20 @@ function refreshTable() {
   tbody.innerHTML = renderTableRows();
   if (pagContainer) pagContainer.innerHTML = renderPagination();
 
-  const start = filteredData.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0;
-  const end = Math.min(currentPage * PAGE_SIZE, filteredData.length);
-  if (pagInfo) pagInfo.textContent = `Mostrando ${start}-${end} de ${filteredData.length}`;
-  if (totalBadge) totalBadge.textContent = `${catalogoData.length} registros`;
+  const start = totalRecords > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0;
+  const end = Math.min(start + pageRows.length - 1, totalRecords);
+  if (pagInfo) pagInfo.textContent = `Mostrando ${start}-${end < 0 ? 0 : end} de ${totalRecords}`;
+  if (totalBadge) totalBadge.textContent = `${totalRecords} registros`;
+}
+
+// Carga la página desde el servidor y luego repinta la tabla.
+async function refreshTable() {
+  await fetchPage();
+  renderTable();
 }
 
 function openAddModal() {
-  editingIndex = -1;
+  editingId = null;
   const title = document.getElementById('catalogoModalTitle');
   if (title) title.textContent = 'Nuevo Registro';
 
@@ -329,9 +322,9 @@ function openAddModal() {
   modal.show();
 }
 
-function openEditModal(idx) {
-  editingIndex = idx;
-  const item = catalogoData[idx];
+function openEditModal(id) {
+  editingId = id;
+  const item = pageRows.find((r) => String(r.id) === String(id));
   if (!item) return;
 
   const title = document.getElementById('catalogoModalTitle');
@@ -351,16 +344,9 @@ function openEditModal(idx) {
   modal.show();
 }
 
-function saveItem() {
-  const tipoBien = document.getElementById('modal_tipo_bien').value;
+async function saveItem() {
   const itemBien = document.getElementById('modal_item_bien').value.trim();
   const nombreItem = document.getElementById('modal_nombre_item').value.trim();
-  const unidadMedida = document.getElementById('modal_unidad_medida').value.trim();
-  const precioUnitario = parseFloat(document.getElementById('modal_precio_unitario').value) || 0;
-  const fichaTecnica = document.getElementById('modal_ficha_tecnica').checked;
-  const acuerdoMarco = document.getElementById('modal_acuerdo_marco').checked;
-  const productoControlado = document.getElementById('modal_producto_controlado').checked;
-  const fichaHomologada = document.getElementById('modal_ficha_homologada').checked;
 
   if (!itemBien || !nombreItem) {
     alert('El código del item y la descripción son obligatorios.');
@@ -368,35 +354,38 @@ function saveItem() {
   }
 
   const record = {
-    tipo_bien: tipoBien,
+    tipo_bien: document.getElementById('modal_tipo_bien').value,
     item_bien: itemBien,
     nombre_item: nombreItem,
-    unidad_medida: unidadMedida,
-    precio_unitario: precioUnitario,
-    ficha_tecnica: fichaTecnica,
-    acuerdo_marco: acuerdoMarco,
-    producto_controlado: productoControlado,
-    ficha_homologada: fichaHomologada
+    unidad_medida: document.getElementById('modal_unidad_medida').value.trim(),
+    precio_unitario: parseFloat(document.getElementById('modal_precio_unitario').value) || 0,
+    ficha_tecnica: document.getElementById('modal_ficha_tecnica').checked,
+    acuerdo_marco: document.getElementById('modal_acuerdo_marco').checked,
+    producto_controlado: document.getElementById('modal_producto_controlado').checked,
+    ficha_homologada: document.getElementById('modal_ficha_homologada').checked
   };
 
-  if (editingIndex >= 0) {
-    catalogoData[editingIndex] = record;
-  } else {
-    catalogoData.push(record);
+  const btnSave = document.getElementById('btnSaveCatalogo');
+  if (btnSave) btnSave.disabled = true;
+  try {
+    if (editingId != null) {
+      await api.update('catalogo', editingId, record);
+    } else {
+      await api.create('catalogo', record);
+    }
+    await refreshTable();
+    const modalEl = document.getElementById('catalogoModal');
+    const modal = bootstrap.Modal.getInstance(modalEl);
+    if (modal) modal.hide();
+  } catch (e) {
+    alert('Error al guardar: ' + e.message);
+  } finally {
+    if (btnSave) btnSave.disabled = false;
   }
-
-  saveData();
-  const searchVal = document.getElementById('searchCatalogo')?.value || '';
-  applyFilter(searchVal);
-  refreshTable();
-
-  const modalEl = document.getElementById('catalogoModal');
-  const modal = bootstrap.Modal.getInstance(modalEl);
-  if (modal) modal.hide();
 }
 
-function deleteItem(idx) {
-  const item = catalogoData[idx];
+function deleteItem(id) {
+  const item = pageRows.find((r) => String(r.id) === String(id));
   if (!item) return;
 
   const nameEl = document.getElementById('deleteItemName');
@@ -408,12 +397,13 @@ function deleteItem(idx) {
   const btnConfirm = document.getElementById('btnConfirmDelete');
   const newBtn = btnConfirm.cloneNode(true);
   btnConfirm.parentNode.replaceChild(newBtn, btnConfirm);
-  newBtn.addEventListener('click', () => {
-    catalogoData.splice(idx, 1);
-    saveData();
-    const searchVal = document.getElementById('searchCatalogo')?.value || '';
-    applyFilter(searchVal);
-    refreshTable();
+  newBtn.addEventListener('click', async () => {
+    try {
+      await api.remove('catalogo', id);
+      await refreshTable();
+    } catch (e) {
+      alert('Error al eliminar: ' + e.message);
+    }
     const modalInstance = bootstrap.Modal.getInstance(document.getElementById('deleteConfirmModal'));
     if (modalInstance) modalInstance.hide();
   });
@@ -421,7 +411,7 @@ function deleteItem(idx) {
 
 function importExcel(file) {
   const reader = new FileReader();
-  reader.onload = function (e) {
+  reader.onload = async function (e) {
     try {
       const data = new Uint8Array(e.target.result);
       const workbook = XLSX.read(data, { type: 'array' });
@@ -499,22 +489,22 @@ function importExcel(file) {
         return;
       }
 
-      const action = catalogoData.length > 0
-        ? confirm(`Se encontraron ${imported.length} registros.\n\nPresione ACEPTAR para REEMPLAZAR los datos actuales (${catalogoData.length} registros).\nPresione CANCELAR para AGREGAR los registros al catálogo existente.`)
-        : true;
+      const mode = totalRecords > 0
+        ? (confirm(`Se encontraron ${imported.length} registros.\n\nPresione ACEPTAR para REEMPLAZAR los datos actuales (${totalRecords} registros).\nPresione CANCELAR para AGREGAR los registros al catálogo existente.`) ? 'replace' : 'append')
+        : 'replace';
 
-      if (action) {
-        catalogoData = imported;
-      } else {
-        catalogoData = catalogoData.concat(imported);
+      try {
+        const resp = await api.post('/catalogo/import', { rows: imported, mode });
+        searchTerm = '';
+        currentPage = 1;
+        const searchInput = document.getElementById('searchCatalogo');
+        if (searchInput) searchInput.value = '';
+        await refreshTable();
+        alert(`Importación exitosa: ${resp.inserted} registros ${mode === 'replace' ? 'cargados' : 'agregados'}.`);
+      } catch (apiErr) {
+        console.error('Error al enviar importación al servidor:', apiErr);
+        alert('Error al guardar la importación en el servidor: ' + apiErr.message);
       }
-
-      saveData();
-      applyFilter('');
-      const searchInput = document.getElementById('searchCatalogo');
-      if (searchInput) searchInput.value = '';
-      refreshTable();
-      alert(`Importación exitosa: ${imported.length} registros ${action ? 'cargados' : 'agregados'}.`);
     } catch (err) {
       console.error('Error al importar Excel:', err);
       alert('Error al procesar el archivo Excel. Verifique el formato.');
@@ -523,42 +513,59 @@ function importExcel(file) {
   reader.readAsArrayBuffer(file);
 }
 
-function exportExcel() {
-  if (catalogoData.length === 0) {
-    alert('No hay datos para exportar.');
-    return;
+// Descarga todas las filas desde la API (en lotes) para exportar a Excel.
+async function exportExcel() {
+  const btnExport = document.getElementById('btnExportExcel');
+  if (btnExport) { btnExport.disabled = true; }
+  try {
+    const all = [];
+    const big = 5000;
+    let page = 1;
+    let pages = 1;
+    do {
+      const resp = await api.list('catalogo', { page, pageSize: big, search: searchTerm });
+      all.push(...(resp.data || []));
+      pages = resp.totalPages || 1;
+      page += 1;
+    } while (page <= pages);
+
+    if (all.length === 0) {
+      alert('No hay datos para exportar.');
+      return;
+    }
+
+    const exportData = all.map(item => ({
+      'tipo_bien': item.tipo_bien || '',
+      'item_bien': item.item_bien || '',
+      'nombre_item': item.nombre_item || '',
+      'unidad_medida': item.unidad_medida || '',
+      'precio_unitario': parseFloat(item.precio_unitario) || 0,
+      'ficha_tecnica': item.ficha_tecnica ? 1 : 0,
+      'acuerdo_marco': item.acuerdo_marco ? 1 : 0,
+      'producto_controlado': item.producto_controlado ? 1 : 0,
+      'ficha_homologada': item.ficha_homologada ? 1 : 0
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    ws['!cols'] = [
+      { wch: 10 }, { wch: 16 }, { wch: 60 }, { wch: 15 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 16 }
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Catálogo SIGAMEF');
+    XLSX.writeFile(wb, `catalogo_sigamef_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (e) {
+    alert('Error al exportar: ' + e.message);
+  } finally {
+    if (btnExport) { btnExport.disabled = false; }
   }
-
-  const exportData = catalogoData.map(item => ({
-    'tipo_bien': item.tipo_bien || '',
-    'item_bien': item.item_bien || '',
-    'nombre_item': item.nombre_item || '',
-    'unidad_medida': item.unidad_medida || '',
-    'precio_unitario': item.precio_unitario || 0,
-    'ficha_tecnica': item.ficha_tecnica ? 1 : 0,
-    'acuerdo_marco': item.acuerdo_marco ? 1 : 0,
-    'producto_controlado': item.producto_controlado ? 1 : 0,
-    'ficha_homologada': item.ficha_homologada ? 1 : 0
-  }));
-
-  const ws = XLSX.utils.json_to_sheet(exportData);
-
-  const colWidths = [
-    { wch: 10 }, { wch: 16 }, { wch: 60 }, { wch: 15 },
-    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 16 }
-  ];
-  ws['!cols'] = colWidths;
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Catálogo SIGAMEF');
-  XLSX.writeFile(wb, `catalogo_sigamef_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 let searchTimeout = null;
 
 function initCatalogoSigamefView() {
-  loadData();
-  applyFilter('');
+  currentPage = 1;
+  searchTerm = '';
   refreshTable();
 
   // Nuevo registro
@@ -585,15 +592,16 @@ function initCatalogoSigamefView() {
   const btnExport = document.getElementById('btnExportExcel');
   if (btnExport) btnExport.addEventListener('click', exportExcel);
 
-  // Búsqueda con debounce
+  // Búsqueda con debounce (consulta al servidor)
   const searchInput = document.getElementById('searchCatalogo');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
-        applyFilter(searchInput.value);
+        searchTerm = searchInput.value.trim();
+        currentPage = 1;
         refreshTable();
-      }, 300);
+      }, 350);
     });
   }
 
@@ -603,12 +611,14 @@ function initCatalogoSigamefView() {
     btnClear.addEventListener('click', () => {
       const input = document.getElementById('searchCatalogo');
       if (input) input.value = '';
-      applyFilter('');
+      searchTerm = '';
+      currentPage = 1;
       refreshTable();
     });
   }
 
   // Delegación de eventos para botones de tabla y paginación
+  document.removeEventListener('click', handleTableClick);
   document.addEventListener('click', handleTableClick);
 }
 
@@ -616,16 +626,14 @@ function handleTableClick(e) {
   const editBtn = e.target.closest('.btn-catalogo-edit');
   if (editBtn) {
     e.preventDefault();
-    const idx = parseInt(editBtn.dataset.idx, 10);
-    openEditModal(idx);
+    openEditModal(editBtn.dataset.id);
     return;
   }
 
   const deleteBtn = e.target.closest('.btn-catalogo-delete');
   if (deleteBtn) {
     e.preventDefault();
-    const idx = parseInt(deleteBtn.dataset.idx, 10);
-    deleteItem(idx);
+    deleteItem(deleteBtn.dataset.id);
     return;
   }
 
