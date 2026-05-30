@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "npx http-server -c-1 .",
+    "start-backend": "node server.js",
+    "migrate": "node migrate.js",
     "check": "node --check src/app.js src/router.js src/services/authService.js src/services/storageService.js src/services/requerimientoService.js src/services/userService.js src/views/loginView.js src/views/dashboardView.js src/views/auRequerimientosView.js src/views/decContratacionesView.js src/views/adminUsersView.js"
   },
   "devDependencies": {
@@ -16,6 +18,8 @@
   "dependencies": {
     "bcrypt": "^6.0.0",
     "dotenv": "^17.4.2",
-    "pg": "^8.21.0"
+    "pg": "^8.21.0",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
   }
 }
