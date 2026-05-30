@@ -69,6 +69,7 @@ async function renderApp() {
              currentRoute === 'mantenimiento/metas' ||
              currentRoute === 'mantenimiento/ordenes' ||
              currentRoute === 'mantenimiento/siaf' ||
+             currentRoute === 'mantenimiento/fichanet' ||
              currentRoute === 'mantenimiento/bienes' ||
              currentRoute === 'mantenimiento/servicios' ||
              currentRoute === 'mantenimiento/locacion' ||
