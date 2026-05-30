@@ -23,3 +23,9 @@ Thumbs.db
 # Respaldos locales
 *.backup
 C:\SGC-BACKUP-*
+
+# Archivos de datos / fuente (importar por la UI, no versionar)
+*.csv
+*.xlsx
+*.docx
+convertir.py
