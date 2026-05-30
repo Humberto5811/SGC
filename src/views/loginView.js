@@ -31,34 +31,51 @@ function renderLoginView() {
 
 function initLoginView() {
   const form = document.getElementById('loginForm');
-  if (form) {
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const dni = document.getElementById('dni').value;
-      const password = document.getElementById('password').value;
-      
-      // Obtener usuarios del localStorage
-      const users = JSON.parse(localStorage.getItem('users') || '[]');
-      
-      // Buscar usuario por DNI (sin validar contrase&ntilde;a por ahora)
-      const user = users.find(u => u.dni === dni);
-      
-      if (user) {
-        // Guardar usuario actual
-        localStorage.setItem('currentUser', JSON.stringify(user));
-        console.log('Usuario autenticado:', user);
-        // Redirigir al dashboard
-        window.location.hash = '#/dashboard';
-        // Forzar recarga de la aplicaci&oacute;n
-        window.location.reload();
-      } else {
-        // Mostrar error
-        const errorMsg = document.getElementById('errorMsg');
-        errorMsg.textContent = 'Usuario no encontrado. Pruebe con: admin, au, o dec';
-        errorMsg.classList.remove('d-none');
+  if (!form) return;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const dni = document.getElementById('dni').value.trim();
+    const password = document.getElementById('password').value;
+    const errorMsg = document.getElementById('errorMsg');
+
+    const onSuccess = (user) => {
+      localStorage.setItem('currentUser', JSON.stringify(user));
+      window.location.hash = '#/dashboard';
+      window.location.reload();
+    };
+
+    // 1) Intentar autenticar contra el backend (multiusuario).
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dni, password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        onSuccess(data.user);
+        return;
       }
-    });
-  }
+      if (res.status === 401) {
+        errorMsg.textContent = data.error || 'Credenciales inválidas.';
+        errorMsg.classList.remove('d-none');
+        return;
+      }
+    } catch (_) {
+      // El backend no está disponible: usar respaldo local.
+    }
+
+    // 2) Respaldo: usuarios en localStorage (modo sin servidor).
+    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    const user = users.find((u) => u.dni === dni);
+    if (user) {
+      onSuccess(user);
+    } else {
+      errorMsg.textContent = 'Usuario no encontrado. Pruebe con: admin, au, o dec';
+      errorMsg.classList.remove('d-none');
+    }
+  });
 }
 
 export { renderLoginView, initLoginView };

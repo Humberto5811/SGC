@@ -5,21 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "migrate": "node server/migrate.js",
+    "dev:all": "concurrently -n api,web -c green,cyan \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
     "start": "npx http-server -c-1 .",
-    "start-backend": "node server.js",
-    "migrate": "node migrate.js",
-    "check": "node --check src/app.js src/router.js src/services/authService.js src/services/storageService.js src/services/requerimientoService.js src/services/userService.js src/views/loginView.js src/views/dashboardView.js src/views/auRequerimientosView.js src/views/decContratacionesView.js src/views/adminUsersView.js"
+    "check": "node --check server/index.js server/db.js server/crud.js server/migrate.js server/routes/auth.js server/routes/catalogo.js server/routes/glosas.js server/routes/entidad.js server/routes/fichanet.js src/app.js src/router.js src/views/registroDatos/fichaNetView.js src/services/apiService.js src/views/loginView.js src/views/registroDatos/catalogoSigamefView.js src/views/registroDatos/crudViewFactory.js src/views/registroDatos/fichasTecnicasView.js src/views/registroDatos/configuracionDocView.js src/views/registroDatos/metasAreasView.js src/views/registroDatos/ordenesView.js src/views/registroDatos/siafView.js src/views/glosasRequerimientos/glosaFactory.js src/views/glosasRequerimientos/formatoBienesView.js src/views/glosasRequerimientos/formatoServiciosView.js src/views/glosasRequerimientos/formatoLocacionView.js src/views/glosasRequerimientos/formatoLicitacionesView.js src/views/glosasRequerimientos/formatoConcursoView.js src/views/institucional/entidadView.js src/views/institucional/logotiposView.js"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "vite": "^8.0.14"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "pg": "^8.21.0",
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "express": "^5.2.1",
+    "helmet": "^8.2.0",
+    "morgan": "^1.10.1",
+    "pg": "^8.21.0"
   }
 }
