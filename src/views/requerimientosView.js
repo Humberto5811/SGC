@@ -13,7 +13,7 @@ export function renderRequerimientosView() {
 
       <div class="card">
         <div class="d-flex justify-between align-center" style="margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
-          <button onclick="window.location.hash='#/requerimientos/nuevo'">
+          <button onclick="window.location.hash='#/requerimientos/nuevo/bienes'">
             <i class="bi bi-plus-circle"></i> Nuevo Requerimiento
           </button>
           <div style="display: flex; gap: 8px;">

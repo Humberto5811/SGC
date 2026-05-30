@@ -3,6 +3,7 @@ import { storageService } from './services/storageService.js';
 import { authService } from './services/authService.js';
 import { renderNavbar } from './components/Navbar.js';
 import { renderSidebar, initSidebar } from './components/Sidebar.js';
+import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
 
 const appEl = document.getElementById('app');
 
@@ -38,6 +39,10 @@ async function renderApp() {
       content = module.renderRequerimientosView(currentRoute);
       setTimeout(() => module.initRequerimientosView(currentRoute), 50);
     }
+    else if (currentRoute === 'requerimientos/nuevo/bienes') {
+      content = renderFormBienesView();
+      setTimeout(() => initFormBienesView(), 50);
+    }
     // ========== CONTRATACIONES Y SUBRUTAS ==========
     else if (currentRoute === 'contrataciones' || 
              currentRoute === 'dec/actos' ||
@@ -61,26 +66,29 @@ async function renderApp() {
       setTimeout(() => module.initEjecucionView(currentRoute), 50);
     }
     // ========== MANTENIMIENTO Y SUBRUTAS ==========
-    else if (currentRoute === 'mantenimiento' || 
-             currentRoute === 'mantenimiento/usuarios' ||
-             currentRoute === 'mantenimiento/catalogo' ||
-             currentRoute === 'mantenimiento/fichas' ||
-             currentRoute === 'mantenimiento/configuracion' ||
-             currentRoute === 'mantenimiento/metas' ||
-             currentRoute === 'mantenimiento/ordenes' ||
-             currentRoute === 'mantenimiento/siaf' ||
-             currentRoute === 'mantenimiento/fichanet' ||
-             currentRoute === 'mantenimiento/bienes' ||
-             currentRoute === 'mantenimiento/servicios' ||
-             currentRoute === 'mantenimiento/locacion' ||
-             currentRoute === 'mantenimiento/licitaciones' ||
-             currentRoute === 'mantenimiento/concurso' ||
-             currentRoute === 'mantenimiento/logotipos' ||
-             currentRoute === 'mantenimiento/entidad') {
-      const module = await import('./views/mantenimientoView.js');
-      content = module.renderMantenimientoView(currentRoute);
-      setTimeout(() => module.initMantenimientoView(currentRoute), 50);
-    }
+else if (currentRoute === 'mantenimiento/bienes') {
+  content = renderFormBienesView();
+  setTimeout(() => initFormBienesView(), 50);
+}
+else if (currentRoute === 'mantenimiento' || 
+         currentRoute === 'mantenimiento/usuarios' ||
+         currentRoute === 'mantenimiento/catalogo' ||
+         currentRoute === 'mantenimiento/fichas' ||
+         currentRoute === 'mantenimiento/configuracion' ||
+         currentRoute === 'mantenimiento/metas' ||
+         currentRoute === 'mantenimiento/ordenes' ||
+         currentRoute === 'mantenimiento/siaf' ||
+         currentRoute === 'mantenimiento/fichanet' ||
+         currentRoute === 'mantenimiento/servicios' ||
+         currentRoute === 'mantenimiento/locacion' ||
+         currentRoute === 'mantenimiento/licitaciones' ||
+         currentRoute === 'mantenimiento/concurso' ||
+         currentRoute === 'mantenimiento/logotipos' ||
+         currentRoute === 'mantenimiento/entidad') {
+  const module = await import('./views/mantenimientoView.js');
+  content = module.renderMantenimientoView(currentRoute);
+  setTimeout(() => module.initMantenimientoView(currentRoute), 50);
+}
     // Vista genérica para rutas no implementadas
     else {
       content = `
