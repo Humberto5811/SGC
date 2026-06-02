@@ -36,7 +36,12 @@ router.get('/', async (req, res, next) => {
        FROM glosas_bienes gb
        LEFT JOIN glosas_entregas ge ON ge.glosa_id = gb.id
        GROUP BY gb.id
-       ORDER BY COALESCE(NULLIF(gb.numero, ''), gb.literal, gb.id::text)`
+       ORDER BY
+         CASE WHEN gb.literal IS NOT NULL THEN 0 ELSE 1 END,
+         gb.literal,
+         NULLIF(split_part(gb.numero, '.', 1), '')::int NULLS FIRST,
+         NULLIF(split_part(gb.numero, '.', 2), '')::int NULLS FIRST,
+         gb.id`
     );
     res.json({ data: rows });
   } catch (err) { next(err); }
