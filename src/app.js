@@ -4,6 +4,7 @@ import { authService } from './services/authService.js';
 import { renderNavbar } from './components/Navbar.js';
 import { renderSidebar, initSidebar } from './components/Sidebar.js';
 import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
+import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
 
 const appEl = document.getElementById('app');
 
@@ -67,8 +68,8 @@ async function renderApp() {
     }
     // ========== MANTENIMIENTO Y SUBRUTAS ==========
 else if (currentRoute === 'mantenimiento/bienes') {
-  content = renderFormBienesView();
-  setTimeout(() => initFormBienesView(), 50);
+  content = renderFormatoBienesView();
+  setTimeout(() => initFormatoBienesView(), 50);
 }
 else if (currentRoute === 'mantenimiento' || 
          currentRoute === 'mantenimiento/usuarios' ||
