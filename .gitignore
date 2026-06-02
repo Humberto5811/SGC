@@ -29,3 +29,4 @@ C:\SGC-BACKUP-*
 *.xlsx
 *.docx
 convertir.py
+"*.stackdump" 
