@@ -241,3 +241,23 @@ CREATE TABLE IF NOT EXISTS logotipos (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============ REQUERIMIENTOS (Registro de Requerimientos) ============
+-- Cada requerimiento es un registro independiente. Los datos del formulario
+-- (área, responsable, objetivo, finalidad, ítems SIGAMEF, overrides de glosas
+-- c)–18, entregas 14.1 y fichas técnicas adjuntas) se guardan en payload (JSON).
+CREATE TABLE IF NOT EXISTS requerimientos (
+  id SERIAL PRIMARY KEY,
+  tipo VARCHAR(30) NOT NULL DEFAULT 'bienes',
+  codigo VARCHAR(60),
+  denominacion VARCHAR(300),
+  area VARCHAR(250),
+  responsable VARCHAR(200),
+  estado VARCHAR(30) DEFAULT 'Registrado',
+  payload TEXT,
+  usuario_modificacion VARCHAR(150),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_requerimientos_tipo ON requerimientos (tipo);

@@ -104,6 +104,12 @@ app.use('/api/logotipos', crudRouter({
   columns: ['nombre', 'tipo', 'data_url', 'estado'],
   searchCols: ['nombre', 'tipo'],
 }));
+app.use('/api/requerimientos', crudRouter({
+  table: 'requerimientos',
+  columns: ['tipo', 'codigo', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
+  searchCols: ['codigo', 'denominacion', 'area', 'responsable', 'tipo'],
+  orderBy: 'id DESC',
+}));
 
 // Manejador de errores centralizado
 app.use((err, _req, res, _next) => {
