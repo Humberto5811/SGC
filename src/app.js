@@ -5,6 +5,7 @@ import { renderNavbar } from './components/Navbar.js';
 import { renderSidebar, initSidebar } from './components/Sidebar.js';
 import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
 import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
+import { renderRegistroRequerimientoView, initRegistroRequerimientoView } from './views/requerimiento/registroRequerimientoView.js';
 
 const appEl = document.getElementById('app');
 
@@ -32,10 +33,13 @@ async function renderApp() {
       content = dashboardModule.renderDashboardView();
       setTimeout(() => dashboardModule.initDashboardView(), 50);
     }
-    // ========== REQUERIMIENTOS Y SUBRUTAS ==========
-    else if (currentRoute === 'requerimientos' || 
-             currentRoute === 'au/requerimientos/registro' || 
-             currentRoute === 'au/requerimientos/evaluacion') {
+    // ========== REGISTRO DE REQUERIMIENTOS (Formato Bienes v1) ==========
+    else if (currentRoute === 'requerimientos' ||
+             currentRoute === 'au/requerimientos/registro') {
+      content = renderRegistroRequerimientoView();
+      setTimeout(() => initRegistroRequerimientoView(), 50);
+    }
+    else if (currentRoute === 'au/requerimientos/evaluacion') {
       const module = await import('./views/requerimientosView.js');
       content = module.renderRequerimientosView(currentRoute);
       setTimeout(() => module.initRequerimientosView(currentRoute), 50);
