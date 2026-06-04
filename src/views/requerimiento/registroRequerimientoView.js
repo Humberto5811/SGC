@@ -27,6 +27,7 @@ const FORMATOS = [
 let state = {
   view: 'select',          // 'select' | 'bienes'
   reqId: null,
+  codigo: '',              // <--- NUEVO: para almacenar el código del requerimiento
   header: { logo: '', entidadNombre: '' },
   area: { codigo: '', nombre: '', responsable: '' },
   denominacion: '',
@@ -70,15 +71,13 @@ function totalEntregas() {
 // =========================================================================
 function renderSelect() {
   const cards = FORMATOS.map((f) => `
-    <div class="col-md-4 col-lg-3 mb-3">
-      <div class="card h-100 shadow-sm fmt-card ${f.enabled ? '' : 'opacity-75'}" data-tipo="${f.tipo}" data-enabled="${f.enabled}"
-           style="cursor:${f.enabled ? 'pointer' : 'not-allowed'};">
-        <div class="card-body text-center">
-          <div class="display-5 text-${f.color} mb-2"><i class="bi ${f.icon}"></i></div>
-          <h6 class="card-title mb-1">${f.label}</h6>
-          ${f.enabled
-            ? '<span class="badge bg-success">Disponible</span>'
-            : '<span class="badge bg-secondary">En preparación</span>'}
+    <div class="col-auto mb-2">
+      <div class="card shadow-sm fmt-card ${f.enabled ? '' : 'opacity-75'}" data-tipo="${f.tipo}" data-enabled="${f.enabled}"
+           style="cursor:${f.enabled ? 'pointer' : 'not-allowed'}; width: 130px;">
+        <div class="card-body text-center p-2">
+          <div class="h4 text-${f.color} mb-1"><i class="bi ${f.icon}"></i></div>
+          <span class="badge ${f.enabled ? 'bg-success' : 'bg-secondary'}" style="font-size: 0.65rem;">${f.enabled ? 'Disponible' : 'En preparación'}</span>
+          <div class="small fw-bold mt-1">${f.label.replace('Formato de ', '')}</div>
         </div>
       </div>
     </div>
@@ -90,7 +89,9 @@ function renderSelect() {
         <h3 class="mb-1"><i class="bi bi-pencil-square"></i> Registro de Requerimientos</h3>
         <p class="text-muted mb-0">Seleccione el tipo de formato para iniciar el registro del requerimiento.</p>
       </div>
-      <div class="row" id="fmtCards">${cards}</div>
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-4" style="overflow-x: auto; white-space: nowrap;">
+        ${cards}
+      </div>
       <hr/>
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h5 class="mb-0"><i class="bi bi-list-check"></i> Requerimientos registrados</h5>
@@ -100,7 +101,6 @@ function renderSelect() {
     </div>
   `;
 }
-
 async function loadList() {
   const cont = document.getElementById('reqList');
   if (!cont) return;
@@ -225,13 +225,19 @@ function renderBienes() {
       </div>
       <div id="reqMsg"></div>
 
-      <!-- Cabecera: logo + entidad -->
+      <!-- Cabecera: logo + entidad + títulos centrados -->
       <div class="card mb-3">
         <div class="card-body d-flex align-items-center gap-3">
           <div style="width:150px; text-align:center;">${logoImg}</div>
           <div class="flex-fill text-center">
             <div class="fw-bold">${esc(entidadNombre || 'INSTITUTO NACIONAL DE SALUD')}</div>
-            <div class="small text-muted">ANEXO N.º 01 — ESPECIFICACIONES TÉCNICAS PARA ADQUISICIÓN DE BIENES</div>
+            <div class="mt-2">
+              <div class="fw-bold">ANEXO N° 01</div>
+              <div class="text-uppercase small fw-bold">ESPECIFICACIONES TÉCNICAS PARA ADQUISICIÓN DE BIENES</div>
+            </div>
+            <div class="mt-3">
+              <div class="fw-bold bg-light d-inline-block px-3 py-1 rounded">REQUERIMIENTO N° ${state.codigo || '00000'}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -318,7 +324,7 @@ function renderItemsTable() {
           <tr><th>Código SIGAMEF</th><th>Descripción del bien</th><th class="text-center" style="width:120px">Unidad de Medida</th><th style="width:120px">Cantidad</th><th style="width:60px" class="text-center">Acción</th></tr>
         </thead>
         <tbody id="itemsBody">${rows || '<tr><td colspan="5" class="text-center text-muted">Busque y agregue ítems del Catálogo SIGAMEF.</td></tr>'}</tbody>
-        <tfoot><tr class="table-secondary fw-bold"><td colspan="3" class="text-end">TOTAL CANTIDAD</td><td id="itemsTotal">${totalCantidadItems()}</td><td></td></tr></tfoot>
+        <tfoot><tr class="table-secondary fw-bold"><td colspan="3" class="text-end">TOTAL CANTIDAD</td><td id="itemsTotal">${totalCantidadItems()}</td><td style="width:60px"></td></tr></tfoot>
       </table>
     </div>`;
 }
@@ -602,18 +608,31 @@ async function saveRequerimiento() {
   try {
     if (state.reqId) {
       await requerimientosService.update(state.reqId, body);
+      // Actualizar el código en el state después de actualizar
+      if (body.codigo) state.codigo = body.codigo;
     } else {
       const created = await requerimientosService.create(body);
       if (created && created.id) {
         state.reqId = created.id;
         if (!created.codigo) {
-          // Asigna un código legible basado en el id.
-          const codigo = `REQ-B-${String(created.id).padStart(4, '0')}`;
+          // Asigna un código legible único REQ-XXXXX (sin letra de tipo)
+          const codigo = `REQ-${String(created.id).padStart(5, '0')}`;
           await requerimientosService.update(created.id, { codigo });
+          state.codigo = codigo;
+        } else {
+          state.codigo = created.codigo;
         }
       }
     }
     setMsg('success', 'Requerimiento guardado correctamente.');
+    // Refrescar la lista si estamos en la vista de selección
+    if (state.view === 'select') {
+      loadList();
+    } else {
+      // Si estamos en el formulario, actualizar la visualización del código
+      const codigoElement = document.querySelector('.bg-light.d-inline-block');
+      if (codigoElement) codigoElement.textContent = `REQUERIMIENTO N° ${state.codigo || '00000'}`;
+    }
   } catch (e) {
     setMsg('danger', `Error al guardar: ${e.message}`);
   }
@@ -623,6 +642,7 @@ function applyPayload(row) {
   let p = {};
   try { p = JSON.parse(row.payload || '{}'); } catch (_) { p = {}; }
   state.reqId = row.id;
+  state.codigo = row.codigo || '';  // <--- NUEVO: guardar el código
   state.area = p.area || { codigo: '', nombre: row.area || '', responsable: row.responsable || '' };
   state.denominacion = row.denominacion || '';
   state.objetivo = p.objetivo || '';
@@ -678,6 +698,7 @@ async function printRequerimiento(id) {
 function resetState() {
   state = {
     view: 'select', reqId: null,
+    codigo: '',              // <--- NUEVO: resetear código
     header: { logo: '', entidadNombre: '' },
     area: { codigo: '', nombre: '', responsable: '' },
     denominacion: '', objetivo: '', finalidad: '', caracteristicas: '',
@@ -719,9 +740,17 @@ function buildPrintHTML(s) {
   const { logo, entidadNombre } = s.header || {};
   const logoImg = logo ? `<img src="${logo}" style="max-height:70px;max-width:140px;object-fit:contain;">` : '';
   const ent = entidadNombre || 'INSTITUTO NACIONAL DE SALUD';
+  
+  // Obtener el código del requerimiento (correlativo)
+  const codigoRequerimiento = s.codigo || '00000';
 
   const itemsRows = (s.items || []).map((it, i) => `
-    <tr><td>${i + 1}</td><td>${esc(it.item_bien)}</td><td>${esc(it.nombre_item)}</td><td style="text-align:center">${esc(it.unidad_medida)}</td><td style="text-align:right">${esc(it.cantidad)}</td></tr>`).join('');
+    <tr><td style="text-align:center">${i + 1}</td>
+      <td>${esc(it.item_bien)}</td>
+      <td>${esc(it.nombre_item)}</td>
+      <td style="text-align:center">${esc(it.unidad_medida)}</td>
+      <td style="text-align:right">${esc(it.cantidad)}</td>
+    </tr>`).join('');
   const totalItems = (s.items || []).reduce((a, b) => a + (Number(b.cantidad) || 0), 0);
 
   const glosa = MODELO.map((item) => glosaPrint(item, s)).join('');
@@ -738,7 +767,9 @@ function buildPrintHTML(s) {
     .hdr .logo { width:170px; border-right:1px solid #000; padding:8px; text-align:center; }
     .hdr .title { flex:1; text-align:center; padding:8px; }
     .hdr .title h1 { font-size:14px; margin:0 0 4px; }
-    .hdr .title h2 { font-size:12px; margin:0; font-weight:normal; }
+    .hdr .title h2 { font-size:13px; margin:8px 0 0 0; font-weight:bold; }
+    .hdr .title h3 { font-size:12px; margin:4px 0 0 0; font-weight:normal; text-transform:uppercase; }
+    .hdr .title .req-num { font-size:12px; margin:10px 0 0 0; font-weight:bold; background:#f0f0f0; display:inline-block; padding:4px 12px; border-radius:4px; }
     h3.sec { font-size:12px; margin:14px 0 4px; }
     .fld { margin-bottom:8px; }
     .lbl { font-weight:bold; }
@@ -755,7 +786,13 @@ function buildPrintHTML(s) {
   </style></head><body>
   <div class="bar"><button onclick="window.print()">🖨 Imprimir / Guardar como PDF</button></div>
   <div class="hdr"><div class="logo">${logoImg}</div>
-    <div class="title"><h1>${esc(ent)}</h1><h2>ANEXO N.º 01 — ESPECIFICACIONES TÉCNICAS PARA ADQUISICIÓN DE BIENES</h2></div></div>
+    <div class="title">
+      <h1>${esc(ent)}</h1>
+      <h2>ANEXO N° 01</h2>
+      <h3>ESPECIFICACIONES TÉCNICAS PARA ADQUISICIÓN DE BIENES</h3>
+      <div class="req-num">REQUERIMIENTO N° ${esc(codigoRequerimiento)}</div>
+    </div>
+  </div>
 
   <h3 class="sec">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL BIEN</h3>
   <div class="fld"><div class="box">${esc((s.area && s.area.nombre) || '')}${s.area && s.area.responsable ? ' — Responsable: ' + esc(s.area.responsable) : ''}</div></div>
@@ -769,9 +806,10 @@ function buildPrintHTML(s) {
 
   <h3 class="sec">4. REQUERIMIENTO O CARACTERÍSTICAS TÉCNICAS</h3>
   <div class="fld"><div class="lbl">a) Descripción del bien</div>
-    <table><thead><tr><th>N°</th><th>Código SIGAMEF</th><th>Descripción del bien</th><th>Unidad</th><th>Cantidad</th></tr></thead>
-    <tbody>${itemsRows || '<tr><td colspan="5" style="text-align:center">—</td></tr>'}</tbody>
-    <tfoot><tr><th colspan="4" style="text-align:right">TOTAL</th><th style="text-align:right">${totalItems}</th></tr></tfoot></table>
+    <table><thead><tr><th style="text-align:center">N°</th><th>Código SIGAMEF</th><th>Descripción del bien</th><th style="text-align:center">Unidad</th><th style="text-align:right">Cantidad</th></tr></thead>
+    <tbody>${itemsRows || '<tr><td colspan="5" style="text-align:center">—</td></td>'}</tbody>
+    <tfoot><tr><th colspan="4" style="text-align:right">TOTAL</th><th style="text-align:right">${totalItems}</th></tr></tfoot>
+    </table>
   </div>
   <div class="fld"><div class="lbl">b) Características técnicas</div><div class="box">${esc(s.caracteristicas || '')}</div></div>
 
@@ -802,11 +840,11 @@ function glosaPrint(item, s) {
   if (item.kind === 'heading') return `<h3 class="sec">${esc(pre)}${esc(glosaTituloPrint(item, s))}</h3>`;
   if (item.kind === 'plazo') {
     const ents = (s.entregas || []);
-    const rows = ents.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:right">${esc(e.cantidad)}</td><td>${esc(e.plazo)}</td><td>${esc(e.condicion)}</td></tr>`).join('');
+    const rows = ents.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:right">${esc(e.cantidad)}</td><td>${esc(e.plazo)}</td><td>${esc(e.condicion)}</td>`).join('');
     const tot = ents.reduce((a, b) => a + (Number(b.cantidad) || 0), 0);
     return `<h3 class="sec">${esc(pre)}${esc(glosaTituloPrint(item, s))}</h3>
       <div class="box">${esc(glosaContPrint(item, s) || item.intro || '')}</div>
-      <table><thead><tr><th>N° Entrega</th><th>Cantidad</th><th>Plazo de Entrega</th><th>Condición de entrega</th></tr></thead>
+      <table><thead><tr><th style="text-align:center">N° Entrega</th><th style="text-align:right">Cantidad</th><th>Plazo de Entrega</th><th>Condición de entrega</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="4" style="text-align:center">—</td></tr>'}</tbody>
       <tfoot><tr><th style="text-align:right">TOTAL</th><th style="text-align:right">${tot}</th><th colspan="2"></th></tr></tfoot></table>`;
   }
