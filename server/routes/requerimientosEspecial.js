@@ -38,7 +38,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
     // Agregar paginación
     params.push(pageSize);
     params.push(offset);
-    const nextParamNum = params.length - 2;
+    const nextParamNum = params.length - 1;
 
     const dataSql = `
       SELECT 

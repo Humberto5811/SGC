@@ -1,7 +1,7 @@
 // Ejecuta el esquema (idempotente) y siembra usuarios por defecto.
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import bcrypt from 'bcrypt';
 import pool, { query } from './db.js';
 
@@ -17,6 +17,24 @@ export async function runMigrations() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   await query(schema);
   console.log('[db] Esquema aplicado correctamente.');
+
+  // Ejecutar migraciones adicionales definidas en server/migrations
+  const migrationsDir = path.join(__dirname, 'migrations');
+  if (fs.existsSync(migrationsDir)) {
+    const migrationFiles = fs.readdirSync(migrationsDir)
+      .filter((name) => name.endsWith('.js'))
+      .sort();
+
+    for (const file of migrationFiles) {
+      const migrationPath = path.join(migrationsDir, file);
+      const migrationModule = await import(pathToFileURL(migrationPath).href);
+      const sql = migrationModule.default;
+      if (sql && typeof sql === 'string') {
+        await query(sql);
+        console.log(`[db] Migración aplicada: ${file}`);
+      }
+    }
+  }
 
   for (const u of DEFAULT_USERS) {
     const hash = await bcrypt.hash(u.password, 10);

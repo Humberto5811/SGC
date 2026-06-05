@@ -96,6 +96,9 @@ CREATE TABLE IF NOT EXISTS areas (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+ALTER TABLE areas
+  ADD COLUMN IF NOT EXISTS centro_id INTEGER REFERENCES centros(id) ON DELETE SET NULL;
+
 -- ============ ÓRDENES ============
 CREATE TABLE IF NOT EXISTS ordenes (
   id SERIAL PRIMARY KEY,
