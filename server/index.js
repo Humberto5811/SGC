@@ -15,6 +15,8 @@ import glosasRouter from './routes/glosas.js';
 import glosasBienesRouter from './routes/glosasBienes.js';
 import entidadRouter from './routes/entidad.js';
 import fichanetRouter from './routes/fichanet.js';
+import adjuntosRouter from './routes/adjuntos.js';
+import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
 
 dotenv.config();
 
@@ -110,6 +112,10 @@ app.use('/api/requerimientos', crudRouter({
   searchCols: ['codigo', 'denominacion', 'area', 'responsable', 'tipo'],
   orderBy: 'id DESC',
 }));
+
+// Rutas especiales para requerimientos y adjuntos
+app.use('/api/requerimientos', requerimientosEspecialRouter);
+app.use('/api/adjuntos', adjuntosRouter);
 
 // Manejador de errores centralizado
 app.use((err, _req, res, _next) => {

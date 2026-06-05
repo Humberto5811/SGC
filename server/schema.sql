@@ -261,3 +261,18 @@ CREATE TABLE IF NOT EXISTS requerimientos (
 );
 
 CREATE INDEX IF NOT EXISTS idx_requerimientos_tipo ON requerimientos (tipo);
+
+-- ============ ADJUNTOS DE REQUERIMIENTOS ============
+-- Almacena archivos adjuntos a cada requerimiento para la aprobación
+CREATE TABLE IF NOT EXISTS requerimientos_adjuntos (
+  id SERIAL PRIMARY KEY,
+  requerimiento_id INTEGER NOT NULL REFERENCES requerimientos(id) ON DELETE CASCADE,
+  nombre_archivo VARCHAR(300),
+  mime_type VARCHAR(100),
+  contenido_base64 TEXT,
+  tamaño_bytes INTEGER,
+  usuario_carga VARCHAR(150),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_adjuntos_requerimiento_id ON requerimientos_adjuntos (requerimiento_id);

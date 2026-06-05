@@ -12,6 +12,7 @@ import { api } from '../../services/apiService.js';
 import { authService } from '../../services/authService.js';
 import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
+import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
@@ -139,6 +140,8 @@ async function loadList() {
                 <td class="text-end text-nowrap">
                   <button class="btn btn-sm btn-outline-primary req-open" data-id="${r.id}" title="Abrir"><i class="bi bi-pencil"></i></button>
                   <button class="btn btn-sm btn-outline-dark req-print" data-id="${r.id}" title="Generar documento"><i class="bi bi-printer"></i></button>
+                  <button class="btn btn-sm btn-outline-info req-attach" data-id="${r.id}" title="Adjuntar archivos"><i class="bi bi-paperclip"></i></button>
+                  <button class="btn btn-sm btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación"><i class="bi bi-check-circle"></i></button>
                   <button class="btn btn-sm btn-outline-danger req-del" data-id="${r.id}" title="Eliminar"><i class="bi bi-trash"></i></button>
                 </td>
               </tr>`).join('')}
@@ -147,6 +150,8 @@ async function loadList() {
       </div>`;
     cont.querySelectorAll('.req-open').forEach((b) => b.onclick = () => openRequerimiento(b.dataset.id));
     cont.querySelectorAll('.req-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
+    cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id));
+    cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
@@ -886,6 +891,149 @@ function openPrintWindow(s) {
   win.document.open();
   win.document.write(buildPrintHTML(s));
   win.document.close();
+}
+
+// =========================================================================
+// GESTIÓN DE ADJUNTOS Y APROBACIÓN
+// =========================================================================
+async function manageAdjuntos(requerimientoId) {
+  try {
+    const adjuntos = await adjuntosService.getAdjuntos(requerimientoId);
+    const adjuntosData = (adjuntos && adjuntos.adjuntos) || [];
+    
+    const html = `
+      <div class="modal fade" id="modAdjuntos" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title"><i class="bi bi-paperclip"></i> Gestionar Adjuntos</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-3">
+                <label class="form-label">Seleccionar archivo para cargar</label>
+                <input id="inputAdjunto" type="file" class="form-control" />
+              </div>
+              <button id="btnSubir" class="btn btn-sm btn-success mb-3"><i class="bi bi-cloud-upload"></i> Subir archivo</button>
+              <div id="listAdjuntos">
+                ${adjuntosData.length === 0 ? '<div class="text-muted">Sin adjuntos registrados.</div>' : ''}
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    let container = document.getElementById('modAdjuntos');
+    if (!container) {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+    }
+    container.innerHTML = html;
+
+    // Renderizar lista de adjuntos
+    renderListaAdjuntos(requerimientoId, adjuntosData);
+
+    // Evento de subida
+    const btnSubir = document.getElementById('btnSubir');
+    if (btnSubir) {
+      btnSubir.onclick = async () => {
+        const input = document.getElementById('inputAdjunto');
+        if (!input || !input.files || !input.files[0]) {
+          alert('Selecciona un archivo');
+          return;
+        }
+        try {
+          btnSubir.disabled = true;
+          btnSubir.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Subiendo…';
+          await adjuntosService.uploadAdjunto(requerimientoId, input.files[0]);
+          input.value = '';
+          btnSubir.disabled = false;
+          btnSubir.innerHTML = '<i class="bi bi-cloud-upload"></i> Subir archivo';
+          // Recargar lista
+          const adjuntos2 = await adjuntosService.getAdjuntos(requerimientoId);
+          renderListaAdjuntos(requerimientoId, adjuntos2.adjuntos || []);
+        } catch (err) {
+          alert('Error al subir: ' + err.message);
+          btnSubir.disabled = false;
+          btnSubir.innerHTML = '<i class="bi bi-cloud-upload"></i> Subir archivo';
+        }
+      };
+    }
+
+    // Mostrar modal
+    const modal = new bootstrap.Modal(document.getElementById('modAdjuntos'));
+    modal.show();
+  } catch (err) {
+    alert('Error al cargar adjuntos: ' + err.message);
+  }
+}
+
+function renderListaAdjuntos(requerimientoId, adjuntos) {
+  const cont = document.getElementById('listAdjuntos');
+  if (!cont) return;
+
+  if (!adjuntos || adjuntos.length === 0) {
+    cont.innerHTML = '<div class="text-muted">Sin adjuntos registrados.</div>';
+    return;
+  }
+
+  const rows = adjuntos.map((a) => `
+    <div class="d-flex justify-content-between align-items-center p-2 border rounded mb-2">
+      <div class="flex-grow-1">
+        <span class="small fw-bold">${esc(a.nombre_archivo || '')}</span>
+        <div class="text-muted small">${a.tamaño_bytes ? (a.tamaño_bytes / 1024).toFixed(1) + ' KB' : ''}</div>
+      </div>
+      <div>
+        <button class="btn btn-sm btn-outline-secondary adj-open" data-id="${a.id}" data-name="${esc(a.nombre_archivo)}" title="Abrir/Descargar"><i class="bi bi-download"></i></button>
+        <button class="btn btn-sm btn-outline-danger adj-del" data-id="${a.id}" title="Eliminar"><i class="bi bi-trash"></i></button>
+      </div>
+    </div>`).join('');
+
+  cont.innerHTML = `<div class="border-top pt-2">${rows}</div>`;
+
+  cont.querySelectorAll('.adj-open').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await adjuntosService.descargarAdjunto(b.dataset.id, b.dataset.name);
+      } catch (err) {
+        alert('Error al descargar: ' + err.message);
+      }
+    };
+  });
+
+  cont.querySelectorAll('.adj-del').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('¿Eliminar este adjunto?')) return;
+      try {
+        await adjuntosService.eliminarAdjunto(b.dataset.id);
+        const adjuntos2 = await adjuntosService.getAdjuntos(requerimientoId);
+        renderListaAdjuntos(requerimientoId, adjuntos2.adjuntos || []);
+      } catch (err) {
+        alert('Error al eliminar: ' + err.message);
+      }
+    };
+  });
+}
+
+async function solicitarAprobacion(requerimientoId) {
+  if (!confirm('¿Solicitar aprobación de este requerimiento? El estado cambiará a "En tramite de aprobación".')) {
+    return;
+  }
+
+  try {
+    const res = await api.put(`/requerimientos/${requerimientoId}/solicitar-aprobacion`, {});
+    if (res && res.success) {
+      alert('Aprobación solicitada correctamente. El requerimiento está en trámite.');
+      loadList();
+    } else {
+      alert('Error al solicitar aprobación');
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
 }
 
 // =========================================================================
