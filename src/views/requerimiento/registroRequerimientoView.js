@@ -106,7 +106,18 @@ async function loadList() {
   if (!cont) return;
   try {
     const resp = await requerimientosService.list({ pageSize: 200 });
-    const rows = (resp && resp.data) || [];
+    let rows = (resp && resp.data) || [];
+    // Ordenar ascendente por número de código (si existe) o por `id` como fallback
+    rows = (rows || []).slice().sort((a, b) => {
+      const getNum = (r) => {
+        if (r && r.codigo) {
+          const m = String(r.codigo).match(/(\d+)/);
+          if (m) return Number(m[1]);
+        }
+        return Number(r && r.id) || 0;
+      };
+      return getNum(a) - getNum(b);
+    });
     if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">Aún no hay requerimientos registrados.</div>';
       return;
