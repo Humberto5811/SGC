@@ -140,7 +140,7 @@ async function loadList() {
                 <td class="text-end text-nowrap">
                   <button class="btn btn-sm btn-outline-primary req-open" data-id="${r.id}" title="Abrir"><i class="bi bi-pencil"></i></button>
                   <button class="btn btn-sm btn-outline-dark req-print" data-id="${r.id}" title="Generar documento"><i class="bi bi-printer"></i></button>
-                  <button class="btn btn-sm btn-outline-info req-attach" data-id="${r.id}" title="Adjuntar archivos"><i class="bi bi-paperclip"></i></button>
+                  <button class="btn btn-sm btn-outline-info req-attach" data-id="${r.id}" title="Adjuntar archivos"><i class="bi bi-paperclip"></i> <span class="badge bg-info adjunto-count-${r.id}">0</span></button>
                   <button class="btn btn-sm btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación"><i class="bi bi-check-circle"></i></button>
                   <button class="btn btn-sm btn-outline-danger req-del" data-id="${r.id}" title="Eliminar"><i class="bi bi-trash"></i></button>
                 </td>
@@ -153,6 +153,11 @@ async function loadList() {
     cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id));
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
+    
+    // Cargar contadores de adjuntos para cada requerimiento
+    rows.forEach((r) => {
+      cargarContadorAdjuntos(r.id);
+    });
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
@@ -902,7 +907,7 @@ async function manageAdjuntos(requerimientoId) {
     const adjuntosData = (adjuntos && adjuntos.adjuntos) || [];
     
     const html = `
-      <div class="modal fade" id="modAdjuntos" tabindex="-1">
+      <div class="modal fade" id="modAdjuntos_${requerimientoId}" tabindex="-1">
         <div class="modal-dialog modal-lg">
           <div class="modal-content">
             <div class="modal-header">
@@ -912,10 +917,10 @@ async function manageAdjuntos(requerimientoId) {
             <div class="modal-body">
               <div class="mb-3">
                 <label class="form-label">Seleccionar archivo para cargar</label>
-                <input id="inputAdjunto" type="file" class="form-control" />
+                <input id="inputAdjunto_${requerimientoId}" type="file" class="form-control" />
               </div>
-              <button id="btnSubir" class="btn btn-sm btn-success mb-3"><i class="bi bi-cloud-upload"></i> Subir archivo</button>
-              <div id="listAdjuntos">
+              <button id="btnSubir_${requerimientoId}" class="btn btn-sm btn-success mb-3"><i class="bi bi-cloud-upload"></i> Subir archivo</button>
+              <div id="listAdjuntos_${requerimientoId}">
                 ${adjuntosData.length === 0 ? '<div class="text-muted">Sin adjuntos registrados.</div>' : ''}
               </div>
             </div>
@@ -926,21 +931,22 @@ async function manageAdjuntos(requerimientoId) {
         </div>
       </div>`;
 
-    let container = document.getElementById('modAdjuntos');
-    if (!container) {
-      container = document.createElement('div');
-      document.body.appendChild(container);
+    let container = document.getElementById(`modAdjuntos_${requerimientoId}`);
+    if (container) {
+      container.remove();
     }
+    container = document.createElement('div');
+    document.body.appendChild(container);
     container.innerHTML = html;
 
     // Renderizar lista de adjuntos
     renderListaAdjuntos(requerimientoId, adjuntosData);
 
     // Evento de subida
-    const btnSubir = document.getElementById('btnSubir');
+    const btnSubir = document.getElementById(`btnSubir_${requerimientoId}`);
     if (btnSubir) {
       btnSubir.onclick = async () => {
-        const input = document.getElementById('inputAdjunto');
+        const input = document.getElementById(`inputAdjunto_${requerimientoId}`);
         if (!input || !input.files || !input.files[0]) {
           alert('Selecciona un archivo');
           return;
@@ -952,9 +958,10 @@ async function manageAdjuntos(requerimientoId) {
           input.value = '';
           btnSubir.disabled = false;
           btnSubir.innerHTML = '<i class="bi bi-cloud-upload"></i> Subir archivo';
-          // Recargar lista
+          // Recargar lista y actualizar contador
           const adjuntos2 = await adjuntosService.getAdjuntos(requerimientoId);
           renderListaAdjuntos(requerimientoId, adjuntos2.adjuntos || []);
+          cargarContadorAdjuntos(requerimientoId);
         } catch (err) {
           alert('Error al subir: ' + err.message);
           btnSubir.disabled = false;
@@ -963,16 +970,21 @@ async function manageAdjuntos(requerimientoId) {
       };
     }
 
-    // Mostrar modal
-    const modal = new bootstrap.Modal(document.getElementById('modAdjuntos'));
+    // Mostrar modal con ID único
+    const modal = new bootstrap.Modal(document.getElementById(`modAdjuntos_${requerimientoId}`));
     modal.show();
+    
+    // Limpiar modal al cerrarlo
+    document.getElementById(`modAdjuntos_${requerimientoId}`).addEventListener('hidden.bs.modal', function() {
+      this.remove();
+    }, { once: true });
   } catch (err) {
     alert('Error al cargar adjuntos: ' + err.message);
   }
 }
 
 function renderListaAdjuntos(requerimientoId, adjuntos) {
-  const cont = document.getElementById('listAdjuntos');
+  const cont = document.getElementById(`listAdjuntos_${requerimientoId}`);
   if (!cont) return;
 
   if (!adjuntos || adjuntos.length === 0) {
@@ -988,7 +1000,7 @@ function renderListaAdjuntos(requerimientoId, adjuntos) {
       </div>
       <div>
         <button class="btn btn-sm btn-outline-secondary adj-open" data-id="${a.id}" data-name="${esc(a.nombre_archivo)}" title="Abrir/Descargar"><i class="bi bi-download"></i></button>
-        <button class="btn btn-sm btn-outline-danger adj-del" data-id="${a.id}" title="Eliminar"><i class="bi bi-trash"></i></button>
+        <button class="btn btn-sm btn-outline-danger adj-del" data-id="${a.id}" data-reqid="${requerimientoId}" title="Eliminar"><i class="bi bi-trash"></i></button>
       </div>
     </div>`).join('');
 
@@ -1011,11 +1023,26 @@ function renderListaAdjuntos(requerimientoId, adjuntos) {
         await adjuntosService.eliminarAdjunto(b.dataset.id);
         const adjuntos2 = await adjuntosService.getAdjuntos(requerimientoId);
         renderListaAdjuntos(requerimientoId, adjuntos2.adjuntos || []);
+        cargarContadorAdjuntos(requerimientoId);
       } catch (err) {
         alert('Error al eliminar: ' + err.message);
       }
     };
   });
+}
+
+// Cargar y actualizar el contador de adjuntos en el botón
+async function cargarContadorAdjuntos(requerimientoId) {
+  try {
+    const adjuntos = await adjuntosService.getAdjuntos(requerimientoId);
+    const count = (adjuntos && adjuntos.adjuntos && adjuntos.adjuntos.length) || 0;
+    const badge = document.querySelector(`.adjunto-count-${requerimientoId}`);
+    if (badge) {
+      badge.textContent = count;
+    }
+  } catch (err) {
+    console.error('Error cargando contador de adjuntos:', err);
+  }
 }
 
 async function solicitarAprobacion(requerimientoId) {
