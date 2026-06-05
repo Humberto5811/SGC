@@ -108,6 +108,28 @@ async function loadList() {
   try {
     const resp = await requerimientosService.listConDetalles({ pageSize: 200 });
     let rows = (resp && resp.data) || [];
+    
+    // Calcular monto_total para cada requerimiento (desde el payload)
+    rows = rows.map((r) => {
+      let monto_total = 0;
+      try {
+        const payload = JSON.parse(r.payload || '{}');
+        if (payload.items && Array.isArray(payload.items)) {
+          monto_total = payload.items.reduce((sum, item) => {
+            const precio = Number(item.precio_unitario) || 0;
+            const cantidad = Number(item.cantidad) || 0;
+            return sum + (precio * cantidad);
+          }, 0);
+        }
+      } catch (e) {
+        console.error(`Error procesando payload del requerimiento ${r.id}:`, e);
+      }
+      return {
+        ...r,
+        monto_total: Number(monto_total.toFixed(2))
+      };
+    });
+    
     // Ordenar ascendente por número de código (si existe) o por `id` como fallback
     rows = (rows || []).slice().sort((a, b) => {
       const getNum = (r) => {

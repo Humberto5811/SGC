@@ -4,7 +4,7 @@ import { query } from '../db.js';
 
 const router = express.Router();
 
-// GET /api/requerimientos/listar-con-detalles - Obtener requerimientos con centro y monto total
+// GET /api/requerimientos/listar-con-detalles - Obtener requerimientos con centro
 router.get('/listar-con-detalles', async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
@@ -23,7 +23,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
       where = `WHERE r.codigo ILIKE $1 OR r.denominacion ILIKE $2 OR r.area ILIKE $3 OR r.responsable ILIKE $4`;
     }
 
-    // Obtener requerimientos con información del centro
+    // Obtener total
     const countSql = `
       SELECT COUNT(*)::int AS total 
       FROM requerimientos r
@@ -44,8 +44,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
       SELECT 
         r.id, r.tipo, r.codigo, r.denominacion, r.area, r.responsable, r.estado, 
         r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
-        c.nombre as centro_nombre,
-        c.codigo as centro_codigo
+        COALESCE(c.nombre, 'N/A') as centro_nombre
       FROM requerimientos r
       LEFT JOIN areas a ON r.area = a.nombre
       LEFT JOIN centros c ON a.centro_id = c.id
@@ -55,36 +54,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
     `;
     
     const result = await query(dataSql, params);
-    
-    // Procesar cada requerimiento para calcular monto total
-    const rows = await Promise.all(result.rows.map(async (req) => {
-      let monto_total = 0;
-      try {
-        const payload = JSON.parse(req.payload || '{}');
-        if (payload.items && Array.isArray(payload.items)) {
-          // Para cada item, buscar el precio en el catálogo
-          for (const item of payload.items) {
-            const catalogRes = await query(
-              `SELECT precio_unitario FROM catalogo_sigamef WHERE item_bien = $1 LIMIT 1`,
-              [item.item_bien]
-            );
-            if (catalogRes && catalogRes.rows.length > 0) {
-              const precio = Number(catalogRes.rows[0].precio_unitario) || 0;
-              const cantidad = Number(item.cantidad) || 0;
-              monto_total += precio * cantidad;
-            }
-          }
-        }
-      } catch (e) {
-        console.error(`Error procesando payload del requerimiento ${req.id}:`, e);
-      }
-      
-      return {
-        ...req,
-        monto_total: Number(monto_total.toFixed(2)),
-        centro_nombre: req.centro_nombre || 'N/A'
-      };
-    }));
+    const rows = result.rows || [];
 
     res.json({ 
       data: rows, 
@@ -94,6 +64,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
       totalPages: Math.max(1, Math.ceil(total / pageSize)) 
     });
   } catch (err) {
+    console.error('[requerimientos/listar-con-detalles] Error:', err);
     next(err);
   }
 });
