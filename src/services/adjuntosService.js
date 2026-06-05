@@ -58,7 +58,7 @@ export const adjuntosService = {
   // Eliminar un adjunto
   eliminarAdjunto: async (adjuntoId) => {
     try {
-      const res = await api.delete(`/adjuntos/${adjuntoId}`);
+      const res = await api.del(`/adjuntos/${adjuntoId}`);
       return res;
     } catch (err) {
       throw err;
