@@ -4,6 +4,8 @@ import { api } from './apiService.js';
 export const requerimientosService = {
   list: ({ page = 1, pageSize = 100, search = '' } = {}) =>
     api.list('requerimientos', { page, pageSize, search }),
+  listConDetalles: ({ page = 1, pageSize = 100, search = '' } = {}) =>
+    api.get(`/requerimientos/listar-con-detalles?page=${page}&pageSize=${pageSize}&search=${encodeURIComponent(search)}`),
   getById: (id) => api.get(`/requerimientos/${id}`),
   create: (body) => api.create('requerimientos', body),
   update: (id, body) => api.update('requerimientos', id, body),

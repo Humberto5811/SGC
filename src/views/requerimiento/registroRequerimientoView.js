@@ -106,7 +106,7 @@ async function loadList() {
   const cont = document.getElementById('reqList');
   if (!cont) return;
   try {
-    const resp = await requerimientosService.list({ pageSize: 200 });
+    const resp = await requerimientosService.listConDetalles({ pageSize: 200 });
     let rows = (resp && resp.data) || [];
     // Ordenar ascendente por número de código (si existe) o por `id` como fallback
     rows = (rows || []).slice().sort((a, b) => {
@@ -127,22 +127,35 @@ async function loadList() {
       <div class="table-responsive">
         <table class="table table-sm table-hover align-middle">
           <thead class="table-light">
-            <tr><th>Código</th><th>Tipo</th><th>Denominación</th><th>Área usuaria</th><th>Estado</th><th class="text-end">Acciones</th></tr>
+            <tr>
+              <th>Código</th>
+              <th>Tipo</th>
+              <th>Denominación</th>
+              <th>Área usuaria</th>
+              <th>Centro</th>
+              <th>Monto Total</th>
+              <th>Estado</th>
+              <th style="width: 150px;" class="text-center">Acciones</th>
+            </tr>
           </thead>
           <tbody>
             ${rows.map((r) => `
               <tr>
                 <td>${esc(r.codigo || ('#' + r.id))}</td>
-                <td><span class="badge bg-secondary text-uppercase">${esc(r.tipo)}</span></td>
+                <td><span class="badge bg-secondary text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo)}</span></td>
                 <td>${esc(r.denominacion || '')}</td>
                 <td>${esc(r.area || '')}</td>
+                <td>${esc(r.centro_nombre || 'N/A')}</td>
+                <td class="text-end">
+                  <strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong>
+                </td>
                 <td>${esc(r.estado || '')}</td>
-                <td class="text-end text-nowrap">
-                  <button class="btn btn-sm btn-outline-primary req-open" data-id="${r.id}" title="Abrir"><i class="bi bi-pencil"></i></button>
-                  <button class="btn btn-sm btn-outline-dark req-print" data-id="${r.id}" title="Generar documento"><i class="bi bi-printer"></i></button>
-                  <button class="btn btn-sm btn-outline-info req-attach" data-id="${r.id}" title="Adjuntar archivos"><i class="bi bi-paperclip"></i> <span class="badge bg-info adjunto-count-${r.id}">0</span></button>
-                  <button class="btn btn-sm btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación"><i class="bi bi-check-circle"></i></button>
-                  <button class="btn btn-sm btn-outline-danger req-del" data-id="${r.id}" title="Eliminar"><i class="bi bi-trash"></i></button>
+                <td class="text-center" style="white-space: nowrap;">
+                  <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
+                  <button class="btn btn-xs btn-outline-dark req-print" data-id="${r.id}" title="Documento" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
+                  <button class="btn btn-xs btn-outline-info req-attach" data-id="${r.id}" title="Adjuntos" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
+                  <button class="btn btn-xs btn-outline-success req-approve" data-id="${r.id}" title="Aprobar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>
+                  <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-trash" style="font-size: 11px;"></i></button>
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -465,8 +478,8 @@ async function buscarItems() {
     if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
     box.innerHTML = `<div class="list-group mb-2">${rows.map((r) => `
       <button type="button" class="list-group-item list-group-item-action item-pick"
-        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-ft="${r.ficha_tecnica ? '1' : '0'}">
-        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')})</span>
+        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-ft="${r.ficha_tecnica ? '1' : '0'}" data-precio="${Number(r.precio_unitario) || 0}">
+        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')}) S/. ${Number(r.precio_unitario || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         ${r.ficha_tecnica ? '<span class="badge bg-info ms-1">F.T.</span>' : ''}
       </button>`).join('')}</div>`;
     box.querySelectorAll('.item-pick').forEach((b) => b.onclick = () => {
@@ -474,6 +487,7 @@ async function buscarItems() {
       state.items.push({
         item_bien: b.dataset.cod, nombre_item: b.dataset.nom,
         unidad_medida: b.dataset.um, cantidad: 1, ficha_tecnica: b.dataset.ft === '1',
+        precio_unitario: Number(b.dataset.precio) || 0,
       });
       box.innerHTML = '';
       document.getElementById('itemSearch').value = '';

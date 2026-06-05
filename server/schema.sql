@@ -74,12 +74,23 @@ CREATE TABLE IF NOT EXISTS metas (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ============ CENTROS ============
+CREATE TABLE IF NOT EXISTS centros (
+  id SERIAL PRIMARY KEY,
+  codigo VARCHAR(60),
+  nombre VARCHAR(200),
+  estado VARCHAR(30) DEFAULT 'Activo',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- ============ ÁREAS ============
 CREATE TABLE IF NOT EXISTS areas (
   id SERIAL PRIMARY KEY,
   codigo VARCHAR(60),
   nombre VARCHAR(200),
   responsable VARCHAR(150),
+  centro_id INTEGER,
   estado VARCHAR(30) DEFAULT 'Activo',
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
