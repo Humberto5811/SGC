@@ -106,6 +106,10 @@ app.use('/api/logotipos', crudRouter({
   columns: ['nombre', 'tipo', 'data_url', 'estado'],
   searchCols: ['nombre', 'tipo'],
 }));
+
+// Rutas especiales para requerimientos ANTES del CRUD genérico
+app.use('/api/requerimientos', requerimientosEspecialRouter);
+
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',
   columns: ['tipo', 'codigo', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
@@ -113,8 +117,7 @@ app.use('/api/requerimientos', crudRouter({
   orderBy: 'id DESC',
 }));
 
-// Rutas especiales para requerimientos y adjuntos
-app.use('/api/requerimientos', requerimientosEspecialRouter);
+// Adjuntos
 app.use('/api/adjuntos', adjuntosRouter);
 
 // Manejador de errores centralizado
