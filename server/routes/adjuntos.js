@@ -4,8 +4,42 @@ import { query } from '../db.js';
 
 const router = express.Router();
 
-// POST /api/adjuntos/:requerimientoId - Subir un adjunto
-router.post('/:requerimientoId', async (req, res, next) => {
+// GET /api/adjuntos/descargar/:adjuntoId - Descargar un adjunto (DEBE IR PRIMERO)
+router.get('/descargar/:adjuntoId', async (req, res, next) => {
+  try {
+    const { adjuntoId } = req.params;
+    const res2 = await query(
+      `SELECT id, nombre_archivo, mime_type, contenido_base64 FROM requerimientos_adjuntos WHERE id = $1`,
+      [adjuntoId]
+    );
+    if (!res2 || res2.rowCount === 0) {
+      return res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
+    }
+    res.json({ success: true, ...res2.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/adjuntos/listar/:requerimientoId - Obtener adjuntos de un requerimiento
+router.get('/listar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const res2 = await query(
+      `SELECT id, nombre_archivo, mime_type, tamaño_bytes, usuario_carga, created_at
+       FROM requerimientos_adjuntos
+       WHERE requerimiento_id = $1
+       ORDER BY created_at DESC`,
+      [requerimientoId]
+    );
+    res.json({ success: true, adjuntos: res2.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/adjuntos/subir/:requerimientoId - Subir un adjunto
+router.post('/subir/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
     const { nombre_archivo, mime_type, contenido_base64, tamaño_bytes } = req.body;
@@ -23,40 +57,6 @@ router.post('/:requerimientoId', async (req, res, next) => {
     );
 
     res.json({ success: true, adjunto: res2.rows[0] });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/adjuntos/:requerimientoId - Obtener adjuntos de un requerimiento
-router.get('/:requerimientoId', async (req, res, next) => {
-  try {
-    const { requerimientoId } = req.params;
-    const res2 = await query(
-      `SELECT id, nombre_archivo, mime_type, tamaño_bytes, usuario_carga, created_at
-       FROM requerimientos_adjuntos
-       WHERE requerimiento_id = $1
-       ORDER BY created_at DESC`,
-      [requerimientoId]
-    );
-    res.json({ success: true, adjuntos: res2.rows });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/adjuntos/descargar/:adjuntoId - Descargar un adjunto
-router.get('/descargar/:adjuntoId', async (req, res, next) => {
-  try {
-    const { adjuntoId } = req.params;
-    const res2 = await query(
-      `SELECT id, nombre_archivo, mime_type, contenido_base64 FROM requerimientos_adjuntos WHERE id = $1`,
-      [adjuntoId]
-    );
-    if (!res2 || res2.rowCount === 0) {
-      return res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
-    }
-    res.json({ success: true, ...res2.rows[0] });
   } catch (err) {
     next(err);
   }

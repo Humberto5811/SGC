@@ -9,7 +9,7 @@ export const adjuntosService = {
         reader.onload = async (e) => {
           try {
             const base64 = e.target.result.split(',')[1];
-            const res = await api.post(`/adjuntos/${requerimientoId}`, {
+            const res = await api.post(`/adjuntos/subir/${requerimientoId}`, {
               nombre_archivo: archivo.name,
               mime_type: archivo.type,
               contenido_base64: base64,
@@ -31,7 +31,7 @@ export const adjuntosService = {
   // Obtener lista de adjuntos de un requerimiento
   getAdjuntos: async (requerimientoId) => {
     try {
-      const res = await api.get(`/adjuntos/${requerimientoId}`);
+      const res = await api.get(`/adjuntos/listar/${requerimientoId}`);
       return res;
     } catch (err) {
       throw err;
