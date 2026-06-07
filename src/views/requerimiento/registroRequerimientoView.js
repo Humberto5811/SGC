@@ -28,7 +28,8 @@ const FORMATOS = [
 let state = {
   view: 'select',          // 'select' | 'bienes'
   reqId: null,
-  codigo: '',              // <--- NUEVO: para almacenar el código del requerimiento
+  codigo: '',              // Código del requerimiento
+  cmn: '',                 // CMN N° (5 dígitos con ceros a la izquierda)
   header: { logo: '', entidadNombre: '' },
   area: { codigo: '', nombre: '', responsable: '' },
   denominacion: '',
@@ -152,25 +153,46 @@ async function loadList() {
             <tr>
               <th>Código</th>
               <th>Tipo</th>
-              <th>Denominación</th>
+              <th>Código SIGAMEF</th>
+              <th>Descripción del bien</th>
               <th>Área usuaria</th>
               <th>Centro</th>
               <th>Monto Total</th>
+              <th>CMN N°</th>
               <th>Estado</th>
               <th style="width: 150px;" class="text-center">Acciones</th>
             </tr>
           </thead>
           <tbody>
-            ${rows.map((r) => `
+            ${rows.map((r) => {
+              // Extraer items del payload para mostrar código y descripción
+              let codigosSigamef = '';
+              let descripcionesBien = '';
+              try {
+                const p = JSON.parse(r.payload || '{}');
+                if (p.items && Array.isArray(p.items) && p.items.length) {
+                  codigosSigamef = p.items.map(it => esc(it.item_bien || '')).join(', ');
+                  descripcionesBien = p.items.map(it => esc(it.nombre_item || '')).join(', ');
+                } else {
+                  codigosSigamef = '<span class="text-muted small">—</span>';
+                  descripcionesBien = '<span class="text-muted small">—</span>';
+                }
+              } catch (_) {
+                codigosSigamef = '<span class="text-muted small">—</span>';
+                descripcionesBien = '<span class="text-muted small">—</span>';
+              }
+              return `
               <tr>
                 <td>${esc(r.codigo || ('#' + r.id))}</td>
                 <td><span class="badge bg-secondary text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo)}</span></td>
-                <td>${esc(r.denominacion || '')}</td>
+                <td class="small">${codigosSigamef}</td>
+                <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
-                <td>${esc(r.centro_nombre || 'N/A')}</td>
+                <td>${esc(r.centro_nombre || '')}</td>
                 <td class="text-end">
                   <strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong>
                 </td>
+                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
                 <td>${esc(r.estado || '')}</td>
                 <td class="text-center" style="white-space: nowrap;">
                   <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
@@ -179,7 +201,8 @@ async function loadList() {
                   <button class="btn btn-xs btn-outline-success req-approve" data-id="${r.id}" title="Aprobar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-trash" style="font-size: 11px;"></i></button>
                 </td>
-              </tr>`).join('')}
+              </tr>`;
+            }).join('')}
           </tbody>
         </table>
       </div>`;
@@ -291,8 +314,14 @@ function renderBienes() {
               <div class="fw-bold">ANEXO N° 01</div>
               <div class="text-uppercase small fw-bold">ESPECIFICACIONES TÉCNICAS PARA ADQUISICIÓN DE BIENES</div>
             </div>
-            <div class="mt-3">
+            <div class="mt-3 d-flex align-items-center justify-content-center gap-3">
               <div class="fw-bold bg-light d-inline-block px-3 py-1 rounded">REQUERIMIENTO N° ${state.codigo || '00000'}</div>
+              <div class="d-flex align-items-center gap-1">
+                <span class="fw-bold small">CMN N°</span>
+                <input id="reqCmn" class="form-control form-control-sm" type="text" inputmode="numeric" maxlength="5"
+                  style="width: 80px; text-align: center;" value="${esc(state.cmn || '')}"
+                  placeholder="00000" />
+              </div>
             </div>
           </div>
         </div>
@@ -314,7 +343,7 @@ function renderBienes() {
               <input id="areaNombre" class="form-control" value="${esc(state.area.nombre)}" readonly />
             </div>
             <div class="col-md-6">
-              <label class="form-label small mb-0">Responsable</label>
+              <label class="form-label small mb-0">Centro</label>
               <input id="areaResponsable" class="form-control" value="${esc(state.area.responsable)}" readonly />
             </div>
           </div>
@@ -367,7 +396,7 @@ function renderBienes() {
 function renderItemsTable() {
   const rows = state.items.map((it, i) => `
     <tr>
-      <td>${esc(it.item_bien)}${it.ficha_tecnica ? ' <span class="badge bg-info" title="Tiene Ficha Técnica asociada">F.T.</span>' : ''}</td>
+      <td>${esc(it.item_bien)}${it.ficha_tecnica ? ' <span class="badge bg-info" title="Ficha Técnica">F.T.</span>' : ''}${it.producto_controlado ? ' <span class="badge bg-danger" title="Producto Controlado">P.C.</span>' : ''}${it.acuerdo_marco ? ' <span class="badge bg-success" title="Acuerdo Marco">A.M.</span>' : ''}</td>
       <td>${esc(it.nombre_item)}</td>
       <td class="text-center">${esc(it.unidad_medida)}</td>
       <td style="width:120px"><input class="form-control form-control-sm req-it" data-i="${i}" type="number" min="0" step="any" value="${esc(it.cantidad ?? 1)}" /></td>
@@ -495,20 +524,33 @@ async function buscarItems() {
   if (!box) return;
   box.innerHTML = '<div class="text-muted small">Buscando…</div>';
   try {
-    const resp = await api.list('catalogo', { page: 1, pageSize: 10, search: q.trim() });
+    const resp = await api.list('catalogo', { page: 1, pageSize: 200, search: q.trim() });
     const rows = (resp && resp.data) || [];
     if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
-    box.innerHTML = `<div class="list-group mb-2">${rows.map((r) => `
+    
+    // Construir badges para cada producto
+    const badgesFn = (r) => {
+      let badges = '';
+      if (r.ficha_tecnica) badges += '<span class="badge bg-info ms-1">F.T.</span>';
+      if (r.producto_controlado) badges += '<span class="badge bg-danger ms-1">P.C.</span>';
+      if (r.acuerdo_marco) badges += '<span class="badge bg-success ms-1">A.M.</span>';
+      return badges;
+    };
+    
+    box.innerHTML = `<div class="list-group mb-2" style="max-height: 300px; overflow-y: auto;">${rows.map((r) => `
       <button type="button" class="list-group-item list-group-item-action item-pick"
-        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-ft="${r.ficha_tecnica ? '1' : '0'}" data-precio="${Number(r.precio_unitario) || 0}">
+        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-ft="${r.ficha_tecnica ? '1' : '0'}" data-pc="${r.producto_controlado ? '1' : '0'}" data-am="${r.acuerdo_marco ? '1' : '0'}" data-precio="${Number(r.precio_unitario) || 0}">
         <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')}) S/. ${Number(r.precio_unitario || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-        ${r.ficha_tecnica ? '<span class="badge bg-info ms-1">F.T.</span>' : ''}
+        ${badgesFn(r)}
       </button>`).join('')}</div>`;
     box.querySelectorAll('.item-pick').forEach((b) => b.onclick = () => {
       collectInputs();
       state.items.push({
         item_bien: b.dataset.cod, nombre_item: b.dataset.nom,
-        unidad_medida: b.dataset.um, cantidad: 1, ficha_tecnica: b.dataset.ft === '1',
+        unidad_medida: b.dataset.um, cantidad: 1,
+        ficha_tecnica: b.dataset.ft === '1',
+        producto_controlado: b.dataset.pc === '1',
+        acuerdo_marco: b.dataset.am === '1',
         precio_unitario: Number(b.dataset.precio) || 0,
       });
       box.innerHTML = '';
@@ -535,6 +577,11 @@ function collectInputs() {
   if (document.getElementById('objetivo') != null) state.objetivo = g('objetivo') || '';
   if (document.getElementById('finalidad') != null) state.finalidad = g('finalidad') || '';
   if (document.getElementById('caracteristicas') != null) state.caracteristicas = g('caracteristicas') || '';
+  if (document.getElementById('reqCmn') != null) {
+    const raw = g('reqCmn') || '';
+    const num = parseInt(raw.replace(/\D/g, ''), 10);
+    state.cmn = isNaN(num) ? '' : String(num).padStart(5, '0');
+  }
   document.querySelectorAll('.req-it').forEach((el) => {
     const i = Number(el.dataset.i);
     if (state.items[i]) state.items[i].cantidad = Number(el.value) || 0;
@@ -569,6 +616,21 @@ function attachBienes() {
     setMsg('', '');
     openPrintWindow(buildState());
   };
+
+  // Auto-formato CMN: al perder el foco, rellena con ceros a la izquierda a 5 dígitos
+  const cmnInput = document.getElementById('reqCmn');
+  if (cmnInput) {
+    cmnInput.onblur = () => {
+      const raw = cmnInput.value || '';
+      const num = parseInt(raw.replace(/\D/g, ''), 10);
+      cmnInput.value = isNaN(num) ? '' : String(num).padStart(5, '0');
+      state.cmn = cmnInput.value;
+    };
+    // Restringir solo números mientras escribe
+    cmnInput.oninput = () => {
+      cmnInput.value = cmnInput.value.replace(/\D/g, '').slice(0, 5);
+    };
+  }
 
   const areaBtn = document.getElementById('areaBtn');
   if (areaBtn) areaBtn.onclick = buscarAreas;
@@ -652,8 +714,15 @@ async function saveRequerimiento() {
     fichas,
     header: state.header,
   };
+  // Formatear cmn a 5 dígitos con ceros a la izquierda
+  const cmnRaw = state.cmn || '';
+  const cmnNum = parseInt(cmnRaw.replace(/\D/g, ''), 10);
+  const cmnFormatted = isNaN(cmnNum) ? '' : String(cmnNum).padStart(5, '0');
+  state.cmn = cmnFormatted;
+
   const body = {
     tipo: 'bienes',
+    cmn: cmnFormatted,
     denominacion: state.denominacion,
     area: state.area.nombre,
     responsable: state.area.responsable,
@@ -667,6 +736,7 @@ async function saveRequerimiento() {
       await requerimientosService.update(state.reqId, body);
       // Actualizar el código en el state después de actualizar
       if (body.codigo) state.codigo = body.codigo;
+      state.cmn = cmnFormatted;
     } else {
       const created = await requerimientosService.create(body);
       if (created && created.id) {
@@ -699,7 +769,8 @@ function applyPayload(row) {
   let p = {};
   try { p = JSON.parse(row.payload || '{}'); } catch (_) { p = {}; }
   state.reqId = row.id;
-  state.codigo = row.codigo || '';  // <--- NUEVO: guardar el código
+  state.codigo = row.codigo || '';
+  state.cmn = row.cmn || '';
   state.area = p.area || { codigo: '', nombre: row.area || '', responsable: row.responsable || '' };
   state.denominacion = row.denominacion || '';
   state.objetivo = p.objetivo || '';
@@ -755,7 +826,8 @@ async function printRequerimiento(id) {
 function resetState() {
   state = {
     view: 'select', reqId: null,
-    codigo: '',              // <--- NUEVO: resetear código
+    codigo: '',
+    cmn: '',
     header: { logo: '', entidadNombre: '' },
     area: { codigo: '', nombre: '', responsable: '' },
     denominacion: '', objetivo: '', finalidad: '', caracteristicas: '',
@@ -848,6 +920,7 @@ function buildPrintHTML(s) {
       <h2>ANEXO N° 01</h2>
       <h3>ESPECIFICACIONES TÉCNICAS PARA ADQUISICIÓN DE BIENES</h3>
       <div class="req-num">REQUERIMIENTO N° ${esc(codigoRequerimiento)}</div>
+      ${s.cmn ? `<div style="margin-top:6px; font-size:12px; font-weight:bold;">CMN N° ${esc(s.cmn)}</div>` : ''}
     </div>
   </div>
 

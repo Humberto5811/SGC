@@ -112,7 +112,7 @@ app.use('/api/requerimientos', requerimientosEspecialRouter);
 
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',
-  columns: ['tipo', 'codigo', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
+  columns: ['tipo', 'codigo', 'cmn', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
   searchCols: ['codigo', 'denominacion', 'area', 'responsable', 'tipo'],
   orderBy: 'id DESC',
 }));

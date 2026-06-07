@@ -42,9 +42,9 @@ router.get('/listar-con-detalles', async (req, res, next) => {
 
     const dataSql = `
       SELECT 
-        r.id, r.tipo, r.codigo, r.denominacion, r.area, r.responsable, r.estado, 
+        r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado, 
         r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
-        COALESCE(c.nombre, 'N/A') as centro_nombre
+        COALESCE(c.nombre, '') as centro_nombre
       FROM requerimientos r
       LEFT JOIN areas a ON r.area = a.nombre
       LEFT JOIN centros c ON a.centro_id = c.id

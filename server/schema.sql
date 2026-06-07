@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS requerimientos (
   id SERIAL PRIMARY KEY,
   tipo VARCHAR(30) NOT NULL DEFAULT 'bienes',
   codigo VARCHAR(60),
+  cmn VARCHAR(5),
   denominacion VARCHAR(300),
   area VARCHAR(250),
   responsable VARCHAR(200),
@@ -273,6 +274,9 @@ CREATE TABLE IF NOT EXISTS requerimientos (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Add cmn column to existing requerimientos table (for databases created before cmn was added)
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS cmn VARCHAR(5);
 
 CREATE INDEX IF NOT EXISTS idx_requerimientos_tipo ON requerimientos (tipo);
 
