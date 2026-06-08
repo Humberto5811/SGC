@@ -49,6 +49,28 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// ---------- Helpers de estado y botones de aprobación ----------
+function estadoBadge(estado) {
+  const e = estado || 'Registrado';
+  if (e === 'Observado') return `<span class="badge bg-danger">${esc(e)}</span>`;
+  if (e === 'En tramite de aprobación') return `<span class="badge bg-warning text-dark">${esc(e)}</span>`;
+  if (e === 'Aprobado') return `<span class="badge bg-success">${esc(e)}</span>`;
+  return `<span class="badge bg-secondary">${esc(e)}</span>`;
+}
+
+function approveButton(r) {
+  if (r.estado === 'Observado') {
+    return `<button class="btn btn-xs btn-danger req-observado" data-id="${r.id}" title="Observado" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-exclamation-triangle" style="font-size: 11px;"></i></button>`;
+  }
+  if (r.estado === 'En tramite de aprobación') {
+    return `<button class="btn btn-xs btn-primary" disabled title="En trámite" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
+  }
+  if (r.estado === 'Aprobado') {
+    return `<button class="btn btn-xs btn-success" disabled title="Aprobado" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
+  }
+  return `<button class="btn btn-xs btn-outline-success req-approve" data-id="${r.id}" title="Aprobar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>`;
+}
+
 // ---------- Helpers de glosas (c…18) ----------
 function tituloDe(item) {
   const o = state.glosaOverrides[item.key];
@@ -204,12 +226,12 @@ async function loadList() {
                   <strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong>
                 </td>
                 <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${esc(r.estado || '')}</td>
+                <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center" style="white-space: nowrap;">
                   <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-dark req-print" data-id="${r.id}" title="Documento" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-info req-attach" data-id="${r.id}" title="Adjuntos" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
-                  <button class="btn btn-xs btn-outline-success req-approve" data-id="${r.id}" title="Aprobar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>
+                  ${approveButton(r)}
                   <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-trash" style="font-size: 11px;"></i></button>
                 </td>
               </tr>`;
@@ -221,6 +243,7 @@ async function loadList() {
     cont.querySelectorAll('.req-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
     cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id));
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
+    cont.querySelectorAll('.req-observado').forEach((b) => b.onclick = () => verObservacion(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
     
     // Cargar contadores de adjuntos para cada requerimiento
@@ -1219,6 +1242,112 @@ async function solicitarAprobacion(requerimientoId) {
     }
   } catch (err) {
     alert('Error: ' + err.message);
+  }
+}
+
+// ---------- Observación / Subsanación (desde Registro) ----------
+async function verObservacion(requerimientoId) {
+  try {
+    const row = await requerimientosService.getById(requerimientoId);
+    let payload = {};
+    try { payload = JSON.parse(row.payload || '{}'); } catch (_) {}
+    const historial = payload.historial_evaluacion || [];
+
+    // Get last observation
+    const lastObs = [...historial].reverse().find(h => h.tipo === 'observacion');
+    const motivoText = lastObs ? lastObs.motivo : 'Sin motivo registrado.';
+    const fechaObs = lastObs ? new Date(lastObs.fecha).toLocaleString('es-PE') : '';
+
+    // Build historial HTML
+    const historialHTML = historial.length ? `
+      <div class="mt-3">
+        <h6><i class="bi bi-clock-history"></i> Historial de evaluación</h6>
+        <div class="list-group list-group-flush" style="max-height: 200px; overflow-y: auto;">
+          ${historial.map(h => {
+            if (h.tipo === 'observacion') {
+              return `<div class="list-group-item list-group-item-danger py-1 px-2">
+                <small><strong>Observación</strong> (${new Date(h.fecha).toLocaleString('es-PE')}${h.usuario ? ' - ' + esc(h.usuario) : ''}): ${esc(h.motivo)}</small>
+              </div>`;
+            } else if (h.tipo === 'subsanacion') {
+              return `<div class="list-group-item list-group-item-info py-1 px-2">
+                <small><strong>Subsanación</strong> (${new Date(h.fecha).toLocaleString('es-PE')}${h.usuario ? ' - ' + esc(h.usuario) : ''}): ${esc(h.respuesta)}</small>
+              </div>`;
+            } else if (h.tipo === 'aprobacion') {
+              return `<div class="list-group-item list-group-item-success py-1 px-2">
+                <small><strong>Aprobado</strong> (${new Date(h.fecha).toLocaleString('es-PE')}${h.usuario ? ' - ' + esc(h.usuario) : ''})</small>
+              </div>`;
+            }
+            return '';
+          }).join('')}
+        </div>
+      </div>
+    ` : '';
+
+    // Create and show modal
+    const existingModal = document.getElementById('modalSubsanacion');
+    if (existingModal) existingModal.remove();
+
+    const modalHTML = `
+      <div class="modal fade" id="modalSubsanacion" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+              <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Requerimiento Observado</h5>
+              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="alert alert-danger">
+                <strong><i class="bi bi-exclamation-circle"></i> Observación del evaluador:</strong>
+                <p class="mb-0 mt-1">${esc(motivoText)}</p>
+                ${fechaObs ? `<small class="text-muted">Fecha: ${fechaObs}</small>` : ''}
+              </div>
+              ${historialHTML}
+              <hr/>
+              <div class="mb-3">
+                <label for="subsanacionRespuesta" class="form-label fw-bold">Subsanación realizada</label>
+                <textarea id="subsanacionRespuesta" class="form-control" rows="4" placeholder="Describa la subsanación realizada…"></textarea>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+              <button type="button" class="btn btn-primary" id="btnSolicitarAprobacionSub"><i class="bi bi-send"></i> Solicitar aprobación</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    const modal = new bootstrap.Modal(document.getElementById('modalSubsanacion'));
+    modal.show();
+
+    document.getElementById('btnSolicitarAprobacionSub').onclick = async () => {
+      const respuesta = (document.getElementById('subsanacionRespuesta').value || '').trim();
+      if (!respuesta) { alert('Ingrese la subsanación realizada.'); return; }
+
+      const user = authService.getCurrentUser();
+      try {
+        const res = await api.put(`/requerimientos/${requerimientoId}/subsanar`, {
+          respuesta,
+          usuario: user ? user.nombre : '',
+        });
+        if (res && res.success) {
+          modal.hide();
+          alert('Subsanación enviada. El requerimiento está nuevamente en trámite de aprobación.');
+          loadList();
+        } else {
+          alert('Error al enviar subsanación.');
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    };
+
+    // Clean up modal on hide
+    document.getElementById('modalSubsanacion').addEventListener('hidden.bs.modal', () => {
+      document.getElementById('modalSubsanacion').remove();
+    });
+  } catch (err) {
+    alert('Error al cargar observación: ' + err.message);
   }
 }
 
