@@ -62,8 +62,9 @@ function initLoginView() {
         errorMsg.classList.remove('d-none');
         return;
       }
-    } catch (_) {
+    } catch (err) {
       // El backend no está disponible: usar respaldo local.
+      console.warn('[login] Backend no disponible, usando respaldo local:', err.message);
     }
 
     // 2) Respaldo: usuarios en localStorage (modo sin servidor).

@@ -367,7 +367,7 @@ export function createCrudView(cfg) {
             else rec[f.name] = v;
           }
           if (Object.keys(rec).length === 0) continue;
-          try { await adapter.create(rec); ok += 1; } catch (_) { fail += 1; }
+          try { await adapter.create(rec); ok += 1; } catch (e) { fail += 1; console.warn(`[import] Fila ${ok + fail} falló:`, e.message); }
         }
         state.page = 1; state.search = '';
         const si = document.getElementById(id('search')); if (si) si.value = '';
