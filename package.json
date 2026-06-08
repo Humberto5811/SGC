@@ -11,11 +11,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "npx http-server -c-1 .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "check": "node --check server/index.js server/db.js server/crud.js server/migrate.js server/routes/auth.js server/routes/catalogo.js server/routes/glosas.js server/routes/entidad.js server/routes/fichanet.js src/app.js src/router.js src/views/registroDatos/fichaNetView.js src/services/apiService.js src/views/loginView.js src/views/registroDatos/catalogoSigamefView.js src/views/registroDatos/crudViewFactory.js src/views/registroDatos/fichasTecnicasView.js src/views/registroDatos/configuracionDocView.js src/views/registroDatos/metasAreasView.js src/views/registroDatos/ordenesView.js src/views/registroDatos/siafView.js src/views/glosasRequerimientos/glosaFactory.js src/views/glosasRequerimientos/formatoBienesView.js src/views/glosasRequerimientos/formatoServiciosView.js src/views/glosasRequerimientos/formatoLocacionView.js src/views/glosasRequerimientos/formatoLicitacionesView.js src/views/glosasRequerimientos/formatoConcursoView.js src/views/institucional/entidadView.js src/views/institucional/logotiposView.js"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
-    "vite": "^8.0.14"
+    "vite": "^8.0.14",
+    "vitest": "^4.1.8"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
