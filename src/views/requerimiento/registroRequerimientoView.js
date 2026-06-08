@@ -41,6 +41,9 @@ let state = {
   entregas: [],            // 14.1
 };
 
+// Últimas filas cargadas en el listado (para exportar a Excel)
+let lastListRows = [];
+
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -97,7 +100,7 @@ function renderSelect() {
       <hr/>
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h5 class="mb-0"><i class="bi bi-list-check"></i> Requerimientos registrados</h5>
-        <button id="reqReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
+        <button id="reqExport" class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-excel"></i> Exportar reporte</button>
       </div>
       <div id="reqList"><div class="text-muted">Cargando…</div></div>
     </div>
@@ -142,13 +145,21 @@ async function loadList() {
       };
       return getNum(a) - getNum(b);
     });
+    lastListRows = rows;
     if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">Aún no hay requerimientos registrados.</div>';
       return;
     }
     cont.innerHTML = `
+      <style>
+        #reqList .req-list-table,
+        #reqList .req-list-table th,
+        #reqList .req-list-table td { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal; }
+        #reqList .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
+        #reqList .req-list-table strong { font-weight: normal; }
+      </style>
       <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle">
+        <table class="table table-sm table-hover align-middle req-list-table">
           <thead class="table-light">
             <tr>
               <th>Código</th>
@@ -188,7 +199,7 @@ async function loadList() {
                 <td class="small">${codigosSigamef}</td>
                 <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
-                <td>${esc(r.centro_nombre || '')}</td>
+                <td>${esc(r.responsable || r.centro_nombre || '')}</td>
                 <td class="text-end">
                   <strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong>
                 </td>
@@ -221,6 +232,45 @@ async function loadList() {
   }
 }
 
+function exportarReporte() {
+  try {
+    const rows = lastListRows || [];
+    if (!rows.length) { alert('No hay requerimientos para exportar.'); return; }
+    const data = rows.map((r) => {
+      let codigos = '';
+      let descrip = '';
+      try {
+        const p = JSON.parse(r.payload || '{}');
+        if (Array.isArray(p.items) && p.items.length) {
+          codigos = p.items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
+          descrip = p.items.map((it) => it.nombre_item || '').filter(Boolean).join(', ');
+        }
+      } catch (_) { /* payload no-JSON */ }
+      return {
+        'Código': r.codigo || ('#' + r.id),
+        'Tipo': r.tipo || '',
+        'Código SIGAMEF': codigos,
+        'Descripción del bien': descrip,
+        'Área usuaria': r.area || '',
+        'Centro': r.responsable || r.centro_nombre || '',
+        'Monto Total': Number(r.monto_total) || 0,
+        'CMN N°': r.cmn || '',
+        'Estado': r.estado || '',
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [
+      { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 45 }, { wch: 32 },
+      { wch: 24 }, { wch: 14 }, { wch: 10 }, { wch: 22 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Requerimientos');
+    XLSX.writeFile(wb, `requerimientos_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (e) {
+    alert('Error al exportar el reporte: ' + e.message);
+  }
+}
+
 function attachSelect() {
   document.querySelectorAll('.fmt-card').forEach((card) => {
     card.onclick = () => {
@@ -231,8 +281,8 @@ function attachSelect() {
       newRequerimiento(card.dataset.tipo);
     };
   });
-  const rl = document.getElementById('reqReload');
-  if (rl) rl.onclick = loadList;
+  const rl = document.getElementById('reqExport');
+  if (rl) rl.onclick = exportarReporte;
   loadList();
 }
 
