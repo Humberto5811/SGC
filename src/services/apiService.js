@@ -3,9 +3,20 @@
 
 const BASE = '/api';
 
+function authHeaders() {
+  try {
+    const raw = localStorage.getItem('currentUser');
+    if (raw) {
+      const user = JSON.parse(raw);
+      if (user && user.id) return { 'x-user-id': String(user.id) };
+    }
+  } catch (_) { /* ignore */ }
+  return {};
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...options,
   });
   if (!res.ok) {
