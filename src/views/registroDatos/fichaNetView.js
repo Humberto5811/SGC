@@ -6,6 +6,7 @@
 // =====================================================
 import { api } from '../../services/apiService.js';
 import { createCrudView } from './crudViewFactory.js';
+import { escapeHtml as esc } from '../../utils/escapeHtml.js';
 
 // Campos del formulario CRUD (alta/edición). Nombres = columnas de la tabla.
 const FIELDS = [
@@ -44,9 +45,6 @@ const COLUMNS = [
   { name: 'dscartpresentacion', label: 'Presentación', width: '120px' },
   { name: 'stcartestado', label: 'Estado', width: '70px' },
 ];
-
-const esc = (v) => String(v == null ? '' : v)
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // ---- Caché del encabezado (logo + entidad) para no recargar en cada impresión.
 let headerCache = null;
