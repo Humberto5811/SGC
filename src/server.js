@@ -1,14 +1,17 @@
 // server.js
 import express from 'express';
+import dotenv from 'dotenv';
 import pkg from 'pg';
+
+dotenv.config();
 const { Pool } = pkg;
 
 const pool = new Pool({
-  user: 'postgres',        // tu usuario de PostgreSQL
-  host: 'localhost',
-  database: 'sgc',         // tu base de datos
-  password: '1234',        // tu contraseña
-  port: 5432,
+  user: process.env.DB_USER || 'postgres',
+  host: process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'sgc',
+  password: process.env.DB_PASSWORD || 'postgres',
+  port: parseInt(process.env.DB_PORT || '5432', 10),
 });
 
 const app = express();
