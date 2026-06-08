@@ -1,4 +1,3 @@
-export const ejecucionService = {
-  getAll: () => JSON.parse(localStorage.getItem('ejecucionService') || '[]'),
-  save: (data) => { localStorage.setItem('ejecucionService', JSON.stringify(data)); }
-};
+import { createLocalStorageService } from './localStorageServiceFactory.js';
+
+export const ejecucionService = createLocalStorageService('ejecucionService');

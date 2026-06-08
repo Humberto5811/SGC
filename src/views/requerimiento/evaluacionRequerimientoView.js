@@ -3,11 +3,7 @@ import { api } from '../../services/apiService.js';
 import { authService } from '../../services/authService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { adjuntosService } from '../../services/adjuntosService.js';
-
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+import { escapeHtml as esc } from '../../utils/escapeHtml.js';
 
 let stateEval = {
   listaRequerimientos: [],

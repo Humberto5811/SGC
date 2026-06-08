@@ -14,6 +14,7 @@ import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
+import { escapeHtml as esc } from '../../utils/escapeHtml.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
@@ -44,10 +45,7 @@ let state = {
 // Últimas filas cargadas en el listado (para exportar a Excel)
 let lastListRows = [];
 
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+
 
 // ---------- Helpers de glosas (c…18) ----------
 function tituloDe(item) {

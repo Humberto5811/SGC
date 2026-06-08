@@ -7,6 +7,7 @@
 import { authService } from '../../services/authService.js';
 import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { MODELO } from './formatoBienesModelo.js';
+import { escapeHtml as esc } from '../../utils/escapeHtml.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
@@ -18,12 +19,6 @@ let state = {
   entregas: [],       // filas del numeral 14.1
   editing: false,
 };
-
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 function tituloDe(item) {
   const o = state.overrides[item.key];
