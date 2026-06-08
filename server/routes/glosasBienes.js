@@ -87,7 +87,9 @@ router.post('/', async (req, res, next) => {
     const createdGlosa = await loadGlosaWithEntregas(glosa.id);
     res.status(201).json(createdGlosa);
   } catch (err) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); } catch (rbErr) {
+      console.error('[glosasBienes/create] ROLLBACK failed:', rbErr.message);
+    }
     next(err);
   } finally {
     client.release();
@@ -138,7 +140,9 @@ router.put('/:id', async (req, res, next) => {
     if (!updated) return res.status(404).json({ error: 'No encontrado' });
     res.json(updated);
   } catch (err) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); } catch (rbErr) {
+      console.error('[glosasBienes/update] ROLLBACK failed:', rbErr.message);
+    }
     next(err);
   } finally {
     client.release();

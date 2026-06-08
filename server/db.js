@@ -22,9 +22,30 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('Error inesperado en el pool de PostgreSQL:', err.message);
+  console.error('Error inesperado en el pool de PostgreSQL:', err.stack || err);
 });
 
-export const query = (text, params) => pool.query(text, params);
-export const getClient = () => pool.connect();
+export async function query(text, params) {
+  try {
+    return await pool.query(text, params);
+  } catch (err) {
+    err.query = text;
+    throw err;
+  }
+}
+
+export async function getClient() {
+  const client = await pool.connect();
+  const originalQuery = client.query.bind(client);
+  client.query = async (...args) => {
+    try {
+      return await originalQuery(...args);
+    } catch (err) {
+      err.query = typeof args[0] === 'string' ? args[0] : undefined;
+      throw err;
+    }
+  };
+  return client;
+}
+
 export default pool;

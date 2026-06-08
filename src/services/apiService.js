@@ -15,13 +15,18 @@ function authHeaders() {
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      ...options,
+    });
+  } catch (networkErr) {
+    throw new Error(`Error de red al conectar con ${path}: ${networkErr.message}`);
+  }
   if (!res.ok) {
     let detail = '';
-    try { detail = (await res.json()).error || ''; } catch (_) { /* ignore */ }
+    try { detail = (await res.json()).error || ''; } catch (_) { /* body no-JSON */ }
     throw new Error(detail || `Error ${res.status} en ${path}`);
   }
   if (res.status === 204) return null;

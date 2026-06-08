@@ -73,24 +73,18 @@ app.use('/api/entidad', entidadRouter);
 app.use('/api/fichanet', fichanetRouter);
 
 // Endpoints adicionales de glosas
-app.get('/api/entregas', async (_req, res) => {
+app.get('/api/entregas', async (_req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM glosas_entregas ORDER BY id ASC');
     res.json(result.rows);
-  } catch (err) {
-    console.error('[Error en /api/entregas]', err);
-    res.status(500).send('Error en el servidor');
-  }
+  } catch (err) { next(err); }
 });
 
-app.get('/api/servicios', async (_req, res) => {
+app.get('/api/servicios', async (_req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM glosas_servicios ORDER BY id ASC');
     res.json(result.rows);
-  } catch (err) {
-    console.error('[Error en /api/servicios]', err);
-    res.status(500).send('Error en el servidor');
-  }
+  } catch (err) { next(err); }
 });
 
 // CRUD genéricos para submódulos simples
@@ -145,12 +139,22 @@ app.use('/api/adjuntos', adjuntosRouter);
 
 // Manejador de errores centralizado
 app.use((err, _req, res, _next) => {
-  console.error('[api] Error:', err.message);
+  console.error('[api] Error:', err.stack || err);
+  const status = err.status || err.statusCode || 500;
   const isProduction = process.env.NODE_ENV === 'production';
-  res.status(500).json({
+  res.status(status).json({
     error: 'Error interno del servidor',
     ...(isProduction ? {} : { detail: err.message }),
   });
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[process] Unhandled Promise Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[process] Uncaught Exception:', err.stack || err);
+  process.exit(1);
 });
 
 async function start() {

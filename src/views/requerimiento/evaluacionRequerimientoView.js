@@ -212,7 +212,7 @@ async function evalPrint(id) {
   try {
     const row = await requerimientosService.getById(id);
     let payload = {};
-    try { payload = JSON.parse(row.payload || '{}'); } catch (_) {}
+    try { payload = JSON.parse(row.payload || '{}'); } catch (e) { console.warn('[evaluacion] Payload JSON inválido:', e.message); }
     const items = payload.items || [];
     const printW = window.open('', '_blank');
     printW.document.write(`<html><head><title>Requerimiento ${esc(row.codigo || row.id)}</title>

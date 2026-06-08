@@ -53,7 +53,9 @@ export function bulkImportRouter(cfg) {
       await client.query('COMMIT');
       res.json({ ok: true, inserted, mode });
     } catch (err) {
-      await client.query('ROLLBACK');
+      try { await client.query('ROLLBACK'); } catch (rbErr) {
+        console.error(`[bulkImport/${table}] ROLLBACK failed:`, rbErr.message);
+      }
       next(err);
     } finally {
       client.release();
