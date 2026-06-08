@@ -40,9 +40,9 @@ async function renderApp() {
       setTimeout(() => initRegistroRequerimientoView(), 50);
     }
     else if (currentRoute === 'au/requerimientos/evaluacion') {
-      const module = await import('./views/requerimientosView.js');
-      content = module.renderRequerimientosView(currentRoute);
-      setTimeout(() => module.initRequerimientosView(currentRoute), 50);
+      const { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } = await import('./views/requerimiento/evaluacionRequerimientoView.js');
+      content = renderEvaluacionRequerimientoView();
+      setTimeout(() => initEvaluacionRequerimientoView(), 50);
     }
     else if (currentRoute === 'requerimientos/nuevo/bienes') {
       content = renderFormBienesView();
