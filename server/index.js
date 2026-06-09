@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 import pkg from 'pg';
 
 import { runMigrations } from './migrate.js';
@@ -17,6 +18,7 @@ import entidadRouter from './routes/entidad.js';
 import fichanetRouter from './routes/fichanet.js';
 import adjuntosRouter from './routes/adjuntos.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
+import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
 
@@ -25,7 +27,7 @@ const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'sgc',
-  password: process.env.DB_PASS || '1234',
+  password: process.env.DB_PASSWORD || 'postgres',
   port: parseInt(process.env.DB_PORT || '5432', 10),
 });
 
@@ -33,16 +35,37 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(helmet());
-app.use(cors());
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174,http://localhost:5177,http://localhost:5178,http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim());
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error('Origen no permitido por CORS'));
+  },
+  credentials: true,
+}));
 app.use(compression());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use(morgan('tiny'));
 
 // Health check
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// Rutas principales
-app.use('/api/auth', authRouter);
+// Limitar intentos de login para prevenir fuerza bruta
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Demasiados intentos. Intente de nuevo en 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rutas públicas
+app.use('/api/auth', loginLimiter, authRouter);
+
+// Proteger todas las rutas restantes con autenticación
+app.use('/api', requireAuth);
 app.use('/api/catalogo', catalogoRouter);
 app.use('/api/glosas', glosasRouter);
 app.use('/api/glosas-bienes', glosasBienesRouter);
@@ -50,24 +73,18 @@ app.use('/api/entidad', entidadRouter);
 app.use('/api/fichanet', fichanetRouter);
 
 // Endpoints adicionales de glosas
-app.get('/api/entregas', async (_req, res) => {
+app.get('/api/entregas', async (_req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM glosas_entregas ORDER BY id ASC');
     res.json(result.rows);
-  } catch (err) {
-    console.error('[Error en /api/entregas]', err);
-    res.status(500).send('Error en el servidor');
-  }
+  } catch (err) { next(err); }
 });
 
-app.get('/api/servicios', async (_req, res) => {
+app.get('/api/servicios', async (_req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM glosas_servicios ORDER BY id ASC');
     res.json(result.rows);
-  } catch (err) {
-    console.error('[Error en /api/servicios]', err);
-    res.status(500).send('Error en el servidor');
-  }
+  } catch (err) { next(err); }
 });
 
 // CRUD genéricos para submódulos simples
@@ -122,8 +139,22 @@ app.use('/api/adjuntos', adjuntosRouter);
 
 // Manejador de errores centralizado
 app.use((err, _req, res, _next) => {
-  console.error('[api] Error:', err.message);
-  res.status(500).json({ error: 'Error interno del servidor', detail: err.message });
+  console.error('[api] Error:', err.stack || err);
+  const status = err.status || err.statusCode || 500;
+  const isProduction = process.env.NODE_ENV === 'production';
+  res.status(status).json({
+    error: 'Error interno del servidor',
+    ...(isProduction ? {} : { detail: err.message }),
+  });
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[process] Unhandled Promise Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[process] Uncaught Exception:', err.stack || err);
+  process.exit(1);
 });
 
 async function start() {

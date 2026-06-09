@@ -95,4 +95,89 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
   }
 });
 
+// PUT /api/requerimientos/:requerimientoId/observar
+router.put('/:requerimientoId/observar', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { motivo, usuario } = req.body || {};
+    if (!motivo) return res.status(400).json({ success: false, error: 'Motivo de observación requerido' });
+
+    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
+
+    let payload = {};
+    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+    payload.historial_evaluacion.push({
+      tipo: 'observacion',
+      motivo,
+      usuario: usuario || '',
+      fecha: new Date().toISOString(),
+    });
+
+    const res2 = await query(
+      `UPDATE requerimientos SET estado = 'Observado', payload = $2, updated_at = NOW()
+       WHERE id = $1 RETURNING id, codigo, estado`,
+      [requerimientoId, JSON.stringify(payload)]
+    );
+    res.json({ success: true, requerimiento: res2.rows[0] });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/requerimientos/:requerimientoId/subsanar
+router.put('/:requerimientoId/subsanar', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { respuesta, usuario } = req.body || {};
+    if (!respuesta) return res.status(400).json({ success: false, error: 'Subsanación requerida' });
+
+    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
+
+    let payload = {};
+    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+    payload.historial_evaluacion.push({
+      tipo: 'subsanacion',
+      respuesta,
+      usuario: usuario || '',
+      fecha: new Date().toISOString(),
+    });
+
+    const res2 = await query(
+      `UPDATE requerimientos SET estado = 'En tramite de aprobación', payload = $2, updated_at = NOW()
+       WHERE id = $1 RETURNING id, codigo, estado`,
+      [requerimientoId, JSON.stringify(payload)]
+    );
+    res.json({ success: true, requerimiento: res2.rows[0] });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/requerimientos/:requerimientoId/aprobar-evaluacion
+router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { usuario } = req.body || {};
+
+    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
+
+    let payload = {};
+    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+    payload.historial_evaluacion.push({
+      tipo: 'aprobacion',
+      usuario: usuario || '',
+      fecha: new Date().toISOString(),
+    });
+
+    const res2 = await query(
+      `UPDATE requerimientos SET estado = 'Aprobado', payload = $2, updated_at = NOW()
+       WHERE id = $1 RETURNING id, codigo, estado`,
+      [requerimientoId, JSON.stringify(payload)]
+    );
+    res.json({ success: true, requerimiento: res2.rows[0] });
+  } catch (err) { next(err); }
+});
+
 export default router;

@@ -3,14 +3,30 @@
 
 const BASE = '/api';
 
+function authHeaders() {
+  try {
+    const raw = localStorage.getItem('currentUser');
+    if (raw) {
+      const user = JSON.parse(raw);
+      if (user && user.id) return { 'x-user-id': String(user.id) };
+    }
+  } catch (_) { /* ignore */ }
+  return {};
+}
+
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      ...options,
+    });
+  } catch (networkErr) {
+    throw new Error(`Error de red al conectar con ${path}: ${networkErr.message}`);
+  }
   if (!res.ok) {
     let detail = '';
-    try { detail = (await res.json()).error || ''; } catch (_) { /* ignore */ }
+    try { detail = (await res.json()).error || ''; } catch (_) { /* body no-JSON */ }
     throw new Error(detail || `Error ${res.status} en ${path}`);
   }
   if (res.status === 204) return null;
