@@ -6,6 +6,7 @@ import { renderSidebar, initSidebar } from './components/Sidebar.js';
 import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
 import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
 import { renderRegistroRequerimientoView, initRegistroRequerimientoView } from './views/requerimiento/registroRequerimientoView.js';
+import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } from './views/requerimiento/evaluacionRequerimientoView.js';
 
 const appEl = document.getElementById('app');
 
@@ -40,9 +41,8 @@ async function renderApp() {
       setTimeout(() => initRegistroRequerimientoView(), 50);
     }
     else if (currentRoute === 'au/requerimientos/evaluacion') {
-      const module = await import('./views/requerimientosView.js');
-      content = module.renderRequerimientosView(currentRoute);
-      setTimeout(() => module.initRequerimientosView(currentRoute), 50);
+      content = renderEvaluacionRequerimientoView();
+      setTimeout(() => initEvaluacionRequerimientoView(), 50);
     }
     else if (currentRoute === 'requerimientos/nuevo/bienes') {
       content = renderFormBienesView();

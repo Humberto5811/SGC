@@ -14,6 +14,7 @@ import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
+import { reqShared, estadoBadge, ultimaObservacion, addSubsanacion, showTextModal } from './reqShared.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
@@ -106,6 +107,47 @@ function renderSelect() {
     </div>
   `;
 }
+// Botón de aprobación dinámico según el estado del requerimiento.
+function aprobarBtnHtml(r) {
+  const e = String(r.estado || 'Registrado');
+  const base = 'btn btn-xs';
+  const style = 'padding: 2px 6px; font-size: 11px;';
+  if (/observ/i.test(e)) {
+    return `<button class="${base} btn-danger req-observado" data-id="${r.id}" title="Observado — ver observación y subsanar" style="${style}">Observado</button>`;
+  }
+  if (/tr[aá]mite/i.test(e)) {
+    return `<button class="${base} btn-outline-secondary" data-id="${r.id}" title="En trámite de aprobación" style="${style}" disabled><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
+  }
+  if (/aprobad/i.test(e)) {
+    return `<button class="${base} btn-success" data-id="${r.id}" title="Aprobado" style="${style}" disabled><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
+  }
+  return `<button class="${base} btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación" style="${style}"><i class="bi bi-send" style="font-size: 11px;"></i></button>`;
+}
+
+// Diálogo de subsanación: muestra la observación del gerente y solicita la respuesta.
+async function abrirSubsanacion(id) {
+  const req = (lastListRows || []).find((x) => String(x.id) === String(id));
+  if (!req) return;
+  const obs = ultimaObservacion(req);
+  const texto = await showTextModal({
+    title: 'Subsanar observación',
+    readonlyLabel: 'Observación del gerente',
+    readonlyText: obs ? obs.motivo : '(sin detalle)',
+    label: 'Subsanación realizada',
+    placeholder: 'Describa la subsanación realizada…',
+    buttonText: 'Solicitar aprobación',
+    buttonClass: 'btn-primary',
+  });
+  if (!texto) return;
+  try {
+    const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
+    await addSubsanacion(req, texto, user.dni || user.usuario || 'usuario');
+    loadList();
+  } catch (e) {
+    alert('Error al enviar la subsanación: ' + e.message);
+  }
+}
+
 async function loadList() {
   const cont = document.getElementById('reqList');
   if (!cont) return;
@@ -204,12 +246,12 @@ async function loadList() {
                   <strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong>
                 </td>
                 <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${esc(r.estado || '')}</td>
+                <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center" style="white-space: nowrap;">
                   <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-dark req-print" data-id="${r.id}" title="Documento" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-info req-attach" data-id="${r.id}" title="Adjuntos" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
-                  <button class="btn btn-xs btn-outline-success req-approve" data-id="${r.id}" title="Aprobar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>
+                  ${aprobarBtnHtml(r)}
                   <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-trash" style="font-size: 11px;"></i></button>
                 </td>
               </tr>`;
@@ -221,6 +263,7 @@ async function loadList() {
     cont.querySelectorAll('.req-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
     cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id));
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
+    cont.querySelectorAll('.req-observado').forEach((b) => b.onclick = () => abrirSubsanacion(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
     
     // Cargar contadores de adjuntos para cada requerimiento
@@ -1231,5 +1274,14 @@ export function renderRegistroRequerimientoView() {
 
 export function initRegistroRequerimientoView() {
   resetState();
-  showSelect();
+  if (reqShared.pendingOpenId != null) {
+    const id = reqShared.pendingOpenId;
+    reqShared.pendingOpenId = null;
+    openRequerimiento(id);
+  } else {
+    showSelect();
+  }
 }
+
+// Reutilizados por Evaluación de Requerimientos.
+export { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos };
