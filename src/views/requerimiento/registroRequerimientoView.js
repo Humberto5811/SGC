@@ -697,9 +697,8 @@ function collectInputs() {
 function attachBienes() {
   const back = document.getElementById('reqBack');
   if (back) back.onclick = () => {
-    if (reqShared.editingFromEvaluacion) {
-      reqShared.editingFromEvaluacion = false;
-      location.hash = '#/au/requerimientos/evaluacion';
+    if (reqShared.editingFromEvaluacion && reqShared.onBackToEvaluacion) {
+      reqShared.onBackToEvaluacion();
     } else {
       showSelect();
     }
@@ -811,6 +810,7 @@ async function saveRequerimiento() {
     entregas: state.entregas,
     fichas,
     header: state.header,
+    observaciones: state.observaciones || [],
   };
   // Formatear cmn a 5 dígitos con ceros a la izquierda
   const cmnRaw = state.cmn || '';
@@ -824,10 +824,12 @@ async function saveRequerimiento() {
     denominacion: state.denominacion,
     area: state.area.nombre,
     responsable: state.area.responsable,
-    estado: 'Registrado',
     payload: JSON.stringify(payloadObj),
     usuario_modificacion: usuario,
   };
+  if (!reqShared.editingFromEvaluacion) {
+    body.estado = 'Registrado';
+  }
 
   try {
     if (state.reqId) {
@@ -878,6 +880,7 @@ function applyPayload(row) {
   state.glosaOverrides = p.glosaOverrides || {};
   state.entregas = Array.isArray(p.entregas) && p.entregas.length ? p.entregas : [];
   state.fichas = Array.isArray(p.fichas) ? p.fichas : [];
+  state.observaciones = Array.isArray(p.observaciones) ? p.observaciones : [];
   if (p.header) state.header = p.header;
 }
 
@@ -929,7 +932,7 @@ function resetState() {
     header: { logo: '', entidadNombre: '' },
     area: { codigo: '', nombre: '', responsable: '' },
     denominacion: '', objetivo: '', finalidad: '', caracteristicas: '',
-    items: [], glosaOverrides: {}, entregas: [], fichas: [],
+    items: [], glosaOverrides: {}, entregas: [], fichas: [], observaciones: [],
   };
 }
 
