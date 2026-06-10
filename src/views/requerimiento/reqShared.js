@@ -6,7 +6,9 @@
 import { requerimientosService } from '../../services/requerimientosService.js';
 
 // Intent para abrir un requerimiento a editar desde Evaluación (se navega a Registro).
-export const reqShared = { pendingOpenId: null };
+// editingFromEvaluacion: cuando es true, el formulario oculta títulos de Registro y
+// el botón "Volver" regresa al listado de Evaluación.
+export const reqShared = { pendingOpenId: null, editingFromEvaluacion: false };
 
 function esc(s) {
   return String(s == null ? '' : s)

@@ -152,15 +152,12 @@ function editarRequerimiento(id) {
   const wrapper = cont.closest('.container-fluid');
   if (!wrapper) return;
   wrapper.innerHTML = `
-    <div class="d-flex align-items-center mb-3">
-      <button id="evalBack" class="btn btn-sm btn-outline-secondary me-3"><i class="bi bi-arrow-left"></i> Volver al listado</button>
-      <h3 class="mb-0"><i class="bi bi-check-circle"></i> Evaluación — Edición de Requerimiento</h3>
+    <div class="mb-2">
+      <h5 class="mb-0"><i class="bi bi-check-circle"></i> Evaluación — Edición de Requerimiento</h5>
     </div>
     <div id="reqRoot"></div>
   `;
-  document.getElementById('evalBack').onclick = () => {
-    location.hash = '#/au/requerimientos/evaluacion';
-  };
+  reqShared.editingFromEvaluacion = true;
   openRequerimiento(id);
 }
 
