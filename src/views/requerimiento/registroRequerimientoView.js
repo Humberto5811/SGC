@@ -383,7 +383,7 @@ function renderBienes() {
   return `
     <div class="container-fluid">
       <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
-        <div>
+        <div ${reqShared.editingFromEvaluacion ? 'style="display:none"' : ''}>
           <h3 class="mb-1"><i class="bi bi-box-seam"></i> Registro de Requerimiento — Formato de Bienes</h3>
           <p class="text-muted mb-0">Anexo N.º 01 — Especificaciones Técnicas para Adquisición de Bienes</p>
         </div>
@@ -696,7 +696,14 @@ function collectInputs() {
 
 function attachBienes() {
   const back = document.getElementById('reqBack');
-  if (back) back.onclick = () => showSelect();
+  if (back) back.onclick = () => {
+    if (reqShared.editingFromEvaluacion) {
+      reqShared.editingFromEvaluacion = false;
+      location.hash = '#/au/requerimientos/evaluacion';
+    } else {
+      showSelect();
+    }
+  };
   const save = document.getElementById('reqSave');
   if (save) save.onclick = () => saveRequerimiento();
   const print = document.getElementById('reqPrint');
