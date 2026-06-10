@@ -4,7 +4,7 @@
 // es distinto de "Registrado" (es decir, los que el usuario ya envió a aprobación).
 import { authService } from '../../services/authService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
-import { reqShared, estadoBadge, addObservacion, ultimaObservacion, showTextModal } from './reqShared.js';
+import { reqShared, estadoBadge, addObservacion, ultimaObservacion, todasObservaciones, historialHtml, showTextModal } from './reqShared.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento } from './registroRequerimientoView.js';
 
 function esc(s) {
@@ -173,23 +173,11 @@ function editarRequerimiento(id) {
 async function observarRequerimiento(id) {
   const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
-  const prev = ultimaObservacion(req);
-  let readonlyLabel = '';
-  let readonlyText = '';
-  if (prev) {
-    if (prev.subsanacion) {
-      readonlyLabel = 'Última subsanación del usuario';
-      readonlyText = prev.subsanacion;
-    } else {
-      readonlyLabel = 'Su observación anterior (sin respuesta aún)';
-      readonlyText = prev.motivo;
-    }
-  }
+  const allObs = todasObservaciones(req);
   const motivo = await showTextModal({
     title: 'Observar requerimiento',
-    readonlyLabel,
-    readonlyText,
-    label: 'Motivo de la observación',
+    historyHtml: historialHtml(allObs),
+    label: 'Nueva observación',
     placeholder: 'Indique el motivo de la observación…',
     buttonText: 'Guardar observación',
     buttonClass: 'btn-danger',

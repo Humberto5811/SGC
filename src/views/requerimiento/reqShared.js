@@ -35,6 +35,32 @@ export function ultimaObservacion(req) {
   return obs.length ? obs[obs.length - 1] : null;
 }
 
+// Devuelve todas las observaciones del payload.
+export function todasObservaciones(req) {
+  return safeParse(req && req.payload).observaciones || [];
+}
+
+// Genera HTML del historial completo de observaciones/subsanaciones.
+export function historialHtml(observaciones) {
+  if (!observaciones || !observaciones.length) return '';
+  const items = observaciones.map((o) => {
+    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE') : '';
+    let html = `<div class="border rounded p-2 mb-2" style="font-size:0.9em;">`;
+    html += `<div class="fw-bold text-danger"><i class="bi bi-chat-left-dots"></i> Observación #${o.ronda || '?'} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
+    html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || '')}</div>`;
+    if (o.subsanacion) {
+      const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE') : '';
+      html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Subsanación ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
+      html += `<div style="white-space:pre-wrap;">${esc(o.subsanacion)}</div>`;
+    } else {
+      html += `<div class="text-muted fst-italic mt-1"><small>Sin respuesta aún</small></div>`;
+    }
+    html += `</div>`;
+    return html;
+  });
+  return `<div class="mb-3"><label class="form-label fw-bold">Historial de observaciones</label>${items.join('')}</div>`;
+}
+
 // Agrega una observación (gerente) → estado "Observado".
 export async function addObservacion(req, motivo, gerente) {
   const payload = safeParse(req.payload);
@@ -74,15 +100,17 @@ export function showTextModal(opts = {}) {
          <div class="alert alert-warning mb-0" style="white-space:pre-wrap;">${esc(opts.readonlyText)}</div>
        </div>`
     : '';
+  const hist = opts.historyHtml || '';
   const html = `
     <div class="modal fade" id="${id}" tabindex="-1">
-      <div class="modal-dialog">
+      <div class="modal-dialog modal-lg">
         <div class="modal-content">
           <div class="modal-header">
             <h5 class="modal-title">${esc(opts.title || 'Observación')}</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
           </div>
-          <div class="modal-body">
+          <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
+            ${hist}
             ${ro}
             <label class="form-label">${esc(opts.label || 'Detalle')}</label>
             <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || '')}"></textarea>
