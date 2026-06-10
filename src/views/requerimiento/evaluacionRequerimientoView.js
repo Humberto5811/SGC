@@ -5,7 +5,7 @@
 import { authService } from '../../services/authService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { reqShared, estadoBadge, addObservacion, ultimaObservacion, showTextModal } from './reqShared.js';
-import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from './registroRequerimientoView.js';
+import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento } from './registroRequerimientoView.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -85,8 +85,8 @@ async function loadEvaluacionList() {
               <th>Descripción del bien</th>
               <th>Área usuaria</th>
               <th>Centro</th>
-              <th>Monto Total</th>
-              <th>CMN N°</th>
+              <th class="text-center">Monto Total</th>
+              <th class="text-center">CMN N°</th>
               <th>Estado</th>
               <th style="width: 180px;" class="text-center">Acciones</th>
             </tr>
@@ -103,8 +103,9 @@ async function loadEvaluacionList() {
                 }
               } catch (_) {}
               const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
+              const observado = /observ/i.test(String(r.estado || ''));
               const style = 'padding: 2px 6px; font-size: 11px;';
-              const observarBtn = `<button class="btn btn-xs btn-danger eval-observar" data-id="${r.id}" title="Observar" style="${style}" ${enTramite ? '' : 'disabled'}><i class="bi bi-chat-left-dots" style="font-size: 11px;"></i></button>`;
+              const observarBtn = `<button class="btn btn-xs btn-danger eval-observar" data-id="${r.id}" title="Observar" style="${style}" ${(enTramite || observado) ? '' : 'disabled'}><i class="bi bi-chat-left-dots" style="font-size: 11px;"></i></button>`;
               const aprobarBtn = `<button class="btn btn-xs btn-outline-success eval-approve" data-id="${r.id}" title="Aprobar" style="${style}" ${enTramite ? '' : 'disabled'}><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>`;
               return `
               <tr>
@@ -114,7 +115,7 @@ async function loadEvaluacionList() {
                 <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
                 <td>${esc(r.responsable || r.centro_nombre || '')}</td>
-                <td class="text-end"><strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong></td>
+                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</td>
                 <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
                 <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center" style="white-space: nowrap;">
@@ -144,20 +145,44 @@ async function loadEvaluacionList() {
   }
 }
 
-// Editar reutilizando el formulario del submenú Registro de Requerimientos.
+// Editar el requerimiento dentro de la vista de Evaluación (sin navegar a Registro).
 function editarRequerimiento(id) {
-  reqShared.pendingOpenId = id;
-  location.hash = '#/au/requerimientos/registro';
+  const cont = document.getElementById('evalList');
+  if (!cont) return;
+  const wrapper = cont.closest('.container-fluid');
+  if (!wrapper) return;
+  wrapper.innerHTML = `
+    <div class="d-flex align-items-center mb-3">
+      <button id="evalBack" class="btn btn-sm btn-outline-secondary me-3"><i class="bi bi-arrow-left"></i> Volver al listado</button>
+      <h3 class="mb-0"><i class="bi bi-check-circle"></i> Evaluación — Edición de Requerimiento</h3>
+    </div>
+    <div id="reqRoot"></div>
+  `;
+  document.getElementById('evalBack').onclick = () => {
+    location.hash = '#/au/requerimientos/evaluacion';
+  };
+  openRequerimiento(id);
 }
 
 async function observarRequerimiento(id) {
   const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
   const prev = ultimaObservacion(req);
+  let readonlyLabel = '';
+  let readonlyText = '';
+  if (prev) {
+    if (prev.subsanacion) {
+      readonlyLabel = 'Última subsanación del usuario';
+      readonlyText = prev.subsanacion;
+    } else {
+      readonlyLabel = 'Su observación anterior (sin respuesta aún)';
+      readonlyText = prev.motivo;
+    }
+  }
   const motivo = await showTextModal({
     title: 'Observar requerimiento',
-    readonlyLabel: prev && prev.subsanacion ? 'Última subsanación del usuario' : '',
-    readonlyText: prev && prev.subsanacion ? prev.subsanacion : '',
+    readonlyLabel,
+    readonlyText,
     label: 'Motivo de la observación',
     placeholder: 'Indique el motivo de la observación…',
     buttonText: 'Guardar observación',

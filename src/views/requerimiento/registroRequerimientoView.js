@@ -210,8 +210,8 @@ async function loadList() {
               <th>Descripción del bien</th>
               <th>Área usuaria</th>
               <th>Centro</th>
-              <th>Monto Total</th>
-              <th>CMN N°</th>
+              <th class="text-center">Monto Total</th>
+              <th class="text-center">CMN N°</th>
               <th>Estado</th>
               <th style="width: 150px;" class="text-center">Acciones</th>
             </tr>
@@ -242,9 +242,7 @@ async function loadList() {
                 <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
                 <td>${esc(r.responsable || r.centro_nombre || '')}</td>
-                <td class="text-end">
-                  <strong>${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</strong>
-                </td>
+                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</td>
                 <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
                 <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center" style="white-space: nowrap;">
@@ -1284,4 +1282,4 @@ export function initRegistroRequerimientoView() {
 }
 
 // Reutilizados por Evaluación de Requerimientos.
-export { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos };
+export { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento };
