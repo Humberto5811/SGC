@@ -158,6 +158,15 @@ function editarRequerimiento(id) {
     <div id="reqRoot"></div>
   `;
   reqShared.editingFromEvaluacion = true;
+  reqShared.onBackToEvaluacion = () => {
+    reqShared.editingFromEvaluacion = false;
+    reqShared.onBackToEvaluacion = null;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = renderEvaluacionRequerimientoView();
+    const cf = tmp.querySelector('.container-fluid');
+    wrapper.innerHTML = cf ? cf.innerHTML : tmp.innerHTML;
+    initEvaluacionRequerimientoView();
+  };
   openRequerimiento(id);
 }
 
