@@ -14,7 +14,7 @@ import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
-import { reqShared, estadoBadge, ultimaObservacion, addSubsanacion, showTextModal } from './reqShared.js';
+import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showTextModal } from './reqShared.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
@@ -128,11 +128,10 @@ function aprobarBtnHtml(r) {
 async function abrirSubsanacion(id) {
   const req = (lastListRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
-  const obs = ultimaObservacion(req);
+  const allObs = todasObservaciones(req);
   const texto = await showTextModal({
     title: 'Subsanar observación',
-    readonlyLabel: 'Observación del gerente',
-    readonlyText: obs ? obs.motivo : '(sin detalle)',
+    historyHtml: historialHtml(allObs),
     label: 'Subsanación realizada',
     placeholder: 'Describa la subsanación realizada…',
     buttonText: 'Solicitar aprobación',
