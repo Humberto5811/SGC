@@ -294,3 +294,14 @@ CREATE TABLE IF NOT EXISTS requerimientos_adjuntos (
 );
 
 CREATE INDEX IF NOT EXISTS idx_adjuntos_requerimiento_id ON requerimientos_adjuntos (requerimiento_id);
+
+-- ============ GLOSAS SERVICIOS ============
+CREATE TABLE IF NOT EXISTS glosas_servicios (
+  id SERIAL PRIMARY KEY,
+  titulo VARCHAR(250) NOT NULL UNIQUE,
+  contenido TEXT,
+  estado VARCHAR(30) DEFAULT 'Activo',
+  usuario_modificacion VARCHAR(150),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);

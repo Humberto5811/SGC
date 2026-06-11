@@ -124,7 +124,7 @@ async function loadEvaluacionList() {
                 <td class="text-center" style="white-space: nowrap;">
                   <button class="btn btn-xs btn-outline-primary eval-edit" data-id="${r.id}" title="Editar" style="${style}" ${aprobado ? 'disabled' : ''}><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-dark eval-print" data-id="${r.id}" title="Documento" style="${style}"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-outline-info eval-attach" data-id="${r.id}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
+                  <button class="btn btn-xs btn-outline-info eval-attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
                   ${observarBtn}
                   ${aprobarBtn}
                   <button class="btn btn-xs btn-outline-danger eval-del" data-id="${r.id}" title="Eliminar" style="${style}" ${aprobado ? 'disabled' : ''}><i class="bi bi-trash" style="font-size: 11px;"></i></button>
@@ -137,7 +137,10 @@ async function loadEvaluacionList() {
 
     cont.querySelectorAll('.eval-edit').forEach((b) => b.onclick = () => editarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-    cont.querySelectorAll('.eval-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id));
+    cont.querySelectorAll('.eval-attach').forEach((b) => b.onclick = () => {
+      const readOnly = /aprobad/i.test(String(b.dataset.estado || ''));
+      manageAdjuntos(b.dataset.id, readOnly);
+    });
     cont.querySelectorAll('.eval-observar').forEach((b) => b.onclick = () => observarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-approve').forEach((b) => b.onclick = () => approveRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-del').forEach((b) => b.onclick = () => eliminarRequerimiento(b.dataset.id));

@@ -5,6 +5,7 @@ import { renderNavbar } from './components/Navbar.js';
 import { renderSidebar, initSidebar } from './components/Sidebar.js';
 import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
 import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
+import { renderFormatoServiciosView, initFormatoServiciosView } from './views/glosasRequerimientos/formatoServiciosView.js';
 import { renderRegistroRequerimientoView, initRegistroRequerimientoView } from './views/requerimiento/registroRequerimientoView.js';
 import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } from './views/requerimiento/evaluacionRequerimientoView.js';
 
@@ -74,6 +75,10 @@ async function renderApp() {
 else if (currentRoute === 'mantenimiento/bienes') {
   content = renderFormatoBienesView();
   setTimeout(() => initFormatoBienesView(), 50);
+}
+else if (currentRoute === 'mantenimiento/servicios') {
+  content = renderFormatoServiciosView();
+  setTimeout(() => initFormatoServiciosView(), 50);
 }
 else if (currentRoute === 'mantenimiento' || 
          currentRoute === 'mantenimiento/usuarios' ||

@@ -42,15 +42,17 @@ export function todasObservaciones(req) {
 
 // Genera HTML del historial completo de observaciones/subsanaciones.
 export function historialHtml(observaciones) {
-  if (!observaciones || !observaciones.length) return '';
+  if (!observaciones || !observaciones.length) {
+    return '<div class="text-muted fst-italic">No hay observaciones registradas.</div>';
+  }
   const items = observaciones.map((o) => {
-    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE') : '';
+    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     let html = `<div class="border rounded p-2 mb-2" style="font-size:0.9em;">`;
     html += `<div class="fw-bold text-danger"><i class="bi bi-chat-left-dots"></i> Observación #${o.ronda || '?'} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
     html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || '')}</div>`;
     if (o.subsanacion) {
-      const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE') : '';
-      html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Subsanación ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
+      const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta del usuario ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
       html += `<div style="white-space:pre-wrap;">${esc(o.subsanacion)}</div>`;
     } else {
       html += `<div class="text-muted fst-italic mt-1"><small>Sin respuesta aún</small></div>`;
@@ -58,7 +60,7 @@ export function historialHtml(observaciones) {
     html += `</div>`;
     return html;
   });
-  return `<div class="mb-3"><label class="form-label fw-bold">Historial de observaciones</label>${items.join('')}</div>`;
+  return `<div class="mb-3"><label class="form-label fw-bold">Historial de la conversación</label>${items.join('')}</div>`;
 }
 
 // Agrega una observación (gerente) → estado "Observado".
