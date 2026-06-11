@@ -104,9 +104,12 @@ async function loadEvaluacionList() {
               } catch (_) {}
               const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
               const observado = /observ/i.test(String(r.estado || ''));
+              const aprobado = /aprobad/i.test(String(r.estado || ''));
               const style = 'padding: 2px 6px; font-size: 11px;';
-              const observarBtn = `<button class="btn btn-xs btn-danger eval-observar" data-id="${r.id}" title="Observar" style="${style}" ${(enTramite || observado) ? '' : 'disabled'}><i class="bi bi-chat-left-dots" style="font-size: 11px;"></i></button>`;
-              const aprobarBtn = `<button class="btn btn-xs btn-outline-success eval-approve" data-id="${r.id}" title="Aprobar" style="${style}" ${enTramite ? '' : 'disabled'}><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>`;
+              const observarBtn = `<button class="btn btn-xs ${aprobado ? 'btn-outline-secondary' : 'btn-danger'} eval-observar" data-id="${r.id}" title="${aprobado ? 'Ver observaciones' : 'Observar'}" style="${style}" ${(enTramite || observado || aprobado) ? '' : 'disabled'}><i class="bi bi-chat-left-dots" style="font-size: 11px;"></i></button>`;
+              const aprobarBtn = aprobado
+                ? `<button class="btn btn-xs btn-success" data-id="${r.id}" title="Aprobado" style="${style}" disabled><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`
+                : `<button class="btn btn-xs btn-outline-success eval-approve" data-id="${r.id}" title="Aprobar" style="${style}" ${enTramite ? '' : 'disabled'}><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>`;
               return `
               <tr>
                 <td>${esc(r.codigo || ('#' + r.id))}</td>
@@ -119,12 +122,12 @@ async function loadEvaluacionList() {
                 <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
                 <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center" style="white-space: nowrap;">
-                  <button class="btn btn-xs btn-outline-primary eval-edit" data-id="${r.id}" title="Editar" style="${style}"><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
+                  <button class="btn btn-xs btn-outline-primary eval-edit" data-id="${r.id}" title="Editar" style="${style}" ${aprobado ? 'disabled' : ''}><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-dark eval-print" data-id="${r.id}" title="Documento" style="${style}"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-info eval-attach" data-id="${r.id}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
                   ${observarBtn}
                   ${aprobarBtn}
-                  <button class="btn btn-xs btn-outline-danger eval-del" data-id="${r.id}" title="Eliminar" style="${style}"><i class="bi bi-trash" style="font-size: 11px;"></i></button>
+                  <button class="btn btn-xs btn-outline-danger eval-del" data-id="${r.id}" title="Eliminar" style="${style}" ${aprobado ? 'disabled' : ''}><i class="bi bi-trash" style="font-size: 11px;"></i></button>
                 </td>
               </tr>`;
             }).join('')}
@@ -174,6 +177,15 @@ async function observarRequerimiento(id) {
   const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
   const allObs = todasObservaciones(req);
+  const aprobado = /aprobad/i.test(String(req.estado || ''));
+  if (aprobado) {
+    await showTextModal({
+      title: 'Historial de observaciones',
+      historyHtml: historialHtml(allObs),
+      readOnlyMode: true,
+    });
+    return;
+  }
   const motivo = await showTextModal({
     title: 'Observar requerimiento',
     historyHtml: historialHtml(allObs),
