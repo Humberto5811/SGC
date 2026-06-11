@@ -119,7 +119,7 @@ function aprobarBtnHtml(r) {
     return `<button class="${base} btn-outline-secondary" data-id="${r.id}" title="En trámite de aprobación" style="${style}" disabled><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
   }
   if (/aprobad/i.test(e)) {
-    return `<button class="${base} btn-success" data-id="${r.id}" title="Aprobado" style="${style}" disabled><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
+    return `<button class="${base} btn-success req-ver-obs" data-id="${r.id}" title="Aprobado — ver observaciones" style="${style}"><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
   }
   return `<button class="${base} btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación" style="${style}"><i class="bi bi-send" style="font-size: 11px;"></i></button>`;
 }
@@ -145,6 +145,18 @@ async function abrirSubsanacion(id) {
   } catch (e) {
     alert('Error al enviar la subsanación: ' + e.message);
   }
+}
+
+// Ver historial de observaciones en modo solo lectura (para requerimientos aprobados).
+async function verObservacionesReadOnly(id) {
+  const req = (lastListRows || []).find((x) => String(x.id) === String(id));
+  if (!req) return;
+  const allObs = todasObservaciones(req);
+  await showTextModal({
+    title: 'Historial de observaciones',
+    historyHtml: historialHtml(allObs),
+    readOnlyMode: true,
+  });
 }
 
 async function loadList() {
@@ -245,11 +257,13 @@ async function loadList() {
                 <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
                 <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center" style="white-space: nowrap;">
-                  <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
+                  ${(() => { const _aprobado = /aprobad/i.test(String(r.estado || '')); return `
+                  <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;" ${_aprobado ? 'disabled' : ''}><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-dark req-print" data-id="${r.id}" title="Documento" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
                   <button class="btn btn-xs btn-outline-info req-attach" data-id="${r.id}" title="Adjuntos" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
                   ${aprobarBtnHtml(r)}
-                  <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-trash" style="font-size: 11px;"></i></button>
+                  <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;" ${_aprobado ? 'disabled' : ''}><i class="bi bi-trash" style="font-size: 11px;"></i></button>
+                  `; })()}
                 </td>
               </tr>`;
             }).join('')}
@@ -261,6 +275,7 @@ async function loadList() {
     cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id));
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
     cont.querySelectorAll('.req-observado').forEach((b) => b.onclick = () => abrirSubsanacion(b.dataset.id));
+    cont.querySelectorAll('.req-ver-obs').forEach((b) => b.onclick = () => verObservacionesReadOnly(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
     
     // Cargar contadores de adjuntos para cada requerimiento

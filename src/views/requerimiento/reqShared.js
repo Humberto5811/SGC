@@ -92,6 +92,7 @@ export async function addSubsanacion(req, texto, usuario) {
 
 // Cuadro de diálogo con un texto opcional de solo lectura y un textarea editable.
 // Resuelve con el texto ingresado (trim) o null si se cancela/cierra.
+// Si opts.readOnlyMode es true, solo muestra el historial sin textarea ni botón de acción.
 export function showTextModal(opts = {}) {
   const id = 'modTxt_' + Date.now();
   const ro = opts.readonlyText
@@ -101,6 +102,13 @@ export function showTextModal(opts = {}) {
        </div>`
     : '';
   const hist = opts.historyHtml || '';
+  const inputSection = opts.readOnlyMode ? '' : `
+            <label class="form-label">${esc(opts.label || 'Detalle')}</label>
+            <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || '')}"></textarea>`;
+  const footerBtns = opts.readOnlyMode
+    ? `<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>`
+    : `<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="${id}_ok" class="btn ${opts.buttonClass || 'btn-primary'}">${esc(opts.buttonText || 'Guardar')}</button>`;
   const html = `
     <div class="modal fade" id="${id}" tabindex="-1">
       <div class="modal-dialog modal-lg">
@@ -112,12 +120,10 @@ export function showTextModal(opts = {}) {
           <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
             ${hist}
             ${ro}
-            <label class="form-label">${esc(opts.label || 'Detalle')}</label>
-            <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || '')}"></textarea>
+            ${inputSection}
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-            <button type="button" id="${id}_ok" class="btn ${opts.buttonClass || 'btn-primary'}">${esc(opts.buttonText || 'Guardar')}</button>
+            ${footerBtns}
           </div>
         </div>
       </div>
@@ -129,13 +135,15 @@ export function showTextModal(opts = {}) {
   const modal = new bootstrap.Modal(el);
   return new Promise((resolve) => {
     let resolved = false;
-    document.getElementById(`${id}_ok`).onclick = () => {
-      const v = (document.getElementById(`${id}_txt`).value || '').trim();
-      if (!v) { alert('Por favor ingrese el texto.'); return; }
-      resolved = true;
-      resolve(v);
-      modal.hide();
-    };
+    if (!opts.readOnlyMode) {
+      document.getElementById(`${id}_ok`).onclick = () => {
+        const v = (document.getElementById(`${id}_txt`).value || '').trim();
+        if (!v) { alert('Por favor ingrese el texto.'); return; }
+        resolved = true;
+        resolve(v);
+        modal.hide();
+      };
+    }
     el.addEventListener('hidden.bs.modal', () => {
       wrap.remove();
       if (!resolved) resolve(null);
