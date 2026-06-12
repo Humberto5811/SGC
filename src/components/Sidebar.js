@@ -45,7 +45,8 @@
             { path: 'mantenimiento/metas', label: 'Metas y Áreas', icon: 'bi-bullseye' },
             { path: 'mantenimiento/ordenes', label: 'Órdenes', icon: 'bi-receipt' },
             { path: 'mantenimiento/siaf', label: 'SIAF', icon: 'bi-bank' },
-            { path: 'mantenimiento/fichanet', label: 'Ficha NET', icon: 'bi-file-earmark-medical' }
+            { path: 'mantenimiento/fichanet', label: 'Ficha NET', icon: 'bi-file-earmark-medical' },
+            { path: 'mantenimiento/carreras', label: 'Carreras Profesionales', icon: 'bi-mortarboard' }
           ]
         },
         { 

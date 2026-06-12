@@ -1,7 +1,5 @@
-// Cliente HTTP central para hablar con el backend.
-// Todas las llamadas pasan por /api (proxy de Vite hacia el backend Express).
-
-const BASE = '/api';
+// Cliente HTTP central - VERSIÓN DEFINITIVA
+const BASE = 'http://localhost:3000/api';
 
 function authHeaders() {
   try {
@@ -10,27 +8,29 @@ function authHeaders() {
       const user = JSON.parse(raw);
       if (user && user.id) return { 'x-user-id': String(user.id) };
     }
-  } catch (_) { /* ignore */ }
+  } catch (_) { }
   return {};
 }
 
 async function request(path, options = {}) {
-  let res;
+  const url = BASE + path;
+  console.log('📡 Llamando a:', url);
+  
   try {
-    res = await fetch(`${BASE}${path}`, {
+    const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       ...options,
     });
-  } catch (networkErr) {
-    throw new Error(`Error de red al conectar con ${path}: ${networkErr.message}`);
+    
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || `Error ${res.status}`);
+    }
+    return res.status === 204 ? null : res.json();
+  } catch (error) {
+    console.error('❌ Error en request:', error);
+    throw error;
   }
-  if (!res.ok) {
-    let detail = '';
-    try { detail = (await res.json()).error || ''; } catch (_) { /* body no-JSON */ }
-    throw new Error(detail || `Error ${res.status} en ${path}`);
-  }
-  if (res.status === 204) return null;
-  return res.json();
 }
 
 export const api = {
@@ -38,8 +38,6 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: (path) => request(path, { method: 'DELETE' }),
-
-  // Helpers de recursos CRUD estándar con paginación/búsqueda.
   list: (resource, { page = 1, pageSize = 50, search = '' } = {}) => {
     const q = new URLSearchParams({ page, pageSize, search });
     return request(`/${resource}?${q.toString()}`);

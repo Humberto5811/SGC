@@ -305,3 +305,16 @@ CREATE TABLE IF NOT EXISTS glosas_servicios (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============ CARRERAS PROFESIONALES ============
+CREATE TABLE IF NOT EXISTS carreras_profesionales (
+  id SERIAL PRIMARY KEY,
+  nombre_carrera VARCHAR(300) NOT NULL UNIQUE,
+  tipo_carrera VARCHAR(50) NOT NULL DEFAULT 'Profesional',
+  estado BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_carreras_nombre_trgm ON carreras_profesionales USING gin (nombre_carrera gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_carreras_tipo ON carreras_profesionales (tipo_carrera);

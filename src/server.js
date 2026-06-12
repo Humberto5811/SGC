@@ -38,6 +38,7 @@ app.get('/', (req, res) => {
           <li><a href="/api/glosas-bienes">/api/glosas-bienes</a></li>
           <li><a href="/api/entregas">/api/entregas</a></li>
           <li><a href="/api/servicios">/api/servicios</a></li>
+          <li><a href="/api/carreras">/api/carreras</a></li>
         </ul>
       </body>
     </html>
@@ -87,6 +88,87 @@ app.get('/api/servicios', async (req, res) => {
     res.status(500).send('Error en el servidor');
   }
 });
+
+// Endpoint para carreras profesionales (GET paginado + GET all)
+app.get('/api/carreras', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '50', 10)));
+    const offset = (page - 1) * pageSize;
+    const search = (req.query.search || '').trim();
+
+    let where = '';
+    const params = [];
+    if (search) {
+      params.push(`%${search}%`);
+      where = `WHERE nombre_carrera ILIKE $1 OR tipo_carrera ILIKE $1`;
+    }
+
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM carreras_profesionales ${where}`, params);
+    const total = countResult.rows[0].total;
+
+    params.push(pageSize);
+    params.push(offset);
+    const dataResult = await pool.query(
+      `SELECT * FROM carreras_profesionales ${where} ORDER BY nombre_carrera ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({ data: dataResult.rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
+  } catch (err) {
+    console.error('[Error en /api/carreras]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CRUD endpoints para carreras
+app.post('/api/carreras', async (req, res) => {
+  try {
+    const { nombre_carrera, tipo_carrera, estado } = req.body;
+    const result = await pool.query(
+      `INSERT INTO carreras_profesionales (nombre_carrera, tipo_carrera, estado) VALUES ($1, $2, $3) RETURNING *`,
+      [nombre_carrera, tipo_carrera || 'Profesional', estado !== undefined ? estado : true]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('[Error POST carreras]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/carreras/:id', async (req, res) => {
+  try {
+    const { nombre_carrera, tipo_carrera, estado } = req.body;
+    const sets = [];
+    const vals = [];
+    if (nombre_carrera !== undefined) { sets.push(`nombre_carrera = $${vals.length + 1}`); vals.push(nombre_carrera); }
+    if (tipo_carrera !== undefined) { sets.push(`tipo_carrera = $${vals.length + 1}`); vals.push(tipo_carrera); }
+    if (estado !== undefined) { sets.push(`estado = $${vals.length + 1}`); vals.push(estado); }
+    sets.push(`updated_at = NOW()`);
+    vals.push(req.params.id);
+    const result = await pool.query(
+      `UPDATE carreras_profesionales SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING *`,
+      vals
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'No encontrado' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('[Error PUT carreras]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/carreras/:id', async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM carreras_profesionales WHERE id = $1 RETURNING *', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ ok: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error('[Error DELETE carreras]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============================================
 // NUEVOS ENDPOINTS PARA REQUERIMIENTOS (solo agregar esto)
 // ============================================

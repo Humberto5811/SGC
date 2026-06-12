@@ -6,6 +6,7 @@ import { renderMetasAreasView, initMetasAreasView } from './registroDatos/metasA
 import { renderOrdenesView, initOrdenesView } from './registroDatos/ordenesView.js';
 import { renderSiafView, initSiafView } from './registroDatos/siafView.js';
 import { renderFichaNetView, initFichaNetView } from './registroDatos/fichaNetView.js';
+import { renderCarrerasProfesionalesView, initCarrerasProfesionalesView } from './registroDatos/carrerasProfesionalesView.js';
 import { renderFormatoBienesView, initFormatoBienesView } from './glosasRequerimientos/formatoBienesView.js';
 import { renderFormatoServiciosView, initFormatoServiciosView } from './glosasRequerimientos/formatoServiciosView.js';
 import { renderFormatoLocacionView, initFormatoLocacionView } from './glosasRequerimientos/formatoLocacionView.js';
@@ -23,6 +24,7 @@ const subRoutes = {
   'mantenimiento/ordenes': { render: renderOrdenesView, init: initOrdenesView },
   'mantenimiento/siaf': { render: renderSiafView, init: initSiafView },
   'mantenimiento/fichanet': { render: renderFichaNetView, init: initFichaNetView },
+  'mantenimiento/carreras': { render: renderCarrerasProfesionalesView, init: initCarrerasProfesionalesView },
   'mantenimiento/bienes': { render: renderFormatoBienesView, init: initFormatoBienesView },
   'mantenimiento/servicios': { render: renderFormatoServiciosView, init: initFormatoServiciosView },
   'mantenimiento/locacion': { render: renderFormatoLocacionView, init: initFormatoLocacionView },

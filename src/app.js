@@ -89,6 +89,7 @@ else if (currentRoute === 'mantenimiento' ||
          currentRoute === 'mantenimiento/ordenes' ||
          currentRoute === 'mantenimiento/siaf' ||
          currentRoute === 'mantenimiento/fichanet' ||
+         currentRoute === 'mantenimiento/carreras' ||
          currentRoute === 'mantenimiento/servicios' ||
          currentRoute === 'mantenimiento/locacion' ||
          currentRoute === 'mantenimiento/licitaciones' ||

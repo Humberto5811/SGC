@@ -30,7 +30,8 @@ export const ROUTE_ROLES = {
   'mantenimiento/licitaciones': ['admin'],
   'mantenimiento/concurso': ['admin'],
   'mantenimiento/logotipos': ['admin'],
-  'mantenimiento/entidad': ['admin']
+  'mantenimiento/entidad': ['admin'],
+  'mantenimiento/carreras': ['admin']
 };
 
 export const DEFAULT_USERS = [

@@ -62,10 +62,137 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Rutas públicas
+// ==================== RUTAS PÚBLICAS ====================
 app.use('/api/auth', loginLimiter, authRouter);
 
-// Proteger todas las rutas restantes con autenticación
+// ==================== CARRERAS PROFESIONALES (RUTAS PÚBLICAS - SIN AUTENTICACIÓN) ====================
+
+// GET /api/carreras - Listar carreras con paginación
+app.get('/api/carreras', async (req, res, next) => {
+  try {
+    const { page = 1, pageSize = 50, search = '' } = req.query;
+    const offset = (page - 1) * pageSize;
+    const searchTerm = `%${search}%`;
+    
+    let query = `
+      SELECT id, nombre_carrera, tipo_carrera, estado, 
+             fecha_creacion, fecha_modificacion 
+      FROM carreras_profesionales 
+      WHERE estado = true
+    `;
+    let countQuery = `SELECT COUNT(*) as total FROM carreras_profesionales WHERE estado = true`;
+    let params = [];
+    
+    if (search) {
+      query += ` AND (nombre_carrera ILIKE $1 OR tipo_carrera ILIKE $1)`;
+      countQuery += ` AND (nombre_carrera ILIKE $1 OR tipo_carrera ILIKE $1)`;
+      params.push(searchTerm);
+    }
+    
+    query += ` ORDER BY nombre_carrera ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(parseInt(pageSize), parseInt(offset));
+    
+    const result = await pool.query(query, params);
+    const totalResult = await pool.query(countQuery, params.slice(0, search ? 1 : 0));
+    
+    res.json({
+      data: result.rows,
+      total: parseInt(totalResult.rows[0].total),
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    });
+  } catch (err) {
+    console.error('Error GET /api/carreras:', err);
+    next(err);
+  }
+});
+
+// GET /api/carreras/:id - Obtener una carrera
+app.get('/api/carreras/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      'SELECT * FROM carreras_profesionales WHERE id = $1 AND estado = true',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Carrera no encontrada' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/carreras - Crear nueva carrera
+app.post('/api/carreras', async (req, res, next) => {
+  try {
+    const { nombre_carrera, tipo_carrera = 'Profesional' } = req.body;
+    
+    if (!nombre_carrera || nombre_carrera.trim() === '') {
+      return res.status(400).json({ error: 'El nombre de la carrera es requerido' });
+    }
+    
+    const result = await pool.query(
+      'INSERT INTO carreras_profesionales (nombre_carrera, tipo_carrera) VALUES ($1, $2) RETURNING *',
+      [nombre_carrera.trim(), tipo_carrera]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Ya existe una carrera con ese nombre' });
+    }
+    next(err);
+  }
+});
+
+// PUT /api/carreras/:id - Actualizar carrera
+app.put('/api/carreras/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { nombre_carrera, tipo_carrera } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE carreras_profesionales 
+       SET nombre_carrera = $1, tipo_carrera = $2, fecha_modificacion = CURRENT_TIMESTAMP 
+       WHERE id = $3 AND estado = true 
+       RETURNING *`,
+      [nombre_carrera, tipo_carrera, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Carrera no encontrada' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Ya existe una carrera con ese nombre' });
+    }
+    next(err);
+  }
+});
+
+// DELETE /api/carreras/:id - Eliminar (soft delete)
+app.delete('/api/carreras/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      'UPDATE carreras_profesionales SET estado = false WHERE id = $1 AND estado = true RETURNING id',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Carrera no encontrada' });
+    }
+    res.json({ message: 'Carrera eliminada correctamente' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==================== FIN CARRERAS PROFESIONALES ====================
+
+// ==================== RUTAS PROTEGIDAS (requieren autenticación) ====================
 app.use('/api', requireAuth);
 app.use('/api/catalogo', catalogoRouter);
 app.use('/api/glosas', glosasRouter);
