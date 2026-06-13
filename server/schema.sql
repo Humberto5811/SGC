@@ -318,3 +318,14 @@ CREATE TABLE IF NOT EXISTS carreras_profesionales (
 
 CREATE INDEX IF NOT EXISTS idx_carreras_nombre_trgm ON carreras_profesionales USING gin (nombre_carrera gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_carreras_tipo ON carreras_profesionales (tipo_carrera);
+
+-- ============ GLOSAS LOCADORES ============
+CREATE TABLE IF NOT EXISTS glosas_locadores (
+  id SERIAL PRIMARY KEY,
+  titulo VARCHAR(250) NOT NULL UNIQUE,
+  contenido TEXT,
+  estado VARCHAR(30) DEFAULT 'Activo',
+  usuario_modificacion VARCHAR(150),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);

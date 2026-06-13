@@ -15,6 +15,7 @@ import catalogoRouter from './routes/catalogo.js';
 import glosasRouter from './routes/glosas.js';
 import glosasBienesRouter from './routes/glosasBienes.js';
 import glosasServiciosRouter from './routes/glosasServicios.js';
+import glosasLocadoresRouter from './routes/glosasLocadores.js';
 import entidadRouter from './routes/entidad.js';
 import fichanetRouter from './routes/fichanet.js';
 import adjuntosRouter from './routes/adjuntos.js';
@@ -245,6 +246,7 @@ app.use('/api/catalogo', catalogoRouter);
 app.use('/api/glosas', glosasRouter);
 app.use('/api/glosas-bienes', glosasBienesRouter);
 app.use('/api/glosas-servicios', glosasServiciosRouter);
+app.use('/api/glosas-locadores', glosasLocadoresRouter);
 app.use('/api/entidad', entidadRouter);
 app.use('/api/fichanet', fichanetRouter);
 

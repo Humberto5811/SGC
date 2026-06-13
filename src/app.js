@@ -6,6 +6,7 @@ import { renderSidebar, initSidebar } from './components/Sidebar.js';
 import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
 import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
 import { renderFormatoServiciosView, initFormatoServiciosView } from './views/glosasRequerimientos/formatoServiciosView.js';
+import { renderFormatoLocadoresView, initFormatoLocadoresView } from './views/glosasRequerimientos/formatoLocadoresView.js';
 import { renderRegistroRequerimientoView, initRegistroRequerimientoView } from './views/requerimiento/registroRequerimientoView.js';
 import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } from './views/requerimiento/evaluacionRequerimientoView.js';
 
@@ -79,6 +80,10 @@ else if (currentRoute === 'mantenimiento/bienes') {
 else if (currentRoute === 'mantenimiento/servicios') {
   content = renderFormatoServiciosView();
   setTimeout(() => initFormatoServiciosView(), 50);
+}
+else if (currentRoute === 'mantenimiento/locacion') {
+  content = renderFormatoLocadoresView();
+  setTimeout(() => initFormatoLocadoresView(), 50);
 }
 else if (currentRoute === 'mantenimiento' || 
          currentRoute === 'mantenimiento/usuarios' ||
