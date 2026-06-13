@@ -1102,7 +1102,7 @@ function renderServicios() {
       <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
         <div ${reqShared.editingFromEvaluacion ? 'style="display:none"' : ''}>
           <h3 class="mb-1"><i class="bi bi-tools"></i> Registro de Requerimiento — Formato de Servicios</h3>
-          <p class="text-muted mb-0">Anexo N.° 01 — Términos de Referencia para Contratación de Servicios</p>
+          <p class="text-muted mb-0">Anexo N.° 02 — Términos de Referencia para Contratación de Servicios</p>
         </div>
         <div class="btn-group">
           <button id="reqBack" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Volver</button>
@@ -1119,7 +1119,7 @@ function renderServicios() {
           <div class="flex-fill text-center">
             <div class="fw-bold">${esc(entidadNombre || 'INSTITUTO NACIONAL DE SALUD')}</div>
             <div class="mt-2">
-              <div class="fw-bold">ANEXO N° 01</div>
+              <div class="fw-bold">ANEXO N° 02</div>
               <div class="text-uppercase small fw-bold">TÉRMINOS DE REFERENCIA PARA CONTRATACIÓN DE SERVICIOS EN GENERAL</div>
             </div>
             <div class="mt-3 d-flex align-items-center justify-content-center gap-3">
@@ -1404,11 +1404,15 @@ function attachServicios() {
     ensureServicioEntregas().push({ plazo: '', condicion: '' });
     rerenderServiciosBody();
   };
-  document.querySelectorAll('.srv-ent-del').forEach((b) => b.onclick = () => {
-    if (state.servicioEntregas.length <= 1) return;
-    collectServicioInputs();
-    state.servicioEntregas.splice(Number(b.dataset.i), 1);
-    rerenderServiciosBody();
+  document.querySelectorAll('.srv-ent-del').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      const idx = Number(b.dataset.i);
+      if (state.servicioEntregas.length <= 1) return;
+      collectServicioInputs();
+      state.servicioEntregas.splice(idx, 1);
+      rerenderServiciosBody();
+    };
   });
 
   // Tabla información
@@ -1418,11 +1422,15 @@ function attachServicios() {
     ensureServicioInformacion().push({ entregable: '', plazo: '', porcentaje: '' });
     rerenderServiciosBody();
   };
-  document.querySelectorAll('.srv-info-del').forEach((b) => b.onclick = () => {
-    if (state.servicioInformacion.length <= 1) return;
-    collectServicioInputs();
-    state.servicioInformacion.splice(Number(b.dataset.i), 1);
-    rerenderServiciosBody();
+  document.querySelectorAll('.srv-info-del').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      const idx = Number(b.dataset.i);
+      if (state.servicioInformacion.length <= 1) return;
+      collectServicioInputs();
+      state.servicioInformacion.splice(idx, 1);
+      rerenderServiciosBody();
+    };
   });
 }
 
@@ -1540,7 +1548,7 @@ function buildPrintHTMLServicios(s) {
   <div class="hdr"><div class="logo">${logoImg}</div>
     <div class="title">
       <h1>${esc(ent)}</h1>
-      <h2>ANEXO N° 01</h2>
+      <h2>ANEXO N° 02</h2>
       <h3>TÉRMINOS DE REFERENCIA PARA CONTRATACIÓN DE SERVICIOS EN GENERAL</h3>
       <div class="req-num">REQUERIMIENTO N° ${esc(codigoRequerimiento)}</div>
       ${s.cmn ? `<div style="margin-top:6px; font-size:12px; font-weight:bold;">CMN N° ${esc(s.cmn)}</div>` : ''}
