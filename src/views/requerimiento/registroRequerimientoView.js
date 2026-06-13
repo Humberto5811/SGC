@@ -1175,7 +1175,6 @@ function renderServicios() {
 
       <!-- 4.2…16 + firmas (TDR Servicios) -->
       <div class="card">
-        <div class="card-header bg-light fw-bold"><i class="bi bi-file-text"></i> Cláusulas del Formato de Servicios (4.2 hasta 16)</div>
         <div class="card-body" id="reqGlosaSrv">${MODELO_SERVICIOS.map(renderServicioGlosaSection).join('')}</div>
       </div>
     </div>
@@ -1310,8 +1309,8 @@ function collectServicioInputs() {
   });
 }
 
-function rerenderServiciosBody() {
-  collectServicioInputs();
+function rerenderServiciosBody(skipCollect) {
+  if (!skipCollect) collectServicioInputs();
   const host = document.getElementById('reqRoot');
   if (!host) return;
   host.innerHTML = renderServicios();
@@ -1411,7 +1410,7 @@ function attachServicios() {
       if (state.servicioEntregas.length <= 1) return;
       collectServicioInputs();
       state.servicioEntregas.splice(idx, 1);
-      rerenderServiciosBody();
+      rerenderServiciosBody(true);
     };
   });
 
@@ -1429,7 +1428,7 @@ function attachServicios() {
       if (state.servicioInformacion.length <= 1) return;
       collectServicioInputs();
       state.servicioInformacion.splice(idx, 1);
-      rerenderServiciosBody();
+      rerenderServiciosBody(true);
     };
   });
 }
