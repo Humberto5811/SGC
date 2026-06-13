@@ -6,6 +6,7 @@ const view = createCrudView({
   icon: 'bi-mortarboard',
   subtitle: 'Administración de Carreras Profesionales',
   excel: true,
+  importPath: '/carreras/import',
   fields: [
     { name: 'nombre_carrera', label: 'Nombre de la Carrera', type: 'text', required: true, col: 8 },
     { name: 'tipo_carrera', label: 'Tipo de Carrera', type: 'select', options: ['Profesional', 'Técnico', 'Egresado', 'Secundaria'], required: true, col: 4 },

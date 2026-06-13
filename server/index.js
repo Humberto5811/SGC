@@ -76,7 +76,7 @@ app.get('/api/carreras', async (req, res, next) => {
     
     let query = `
       SELECT id, nombre_carrera, tipo_carrera, estado, 
-             fecha_creacion, fecha_modificacion 
+             created_at, updated_at 
       FROM carreras_profesionales 
       WHERE estado = true
     `;
@@ -154,7 +154,7 @@ app.put('/api/carreras/:id', async (req, res, next) => {
     
     const result = await pool.query(
       `UPDATE carreras_profesionales 
-       SET nombre_carrera = $1, tipo_carrera = $2, fecha_modificacion = CURRENT_TIMESTAMP 
+       SET nombre_carrera = $1, tipo_carrera = $2, updated_at = CURRENT_TIMESTAMP 
        WHERE id = $3 AND estado = true 
        RETURNING *`,
       [nombre_carrera, tipo_carrera, id]
@@ -186,6 +186,53 @@ app.delete('/api/carreras/:id', async (req, res, next) => {
     }
     res.json({ message: 'Carrera eliminada correctamente' });
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/carreras/import - Importación masiva
+app.post('/api/carreras/import', async (req, res, next) => {
+  try {
+    const { rows, mode = 'append' } = req.body;
+    if (!Array.isArray(rows) || !rows.length) {
+      return res.status(400).json({ error: 'No hay registros para importar.' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (mode === 'replace') {
+        await client.query('DELETE FROM carreras_profesionales');
+      }
+      let inserted = 0;
+      for (let i = 0; i < rows.length; i += 500) {
+        const batch = rows.slice(i, i + 500);
+        const values = [];
+        const placeholders = batch.map((r, idx) => {
+          const nombre = String(r.nombre_carrera || r.nombre || '').trim();
+          const tipo = String(r.tipo_carrera || r.tipo || 'Profesional').trim();
+          if (!nombre) return null;
+          values.push(nombre, tipo);
+          const base = idx * 2;
+          return `($${base + 1}, $${base + 2})`;
+        }).filter(Boolean);
+        if (placeholders.length) {
+          await client.query(
+            `INSERT INTO carreras_profesionales (nombre_carrera, tipo_carrera) VALUES ${placeholders.join(', ')} ON CONFLICT (nombre_carrera) DO NOTHING`,
+            values
+          );
+          inserted += placeholders.length;
+        }
+      }
+      await client.query('COMMIT');
+      res.json({ success: true, inserted });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Error POST /api/carreras/import:', err);
     next(err);
   }
 });
