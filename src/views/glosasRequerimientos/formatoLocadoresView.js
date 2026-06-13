@@ -13,6 +13,7 @@ let state = {
   docId: null,
   overrides: {},
   entregas: [],
+  plazos: [],
   perfil: {
     formacion_academica: 'Profesional',
     titulo_profesional: '',
@@ -77,6 +78,7 @@ function tituloHtml(item) {
 function renderSection(item) {
   if (item.kind === 'firmas') return renderFirmas();
   if (item.kind === 'tabla_entregas') return renderTablaEntregas(item);
+  if (item.kind === 'tabla_plazos') return renderTablaPlazos(item);
   if (item.kind === 'perfil_academico') return renderPerfilAcademico(item);
   if (item.kind === 'select_modalidad') return renderModalidad(item);
 
@@ -224,6 +226,49 @@ function renderTablaEntregas(item) {
   `;
 }
 
+// ========== TABLA 8.2.2: PLAZO PARA PRESENTAR ENTREGABLES ==========
+function renderTablaPlazos(item) {
+  const ro = state.editing ? '' : 'disabled';
+  const plazos = state.plazos && state.plazos.length ? state.plazos
+    : [{ entregable: '', plazo: '' }];
+
+  const rows = plazos.map((e, i) => `
+    <tr>
+      <td class="text-center align-middle">
+        <input type="checkbox" class="form-check-input fl-chk-plz" data-i="${i}" ${ro ? 'disabled' : ''} />
+      </td>
+      <td class="text-center align-middle fw-bold">${i + 1}</td>
+      <td><input ${ro} class="form-control form-control-sm fl-plz" data-i="${i}" data-f="entregable" type="text" value="${esc(e.entregable || '')}" placeholder="Entregable" /></td>
+      <td><input ${ro} class="form-control form-control-sm fl-plz" data-i="${i}" data-f="plazo" type="text" value="${esc(e.plazo || '')}" placeholder="Plazo de presentación" /></td>
+    </tr>
+  `).join('');
+
+  return `
+    <div class="mt-3">
+      ${tituloHtml(item)}
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle mb-2" id="flPlazosTable">
+          <thead class="table-light">
+            <tr>
+              <th style="width:45px" class="text-center">
+                <input type="checkbox" class="form-check-input fl-chk-plz-all" id="flChkPlzAll" ${ro ? 'disabled' : ''} />
+              </th>
+              <th style="width:60px" class="text-center">N°</th>
+              <th>Entregable</th>
+              <th>Plazo de presentación del entregable</th>
+            </tr>
+          </thead>
+          <tbody id="flPlazosBody">${rows}</tbody>
+        </table>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="button" id="flAddPlz" class="btn btn-sm btn-outline-primary" ${ro}><i class="bi bi-plus-lg"></i> Agregar fila</button>
+        <button type="button" id="flDelPlz" class="btn btn-sm btn-outline-danger" ${ro}><i class="bi bi-trash"></i> Eliminar filas</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderFirmas() {
   return `
     <div style="height: 9rem;" aria-hidden="true"></div>
@@ -259,6 +304,13 @@ function ensureEntregas() {
     state.entregas = [{ plazo: '', condicion: '' }];
   }
   return state.entregas;
+}
+
+function ensurePlazos() {
+  if (!Array.isArray(state.plazos) || !state.plazos.length) {
+    state.plazos = [{ entregable: '', plazo: '' }];
+  }
+  return state.plazos;
 }
 
 function getSelectedIndices(checkboxClass) {
@@ -322,6 +374,43 @@ function attachDynamic() {
   // Modalidad select
   const modSel = document.querySelector('.fl-modalidad');
   if (modSel) modSel.onchange = () => { state.modalidad = modSel.value; };
+
+  // ---- Tabla 8.2.2: Agregar fila ----
+  const addPlzBtn = document.getElementById('flAddPlz');
+  if (addPlzBtn) addPlzBtn.onclick = () => {
+    collectInputs();
+    ensurePlazos().push({ entregable: '', plazo: '' });
+    renderBody();
+  };
+
+  // ---- Tabla 8.2.2: Eliminar filas seleccionadas ----
+  const delPlzBtn = document.getElementById('flDelPlz');
+  if (delPlzBtn) delPlzBtn.onclick = () => {
+    const plazos = ensurePlazos();
+    if (plazos.length <= 1) { setMsg('warning', 'Debe haber al menos una fila.'); return; }
+    const indices = getSelectedIndices('.fl-chk-plz');
+    if (!indices.length) { setMsg('warning', 'Seleccione al menos una fila para eliminar.'); return; }
+    collectInputs();
+    indices.forEach((i) => plazos.splice(i, 1));
+    renderBody();
+  };
+
+  // ---- Tabla 8.2.2: Check-all ----
+  const chkPlzAll = document.getElementById('flChkPlzAll');
+  if (chkPlzAll) chkPlzAll.onchange = () => {
+    document.querySelectorAll('.fl-chk-plz').forEach((chk) => { chk.checked = chkPlzAll.checked; });
+  };
+
+  // ---- Tabla 8.2.2: Inputs en vivo ----
+  document.querySelectorAll('.fl-plz').forEach((inp) => {
+    inp.oninput = () => {
+      const plazos = ensurePlazos();
+      const i = Number(inp.dataset.i);
+      const f = inp.dataset.f;
+      if (!plazos[i]) plazos[i] = { entregable: '', plazo: '' };
+      plazos[i][f] = inp.value;
+    };
+  });
 }
 
 // ---------- Carga / Guardado ----------
@@ -351,11 +440,13 @@ async function load() {
         const parsed = JSON.parse(docRow.contenido || '{}');
         state.overrides = parsed.overrides || {};
         state.entregas = Array.isArray(parsed.entregas) ? parsed.entregas : [];
+        state.plazos = Array.isArray(parsed.plazos) ? parsed.plazos : [];
         state.perfil = parsed.perfil || state.perfil;
         state.modalidad = parsed.modalidad || 'Presencial';
       } catch (_) { /* no-JSON */ }
     }
     ensureEntregas();
+    ensurePlazos();
     renderBody();
   } catch (e) {
     setMsg('danger', `Error al cargar el formato: ${e.message}`);
@@ -405,7 +496,8 @@ async function save() {
   const usuario = (user && (user.dni || user.nombre)) || 'sistema';
 
   const entregas = (state.entregas || []).map((e) => ({ plazo: e.plazo || '', condicion: e.condicion || '' }));
-  const contenido = JSON.stringify({ overrides: state.overrides, entregas, perfil: state.perfil, modalidad: state.modalidad });
+  const plazos = (state.plazos || []).map((e) => ({ entregable: e.entregable || '', plazo: e.plazo || '' }));
+  const contenido = JSON.stringify({ overrides: state.overrides, entregas, plazos, perfil: state.perfil, modalidad: state.modalidad });
 
   try {
     if (state.docId) {

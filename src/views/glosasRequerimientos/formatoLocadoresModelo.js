@@ -1,6 +1,6 @@
 // Definición del documento Formato Locadores (Glosas de Requerimientos):
 // Estructura según GLOSA TDR LOCADOR V2.docx
-// kind: 'numero' | 'heading' | 'perfil_academico' | 'tabla_entregas' | 'firmas'
+// kind: 'numero' | 'heading' | 'perfil_academico' | 'tabla_entregas' | 'tabla_plazos' | 'firmas'
 export const MODELO_LOCADORES = [
   // ===== 4.2 — CARACTERÍSTICAS TÉCNICAS DEL SERVICIO =====
   { key: '4.2', kind: 'numero', label: '4.2', type: 'textarea', titulo: 'CARACTERÍSTICAS TÉCNICAS DEL SERVICIO', helper: '(Indicar detalladamente cada una de las actividades que realizará el locador)', default: 'Las características técnicas del presente servicio consisten en:\n\nxxxxxxxx.\nxxxxxxxx.\n(se deberá precisar detalladamente cada una de las actividades que realizará el locador, NO se deberá consignar la frase: "y otras funciones que designe la jefatura"; esto con la finalidad de evitar crear vínculo laboral).' },
@@ -35,7 +35,7 @@ export const MODELO_LOCADORES = [
   { key: '8.1_modalidad', kind: 'select_modalidad', label: '', titulo: 'Modalidad del servicio' },
   { key: '8.2', kind: 'numero', label: '8.2', type: 'textarea', titulo: 'ENTREGABLE(S)', default: '(De corresponder, detallar el número de entregables, el contenido de cada entregable, los plazos de presentación y condiciones relevantes para cumplir con cada entregable)\n\nEl presente servicio será ejecutado con xxx entregables y cada entregable será sustentado por un informe emitido por el proveedor adjudicado.' },
   { key: '8.2.1', kind: 'tabla_entregas', label: '8.2.1', titulo: 'N° DE ENTREGABLES' },
-  { key: '8.2.2', kind: 'numero', label: '', type: 'textarea', titulo: '', default: 'El plazo para la presentación de cada entregable será conforme a los plazos establecidos en el numeral 8.1, deberá ser presentada en mesa de partes virtual del INS.' },
+  { key: '8.2.2', kind: 'tabla_plazos', label: '8.2.2', titulo: 'PLAZO PARA PRESENTAR ENTREGABLES' },
   { key: '8.3', kind: 'numero', label: '8.3', type: 'textarea', titulo: 'MODALIDAD DE PAGO', default: 'Suma alzada.' },
   { key: '8.4', kind: 'numero', label: '8.4', type: 'textarea', titulo: 'CONDICIONES DE PAGO', default: 'Pago periódico / único, conforme a lo establecido en el numeral 8.2 y considerando la oferta económica del proveedor adjudicado.\n\n(Precisar si se realiza el pago de la contraprestación en un solo pago o pagos periódicos. Precisar la documentación obligatoria a presentar por el proveedor para la realización del pago).' },
   { key: '8.5', kind: 'numero', label: '8.5', type: 'textarea', titulo: 'DOCUMENTACIÓN OBLIGATORIA PARA EL PAGO', default: 'Carta de presentación del entregable.\nInforme de actividades.\nRecibo por honorarios.\nSuspensión de 4ta categoría, de corresponder.\nFormato CCI enlazado al RUC.\nSeguro particular, SCTR, ESSALUD o SIS (de corresponder).' },

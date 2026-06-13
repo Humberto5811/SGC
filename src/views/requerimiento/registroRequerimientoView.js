@@ -53,7 +53,8 @@ let state = {
   locadorItems: [],        // { item_bien, nombre_item, unidad_medida, monto }
   locadorGlosaOverrides: {},
   locadorEntregas: [],     // tabla 8.2.1
-  locadorPerfil: { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' },
+  locadorPlazos: [],       // tabla 8.2.2
+  locadorPerfil: { formacion: '', titulo: '', colegiado_habilitado: '', serum: '', otros: '' },
   locadorModalidad: '',
 };
 
@@ -945,6 +946,11 @@ async function openRequerimiento(id) {
       await loadLocadorGlosaDefaults();
       applyPayloadLocador(row);
       ensureLocadorEntregas();
+      // Cargar carreras profesionales para el selector de Título en edición
+      try {
+        const resp = await api.get('/carreras?pageSize=2000');
+        state.carrerasLista = (resp.data || []).map(c => c.nombre_carrera).sort();
+      } catch (_) { state.carrerasLista = []; }
       showLocadores();
     } else {
       await loadGlosaDefaults();
@@ -1030,6 +1036,11 @@ async function newRequerimiento(tipo) {
     await loadHeader();
     await loadLocadorGlosaDefaults();
     ensureLocadorEntregas();
+    // Cargar carreras profesionales para el selector de Título
+    try {
+      const resp = await api.get('/carreras?pageSize=2000');
+      state.carrerasLista = (resp.data || []).map(c => c.nombre_carrera).sort();
+    } catch (_) { state.carrerasLista = []; }
     showLocadores();
   }
 }
@@ -1668,17 +1679,31 @@ function ensureLocadorEntregas() {
   return state.locadorEntregas;
 }
 
+const DOC_TITULO_LOC = '__FORMATO_LOCADORES_DOC__';
+
+function ensureLocadorPlazos() {
+  if (!Array.isArray(state.locadorPlazos) || !state.locadorPlazos.length) {
+    state.locadorPlazos = [{ entregable: '', plazo: '' }];
+  }
+  return state.locadorPlazos;
+}
+
 async function loadLocadorGlosaDefaults() {
   try {
-    const saved = await glosasLocadoresService.getAll();
-    if (saved && saved.length) {
-      saved.forEach((g) => {
-        if (!state.locadorGlosaOverrides[g.clave]) state.locadorGlosaOverrides[g.clave] = {};
-        if (g.titulo) state.locadorGlosaOverrides[g.clave].titulo = g.titulo;
-        if (g.contenido) state.locadorGlosaOverrides[g.clave].contenido = g.contenido;
-      });
+    const resp = await glosasLocadoresService.getAll();
+    const rows = (resp && resp.data) || [];
+    const docRow = rows.find((r) => r.titulo === DOC_TITULO_LOC);
+    if (docRow) {
+      try {
+        const parsed = JSON.parse(docRow.contenido || '{}');
+        if (!Object.keys(state.locadorGlosaOverrides).length) state.locadorGlosaOverrides = parsed.overrides || {};
+        if (!state.locadorEntregas.length && Array.isArray(parsed.entregas)) state.locadorEntregas = parsed.entregas;
+        if (!state.locadorPlazos.length && Array.isArray(parsed.plazos)) state.locadorPlazos = parsed.plazos;
+        if (parsed.perfil) state.locadorPerfil = parsed.perfil;
+        if (parsed.modalidad) state.locadorModalidad = parsed.modalidad;
+      } catch (_) { /* contenido no-JSON */ }
     }
-  } catch (_) {}
+  } catch (_) { /* si falla, se usan los valores por defecto del MODELO_LOCADORES */ }
 }
 
 function applyPayloadLocador(row) {
@@ -1694,6 +1719,7 @@ function applyPayloadLocador(row) {
     state.locadorItems = p.locadorItems || [];
     state.locadorGlosaOverrides = p.locadorGlosaOverrides || state.locadorGlosaOverrides;
     state.locadorEntregas = p.locadorEntregas || [];
+    state.locadorPlazos = p.locadorPlazos || [];
     state.locadorPerfil = p.locadorPerfil || { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' };
     state.locadorModalidad = p.locadorModalidad || '';
     state.observaciones = p.observaciones || [];
@@ -1802,6 +1828,7 @@ function renderLocadores() {
 }
 
 function renderLocadorItemsTable() {
+  const total = totalMontoLocadores();
   const rows = state.locadorItems.map((it, i) => `
     <tr>
       <td>${esc(it.item_bien)}</td>
@@ -1817,7 +1844,7 @@ function renderLocadorItemsTable() {
           <tr><th>Código SIGAMEF</th><th>Descripción del Servicio</th><th class="text-center" style="width:130px">Unidad de Medida</th><th style="width:140px">Monto (S/.)</th><th style="width:60px" class="text-center">Acción</th></tr>
         </thead>
         <tbody id="locItemsBody">${rows || '<tr><td colspan="5" class="text-center text-muted">Busque y agregue ítems del Catálogo SIGAMEF.</td></tr>'}</tbody>
-        <tfoot><tr class="table-secondary fw-bold"><td colspan="3" class="text-end">MONTO TOTAL</td><td id="locItemsTotal">S/. ${totalMontoLocadores().toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td></td></tr></tfoot>
+        <tfoot><tr class="table-secondary fw-bold"><td colspan="3" class="text-end">MONTO TOTAL</td><td id="locItemsTotal">S/. ${total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td></td></tr></tfoot>
       </table>
     </div>`;
 }
@@ -1825,6 +1852,7 @@ function renderLocadorItemsTable() {
 function renderLocadorGlosaSection(item) {
   if (item.kind === 'firmas') return renderFirmas();
   if (item.kind === 'tabla_entregas') return renderLocTablaEntregas(item);
+  if (item.kind === 'tabla_plazos') return renderLocTablaPlazos(item);
   if (item.kind === 'perfil_academico') return renderLocPerfilAcademico(item);
   if (item.kind === 'select_modalidad') return renderLocModalidad(item);
 
@@ -1845,6 +1873,7 @@ function renderLocadorGlosaSection(item) {
 
 function renderLocPerfilAcademico(item) {
   const p = state.locadorPerfil || {};
+  const carrerasOpts = (state.carrerasLista || []).map(c => `<option value="${esc(c)}" ${p.titulo === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
   return `
     <div class="mb-3 mt-3">
       <div class="fw-bold mb-2"><span class="text-nowrap">${esc(item.label)}.</span> ${esc(locTituloDe(item))}</div>
@@ -1861,27 +1890,30 @@ function renderLocPerfilAcademico(item) {
         </div>
         <div class="col-md-4">
           <label class="form-label small mb-0">Título Profesional</label>
-          <input id="locTitulo" class="form-control form-control-sm" type="text" value="${esc(p.titulo || '')}" placeholder="Ingrese el título profesional" />
+          <select id="locTitulo" class="form-select form-select-sm">
+            <option value="">— Seleccionar carrera —</option>
+            ${carrerasOpts}
+          </select>
         </div>
         <div class="col-md-4">
-          <label class="form-label small mb-0">Otros (indicar)</label>
-          <input id="locOtros" class="form-control form-control-sm" type="text" value="${esc(p.otros || '')}" placeholder="Otros requisitos" />
+          <label class="form-label small mb-0">Colegiado y Habilitado</label>
+          <div class="d-flex gap-3 mt-1">
+            <div class="form-check"><input class="form-check-input" type="radio" name="locColegiado" id="locColegiadoSi" value="Sí" ${p.colegiado_habilitado === 'Sí' ? 'checked' : ''} /><label class="form-check-label" for="locColegiadoSi">Sí</label></div>
+            <div class="form-check"><input class="form-check-input" type="radio" name="locColegiado" id="locColegiadoNo" value="No" ${p.colegiado_habilitado === 'No' ? 'checked' : ''} /><label class="form-check-label" for="locColegiadoNo">No</label></div>
+          </div>
         </div>
       </div>
       <div class="row g-2">
-        <div class="col-md-4">
-          <label class="form-label small mb-0">Habilitación Profesional</label>
-          <div class="d-flex gap-3 mt-1">
-            <div class="form-check"><input class="form-check-input" type="radio" name="locHab" id="locHabSi" value="Sí" ${p.habilitacion === 'Sí' ? 'checked' : ''} /><label class="form-check-label" for="locHabSi">Sí</label></div>
-            <div class="form-check"><input class="form-check-input" type="radio" name="locHab" id="locHabNo" value="No" ${p.habilitacion === 'No' ? 'checked' : ''} /><label class="form-check-label" for="locHabNo">No</label></div>
-          </div>
-        </div>
         <div class="col-md-4">
           <label class="form-label small mb-0">Resolución SERUM</label>
           <div class="d-flex gap-3 mt-1">
             <div class="form-check"><input class="form-check-input" type="radio" name="locSerum" id="locSerumSi" value="Sí" ${p.serum === 'Sí' ? 'checked' : ''} /><label class="form-check-label" for="locSerumSi">Sí</label></div>
             <div class="form-check"><input class="form-check-input" type="radio" name="locSerum" id="locSerumNo" value="No" ${p.serum === 'No' ? 'checked' : ''} /><label class="form-check-label" for="locSerumNo">No</label></div>
           </div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Otros (indicar)</label>
+          <input id="locOtros" class="form-control form-control-sm" type="text" value="${esc(p.otros || '')}" placeholder="Otros requisitos" />
         </div>
       </div>
     </div>`;
@@ -1926,6 +1958,31 @@ function renderLocTablaEntregas(item) {
     </div>`;
 }
 
+function renderLocTablaPlazos(item) {
+  const plazos = ensureLocadorPlazos();
+  const rows = plazos.map((e, i) => `
+    <tr>
+      <td class="text-center align-middle">${i + 1}</td>
+      <td><input class="form-control form-control-sm loc-plz" data-i="${i}" data-f="entregable" type="text" value="${esc(e.entregable || '')}" placeholder="Entregable" /></td>
+      <td><input class="form-control form-control-sm loc-plz" data-i="${i}" data-f="plazo" type="text" value="${esc(e.plazo || '')}" placeholder="Plazo" /></td>
+      <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger loc-plz-del" data-i="${i}" ${plazos.length <= 1 ? 'disabled' : ''}><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  return `
+    <div class="mt-3">
+      <div class="fw-bold mb-1 d-flex align-items-center gap-2">
+        <span class="text-nowrap">${esc(item.label)}.</span>
+        <input class="form-control form-control-sm fw-bold loc-gtitle" data-key="${item.key}" type="text" value="${esc(locTituloDe(item))}" />
+      </div>
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle mb-2">
+          <thead class="table-light"><tr><th style="width:60px" class="text-center">N°</th><th>Entregable</th><th>Plazo de presentación del entregable</th><th style="width:60px" class="text-center">Acción</th></tr></thead>
+          <tbody id="locPlzBody">${rows}</tbody>
+        </table>
+      </div>
+      <button type="button" id="locPlzAdd" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-circle"></i> Agregar fila</button>
+    </div>`;
+}
+
 function collectLocadorInputs() {
   const g = (id) => (document.getElementById(id) || {}).value;
   if (document.getElementById('denominacion') != null) state.denominacion = g('denominacion') || '';
@@ -1962,10 +2019,10 @@ function collectLocadorInputs() {
   if (lt) state.locadorPerfil.titulo = lt.value;
   const lo = document.getElementById('locOtros');
   if (lo) state.locadorPerfil.otros = lo.value;
-  const habSi = document.getElementById('locHabSi');
-  const habNo = document.getElementById('locHabNo');
-  if (habSi && habSi.checked) state.locadorPerfil.habilitacion = 'Sí';
-  else if (habNo && habNo.checked) state.locadorPerfil.habilitacion = 'No';
+  const colegSi = document.getElementById('locColegiadoSi');
+  const colegNo = document.getElementById('locColegiadoNo');
+  if (colegSi && colegSi.checked) state.locadorPerfil.colegiado_habilitado = 'Sí';
+  else if (colegNo && colegNo.checked) state.locadorPerfil.colegiado_habilitado = 'No';
   const serumSi = document.getElementById('locSerumSi');
   const serumNo = document.getElementById('locSerumNo');
   if (serumSi && serumSi.checked) state.locadorPerfil.serum = 'Sí';
@@ -2031,6 +2088,13 @@ function attachLocadores() {
   const locItemSearch = document.getElementById('locItemSearch');
   if (locItemBtn) locItemBtn.onclick = buscarItemsLocador;
   if (locItemSearch) locItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsLocador(); } };
+  // Monto inputs: actualizar total en vivo
+  document.querySelectorAll('.loc-it-monto').forEach((el) => el.oninput = () => {
+    const i = Number(el.dataset.i);
+    if (state.locadorItems[i]) state.locadorItems[i].monto = Number(el.value) || 0;
+    const tot = document.getElementById('locItemsTotal');
+    if (tot) tot.textContent = 'S/. ' + totalMontoLocadores().toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  });
   // Eliminar ítems
   document.querySelectorAll('.loc-it-del').forEach((b) => b.onclick = () => {
     state.locadorItems.splice(Number(b.dataset.i), 1);
@@ -2053,25 +2117,57 @@ function attachLocadores() {
       rerenderLocadoresBody(true);
     };
   });
+  // Tabla plazos
+  const locPlzAdd = document.getElementById('locPlzAdd');
+  if (locPlzAdd) locPlzAdd.onclick = () => {
+    collectLocadorInputs();
+    ensureLocadorPlazos().push({ entregable: '', plazo: '' });
+    rerenderLocadoresBody();
+  };
+  document.querySelectorAll('.loc-plz-del').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      const idx = Number(b.dataset.i);
+      if (state.locadorPlazos.length <= 1) return;
+      collectLocadorInputs();
+      state.locadorPlazos.splice(idx, 1);
+      rerenderLocadoresBody(true);
+    };
+  });
+  document.querySelectorAll('.loc-plz').forEach((inp) => {
+    inp.oninput = () => {
+      const plazos = ensureLocadorPlazos();
+      const i = Number(inp.dataset.i);
+      const f = inp.dataset.f;
+      if (!plazos[i]) plazos[i] = { entregable: '', plazo: '' };
+      plazos[i][f] = inp.value;
+    };
+  });
 }
 
 async function saveRequerimientoLocador() {
   collectLocadorInputs();
+  const cmnRaw = state.cmn || '';
+  const cmnNum = parseInt(cmnRaw.replace(/\D/g, ''), 10);
+  const cmnFormatted = isNaN(cmnNum) ? '' : String(cmnNum).padStart(5, '0');
+  state.cmn = cmnFormatted;
   const payload = {
     area: state.area,
     denominacion: state.denominacion,
     objetivo: state.objetivo,
     finalidad: state.finalidad,
-    cmn: state.cmn,
+    cmn: cmnFormatted,
     locadorItems: state.locadorItems,
     locadorGlosaOverrides: state.locadorGlosaOverrides,
     locadorEntregas: state.locadorEntregas,
+    locadorPlazos: state.locadorPlazos,
     locadorPerfil: state.locadorPerfil,
     locadorModalidad: state.locadorModalidad,
     observaciones: state.observaciones || [],
   };
   const body = {
     tipo: 'locacion',
+    cmn: cmnFormatted,
     area: state.area.nombre || '',
     responsable: state.area.responsable || '',
     denominacion: state.denominacion,
@@ -2080,18 +2176,31 @@ async function saveRequerimientoLocador() {
   if (reqShared.editingFromEvaluacion) {
     body.estado = undefined;
   }
-  const msgEl = document.getElementById('reqMsg');
   try {
     if (state.reqId) {
       await requerimientosService.update(state.reqId, body);
     } else {
       const created = await requerimientosService.create(body);
-      if (created && created.id) { state.reqId = created.id; state.codigo = created.codigo || ''; }
+      if (created && created.id) {
+        state.reqId = created.id;
+        if (!created.codigo) {
+          const codigo = `REQ-${String(created.id).padStart(5, '0')}`;
+          await requerimientosService.update(created.id, { codigo });
+          state.codigo = codigo;
+        } else {
+          state.codigo = created.codigo;
+        }
+      }
     }
-    if (msgEl) msgEl.innerHTML = '<div class="alert alert-success py-1 px-2 small">Guardado correctamente.</div>';
-    rerenderLocadoresBody();
+    setMsg('success', 'Requerimiento de Locadores guardado correctamente.');
+    if (state.view === 'select') {
+      loadList();
+    } else {
+      const codigoElement = document.querySelector('.bg-light.d-inline-block');
+      if (codigoElement) codigoElement.textContent = `REQUERIMIENTO N° ${state.codigo || '00000'}`;
+    }
   } catch (e) {
-    if (msgEl) msgEl.innerHTML = `<div class="alert alert-danger py-1 px-2 small">Error: ${esc(e.message)}</div>`;
+    setMsg('danger', `Error al guardar: ${e.message}`);
   }
 }
 
@@ -2115,9 +2224,9 @@ function buildPrintHTMLLocadores(s) {
   .hdr { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
   .logo img { max-height: 60px; }
   .title { text-align: center; flex: 1; }
-  .title h1 { font-size: 12px; margin: 0; }
-  .title h2 { font-size: 11px; margin: 4px 0 0; }
-  .title h3 { font-size: 10px; margin: 4px 0 0; }
+  .title h1 { font-size: 14px; margin: 0; }
+  .title h2 { font-size: 13px; margin: 8px 0 0 0; font-weight: bold; }
+  .title h3 { font-size: 12px; margin: 4px 0 0 0; font-weight: normal; text-transform: uppercase; }
   .req-num { font-size: 12px; font-weight: bold; margin-top: 8px; }
   .sec { font-size: 11px; font-weight: bold; margin: 14px 0 4px; }
   .box { white-space: pre-wrap; margin-bottom: 8px; }
@@ -2157,7 +2266,14 @@ function buildPrintHTMLLocadores(s) {
 
 function locGlosaPrint(item, s) {
   if (item.kind === 'firmas') {
-    return `<div class="firmas"><div>FIRMA DEL SUB DIRECTOR Y/O JEFE<br>Y/O DIRECTOR GENERAL</div><div>JEFE DE UNIDAD</div></div>`;
+    // Renderizar las firmas desde las glosas si existen, o usar el default del modelo
+    const firmasHtml = (s.locadorGlosaOverrides && s.locadorGlosaOverrides[item.key])
+      ? `<div class="box">${esc(s.locadorGlosaOverrides[item.key].contenido || '')}</div>`
+      : (item.default || '');
+    if (firmasHtml) {
+      return `<div class="fld"><div class="box" style="border:none; padding:0;">${firmasHtml}</div></div>`;
+    }
+    return `<div class="firmas"><div>FIRMA DEL SUB DIRECTOR Y/O<br>JEFE DE UNIDAD</div><div>FIRMA DEL JEFE Y/O<br>DIRECTOR GENERAL</div></div>`;
   }
   const pre = item.label ? `${item.label}. ` : '';
   const ov = (s.locadorGlosaOverrides || {})[item.key];
@@ -2167,8 +2283,11 @@ function locGlosaPrint(item, s) {
   if (item.kind === 'perfil_academico') {
     const p = s.locadorPerfil || {};
     return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>
-      <table><thead><tr><th>Formación Académica</th><th>Título Profesional</th><th>Habilitación</th><th>SERUM</th><th>Otros</th></tr></thead>
-      <tbody><tr><td>${esc(p.formacion || '—')}</td><td>${esc(p.titulo || '—')}</td><td>${esc(p.habilitacion || '—')}</td><td>${esc(p.serum || '—')}</td><td>${esc(p.otros || '—')}</td></tr></tbody></table>`;
+      <div class="box"><strong>Formación Académica:</strong><br>${esc(p.formacion || '—')}</div>
+      <div class="box"><strong>Título Profesional:</strong><br>${esc(p.titulo || '—')}</div>
+      <div class="box"><strong>Colegiado y Habilitado:</strong><br>${esc(p.colegiado_habilitado || '—')}</div>
+      <div class="box"><strong>Resolución SERUM:</strong><br>${esc(p.serum || '—')}</div>
+      <div class="box"><strong>Otros:</strong><br>${esc(p.otros || '—')}</div>`;
   }
   if (item.kind === 'select_modalidad') {
     const m = s.locadorModalidad || '—';
@@ -2179,6 +2298,13 @@ function locGlosaPrint(item, s) {
     const rows = entregas.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(e.plazo || '')}</td><td>${esc(e.condicion || '')}</td></tr>`).join('');
     return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>
       <table><thead><tr><th>N°</th><th>Plazo del entregable</th><th>Condición de entrega</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" style="text-align:center">—</td></tr>'}</tbody></table>`;
+  }
+  if (item.kind === 'tabla_plazos') {
+    const plazos = s.locadorPlazos || [];
+    const rows = plazos.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(e.entregable || '')}</td><td>${esc(e.plazo || '')}</td></tr>`).join('');
+    return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>
+      <table><thead><tr><th>N°</th><th>Entregable</th><th>Plazo de presentación del entregable</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="3" style="text-align:center">—</td></tr>'}</tbody></table>`;
   }
   if (item.kind === 'heading') return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>`;
