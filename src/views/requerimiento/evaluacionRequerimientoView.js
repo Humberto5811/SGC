@@ -46,6 +46,10 @@ async function loadEvaluacionList() {
           if (Array.isArray(payload.servicioItems)) {
             monto_total = payload.servicioItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
           }
+        } else if (r.tipo === 'locacion') {
+          if (Array.isArray(payload.locadorItems)) {
+            monto_total = payload.locadorItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
+          }
         } else {
           if (Array.isArray(payload.items)) {
             monto_total = payload.items.reduce((sum, it) =>
@@ -103,7 +107,7 @@ async function loadEvaluacionList() {
               let descripcionesBien = '<span class="text-muted small">—</span>';
               try {
                 const p = JSON.parse(r.payload || '{}');
-                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : (p.items || []);
+                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
                 if (Array.isArray(items) && items.length) {
                   codigosSigamef = items.map((it) => esc(it.item_bien || '')).join(', ');
                   descripcionesBien = items.map((it) => esc(it.nombre_item || '')).join(', ');

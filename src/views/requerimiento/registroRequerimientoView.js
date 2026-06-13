@@ -12,10 +12,12 @@ import { api } from '../../services/apiService.js';
 import { authService } from '../../services/authService.js';
 import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { glosasServiciosService } from '../../services/glosasServiciosService.js';
+import { glosasLocadoresService } from '../../services/glosasLocadoresService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
 import { MODELO_SERVICIOS } from '../glosasRequerimientos/formatoServiciosModelo.js';
+import { MODELO_LOCADORES } from '../glosasRequerimientos/formatoLocadoresModelo.js';
 import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showTextModal } from './reqShared.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
@@ -23,7 +25,7 @@ const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 const FORMATOS = [
   { tipo: 'bienes', label: 'Formato de Bienes', icon: 'bi-box-seam', color: 'primary', enabled: true },
   { tipo: 'servicios', label: 'Formato de Servicios', icon: 'bi-tools', color: 'success', enabled: true },
-  { tipo: 'locacion', label: 'Formato de Locadores', icon: 'bi-person-badge', color: 'info', enabled: false },
+  { tipo: 'locacion', label: 'Formato de Locadores', icon: 'bi-person-badge', color: 'info', enabled: true },
   { tipo: 'licitaciones', label: 'Formato de Licitaciones', icon: 'bi-hammer', color: 'warning', enabled: false },
   { tipo: 'concurso', label: 'Formato de Concursos', icon: 'bi-trophy', color: 'danger', enabled: false },
 ];
@@ -47,6 +49,12 @@ let state = {
   servicioGlosaOverrides: {},
   servicioEntregas: [],    // tabla 9.2.1
   servicioInformacion: [], // tabla 9.2.2
+  // --- Locadores ---
+  locadorItems: [],        // { item_bien, nombre_item, unidad_medida, monto }
+  locadorGlosaOverrides: {},
+  locadorEntregas: [],     // tabla 8.2.1
+  locadorPerfil: { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' },
+  locadorModalidad: '',
 };
 
 // Últimas filas cargadas en el listado (para exportar a Excel)
@@ -182,6 +190,10 @@ async function loadList() {
           if (payload.servicioItems && Array.isArray(payload.servicioItems)) {
             monto_total = payload.servicioItems.reduce((sum, item) => sum + (Number(item.monto) || 0), 0);
           }
+        } else if (r.tipo === 'locacion') {
+          if (payload.locadorItems && Array.isArray(payload.locadorItems)) {
+            monto_total = payload.locadorItems.reduce((sum, item) => sum + (Number(item.monto) || 0), 0);
+          }
         } else {
           if (payload.items && Array.isArray(payload.items)) {
             monto_total = payload.items.reduce((sum, item) => {
@@ -247,7 +259,7 @@ async function loadList() {
               let descripcionesBien = '';
               try {
                 const p = JSON.parse(r.payload || '{}');
-                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : (p.items || []);
+                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
                 if (Array.isArray(items) && items.length) {
                   codigosSigamef = items.map(it => esc(it.item_bien || '')).join(', ');
                   descripcionesBien = items.map(it => esc(it.nombre_item || '')).join(', ');
@@ -259,10 +271,12 @@ async function loadList() {
                 codigosSigamef = '<span class="text-muted small">—</span>';
                 descripcionesBien = '<span class="text-muted small">—</span>';
               }
+              const tipoBadge = r.tipo === 'servicios' ? 'bg-success' : r.tipo === 'locacion' ? 'bg-info' : 'bg-primary';
+              const tipoLabel = r.tipo === 'servicios' ? 'Servicio' : r.tipo === 'locacion' ? 'Locador' : 'Bien';
               return `
               <tr>
                 <td>${esc(r.codigo || ('#' + r.id))}</td>
-                <td><span class="badge ${r.tipo === 'servicios' ? 'bg-success' : 'bg-primary'} text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo === 'servicios' ? 'Servicio' : 'Bien')}</span></td>
+                <td><span class="badge ${tipoBadge} text-uppercase" style="font-size: 0.65rem;">${esc(tipoLabel)}</span></td>
                 <td class="small">${codigosSigamef}</td>
                 <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
@@ -313,7 +327,7 @@ function exportarReporte() {
       let descrip = '';
       try {
         const p = JSON.parse(r.payload || '{}');
-        const items = r.tipo === 'servicios' ? (p.servicioItems || []) : (p.items || []);
+        const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
         if (Array.isArray(items) && items.length) {
           codigos = items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
           descrip = items.map((it) => it.nombre_item || '').filter(Boolean).join(', ');
@@ -321,7 +335,7 @@ function exportarReporte() {
       } catch (_) { /* payload no-JSON */ }
       return {
         'Código': r.codigo || ('#' + r.id),
-        'Tipo': r.tipo || '',
+        'Tipo': r.tipo === 'servicios' ? 'Servicio' : r.tipo === 'locacion' ? 'Locador' : 'Bien',
         'Código SIGAMEF': codigos,
         'Descripción': descrip,
         'Área usuaria': r.area || '',
@@ -927,6 +941,11 @@ async function openRequerimiento(id) {
       ensureServicioEntregas();
       ensureServicioInformacion();
       showServicios();
+    } else if (row.tipo === 'locacion') {
+      await loadLocadorGlosaDefaults();
+      applyPayloadLocador(row);
+      ensureLocadorEntregas();
+      showLocadores();
     } else {
       await loadGlosaDefaults();
       applyPayload(row);
@@ -957,6 +976,10 @@ async function printRequerimiento(id) {
       await loadServicioGlosaDefaults();
       applyPayloadServicios(row);
       openPrintWindowServicios(buildState());
+    } else if (row.tipo === 'locacion') {
+      await loadLocadorGlosaDefaults();
+      applyPayloadLocador(row);
+      openPrintWindowLocadores(buildState());
     } else {
       await loadGlosaDefaults();
       applyPayload(row);
@@ -980,6 +1003,8 @@ function resetState() {
     denominacion: '', objetivo: '', finalidad: '', caracteristicas: '',
     items: [], glosaOverrides: {}, entregas: [], fichas: [], observaciones: [],
     servicioItems: [], servicioGlosaOverrides: {}, servicioEntregas: [], servicioInformacion: [],
+    locadorItems: [], locadorGlosaOverrides: {}, locadorEntregas: [],
+    locadorPerfil: { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' }, locadorModalidad: '',
   };
 }
 
@@ -999,6 +1024,13 @@ async function newRequerimiento(tipo) {
     ensureServicioEntregas();
     ensureServicioInformacion();
     showServicios();
+  } else if (tipo === 'locacion') {
+    resetState();
+    setRootLoading();
+    await loadHeader();
+    await loadLocadorGlosaDefaults();
+    ensureLocadorEntregas();
+    showLocadores();
   }
 }
 
@@ -1023,6 +1055,12 @@ function showServicios() {
   state.view = 'servicios';
   const root = document.getElementById('reqRoot');
   if (root) { root.innerHTML = renderServicios(); attachServicios(); }
+}
+
+function showLocadores() {
+  state.view = 'locacion';
+  const root = document.getElementById('reqRoot');
+  if (root) { root.innerHTML = renderLocadores(); attachLocadores(); }
 }
 
 // =========================================================================
@@ -1616,6 +1654,542 @@ function openPrintWindowServicios(s) {
   if (!win) { alert('Permita las ventanas emergentes para generar el documento.'); return; }
   win.document.open();
   win.document.write(buildPrintHTMLServicios(s));
+  win.document.close();
+}
+
+// =========================================================================
+// LOCADORES — FORMULARIO COMPLETO
+// =========================================================================
+
+function ensureLocadorEntregas() {
+  if (!Array.isArray(state.locadorEntregas) || !state.locadorEntregas.length) {
+    state.locadorEntregas = [{ plazo: '', condicion: '' }];
+  }
+  return state.locadorEntregas;
+}
+
+async function loadLocadorGlosaDefaults() {
+  try {
+    const saved = await glosasLocadoresService.getAll();
+    if (saved && saved.length) {
+      saved.forEach((g) => {
+        if (!state.locadorGlosaOverrides[g.clave]) state.locadorGlosaOverrides[g.clave] = {};
+        if (g.titulo) state.locadorGlosaOverrides[g.clave].titulo = g.titulo;
+        if (g.contenido) state.locadorGlosaOverrides[g.clave].contenido = g.contenido;
+      });
+    }
+  } catch (_) {}
+}
+
+function applyPayloadLocador(row) {
+  state.reqId = row.id;
+  state.codigo = row.codigo || '';
+  try {
+    const p = JSON.parse(row.payload || '{}');
+    state.area = p.area || { codigo: '', nombre: '', responsable: '' };
+    state.denominacion = p.denominacion || '';
+    state.objetivo = p.objetivo || '';
+    state.finalidad = p.finalidad || '';
+    state.cmn = p.cmn || '';
+    state.locadorItems = p.locadorItems || [];
+    state.locadorGlosaOverrides = p.locadorGlosaOverrides || state.locadorGlosaOverrides;
+    state.locadorEntregas = p.locadorEntregas || [];
+    state.locadorPerfil = p.locadorPerfil || { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' };
+    state.locadorModalidad = p.locadorModalidad || '';
+    state.observaciones = p.observaciones || [];
+  } catch (_) {}
+}
+
+function totalMontoLocadores() {
+  return state.locadorItems.reduce((s, it) => s + (Number(it.monto) || 0), 0);
+}
+
+function locTituloDe(item) {
+  const o = state.locadorGlosaOverrides[item.key];
+  return o && o.titulo != null && o.titulo !== '' ? o.titulo : (item.titulo || '');
+}
+function locContenidoDe(item) {
+  const o = state.locadorGlosaOverrides[item.key];
+  if (o && o.contenido != null && o.contenido !== '') return o.contenido;
+  return item.default || '';
+}
+
+function renderLocadores() {
+  const { logo, entidadNombre } = state.header || {};
+  const logoImg = logo ? `<img src="${logo}" style="max-height:70px;max-width:140px;object-fit:contain;">` : '';
+  return `
+    <div class="container-fluid">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+        <div ${reqShared.editingFromEvaluacion ? 'style="display:none"' : ''}>
+          <h3 class="mb-1"><i class="bi bi-person-badge"></i> Registro de Requerimiento — Formato de Locadores</h3>
+          <p class="text-muted mb-0">Anexo N.° 03 — Términos de Referencia para Contratación de Locadores</p>
+        </div>
+        <div class="btn-group">
+          <button id="reqBack" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Volver</button>
+          <button id="reqSave" class="btn btn-success"><i class="bi bi-save"></i> Grabar</button>
+          <button id="reqPrint" class="btn btn-dark"><i class="bi bi-printer"></i> Generar documento</button>
+        </div>
+      </div>
+      <div id="reqMsg"></div>
+
+      <!-- Cabecera -->
+      <div class="card mb-3">
+        <div class="card-body d-flex align-items-center gap-3">
+          <div style="width:150px; text-align:center;">${logoImg}</div>
+          <div class="flex-fill text-center">
+            <div class="fw-bold">${esc(entidadNombre || 'INSTITUTO NACIONAL DE SALUD')}</div>
+            <div class="mt-2">
+              <div class="fw-bold">ANEXO N° 03</div>
+              <div class="text-uppercase small fw-bold">TÉRMINOS DE REFERENCIA PARA CONTRATACIÓN DE LOCADORES</div>
+            </div>
+            <div class="mt-3 d-flex align-items-center justify-content-center gap-3">
+              <div class="fw-bold bg-light d-inline-block px-3 py-1 rounded">REQUERIMIENTO N° ${state.codigo || '00000'}</div>
+              <div class="d-flex align-items-center gap-1">
+                <span class="fw-bold small">CMN N°</span>
+                <input id="reqCmn" class="form-control form-control-sm" type="text" inputmode="numeric" maxlength="5"
+                  style="width: 80px; text-align: center;" value="${esc(state.cmn || '')}" placeholder="00000" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3"><div class="card-body">
+        <!-- 1) ÁREA USUARIA -->
+        <div class="mb-3">
+          <div class="fw-bold mb-1">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL SERVICIO</div>
+          <div class="input-group mb-2">
+            <input id="areaSearch" class="form-control" placeholder="Ingrese código o nombre del área usuaria…" />
+            <button id="areaBtn" class="btn btn-outline-primary" type="button"><i class="bi bi-search"></i> Buscar</button>
+          </div>
+          <div id="areaResults"></div>
+          <div class="row g-2">
+            <div class="col-md-6"><label class="form-label small mb-0">Área usuaria</label><input id="areaNombre" class="form-control" value="${esc(state.area.nombre)}" readonly /></div>
+            <div class="col-md-6"><label class="form-label small mb-0">Centro</label><input id="areaResponsable" class="form-control" value="${esc(state.area.responsable)}" readonly /></div>
+          </div>
+        </div>
+
+        <!-- 2) DENOMINACIÓN -->
+        <div class="mb-3">
+          <div class="fw-bold mb-1">2. DENOMINACIÓN DE LA CONTRATACIÓN</div>
+          <input id="denominacion" class="form-control" value="${esc(state.denominacion)}" placeholder="Ingrese la denominación de la contratación" />
+        </div>
+
+        <!-- 3) OBJETIVO Y/O FINALIDAD PÚBLICA -->
+        <div class="mb-2 fw-bold">3. OBJETIVO Y/O FINALIDAD PÚBLICA</div>
+        <div class="mb-3"><div class="fw-bold mb-1">3.1. OBJETIVO</div><textarea id="objetivo" class="form-control" rows="2" placeholder="Describa el objetivo">${esc(state.objetivo)}</textarea></div>
+        <div class="mb-3"><div class="fw-bold mb-1">3.2. FINALIDAD</div><textarea id="finalidad" class="form-control" rows="2" placeholder="Describa la finalidad pública">${esc(state.finalidad)}</textarea></div>
+
+        <!-- 4) DESCRIPCIÓN DEL SERVICIO -->
+        <div class="mb-2 fw-bold">4. DESCRIPCIÓN DEL SERVICIO</div>
+        <div class="mb-3">
+          <div class="fw-bold mb-1">4.1. Requerimiento</div>
+          <div class="input-group mb-2">
+            <input id="locItemSearch" class="form-control" placeholder="Ingrese código o descripción del servicio (Catálogo SIGAMEF)…" />
+            <button id="locItemBtn" class="btn btn-outline-primary" type="button"><i class="bi bi-search"></i> Buscar</button>
+          </div>
+          <div id="locItemResults"></div>
+          ${renderLocadorItemsTable()}
+        </div>
+      </div></div>
+
+      <!-- 4.2…11 + firmas (TDR Locadores) -->
+      <div class="card">
+        <div class="card-body" id="reqGlosaLoc">${MODELO_LOCADORES.map(renderLocadorGlosaSection).join('')}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLocadorItemsTable() {
+  const rows = state.locadorItems.map((it, i) => `
+    <tr>
+      <td>${esc(it.item_bien)}</td>
+      <td>${esc(it.nombre_item)}</td>
+      <td class="text-center">${esc(it.unidad_medida)}</td>
+      <td style="width:140px"><input class="form-control form-control-sm loc-it-monto" data-i="${i}" type="number" min="0" step="0.01" value="${esc(it.monto ?? 0)}" /></td>
+      <td class="text-center"><button class="btn btn-sm btn-outline-danger loc-it-del" data-i="${i}" title="Quitar"><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  return `
+    <div class="table-responsive">
+      <table class="table table-bordered align-middle mb-0">
+        <thead class="table-light">
+          <tr><th>Código SIGAMEF</th><th>Descripción del Servicio</th><th class="text-center" style="width:130px">Unidad de Medida</th><th style="width:140px">Monto (S/.)</th><th style="width:60px" class="text-center">Acción</th></tr>
+        </thead>
+        <tbody id="locItemsBody">${rows || '<tr><td colspan="5" class="text-center text-muted">Busque y agregue ítems del Catálogo SIGAMEF.</td></tr>'}</tbody>
+        <tfoot><tr class="table-secondary fw-bold"><td colspan="3" class="text-end">MONTO TOTAL</td><td id="locItemsTotal">S/. ${totalMontoLocadores().toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td></td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
+function renderLocadorGlosaSection(item) {
+  if (item.kind === 'firmas') return renderFirmas();
+  if (item.kind === 'tabla_entregas') return renderLocTablaEntregas(item);
+  if (item.kind === 'perfil_academico') return renderLocPerfilAcademico(item);
+  if (item.kind === 'select_modalidad') return renderLocModalidad(item);
+
+  const pre = item.label ? `${item.label}. ` : '';
+  const titulo = `<div class="fw-bold mb-1 d-flex align-items-center gap-2">
+      ${pre ? `<span class="text-nowrap">${esc(pre.trim())}</span>` : ''}
+      <input class="form-control form-control-sm fw-bold loc-gtitle" data-key="${item.key}" type="text" value="${esc(locTituloDe(item))}" />
+    </div>`;
+  if (item.kind === 'heading') return `<div class="mt-4 mb-2 border-bottom pb-1">${titulo}</div>`;
+
+  const helper = item.helper ? `<div class="form-text fst-italic text-secondary mb-1">${esc(item.helper)}</div>` : '';
+  const val = locContenidoDe(item);
+  const field = item.type === 'text'
+    ? `<input class="form-control loc-gcont" data-key="${item.key}" type="text" value="${esc(val)}" />`
+    : `<textarea class="form-control loc-gcont" data-key="${item.key}" rows="3">${esc(val)}</textarea>`;
+  return `<div class="mb-3 mt-3">${titulo}${helper}${field}</div>`;
+}
+
+function renderLocPerfilAcademico(item) {
+  const p = state.locadorPerfil || {};
+  return `
+    <div class="mb-3 mt-3">
+      <div class="fw-bold mb-2"><span class="text-nowrap">${esc(item.label)}.</span> ${esc(locTituloDe(item))}</div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Formación Académica</label>
+          <select id="locFormacion" class="form-select form-select-sm">
+            <option value="">— Seleccione —</option>
+            <option value="Profesional" ${p.formacion === 'Profesional' ? 'selected' : ''}>Profesional</option>
+            <option value="Técnico" ${p.formacion === 'Técnico' ? 'selected' : ''}>Técnico</option>
+            <option value="Egresado" ${p.formacion === 'Egresado' ? 'selected' : ''}>Egresado</option>
+            <option value="Secundaria" ${p.formacion === 'Secundaria' ? 'selected' : ''}>Secundaria</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Título Profesional</label>
+          <input id="locTitulo" class="form-control form-control-sm" type="text" value="${esc(p.titulo || '')}" placeholder="Ingrese el título profesional" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Otros (indicar)</label>
+          <input id="locOtros" class="form-control form-control-sm" type="text" value="${esc(p.otros || '')}" placeholder="Otros requisitos" />
+        </div>
+      </div>
+      <div class="row g-2">
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Habilitación Profesional</label>
+          <div class="d-flex gap-3 mt-1">
+            <div class="form-check"><input class="form-check-input" type="radio" name="locHab" id="locHabSi" value="Sí" ${p.habilitacion === 'Sí' ? 'checked' : ''} /><label class="form-check-label" for="locHabSi">Sí</label></div>
+            <div class="form-check"><input class="form-check-input" type="radio" name="locHab" id="locHabNo" value="No" ${p.habilitacion === 'No' ? 'checked' : ''} /><label class="form-check-label" for="locHabNo">No</label></div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Resolución SERUM</label>
+          <div class="d-flex gap-3 mt-1">
+            <div class="form-check"><input class="form-check-input" type="radio" name="locSerum" id="locSerumSi" value="Sí" ${p.serum === 'Sí' ? 'checked' : ''} /><label class="form-check-label" for="locSerumSi">Sí</label></div>
+            <div class="form-check"><input class="form-check-input" type="radio" name="locSerum" id="locSerumNo" value="No" ${p.serum === 'No' ? 'checked' : ''} /><label class="form-check-label" for="locSerumNo">No</label></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderLocModalidad(item) {
+  const m = state.locadorModalidad || '';
+  return `
+    <div class="mb-3 mt-1">
+      <label class="form-label small mb-0 fw-bold">Modalidad del servicio</label>
+      <select id="locModalidad" class="form-select form-select-sm" style="width:200px">
+        <option value="">— Seleccione —</option>
+        <option value="Presencial" ${m === 'Presencial' ? 'selected' : ''}>Presencial</option>
+        <option value="Híbrido" ${m === 'Híbrido' ? 'selected' : ''}>Híbrido</option>
+        <option value="Remoto" ${m === 'Remoto' ? 'selected' : ''}>Remoto</option>
+      </select>
+    </div>`;
+}
+
+function renderLocTablaEntregas(item) {
+  const entregas = ensureLocadorEntregas();
+  const rows = entregas.map((e, i) => `
+    <tr>
+      <td class="text-center align-middle">${i + 1}</td>
+      <td><input class="form-control form-control-sm loc-ent" data-i="${i}" data-f="plazo" type="text" value="${esc(e.plazo || '')}" placeholder="Plazo" /></td>
+      <td><input class="form-control form-control-sm loc-ent" data-i="${i}" data-f="condicion" type="text" value="${esc(e.condicion || '')}" placeholder="Condición" /></td>
+      <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger loc-ent-del" data-i="${i}" ${entregas.length <= 1 ? 'disabled' : ''}><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  return `
+    <div class="mt-3">
+      <div class="fw-bold mb-1 d-flex align-items-center gap-2">
+        <span class="text-nowrap">${esc(item.label)}.</span>
+        <input class="form-control form-control-sm fw-bold loc-gtitle" data-key="${item.key}" type="text" value="${esc(locTituloDe(item))}" />
+      </div>
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle mb-2">
+          <thead class="table-light"><tr><th style="width:90px" class="text-center">N° Entrega</th><th>Plazo de Entrega</th><th>Condición de entrega</th><th style="width:60px" class="text-center">Acción</th></tr></thead>
+          <tbody id="locEntBody">${rows}</tbody>
+        </table>
+      </div>
+      <button type="button" id="locEntAdd" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-circle"></i> Agregar entregable</button>
+    </div>`;
+}
+
+function collectLocadorInputs() {
+  const g = (id) => (document.getElementById(id) || {}).value;
+  if (document.getElementById('denominacion') != null) state.denominacion = g('denominacion') || '';
+  if (document.getElementById('objetivo') != null) state.objetivo = g('objetivo') || '';
+  if (document.getElementById('finalidad') != null) state.finalidad = g('finalidad') || '';
+  if (document.getElementById('reqCmn') != null) {
+    const raw = g('reqCmn') || '';
+    const num = parseInt(raw.replace(/\D/g, ''), 10);
+    state.cmn = isNaN(num) ? '' : String(num).padStart(5, '0');
+  }
+  document.querySelectorAll('.loc-it-monto').forEach((el) => {
+    const i = Number(el.dataset.i);
+    if (state.locadorItems[i]) state.locadorItems[i].monto = Number(el.value) || 0;
+  });
+  document.querySelectorAll('.loc-gtitle').forEach((el) => {
+    const k = el.dataset.key;
+    if (!state.locadorGlosaOverrides[k]) state.locadorGlosaOverrides[k] = {};
+    state.locadorGlosaOverrides[k].titulo = el.value;
+  });
+  document.querySelectorAll('.loc-gcont').forEach((el) => {
+    const k = el.dataset.key;
+    if (!state.locadorGlosaOverrides[k]) state.locadorGlosaOverrides[k] = {};
+    state.locadorGlosaOverrides[k].contenido = el.value;
+  });
+  document.querySelectorAll('.loc-ent').forEach((el) => {
+    const i = Number(el.dataset.i); const f = el.dataset.f;
+    if (!state.locadorEntregas[i]) state.locadorEntregas[i] = { plazo: '', condicion: '' };
+    state.locadorEntregas[i][f] = el.value;
+  });
+  // Perfil académico
+  const lf = document.getElementById('locFormacion');
+  if (lf) state.locadorPerfil.formacion = lf.value;
+  const lt = document.getElementById('locTitulo');
+  if (lt) state.locadorPerfil.titulo = lt.value;
+  const lo = document.getElementById('locOtros');
+  if (lo) state.locadorPerfil.otros = lo.value;
+  const habSi = document.getElementById('locHabSi');
+  const habNo = document.getElementById('locHabNo');
+  if (habSi && habSi.checked) state.locadorPerfil.habilitacion = 'Sí';
+  else if (habNo && habNo.checked) state.locadorPerfil.habilitacion = 'No';
+  const serumSi = document.getElementById('locSerumSi');
+  const serumNo = document.getElementById('locSerumNo');
+  if (serumSi && serumSi.checked) state.locadorPerfil.serum = 'Sí';
+  else if (serumNo && serumNo.checked) state.locadorPerfil.serum = 'No';
+  // Modalidad
+  const lm = document.getElementById('locModalidad');
+  if (lm) state.locadorModalidad = lm.value;
+}
+
+function rerenderLocadoresBody(skipCollect) {
+  if (!skipCollect) collectLocadorInputs();
+  const host = document.getElementById('reqRoot');
+  if (!host) return;
+  host.innerHTML = renderLocadores();
+  attachLocadores();
+}
+
+async function buscarItemsLocador() {
+  const q = (document.getElementById('locItemSearch') || {}).value || '';
+  const box = document.getElementById('locItemResults');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted small">Buscando…</div>';
+  try {
+    const resp = await api.list('catalogo', { page: 1, pageSize: 200, search: q.trim() });
+    const items = (resp && resp.data) || [];
+    if (!items.length) { box.innerHTML = '<div class="text-warning small">Sin resultados.</div>'; return; }
+    box.innerHTML = `<div class="list-group list-group-flush" style="max-height:180px; overflow-y:auto;">${items.map((it) => `
+      <button type="button" class="list-group-item list-group-item-action py-1 loc-add-item" data-code="${esc(it.item_bien || it.codigo)}" data-name="${esc(it.nombre_item || it.descripcion || '')}" data-unit="${esc(it.unidad_medida || '')}">
+        <strong>${esc(it.item_bien || it.codigo)}</strong> — ${esc(it.nombre_item || it.descripcion)} <span class="text-muted">(${esc(it.unidad_medida || '')})</span>
+      </button>`).join('')}</div>`;
+    box.querySelectorAll('.loc-add-item').forEach((b) => b.onclick = () => {
+      state.locadorItems.push({ item_bien: b.dataset.code, nombre_item: b.dataset.name, unidad_medida: b.dataset.unit, monto: 0 });
+      box.innerHTML = '';
+      rerenderLocadoresBody();
+    });
+  } catch (e) { box.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`; }
+}
+
+function attachLocadores() {
+  // Volver
+  const back = document.getElementById('reqBack');
+  if (back) back.onclick = () => {
+    if (reqShared.editingFromEvaluacion && reqShared.onBackToEvaluacion) {
+      reqShared.onBackToEvaluacion();
+    } else { showSelect(); loadList(); }
+  };
+  // Grabar
+  const save = document.getElementById('reqSave');
+  if (save) save.onclick = () => saveRequerimientoLocador();
+  // Imprimir
+  const pr = document.getElementById('reqPrint');
+  if (pr) pr.onclick = () => {
+    collectLocadorInputs();
+    openPrintWindowLocadores(buildState());
+  };
+  // Buscar área
+  const areaBtn = document.getElementById('areaBtn');
+  const areaSearch = document.getElementById('areaSearch');
+  if (areaBtn) areaBtn.onclick = buscarAreas;
+  if (areaSearch) areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  // Buscar items
+  const locItemBtn = document.getElementById('locItemBtn');
+  const locItemSearch = document.getElementById('locItemSearch');
+  if (locItemBtn) locItemBtn.onclick = buscarItemsLocador;
+  if (locItemSearch) locItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsLocador(); } };
+  // Eliminar ítems
+  document.querySelectorAll('.loc-it-del').forEach((b) => b.onclick = () => {
+    state.locadorItems.splice(Number(b.dataset.i), 1);
+    rerenderLocadoresBody();
+  });
+  // Tabla entregas
+  const locEntAdd = document.getElementById('locEntAdd');
+  if (locEntAdd) locEntAdd.onclick = () => {
+    collectLocadorInputs();
+    ensureLocadorEntregas().push({ plazo: '', condicion: '' });
+    rerenderLocadoresBody();
+  };
+  document.querySelectorAll('.loc-ent-del').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      const idx = Number(b.dataset.i);
+      if (state.locadorEntregas.length <= 1) return;
+      collectLocadorInputs();
+      state.locadorEntregas.splice(idx, 1);
+      rerenderLocadoresBody(true);
+    };
+  });
+}
+
+async function saveRequerimientoLocador() {
+  collectLocadorInputs();
+  const payload = {
+    area: state.area,
+    denominacion: state.denominacion,
+    objetivo: state.objetivo,
+    finalidad: state.finalidad,
+    cmn: state.cmn,
+    locadorItems: state.locadorItems,
+    locadorGlosaOverrides: state.locadorGlosaOverrides,
+    locadorEntregas: state.locadorEntregas,
+    locadorPerfil: state.locadorPerfil,
+    locadorModalidad: state.locadorModalidad,
+    observaciones: state.observaciones || [],
+  };
+  const body = {
+    tipo: 'locacion',
+    area: state.area.nombre || '',
+    responsable: state.area.responsable || '',
+    denominacion: state.denominacion,
+    payload: JSON.stringify(payload),
+  };
+  if (reqShared.editingFromEvaluacion) {
+    body.estado = undefined;
+  }
+  const msgEl = document.getElementById('reqMsg');
+  try {
+    if (state.reqId) {
+      await requerimientosService.update(state.reqId, body);
+    } else {
+      const created = await requerimientosService.create(body);
+      if (created && created.id) { state.reqId = created.id; state.codigo = created.codigo || ''; }
+    }
+    if (msgEl) msgEl.innerHTML = '<div class="alert alert-success py-1 px-2 small">Guardado correctamente.</div>';
+    rerenderLocadoresBody();
+  } catch (e) {
+    if (msgEl) msgEl.innerHTML = `<div class="alert alert-danger py-1 px-2 small">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function buildPrintHTMLLocadores(s) {
+  const { logo, entidadNombre } = s.header || {};
+  const logoImg = logo ? `<img src="${logo}" style="max-height:70px;max-width:140px;object-fit:contain;">` : '';
+  const ent = entidadNombre || 'INSTITUTO NACIONAL DE SALUD';
+  const codigoRequerimiento = s.codigo || '00000';
+  const items = s.locadorItems || [];
+  const itemsRows = items.map((it, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(it.item_bien)}</td><td>${esc(it.nombre_item)}</td><td style="text-align:center">${esc(it.unidad_medida)}</td></tr>`).join('');
+
+  let glosaHTML = '';
+  for (const item of MODELO_LOCADORES) {
+    glosaHTML += locGlosaPrint(item, s);
+  }
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>TDR Locador — ${esc(codigoRequerimiento)}</title>
+  <style>
+  @page { size: A4; margin: 20mm 25mm; }
+  body { font-family: Arial, sans-serif; font-size: 11px; line-height: 1.4; color: #000; }
+  .hdr { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .logo img { max-height: 60px; }
+  .title { text-align: center; flex: 1; }
+  .title h1 { font-size: 12px; margin: 0; }
+  .title h2 { font-size: 11px; margin: 4px 0 0; }
+  .title h3 { font-size: 10px; margin: 4px 0 0; }
+  .req-num { font-size: 12px; font-weight: bold; margin-top: 8px; }
+  .sec { font-size: 11px; font-weight: bold; margin: 14px 0 4px; }
+  .box { white-space: pre-wrap; margin-bottom: 8px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 10px; }
+  th, td { border: 1px solid #000; padding: 4px 6px; }
+  th { background: #f0f0f0; font-weight: bold; }
+  .bar { text-align: center; margin-bottom: 12px; }
+  .bar button { padding: 6px 18px; font-size: 13px; cursor: pointer; }
+  .firmas { display: flex; justify-content: space-between; margin-top: 40px; text-align: center; }
+  .firmas div { width: 45%; border-top: 1px solid #000; padding-top: 6px; }
+  @media print { .bar { display: none; } }
+  </style></head><body>
+  <div class="bar"><button onclick="window.print()">🖨 Imprimir / Guardar como PDF</button></div>
+  <div class="hdr"><div class="logo">${logoImg}</div>
+    <div class="title">
+      <h1>${esc(ent)}</h1>
+      <h2>ANEXO N° 03</h2>
+      <h3>TÉRMINOS DE REFERENCIA PARA CONTRATACIÓN DE LOCADORES</h3>
+      <div class="req-num">REQUERIMIENTO N° ${esc(codigoRequerimiento)}</div>
+      ${s.cmn ? `<div style="margin-top:6px; font-size:12px; font-weight:bold;">CMN N° ${esc(s.cmn)}</div>` : ''}
+    </div>
+  </div>
+  <h3 class="sec">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL SERVICIO</h3>
+  <div class="box">Área: ${esc(s.area?.nombre || '')}    Centro: ${esc(s.area?.responsable || '')}</div>
+  <h3 class="sec">2. DENOMINACIÓN DE LA CONTRATACIÓN</h3>
+  <div class="box">${esc(s.denominacion || '')}</div>
+  <h3 class="sec">3. OBJETIVO Y/O FINALIDAD PÚBLICA</h3>
+  <h3 class="sec">3.1. OBJETIVO</h3><div class="box">${esc(s.objetivo || '')}</div>
+  <h3 class="sec">3.2. FINALIDAD</h3><div class="box">${esc(s.finalidad || '')}</div>
+  <h3 class="sec">4. DESCRIPCIÓN DEL SERVICIO</h3>
+  <h3 class="sec">4.1. Requerimiento</h3>
+  <table><thead><tr><th>N°</th><th>Código SIGAMEF</th><th>Descripción del Servicio</th><th>Unidad de Medida</th></tr></thead>
+    <tbody>${itemsRows || '<tr><td colspan="4" style="text-align:center">—</td></tr>'}</tbody></table>
+  ${glosaHTML}
+  </body></html>`;
+}
+
+function locGlosaPrint(item, s) {
+  if (item.kind === 'firmas') {
+    return `<div class="firmas"><div>FIRMA DEL SUB DIRECTOR Y/O JEFE<br>Y/O DIRECTOR GENERAL</div><div>JEFE DE UNIDAD</div></div>`;
+  }
+  const pre = item.label ? `${item.label}. ` : '';
+  const ov = (s.locadorGlosaOverrides || {})[item.key];
+  const titulo = ov && ov.titulo ? ov.titulo : (item.titulo || '');
+  const contenido = ov && ov.contenido ? ov.contenido : (item.default || '');
+
+  if (item.kind === 'perfil_academico') {
+    const p = s.locadorPerfil || {};
+    return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>
+      <table><thead><tr><th>Formación Académica</th><th>Título Profesional</th><th>Habilitación</th><th>SERUM</th><th>Otros</th></tr></thead>
+      <tbody><tr><td>${esc(p.formacion || '—')}</td><td>${esc(p.titulo || '—')}</td><td>${esc(p.habilitacion || '—')}</td><td>${esc(p.serum || '—')}</td><td>${esc(p.otros || '—')}</td></tr></tbody></table>`;
+  }
+  if (item.kind === 'select_modalidad') {
+    const m = s.locadorModalidad || '—';
+    return `<div class="box" style="margin-top:-4px"><strong>Modalidad:</strong> ${esc(m)}</div>`;
+  }
+  if (item.kind === 'tabla_entregas') {
+    const entregas = s.locadorEntregas || [];
+    const rows = entregas.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(e.plazo || '')}</td><td>${esc(e.condicion || '')}</td></tr>`).join('');
+    return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>
+      <table><thead><tr><th>N°</th><th>Plazo del entregable</th><th>Condición de entrega</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" style="text-align:center">—</td></tr>'}</tbody></table>`;
+  }
+  if (item.kind === 'heading') return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>`;
+  return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3><div class="box">${esc(contenido)}</div>`;
+}
+
+function openPrintWindowLocadores(s) {
+  const win = window.open('', '_blank');
+  if (!win) { alert('Permita las ventanas emergentes para generar el documento.'); return; }
+  win.document.open();
+  win.document.write(buildPrintHTMLLocadores(s));
   win.document.close();
 }
 
