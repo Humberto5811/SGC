@@ -37,14 +37,20 @@ async function loadEvaluacionList() {
     const resp = await requerimientosService.listConDetalles({ pageSize: 200 });
     let rows = (resp && resp.data) || [];
 
-    // Calcular monto_total desde el payload (precio_unitario × cantidad).
+    // Calcular monto_total desde el payload.
     rows = rows.map((r) => {
       let monto_total = 0;
       try {
         const payload = JSON.parse(r.payload || '{}');
-        if (Array.isArray(payload.items)) {
-          monto_total = payload.items.reduce((sum, it) =>
-            sum + ((Number(it.precio_unitario) || 0) * (Number(it.cantidad) || 0)), 0);
+        if (r.tipo === 'servicios') {
+          if (Array.isArray(payload.servicioItems)) {
+            monto_total = payload.servicioItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
+          }
+        } else {
+          if (Array.isArray(payload.items)) {
+            monto_total = payload.items.reduce((sum, it) =>
+              sum + ((Number(it.precio_unitario) || 0) * (Number(it.cantidad) || 0)), 0);
+          }
         }
       } catch (_) {}
       return { ...r, monto_total: Number(monto_total.toFixed(2)) };
@@ -97,9 +103,10 @@ async function loadEvaluacionList() {
               let descripcionesBien = '<span class="text-muted small">—</span>';
               try {
                 const p = JSON.parse(r.payload || '{}');
-                if (Array.isArray(p.items) && p.items.length) {
-                  codigosSigamef = p.items.map((it) => esc(it.item_bien || '')).join(', ');
-                  descripcionesBien = p.items.map((it) => esc(it.nombre_item || '')).join(', ');
+                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : (p.items || []);
+                if (Array.isArray(items) && items.length) {
+                  codigosSigamef = items.map((it) => esc(it.item_bien || '')).join(', ');
+                  descripcionesBien = items.map((it) => esc(it.nombre_item || '')).join(', ');
                 }
               } catch (_) {}
               const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
