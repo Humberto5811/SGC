@@ -11,23 +11,25 @@
 import { api } from '../../services/apiService.js';
 import { authService } from '../../services/authService.js';
 import { glosasBienesService } from '../../services/glosasBienesService.js';
+import { glosasServiciosService } from '../../services/glosasServiciosService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
+import { MODELO_SERVICIOS } from '../glosasRequerimientos/formatoServiciosModelo.js';
 import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showTextModal } from './reqShared.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
 const FORMATOS = [
   { tipo: 'bienes', label: 'Formato de Bienes', icon: 'bi-box-seam', color: 'primary', enabled: true },
-  { tipo: 'servicios', label: 'Formato de Servicios', icon: 'bi-tools', color: 'success', enabled: false },
+  { tipo: 'servicios', label: 'Formato de Servicios', icon: 'bi-tools', color: 'success', enabled: true },
   { tipo: 'locacion', label: 'Formato de Locadores', icon: 'bi-person-badge', color: 'info', enabled: false },
   { tipo: 'licitaciones', label: 'Formato de Licitaciones', icon: 'bi-hammer', color: 'warning', enabled: false },
   { tipo: 'concurso', label: 'Formato de Concursos', icon: 'bi-trophy', color: 'danger', enabled: false },
 ];
 
 let state = {
-  view: 'select',          // 'select' | 'bienes'
+  view: 'select',          // 'select' | 'bienes' | 'servicios'
   reqId: null,
   codigo: '',              // Código del requerimiento
   cmn: '',                 // CMN N° (5 dígitos con ceros a la izquierda)
@@ -40,6 +42,11 @@ let state = {
   items: [],               // { item_bien, nombre_item, unidad_medida, cantidad, ficha_tecnica }
   glosaOverrides: {},      // overrides de c)…18 (cargados del Formato Bienes de Glosas)
   entregas: [],            // 14.1
+  // --- Servicios ---
+  servicioItems: [],       // { item_bien, nombre_item, unidad_medida, monto }
+  servicioGlosaOverrides: {},
+  servicioEntregas: [],    // tabla 9.2.1
+  servicioInformacion: [], // tabla 9.2.2
 };
 
 // Últimas filas cargadas en el listado (para exportar a Excel)
@@ -171,12 +178,18 @@ async function loadList() {
       let monto_total = 0;
       try {
         const payload = JSON.parse(r.payload || '{}');
-        if (payload.items && Array.isArray(payload.items)) {
-          monto_total = payload.items.reduce((sum, item) => {
-            const precio = Number(item.precio_unitario) || 0;
-            const cantidad = Number(item.cantidad) || 0;
-            return sum + (precio * cantidad);
-          }, 0);
+        if (r.tipo === 'servicios') {
+          if (payload.servicioItems && Array.isArray(payload.servicioItems)) {
+            monto_total = payload.servicioItems.reduce((sum, item) => sum + (Number(item.monto) || 0), 0);
+          }
+        } else {
+          if (payload.items && Array.isArray(payload.items)) {
+            monto_total = payload.items.reduce((sum, item) => {
+              const precio = Number(item.precio_unitario) || 0;
+              const cantidad = Number(item.cantidad) || 0;
+              return sum + (precio * cantidad);
+            }, 0);
+          }
         }
       } catch (e) {
         console.error(`Error procesando payload del requerimiento ${r.id}:`, e);
@@ -234,9 +247,10 @@ async function loadList() {
               let descripcionesBien = '';
               try {
                 const p = JSON.parse(r.payload || '{}');
-                if (p.items && Array.isArray(p.items) && p.items.length) {
-                  codigosSigamef = p.items.map(it => esc(it.item_bien || '')).join(', ');
-                  descripcionesBien = p.items.map(it => esc(it.nombre_item || '')).join(', ');
+                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : (p.items || []);
+                if (Array.isArray(items) && items.length) {
+                  codigosSigamef = items.map(it => esc(it.item_bien || '')).join(', ');
+                  descripcionesBien = items.map(it => esc(it.nombre_item || '')).join(', ');
                 } else {
                   codigosSigamef = '<span class="text-muted small">—</span>';
                   descripcionesBien = '<span class="text-muted small">—</span>';
@@ -248,7 +262,7 @@ async function loadList() {
               return `
               <tr>
                 <td>${esc(r.codigo || ('#' + r.id))}</td>
-                <td><span class="badge bg-secondary text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo)}</span></td>
+                <td><span class="badge ${r.tipo === 'servicios' ? 'bg-success' : 'bg-primary'} text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo === 'servicios' ? 'Servicio' : 'Bien')}</span></td>
                 <td class="small">${codigosSigamef}</td>
                 <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
@@ -299,16 +313,17 @@ function exportarReporte() {
       let descrip = '';
       try {
         const p = JSON.parse(r.payload || '{}');
-        if (Array.isArray(p.items) && p.items.length) {
-          codigos = p.items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
-          descrip = p.items.map((it) => it.nombre_item || '').filter(Boolean).join(', ');
+        const items = r.tipo === 'servicios' ? (p.servicioItems || []) : (p.items || []);
+        if (Array.isArray(items) && items.length) {
+          codigos = items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
+          descrip = items.map((it) => it.nombre_item || '').filter(Boolean).join(', ');
         }
       } catch (_) { /* payload no-JSON */ }
       return {
         'Código': r.codigo || ('#' + r.id),
         'Tipo': r.tipo || '',
         'Código SIGAMEF': codigos,
-        'Descripción del bien': descrip,
+        'Descripción': descrip,
         'Área usuaria': r.area || '',
         'Centro': r.responsable || r.centro_nombre || '',
         'Monto Total': Number(r.monto_total) || 0,
@@ -906,10 +921,18 @@ async function openRequerimiento(id) {
     const row = await requerimientosService.getById(id);
     resetState();
     await loadHeader();
-    await loadGlosaDefaults();
-    applyPayload(row);
-    ensureEntregas();
-    showBienes();
+    if (row.tipo === 'servicios') {
+      await loadServicioGlosaDefaults();
+      applyPayloadServicios(row);
+      ensureServicioEntregas();
+      ensureServicioInformacion();
+      showServicios();
+    } else {
+      await loadGlosaDefaults();
+      applyPayload(row);
+      ensureEntregas();
+      showBienes();
+    }
   } catch (e) {
     alert('Error al abrir: ' + e.message);
   }
@@ -930,9 +953,15 @@ async function printRequerimiento(id) {
     const row = await requerimientosService.getById(id);
     resetState();
     await loadHeader();
-    await loadGlosaDefaults();
-    applyPayload(row);
-    openPrintWindow(buildState());
+    if (row.tipo === 'servicios') {
+      await loadServicioGlosaDefaults();
+      applyPayloadServicios(row);
+      openPrintWindowServicios(buildState());
+    } else {
+      await loadGlosaDefaults();
+      applyPayload(row);
+      openPrintWindow(buildState());
+    }
   } catch (e) {
     alert('Error al generar: ' + e.message);
   }
@@ -950,17 +979,27 @@ function resetState() {
     area: { codigo: '', nombre: '', responsable: '' },
     denominacion: '', objetivo: '', finalidad: '', caracteristicas: '',
     items: [], glosaOverrides: {}, entregas: [], fichas: [], observaciones: [],
+    servicioItems: [], servicioGlosaOverrides: {}, servicioEntregas: [], servicioInformacion: [],
   };
 }
 
 async function newRequerimiento(tipo) {
-  if (tipo !== 'bienes') return;
-  resetState();
-  setRootLoading();
-  await loadHeader();
-  await loadGlosaDefaults();
-  ensureEntregas();
-  showBienes();
+  if (tipo === 'bienes') {
+    resetState();
+    setRootLoading();
+    await loadHeader();
+    await loadGlosaDefaults();
+    ensureEntregas();
+    showBienes();
+  } else if (tipo === 'servicios') {
+    resetState();
+    setRootLoading();
+    await loadHeader();
+    await loadServicioGlosaDefaults();
+    ensureServicioEntregas();
+    ensureServicioInformacion();
+    showServicios();
+  }
 }
 
 function setRootLoading() {
@@ -978,6 +1017,599 @@ function showBienes() {
   state.view = 'bienes';
   const root = document.getElementById('reqRoot');
   if (root) { root.innerHTML = renderBienes(); attachBienes(); }
+}
+
+function showServicios() {
+  state.view = 'servicios';
+  const root = document.getElementById('reqRoot');
+  if (root) { root.innerHTML = renderServicios(); attachServicios(); }
+}
+
+// =========================================================================
+// SERVICIOS — FORMULARIO COMPLETO
+// =========================================================================
+const DOC_TITULO_SERV = '__FORMATO_SERVICIOS_DOC__';
+
+function ensureServicioEntregas() {
+  if (!Array.isArray(state.servicioEntregas) || !state.servicioEntregas.length) {
+    state.servicioEntregas = [{ plazo: '', condicion: '' }];
+  }
+  return state.servicioEntregas;
+}
+function ensureServicioInformacion() {
+  if (!Array.isArray(state.servicioInformacion) || !state.servicioInformacion.length) {
+    state.servicioInformacion = [{ entregable: '', plazo: '', porcentaje: '' }];
+  }
+  return state.servicioInformacion;
+}
+
+async function loadServicioGlosaDefaults() {
+  try {
+    const resp = await glosasServiciosService.getAll();
+    const rows = (resp && resp.data) || [];
+    const docRow = rows.find((r) => r.titulo === DOC_TITULO_SERV);
+    if (docRow) {
+      try {
+        const parsed = JSON.parse(docRow.contenido || '{}');
+        if (!Object.keys(state.servicioGlosaOverrides).length) state.servicioGlosaOverrides = parsed.overrides || {};
+        if (!state.servicioEntregas.length && Array.isArray(parsed.entregas)) state.servicioEntregas = parsed.entregas;
+        if (!state.servicioInformacion.length && Array.isArray(parsed.informacion)) state.servicioInformacion = parsed.informacion;
+      } catch (_) { /* contenido no-JSON */ }
+    }
+  } catch (_) { /* si falla, se usan los valores por defecto del MODELO_SERVICIOS */ }
+}
+
+function applyPayloadServicios(row) {
+  let p = {};
+  try { p = JSON.parse(row.payload || '{}'); } catch (_) { p = {}; }
+  state.reqId = row.id;
+  state.codigo = row.codigo || '';
+  state.cmn = row.cmn || '';
+  state.area = p.area || { codigo: '', nombre: row.area || '', responsable: row.responsable || '' };
+  state.denominacion = row.denominacion || '';
+  state.objetivo = p.objetivo || '';
+  state.finalidad = p.finalidad || '';
+  state.servicioItems = Array.isArray(p.servicioItems) ? p.servicioItems : [];
+  state.servicioGlosaOverrides = p.servicioGlosaOverrides || {};
+  state.servicioEntregas = Array.isArray(p.servicioEntregas) ? p.servicioEntregas : [];
+  state.servicioInformacion = Array.isArray(p.servicioInformacion) ? p.servicioInformacion : [];
+  state.observaciones = Array.isArray(p.observaciones) ? p.observaciones : [];
+  if (p.header) state.header = p.header;
+}
+
+function totalMontoServicios() {
+  return state.servicioItems.reduce((s, it) => s + (Number(it.monto) || 0), 0);
+}
+
+function srvTituloDe(item) {
+  const o = state.servicioGlosaOverrides[item.key];
+  return o && o.titulo != null && o.titulo !== '' ? o.titulo : (item.titulo || '');
+}
+function srvContenidoDe(item) {
+  const o = state.servicioGlosaOverrides[item.key];
+  if (o && o.contenido != null && o.contenido !== '') return o.contenido;
+  return item.default || '';
+}
+
+function renderServicios() {
+  const { logo, entidadNombre } = state.header;
+  const logoImg = logo
+    ? `<img src="${logo}" alt="logo" style="max-height:64px;max-width:130px;object-fit:contain;">`
+    : '<span class="text-muted small">Sin logo</span>';
+
+  return `
+    <div class="container-fluid">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+        <div ${reqShared.editingFromEvaluacion ? 'style="display:none"' : ''}>
+          <h3 class="mb-1"><i class="bi bi-tools"></i> Registro de Requerimiento — Formato de Servicios</h3>
+          <p class="text-muted mb-0">Anexo N.° 01 — Términos de Referencia para Contratación de Servicios</p>
+        </div>
+        <div class="btn-group">
+          <button id="reqBack" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Volver</button>
+          <button id="reqSave" class="btn btn-success"><i class="bi bi-save"></i> Grabar</button>
+          <button id="reqPrint" class="btn btn-dark"><i class="bi bi-printer"></i> Generar documento</button>
+        </div>
+      </div>
+      <div id="reqMsg"></div>
+
+      <!-- Cabecera -->
+      <div class="card mb-3">
+        <div class="card-body d-flex align-items-center gap-3">
+          <div style="width:150px; text-align:center;">${logoImg}</div>
+          <div class="flex-fill text-center">
+            <div class="fw-bold">${esc(entidadNombre || 'INSTITUTO NACIONAL DE SALUD')}</div>
+            <div class="mt-2">
+              <div class="fw-bold">ANEXO N° 01</div>
+              <div class="text-uppercase small fw-bold">TÉRMINOS DE REFERENCIA PARA CONTRATACIÓN DE SERVICIOS EN GENERAL</div>
+            </div>
+            <div class="mt-3 d-flex align-items-center justify-content-center gap-3">
+              <div class="fw-bold bg-light d-inline-block px-3 py-1 rounded">REQUERIMIENTO N° ${state.codigo || '00000'}</div>
+              <div class="d-flex align-items-center gap-1">
+                <span class="fw-bold small">CMN N°</span>
+                <input id="reqCmn" class="form-control form-control-sm" type="text" inputmode="numeric" maxlength="5"
+                  style="width: 80px; text-align: center;" value="${esc(state.cmn || '')}" placeholder="00000" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3"><div class="card-body">
+        <!-- 1) ÁREA USUARIA -->
+        <div class="mb-3">
+          <div class="fw-bold mb-1">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL SERVICIO</div>
+          <div class="input-group mb-2">
+            <input id="areaSearch" class="form-control" placeholder="Ingrese código o nombre del área usuaria…" />
+            <button id="areaBtn" class="btn btn-outline-primary" type="button"><i class="bi bi-search"></i> Buscar</button>
+          </div>
+          <div id="areaResults"></div>
+          <div class="row g-2">
+            <div class="col-md-6"><label class="form-label small mb-0">Área usuaria</label><input id="areaNombre" class="form-control" value="${esc(state.area.nombre)}" readonly /></div>
+            <div class="col-md-6"><label class="form-label small mb-0">Centro</label><input id="areaResponsable" class="form-control" value="${esc(state.area.responsable)}" readonly /></div>
+          </div>
+        </div>
+
+        <!-- 2) DENOMINACIÓN -->
+        <div class="mb-3">
+          <div class="fw-bold mb-1">2. DENOMINACIÓN DE LA CONTRATACIÓN</div>
+          <input id="denominacion" class="form-control" value="${esc(state.denominacion)}" placeholder="Ingrese la denominación de la contratación" />
+        </div>
+
+        <!-- 3) OBJETIVO Y/O FINALIDAD PÚBLICA -->
+        <div class="mb-2 fw-bold">3. OBJETIVO Y/O FINALIDAD PÚBLICA</div>
+        <div class="mb-3"><div class="fw-bold mb-1">3.1. OBJETIVO</div><textarea id="objetivo" class="form-control" rows="2" placeholder="Describa el objetivo">${esc(state.objetivo)}</textarea></div>
+        <div class="mb-3"><div class="fw-bold mb-1">3.2. FINALIDAD</div><textarea id="finalidad" class="form-control" rows="2" placeholder="Describa la finalidad pública">${esc(state.finalidad)}</textarea></div>
+
+        <!-- 4) DESCRIPCIÓN DEL SERVICIO -->
+        <div class="mb-2 fw-bold">4. DESCRIPCIÓN DEL SERVICIO</div>
+        <div class="mb-3">
+          <div class="fw-bold mb-1">4.1. Requerimiento</div>
+          <div class="input-group mb-2">
+            <input id="srvItemSearch" class="form-control" placeholder="Ingrese código o descripción del servicio (Catálogo SIGAMEF)…" />
+            <button id="srvItemBtn" class="btn btn-outline-primary" type="button"><i class="bi bi-search"></i> Buscar</button>
+          </div>
+          <div id="srvItemResults"></div>
+          ${renderServicioItemsTable()}
+        </div>
+      </div></div>
+
+      <!-- 4.2…16 + firmas (TDR Servicios) -->
+      <div class="card">
+        <div class="card-header bg-light fw-bold"><i class="bi bi-file-text"></i> Cláusulas del Formato de Servicios (4.2 hasta 16)</div>
+        <div class="card-body" id="reqGlosaSrv">${MODELO_SERVICIOS.map(renderServicioGlosaSection).join('')}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderServicioItemsTable() {
+  const rows = state.servicioItems.map((it, i) => `
+    <tr>
+      <td>${esc(it.item_bien)}</td>
+      <td>${esc(it.nombre_item)}</td>
+      <td class="text-center">${esc(it.unidad_medida)}</td>
+      <td style="width:140px"><input class="form-control form-control-sm srv-it-monto" data-i="${i}" type="number" min="0" step="0.01" value="${esc(it.monto ?? 0)}" /></td>
+      <td class="text-center"><button class="btn btn-sm btn-outline-danger srv-it-del" data-i="${i}" title="Quitar"><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  return `
+    <div class="table-responsive">
+      <table class="table table-bordered align-middle mb-0">
+        <thead class="table-light">
+          <tr><th>Código SIGAMEF</th><th>Descripción del Servicio</th><th class="text-center" style="width:130px">Unidad de Medida</th><th style="width:140px">Monto (S/.)</th><th style="width:60px" class="text-center">Acción</th></tr>
+        </thead>
+        <tbody id="srvItemsBody">${rows || '<tr><td colspan="5" class="text-center text-muted">Busque y agregue ítems del Catálogo SIGAMEF.</td></tr>'}</tbody>
+        <tfoot><tr class="table-secondary fw-bold"><td colspan="3" class="text-end">MONTO TOTAL</td><td id="srvItemsTotal">S/. ${totalMontoServicios().toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td></td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
+function renderServicioGlosaSection(item) {
+  if (item.kind === 'firmas') return renderFirmas();
+  if (item.kind === 'tabla_entregas') return renderSrvTablaEntregas(item);
+  if (item.kind === 'tabla_informacion') return renderSrvTablaInformacion(item);
+
+  const pre = item.label ? `${item.label}. ` : '';
+  const titulo = `<div class="fw-bold mb-1 d-flex align-items-center gap-2">
+      ${pre ? `<span class="text-nowrap">${esc(pre.trim())}</span>` : ''}
+      <input class="form-control form-control-sm fw-bold srv-gtitle" data-key="${item.key}" type="text" value="${esc(srvTituloDe(item))}" />
+    </div>`;
+  if (item.kind === 'heading') return `<div class="mt-4 mb-2 border-bottom pb-1">${titulo}</div>`;
+
+  const helper = item.helper ? `<div class="form-text fst-italic text-secondary mb-1">${esc(item.helper)}</div>` : '';
+  const val = srvContenidoDe(item);
+  const field = item.type === 'text'
+    ? `<input class="form-control srv-gcont" data-key="${item.key}" type="text" value="${esc(val)}" />`
+    : `<textarea class="form-control srv-gcont" data-key="${item.key}" rows="3">${esc(val)}</textarea>`;
+  return `<div class="mb-3 mt-3">${titulo}${helper}${field}</div>`;
+}
+
+function renderSrvTablaEntregas(item) {
+  const entregas = ensureServicioEntregas();
+  const rows = entregas.map((e, i) => `
+    <tr>
+      <td class="text-center align-middle">${i + 1}</td>
+      <td><input class="form-control form-control-sm srv-ent" data-i="${i}" data-f="plazo" type="text" value="${esc(e.plazo || '')}" placeholder="Plazo" /></td>
+      <td><input class="form-control form-control-sm srv-ent" data-i="${i}" data-f="condicion" type="text" value="${esc(e.condicion || '')}" placeholder="Condición" /></td>
+      <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger srv-ent-del" data-i="${i}" ${entregas.length <= 1 ? 'disabled' : ''}><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  return `
+    <div class="mt-3">
+      <div class="fw-bold mb-1 d-flex align-items-center gap-2">
+        <span class="text-nowrap">${esc(item.label)}.</span>
+        <input class="form-control form-control-sm fw-bold srv-gtitle" data-key="${item.key}" type="text" value="${esc(srvTituloDe(item))}" />
+      </div>
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle mb-2">
+          <thead class="table-light"><tr><th style="width:90px" class="text-center">N° Entrega</th><th>Plazo de Entrega</th><th>Condición de entrega</th><th style="width:60px" class="text-center">Acción</th></tr></thead>
+          <tbody id="srvEntBody">${rows}</tbody>
+        </table>
+      </div>
+      <button type="button" id="srvEntAdd" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i> Agregar entregable</button>
+    </div>`;
+}
+
+function renderSrvTablaInformacion(item) {
+  const info = ensureServicioInformacion();
+  const rows = info.map((e, i) => `
+    <tr>
+      <td class="text-center align-middle">${i + 1}</td>
+      <td><input class="form-control form-control-sm srv-info" data-i="${i}" data-f="entregable" type="text" value="${esc(e.entregable || '')}" placeholder="Entregable" /></td>
+      <td><input class="form-control form-control-sm srv-info" data-i="${i}" data-f="plazo" type="text" value="${esc(e.plazo || '')}" placeholder="Plazo" /></td>
+      <td><input class="form-control form-control-sm srv-info" data-i="${i}" data-f="porcentaje" type="text" value="${esc(e.porcentaje || '')}" placeholder="%" /></td>
+      <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger srv-info-del" data-i="${i}" ${info.length <= 1 ? 'disabled' : ''}><i class="bi bi-trash"></i></button></td>
+    </tr>`).join('');
+  return `
+    <div class="mt-3">
+      <div class="fw-bold mb-1 d-flex align-items-center gap-2">
+        <span class="text-nowrap">${esc(item.label)}.</span>
+        <input class="form-control form-control-sm fw-bold srv-gtitle" data-key="${item.key}" type="text" value="${esc(srvTituloDe(item))}" />
+      </div>
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle mb-2">
+          <thead class="table-light"><tr><th style="width:60px" class="text-center">N°</th><th>Entregable</th><th>Plazo del entregable</th><th>PORCENTAJE</th><th style="width:60px" class="text-center">Acción</th></tr></thead>
+          <tbody id="srvInfoBody">${rows}</tbody>
+        </table>
+      </div>
+      <button type="button" id="srvInfoAdd" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i> Agregar fila</button>
+    </div>`;
+}
+
+function collectServicioInputs() {
+  const g = (id) => (document.getElementById(id) || {}).value;
+  if (document.getElementById('denominacion') != null) state.denominacion = g('denominacion') || '';
+  if (document.getElementById('objetivo') != null) state.objetivo = g('objetivo') || '';
+  if (document.getElementById('finalidad') != null) state.finalidad = g('finalidad') || '';
+  if (document.getElementById('reqCmn') != null) {
+    const raw = g('reqCmn') || '';
+    const num = parseInt(raw.replace(/\D/g, ''), 10);
+    state.cmn = isNaN(num) ? '' : String(num).padStart(5, '0');
+  }
+  document.querySelectorAll('.srv-it-monto').forEach((el) => {
+    const i = Number(el.dataset.i);
+    if (state.servicioItems[i]) state.servicioItems[i].monto = Number(el.value) || 0;
+  });
+  document.querySelectorAll('.srv-gtitle').forEach((el) => {
+    const k = el.dataset.key;
+    if (!state.servicioGlosaOverrides[k]) state.servicioGlosaOverrides[k] = {};
+    state.servicioGlosaOverrides[k].titulo = el.value;
+  });
+  document.querySelectorAll('.srv-gcont').forEach((el) => {
+    const k = el.dataset.key;
+    if (!state.servicioGlosaOverrides[k]) state.servicioGlosaOverrides[k] = {};
+    state.servicioGlosaOverrides[k].contenido = el.value;
+  });
+  document.querySelectorAll('.srv-ent').forEach((el) => {
+    const i = Number(el.dataset.i); const f = el.dataset.f;
+    if (!state.servicioEntregas[i]) state.servicioEntregas[i] = { plazo: '', condicion: '' };
+    state.servicioEntregas[i][f] = el.value;
+  });
+  document.querySelectorAll('.srv-info').forEach((el) => {
+    const i = Number(el.dataset.i); const f = el.dataset.f;
+    if (!state.servicioInformacion[i]) state.servicioInformacion[i] = { entregable: '', plazo: '', porcentaje: '' };
+    state.servicioInformacion[i][f] = el.value;
+  });
+}
+
+function rerenderServiciosBody() {
+  collectServicioInputs();
+  const host = document.getElementById('reqRoot');
+  if (!host) return;
+  host.innerHTML = renderServicios();
+  attachServicios();
+}
+
+async function buscarItemsServicio() {
+  const q = (document.getElementById('srvItemSearch') || {}).value || '';
+  const box = document.getElementById('srvItemResults');
+  if (!box) return;
+  box.innerHTML = '<div class="text-muted small">Buscando…</div>';
+  try {
+    const resp = await api.list('catalogo', { page: 1, pageSize: 200, search: q.trim() });
+    const rows = (resp && resp.data) || [];
+    if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
+    box.innerHTML = `<div class="list-group mb-2" style="max-height: 300px; overflow-y: auto;">${rows.map((r) => `
+      <button type="button" class="list-group-item list-group-item-action srv-item-pick"
+        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-precio="${Number(r.precio_unitario) || 0}">
+        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')})</span>
+      </button>`).join('')}</div>`;
+    box.querySelectorAll('.srv-item-pick').forEach((b) => b.onclick = () => {
+      collectServicioInputs();
+      state.servicioItems.push({
+        item_bien: b.dataset.cod, nombre_item: b.dataset.nom,
+        unidad_medida: b.dataset.um, monto: Number(b.dataset.precio) || 0,
+      });
+      box.innerHTML = '';
+      document.getElementById('srvItemSearch').value = '';
+      rerenderServiciosBody();
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function attachServicios() {
+  const back = document.getElementById('reqBack');
+  if (back) back.onclick = () => {
+    if (reqShared.editingFromEvaluacion && reqShared.onBackToEvaluacion) {
+      reqShared.onBackToEvaluacion();
+    } else {
+      showSelect();
+    }
+  };
+  const save = document.getElementById('reqSave');
+  if (save) save.onclick = () => saveRequerimientoServicio();
+  const print = document.getElementById('reqPrint');
+  if (print) print.onclick = () => {
+    collectServicioInputs();
+    openPrintWindowServicios(buildState());
+  };
+
+  const cmnInput = document.getElementById('reqCmn');
+  if (cmnInput) {
+    cmnInput.onblur = () => {
+      const raw = cmnInput.value || '';
+      const num = parseInt(raw.replace(/\D/g, ''), 10);
+      cmnInput.value = isNaN(num) ? '' : String(num).padStart(5, '0');
+      state.cmn = cmnInput.value;
+    };
+    cmnInput.oninput = () => { cmnInput.value = cmnInput.value.replace(/\D/g, '').slice(0, 5); };
+  }
+
+  const areaBtn = document.getElementById('areaBtn');
+  if (areaBtn) areaBtn.onclick = buscarAreas;
+  const areaSearch = document.getElementById('areaSearch');
+  if (areaSearch) areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+
+  const srvItemBtn = document.getElementById('srvItemBtn');
+  if (srvItemBtn) srvItemBtn.onclick = buscarItemsServicio;
+  const srvItemSearch = document.getElementById('srvItemSearch');
+  if (srvItemSearch) srvItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsServicio(); } };
+
+  document.querySelectorAll('.srv-it-monto').forEach((el) => el.oninput = () => {
+    const i = Number(el.dataset.i);
+    if (state.servicioItems[i]) state.servicioItems[i].monto = Number(el.value) || 0;
+    const tot = document.getElementById('srvItemsTotal');
+    if (tot) tot.textContent = 'S/. ' + totalMontoServicios().toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  });
+  document.querySelectorAll('.srv-it-del').forEach((b) => b.onclick = () => {
+    collectServicioInputs();
+    state.servicioItems.splice(Number(b.dataset.i), 1);
+    rerenderServiciosBody();
+  });
+
+  // Tabla entregas
+  const srvEntAdd = document.getElementById('srvEntAdd');
+  if (srvEntAdd) srvEntAdd.onclick = () => {
+    collectServicioInputs();
+    ensureServicioEntregas().push({ plazo: '', condicion: '' });
+    rerenderServiciosBody();
+  };
+  document.querySelectorAll('.srv-ent-del').forEach((b) => b.onclick = () => {
+    if (state.servicioEntregas.length <= 1) return;
+    collectServicioInputs();
+    state.servicioEntregas.splice(Number(b.dataset.i), 1);
+    rerenderServiciosBody();
+  });
+
+  // Tabla información
+  const srvInfoAdd = document.getElementById('srvInfoAdd');
+  if (srvInfoAdd) srvInfoAdd.onclick = () => {
+    collectServicioInputs();
+    ensureServicioInformacion().push({ entregable: '', plazo: '', porcentaje: '' });
+    rerenderServiciosBody();
+  };
+  document.querySelectorAll('.srv-info-del').forEach((b) => b.onclick = () => {
+    if (state.servicioInformacion.length <= 1) return;
+    collectServicioInputs();
+    state.servicioInformacion.splice(Number(b.dataset.i), 1);
+    rerenderServiciosBody();
+  });
+}
+
+async function saveRequerimientoServicio() {
+  collectServicioInputs();
+  setMsg('info', 'Guardando requerimiento de servicios…');
+  const user = authService.getCurrentUser();
+  const usuario = (user && (user.dni || user.nombre)) || 'sistema';
+
+  const cmnRaw = state.cmn || '';
+  const cmnNum = parseInt(cmnRaw.replace(/\D/g, ''), 10);
+  const cmnFormatted = isNaN(cmnNum) ? '' : String(cmnNum).padStart(5, '0');
+  state.cmn = cmnFormatted;
+
+  const payloadObj = {
+    area: state.area,
+    objetivo: state.objetivo,
+    finalidad: state.finalidad,
+    servicioItems: state.servicioItems,
+    servicioGlosaOverrides: state.servicioGlosaOverrides,
+    servicioEntregas: state.servicioEntregas,
+    servicioInformacion: state.servicioInformacion,
+    header: state.header,
+    observaciones: state.observaciones || [],
+  };
+
+  const body = {
+    tipo: 'servicios',
+    cmn: cmnFormatted,
+    denominacion: state.denominacion,
+    area: state.area.nombre,
+    responsable: state.area.responsable,
+    payload: JSON.stringify(payloadObj),
+    usuario_modificacion: usuario,
+  };
+  if (!reqShared.editingFromEvaluacion) {
+    body.estado = 'Registrado';
+  }
+
+  try {
+    if (state.reqId) {
+      await requerimientosService.update(state.reqId, body);
+      state.cmn = cmnFormatted;
+    } else {
+      const created = await requerimientosService.create(body);
+      if (created && created.id) {
+        state.reqId = created.id;
+        if (!created.codigo) {
+          const codigo = `REQ-${String(created.id).padStart(5, '0')}`;
+          await requerimientosService.update(created.id, { codigo });
+          state.codigo = codigo;
+        } else {
+          state.codigo = created.codigo;
+        }
+      }
+    }
+    setMsg('success', 'Requerimiento de servicios guardado correctamente.');
+    if (state.view === 'select') {
+      loadList();
+    } else {
+      const codigoElement = document.querySelector('.bg-light.d-inline-block');
+      if (codigoElement) codigoElement.textContent = `REQUERIMIENTO N° ${state.codigo || '00000'}`;
+    }
+  } catch (e) {
+    setMsg('danger', `Error al guardar: ${e.message}`);
+  }
+}
+
+// =========================================================================
+// PDF SERVICIOS
+// =========================================================================
+function buildPrintHTMLServicios(s) {
+  const { logo, entidadNombre } = s.header || {};
+  const logoImg = logo ? `<img src="${logo}" style="max-height:70px;max-width:140px;object-fit:contain;">` : '';
+  const ent = entidadNombre || 'INSTITUTO NACIONAL DE SALUD';
+  const codigoRequerimiento = s.codigo || '00000';
+
+  // Items table (sin columna Monto)
+  const itemsRows = (s.servicioItems || []).map((it, i) => `
+    <tr><td style="text-align:center">${i + 1}</td>
+      <td>${esc(it.item_bien)}</td>
+      <td>${esc(it.nombre_item)}</td>
+      <td style="text-align:center">${esc(it.unidad_medida)}</td>
+    </tr>`).join('');
+
+  // Glosas TDR
+  const glosa = MODELO_SERVICIOS.map((item) => srvGlosaPrint(item, s)).join('');
+
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Requerimiento — ${esc(s.denominacion || 'Servicios')}</title>
+  <style>
+    * { box-sizing:border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color:#000; margin:0; padding:18px 26px; font-size:12px; line-height:1.4; }
+    .hdr { display:flex; align-items:center; border:1px solid #000; margin-bottom:14px; }
+    .hdr .logo { width:170px; border-right:1px solid #000; padding:8px; text-align:center; }
+    .hdr .title { flex:1; text-align:center; padding:8px; }
+    .hdr .title h1 { font-size:14px; margin:0 0 4px; }
+    .hdr .title h2 { font-size:13px; margin:8px 0 0 0; font-weight:bold; }
+    .hdr .title h3 { font-size:12px; margin:4px 0 0 0; font-weight:normal; text-transform:uppercase; }
+    .hdr .title .req-num { font-size:12px; margin:10px 0 0 0; font-weight:bold; background:#f0f0f0; display:inline-block; padding:4px 12px; border-radius:4px; }
+    h3.sec { font-size:12px; margin:14px 0 4px; }
+    .fld { margin-bottom:8px; }
+    .lbl { font-weight:bold; }
+    .box { border:1px solid #000; padding:4px 7px; min-height:22px; white-space:pre-wrap; word-break:break-word; }
+    table { width:100%; border-collapse:collapse; margin:6px 0; }
+    th, td { border:1px solid #000; padding:4px 6px; font-size:11px; vertical-align:top; }
+    th { background:#eee; }
+    .firma { display:flex; justify-content:space-around; text-align:center; margin-top:120px; }
+    .firma .l { border-top:1px solid #000; width:40%; padding-top:4px; }
+    .pagebreak { page-break-before: always; }
+    @media print { body { padding:10px 18px; } button { display:none; } }
+    .bar { text-align:center; margin-bottom:14px; }
+    .bar button { padding:8px 18px; font-size:13px; cursor:pointer; }
+  </style></head><body>
+  <div class="bar"><button onclick="window.print()">🖨 Imprimir / Guardar como PDF</button></div>
+  <div class="hdr"><div class="logo">${logoImg}</div>
+    <div class="title">
+      <h1>${esc(ent)}</h1>
+      <h2>ANEXO N° 01</h2>
+      <h3>TÉRMINOS DE REFERENCIA PARA CONTRATACIÓN DE SERVICIOS EN GENERAL</h3>
+      <div class="req-num">REQUERIMIENTO N° ${esc(codigoRequerimiento)}</div>
+      ${s.cmn ? `<div style="margin-top:6px; font-size:12px; font-weight:bold;">CMN N° ${esc(s.cmn)}</div>` : ''}
+    </div>
+  </div>
+
+  <h3 class="sec">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL SERVICIO</h3>
+  <div class="fld"><div class="box">${esc((s.area && s.area.nombre) || '')}${s.area && s.area.responsable ? ' — Responsable: ' + esc(s.area.responsable) : ''}</div></div>
+
+  <h3 class="sec">2. DENOMINACIÓN DE LA CONTRATACIÓN</h3>
+  <div class="fld"><div class="box">${esc(s.denominacion || '')}</div></div>
+
+  <h3 class="sec">3. OBJETIVO Y/O FINALIDAD PÚBLICA</h3>
+  <div class="fld"><div class="lbl">3.1. Objetivo</div><div class="box">${esc(s.objetivo || '')}</div></div>
+  <div class="fld"><div class="lbl">3.2. Finalidad</div><div class="box">${esc(s.finalidad || '')}</div></div>
+
+  <h3 class="sec">4. DESCRIPCIÓN DEL SERVICIO</h3>
+  <div class="fld"><div class="lbl">4.1. Requerimiento</div>
+    <table><thead><tr><th style="text-align:center">N°</th><th>Código SIGAMEF</th><th>Descripción del Servicio</th><th style="text-align:center">Unidad de Medida</th></tr></thead>
+    <tbody>${itemsRows || '<tr><td colspan="4" style="text-align:center">—</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  ${glosa}
+
+  <div class="firma">
+    <div class="l">FIRMA DEL SUB DIRECTOR Y/O<br>JEFE DE UNIDAD</div>
+    <div class="l">FIRMA DEL JEFE Y/O<br>DIRECTOR GENERAL</div>
+  </div>
+  </body></html>`;
+}
+
+function srvGlosaTituloPrint(item, s) {
+  const o = (s.servicioGlosaOverrides || {})[item.key];
+  return o && o.titulo != null && o.titulo !== '' ? o.titulo : (item.titulo || '');
+}
+function srvGlosaContPrint(item, s) {
+  const o = (s.servicioGlosaOverrides || {})[item.key];
+  if (o && o.contenido != null && o.contenido !== '') return o.contenido;
+  return item.default || '';
+}
+
+function srvGlosaPrint(item, s) {
+  if (item.kind === 'firmas') return '';
+  const pre = item.label ? `${item.label}. ` : '';
+  if (item.kind === 'heading') return `<h3 class="sec">${esc(pre)}${esc(srvGlosaTituloPrint(item, s))}</h3>`;
+  if (item.kind === 'tabla_entregas') {
+    const ents = (s.servicioEntregas || []);
+    const rows = ents.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(e.plazo)}</td><td>${esc(e.condicion)}</td></tr>`).join('');
+    return `<h3 class="sec">${esc(pre)}${esc(srvGlosaTituloPrint(item, s))}</h3>
+      <table><thead><tr><th style="text-align:center">N° Entrega</th><th>Plazo de Entrega</th><th>Condición de entrega</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" style="text-align:center">—</td></tr>'}</tbody></table>`;
+  }
+  if (item.kind === 'tabla_informacion') {
+    const info = (s.servicioInformacion || []);
+    const rows = info.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(e.entregable)}</td><td>${esc(e.plazo)}</td><td>${esc(e.porcentaje)}</td></tr>`).join('');
+    return `<h3 class="sec">${esc(pre)}${esc(srvGlosaTituloPrint(item, s))}</h3>
+      <table><thead><tr><th style="text-align:center">N°</th><th>Entregable</th><th>Plazo del entregable</th><th>PORCENTAJE</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4" style="text-align:center">—</td></tr>'}</tbody></table>`;
+  }
+  return `<h3 class="sec">${esc(pre)}${esc(srvGlosaTituloPrint(item, s))}</h3><div class="box">${esc(srvGlosaContPrint(item, s))}</div>`;
+}
+
+function openPrintWindowServicios(s) {
+  const win = window.open('', '_blank');
+  if (!win) { alert('Permita las ventanas emergentes para generar el documento.'); return; }
+  win.document.open();
+  win.document.write(buildPrintHTMLServicios(s));
+  win.document.close();
 }
 
 // =========================================================================
