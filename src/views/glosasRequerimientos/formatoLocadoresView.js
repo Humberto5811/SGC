@@ -13,7 +13,7 @@ let state = {
   docId: null,
   overrides: {},
   entregas: [],
-  plazos: [],
+  informacion: [],
   perfil: {
     formacion_academica: 'Profesional',
     titulo_profesional: '',
@@ -78,7 +78,7 @@ function tituloHtml(item) {
 function renderSection(item) {
   if (item.kind === 'firmas') return renderFirmas();
   if (item.kind === 'tabla_entregas') return renderTablaEntregas(item);
-  if (item.kind === 'tabla_plazos') return renderTablaPlazos(item);
+  if (item.kind === 'tabla_informacion') return renderTablaPlazos(item);
   if (item.kind === 'perfil_academico') return renderPerfilAcademico(item);
   if (item.kind === 'select_modalidad') return renderModalidad(item);
 
@@ -229,7 +229,7 @@ function renderTablaEntregas(item) {
 // ========== TABLA 8.2.2: PLAZO PARA PRESENTAR ENTREGABLES ==========
 function renderTablaPlazos(item) {
   const ro = state.editing ? '' : 'disabled';
-  const plazos = state.plazos && state.plazos.length ? state.plazos
+  const plazos = state.informacion && state.informacion.length ? state.informacion
     : [{ entregable: '', plazo: '' }];
 
   const rows = plazos.map((e, i) => `
@@ -307,10 +307,10 @@ function ensureEntregas() {
 }
 
 function ensurePlazos() {
-  if (!Array.isArray(state.plazos) || !state.plazos.length) {
-    state.plazos = [{ entregable: '', plazo: '' }];
+  if (!Array.isArray(state.informacion) || !state.informacion.length) {
+    state.informacion = [{ entregable: '', plazo: '' }];
   }
-  return state.plazos;
+  return state.informacion;
 }
 
 function getSelectedIndices(checkboxClass) {
@@ -440,7 +440,7 @@ async function load() {
         const parsed = JSON.parse(docRow.contenido || '{}');
         state.overrides = parsed.overrides || {};
         state.entregas = Array.isArray(parsed.entregas) ? parsed.entregas : [];
-        state.plazos = Array.isArray(parsed.plazos) ? parsed.plazos : [];
+        state.informacion = Array.isArray(parsed.informacion) ? parsed.informacion : (Array.isArray(parsed.plazos) ? parsed.plazos : []);
         state.perfil = parsed.perfil || state.perfil;
         state.modalidad = parsed.modalidad || 'Presencial';
       } catch (_) { /* no-JSON */ }
@@ -496,8 +496,8 @@ async function save() {
   const usuario = (user && (user.dni || user.nombre)) || 'sistema';
 
   const entregas = (state.entregas || []).map((e) => ({ plazo: e.plazo || '', condicion: e.condicion || '' }));
-  const plazos = (state.plazos || []).map((e) => ({ entregable: e.entregable || '', plazo: e.plazo || '' }));
-  const contenido = JSON.stringify({ overrides: state.overrides, entregas, plazos, perfil: state.perfil, modalidad: state.modalidad });
+  const informacion = (state.informacion || []).map((e) => ({ entregable: e.entregable || '', plazo: e.plazo || '' }));
+  const contenido = JSON.stringify({ overrides: state.overrides, entregas, informacion, perfil: state.perfil, modalidad: state.modalidad });
 
   try {
     if (state.docId) {
