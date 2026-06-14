@@ -38,8 +38,9 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: (path) => request(path, { method: 'DELETE' }),
-  list: (resource, { page = 1, pageSize = 50, search = '' } = {}) => {
+  list: (resource, { page = 1, pageSize = 50, search = '', ...extra } = {}) => {
     const q = new URLSearchParams({ page, pageSize, search });
+    Object.entries(extra).forEach(([k, v]) => { if (v != null && v !== '') q.set(k, v); });
     return request(`/${resource}?${q.toString()}`);
   },
   create: (resource, body) => request(`/${resource}`, { method: 'POST', body: JSON.stringify(body) }),

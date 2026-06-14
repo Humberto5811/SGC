@@ -53,7 +53,7 @@ let state = {
   locadorItems: [],        // { item_bien, nombre_item, unidad_medida, monto }
   locadorGlosaOverrides: {},
   locadorEntregas: [],     // tabla 8.2.1
-  locadorPlazos: [],       // tabla 8.2.2
+  locadorInformacion: [],       // tabla 8.2.2
   locadorPerfil: { formacion: '', titulo: '', colegiado_habilitado: '', serum: '', otros: '' },
   locadorModalidad: '',
 };
@@ -64,6 +64,12 @@ let lastListRows = [];
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ---------- Debounce para typeahead ----------
+function debounce(fn, ms) {
+  let timer;
+  return function (...args) { clearTimeout(timer); timer = setTimeout(() => fn.apply(this, args), ms); };
 }
 
 // ---------- Helpers de glosas (c…18) ----------
@@ -635,12 +641,13 @@ async function buscarAreas() {
   const q = (document.getElementById('areaSearch') || {}).value || '';
   const box = document.getElementById('areaResults');
   if (!box) return;
+  if (q.trim().length < 2) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="text-muted small">Buscando…</div>';
   try {
-    const resp = await api.list('areas', { page: 1, pageSize: 10, search: q.trim() });
+    const resp = await api.list('areas', { page: 1, pageSize: 15, search: q.trim() });
     const rows = (resp && resp.data) || [];
     if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Metas y Áreas.</div>'; return; }
-    box.innerHTML = `<div class="list-group mb-2">${rows.map((r) => `
+    box.innerHTML = `<div class="list-group mb-2" style="max-height:200px; overflow-y:auto;">${rows.map((r) => `
       <button type="button" class="list-group-item list-group-item-action area-pick"
         data-codigo="${esc(r.codigo)}" data-nombre="${esc(r.nombre)}" data-resp="${esc(r.responsable || '')}">
         <strong>${esc(r.codigo || '')}</strong> — ${esc(r.nombre || '')} <span class="text-muted small">(${esc(r.responsable || 'sin responsable')})</span>
@@ -650,19 +657,22 @@ async function buscarAreas() {
       document.getElementById('areaNombre').value = state.area.nombre;
       document.getElementById('areaResponsable').value = state.area.responsable;
       box.innerHTML = '';
+      document.getElementById('areaSearch').value = '';
     });
   } catch (e) {
     box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
   }
 }
+const buscarAreasDebounced = debounce(buscarAreas, 300);
 
 async function buscarItems() {
   const q = (document.getElementById('itemSearch') || {}).value || '';
   const box = document.getElementById('itemResults');
   if (!box) return;
+  if (q.trim().length < 2) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="text-muted small">Buscando…</div>';
   try {
-    const resp = await api.list('catalogo', { page: 1, pageSize: 200, search: q.trim() });
+    const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q.trim())}&tipo_bien=B&limit=15`);
     const rows = (resp && resp.data) || [];
     if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
     
@@ -699,6 +709,7 @@ async function buscarItems() {
     box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
   }
 }
+const buscarItemsDebounced = debounce(buscarItems, 300);
 
 // Re-renderiza el formulario completo conservando lo escrito.
 function rerenderBienesBody() {
@@ -779,12 +790,18 @@ function attachBienes() {
   const areaBtn = document.getElementById('areaBtn');
   if (areaBtn) areaBtn.onclick = buscarAreas;
   const areaSearch = document.getElementById('areaSearch');
-  if (areaSearch) areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  if (areaSearch) {
+    areaSearch.oninput = buscarAreasDebounced;
+    areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  }
 
   const itemBtn = document.getElementById('itemBtn');
   if (itemBtn) itemBtn.onclick = buscarItems;
   const itemSearch = document.getElementById('itemSearch');
-  if (itemSearch) itemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItems(); } };
+  if (itemSearch) {
+    itemSearch.oninput = buscarItemsDebounced;
+    itemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItems(); } };
+  }
 
   document.querySelectorAll('.req-it').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
@@ -1370,12 +1387,13 @@ async function buscarItemsServicio() {
   const q = (document.getElementById('srvItemSearch') || {}).value || '';
   const box = document.getElementById('srvItemResults');
   if (!box) return;
+  if (q.trim().length < 2) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="text-muted small">Buscando…</div>';
   try {
-    const resp = await api.list('catalogo', { page: 1, pageSize: 200, search: q.trim() });
+    const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q.trim())}&tipo_bien=S&limit=15`);
     const rows = (resp && resp.data) || [];
     if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
-    box.innerHTML = `<div class="list-group mb-2" style="max-height: 300px; overflow-y: auto;">${rows.map((r) => `
+    box.innerHTML = `<div class="list-group mb-2" style="max-height: 200px; overflow-y: auto;">${rows.map((r) => `
       <button type="button" class="list-group-item list-group-item-action srv-item-pick"
         data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-precio="${Number(r.precio_unitario) || 0}">
         <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')})</span>
@@ -1394,6 +1412,7 @@ async function buscarItemsServicio() {
     box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
   }
 }
+const buscarItemsServicioDebounced = debounce(buscarItemsServicio, 300);
 
 function attachServicios() {
   const back = document.getElementById('reqBack');
@@ -1426,12 +1445,18 @@ function attachServicios() {
   const areaBtn = document.getElementById('areaBtn');
   if (areaBtn) areaBtn.onclick = buscarAreas;
   const areaSearch = document.getElementById('areaSearch');
-  if (areaSearch) areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  if (areaSearch) {
+    areaSearch.oninput = buscarAreasDebounced;
+    areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  }
 
   const srvItemBtn = document.getElementById('srvItemBtn');
   if (srvItemBtn) srvItemBtn.onclick = buscarItemsServicio;
   const srvItemSearch = document.getElementById('srvItemSearch');
-  if (srvItemSearch) srvItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsServicio(); } };
+  if (srvItemSearch) {
+    srvItemSearch.oninput = buscarItemsServicioDebounced;
+    srvItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsServicio(); } };
+  }
 
   document.querySelectorAll('.srv-it-monto').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
@@ -1575,8 +1600,8 @@ function buildPrintHTMLServicios(s) {
     .hdr .logo { width:170px; border-right:1px solid #000; padding:8px; text-align:center; }
     .hdr .title { flex:1; text-align:center; padding:8px; }
     .hdr .title h1 { font-size:14px; margin:0 0 4px; }
-    .hdr .title h2 { font-size:13px; margin:8px 0 0 0; font-weight:bold; }
-    .hdr .title h3 { font-size:12px; margin:4px 0 0 0; font-weight:normal; text-transform:uppercase; }
+    .hdr .title h2 { font-size:12px; margin:8px 0 0 0; font-weight:bold; }
+    .hdr .title h3 { font-size:12px; margin:4px 0 0 0; font-weight:bold; text-transform:uppercase; }
     .hdr .title .req-num { font-size:12px; margin:10px 0 0 0; font-weight:bold; background:#f0f0f0; display:inline-block; padding:4px 12px; border-radius:4px; }
     h3.sec { font-size:12px; margin:14px 0 4px; }
     .fld { margin-bottom:8px; }
@@ -1681,11 +1706,11 @@ function ensureLocadorEntregas() {
 
 const DOC_TITULO_LOC = '__FORMATO_LOCADORES_DOC__';
 
-function ensureLocadorPlazos() {
-  if (!Array.isArray(state.locadorPlazos) || !state.locadorPlazos.length) {
-    state.locadorPlazos = [{ entregable: '', plazo: '' }];
+function ensureLocadorInformacion() {
+  if (!Array.isArray(state.locadorInformacion) || !state.locadorInformacion.length) {
+    state.locadorInformacion = [{ entregable: '', plazo: '' }];
   }
-  return state.locadorPlazos;
+  return state.locadorInformacion;
 }
 
 async function loadLocadorGlosaDefaults() {
@@ -1698,7 +1723,7 @@ async function loadLocadorGlosaDefaults() {
         const parsed = JSON.parse(docRow.contenido || '{}');
         if (!Object.keys(state.locadorGlosaOverrides).length) state.locadorGlosaOverrides = parsed.overrides || {};
         if (!state.locadorEntregas.length && Array.isArray(parsed.entregas)) state.locadorEntregas = parsed.entregas;
-        if (!state.locadorPlazos.length && Array.isArray(parsed.plazos)) state.locadorPlazos = parsed.plazos;
+        if (!state.locadorInformacion.length && (Array.isArray(parsed.informacion) || Array.isArray(parsed.plazos))) state.locadorInformacion = parsed.informacion || parsed.plazos;
         if (parsed.perfil) state.locadorPerfil = parsed.perfil;
         if (parsed.modalidad) state.locadorModalidad = parsed.modalidad;
       } catch (_) { /* contenido no-JSON */ }
@@ -1719,8 +1744,8 @@ function applyPayloadLocador(row) {
     state.locadorItems = p.locadorItems || [];
     state.locadorGlosaOverrides = p.locadorGlosaOverrides || state.locadorGlosaOverrides;
     state.locadorEntregas = p.locadorEntregas || [];
-    state.locadorPlazos = p.locadorPlazos || [];
-    state.locadorPerfil = p.locadorPerfil || { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' };
+    state.locadorInformacion = p.locadorInformacion || p.locadorPlazos || [];
+    state.locadorPerfil = p.locadorPerfil || { formacion: '', titulo: '', colegiado_habilitado: '', serum: '', otros: '' };
     state.locadorModalidad = p.locadorModalidad || '';
     state.observaciones = p.observaciones || [];
   } catch (_) {}
@@ -1852,7 +1877,7 @@ function renderLocadorItemsTable() {
 function renderLocadorGlosaSection(item) {
   if (item.kind === 'firmas') return renderFirmas();
   if (item.kind === 'tabla_entregas') return renderLocTablaEntregas(item);
-  if (item.kind === 'tabla_plazos') return renderLocTablaPlazos(item);
+  if (item.kind === 'tabla_informacion') return renderLocTablaInformacion(item);
   if (item.kind === 'perfil_academico') return renderLocPerfilAcademico(item);
   if (item.kind === 'select_modalidad') return renderLocModalidad(item);
 
@@ -1958,8 +1983,8 @@ function renderLocTablaEntregas(item) {
     </div>`;
 }
 
-function renderLocTablaPlazos(item) {
-  const plazos = ensureLocadorPlazos();
+function renderLocTablaInformacion(item) {
+  const plazos = ensureLocadorInformacion();
   const rows = plazos.map((e, i) => `
     <tr>
       <td class="text-center align-middle">${i + 1}</td>
@@ -2044,22 +2069,25 @@ async function buscarItemsLocador() {
   const q = (document.getElementById('locItemSearch') || {}).value || '';
   const box = document.getElementById('locItemResults');
   if (!box) return;
+  if (q.trim().length < 2) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="text-muted small">Buscando…</div>';
   try {
-    const resp = await api.list('catalogo', { page: 1, pageSize: 200, search: q.trim() });
+    const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q.trim())}&tipo_bien=S&limit=15`);
     const items = (resp && resp.data) || [];
     if (!items.length) { box.innerHTML = '<div class="text-warning small">Sin resultados.</div>'; return; }
-    box.innerHTML = `<div class="list-group list-group-flush" style="max-height:180px; overflow-y:auto;">${items.map((it) => `
+    box.innerHTML = `<div class="list-group list-group-flush" style="max-height:200px; overflow-y:auto;">${items.map((it) => `
       <button type="button" class="list-group-item list-group-item-action py-1 loc-add-item" data-code="${esc(it.item_bien || it.codigo)}" data-name="${esc(it.nombre_item || it.descripcion || '')}" data-unit="${esc(it.unidad_medida || '')}">
         <strong>${esc(it.item_bien || it.codigo)}</strong> — ${esc(it.nombre_item || it.descripcion)} <span class="text-muted">(${esc(it.unidad_medida || '')})</span>
       </button>`).join('')}</div>`;
     box.querySelectorAll('.loc-add-item').forEach((b) => b.onclick = () => {
       state.locadorItems.push({ item_bien: b.dataset.code, nombre_item: b.dataset.name, unidad_medida: b.dataset.unit, monto: 0 });
       box.innerHTML = '';
+      document.getElementById('locItemSearch').value = '';
       rerenderLocadoresBody();
     });
   } catch (e) { box.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`; }
 }
+const buscarItemsLocadorDebounced = debounce(buscarItemsLocador, 300);
 
 function attachLocadores() {
   // Volver
@@ -2078,16 +2106,33 @@ function attachLocadores() {
     collectLocadorInputs();
     openPrintWindowLocadores(buildState());
   };
+  // CMN
+  const cmnInput = document.getElementById('reqCmn');
+  if (cmnInput) {
+    cmnInput.onblur = () => {
+      const raw = cmnInput.value || '';
+      const num = parseInt(raw.replace(/\D/g, ''), 10);
+      cmnInput.value = isNaN(num) ? '' : String(num).padStart(5, '0');
+      state.cmn = cmnInput.value;
+    };
+    cmnInput.oninput = () => { cmnInput.value = cmnInput.value.replace(/\D/g, '').slice(0, 5); };
+  }
   // Buscar área
   const areaBtn = document.getElementById('areaBtn');
   const areaSearch = document.getElementById('areaSearch');
   if (areaBtn) areaBtn.onclick = buscarAreas;
-  if (areaSearch) areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  if (areaSearch) {
+    areaSearch.oninput = buscarAreasDebounced;
+    areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
+  }
   // Buscar items
   const locItemBtn = document.getElementById('locItemBtn');
   const locItemSearch = document.getElementById('locItemSearch');
   if (locItemBtn) locItemBtn.onclick = buscarItemsLocador;
-  if (locItemSearch) locItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsLocador(); } };
+  if (locItemSearch) {
+    locItemSearch.oninput = buscarItemsLocadorDebounced;
+    locItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsLocador(); } };
+  }
   // Monto inputs: actualizar total en vivo
   document.querySelectorAll('.loc-it-monto').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
@@ -2121,22 +2166,22 @@ function attachLocadores() {
   const locPlzAdd = document.getElementById('locPlzAdd');
   if (locPlzAdd) locPlzAdd.onclick = () => {
     collectLocadorInputs();
-    ensureLocadorPlazos().push({ entregable: '', plazo: '' });
+    ensureLocadorInformacion().push({ entregable: '', plazo: '' });
     rerenderLocadoresBody();
   };
   document.querySelectorAll('.loc-plz-del').forEach((b) => {
     b.onclick = (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       const idx = Number(b.dataset.i);
-      if (state.locadorPlazos.length <= 1) return;
+      if (state.locadorInformacion.length <= 1) return;
       collectLocadorInputs();
-      state.locadorPlazos.splice(idx, 1);
+      state.locadorInformacion.splice(idx, 1);
       rerenderLocadoresBody(true);
     };
   });
   document.querySelectorAll('.loc-plz').forEach((inp) => {
     inp.oninput = () => {
-      const plazos = ensureLocadorPlazos();
+      const plazos = ensureLocadorInformacion();
       const i = Number(inp.dataset.i);
       const f = inp.dataset.f;
       if (!plazos[i]) plazos[i] = { entregable: '', plazo: '' };
@@ -2160,7 +2205,7 @@ async function saveRequerimientoLocador() {
     locadorItems: state.locadorItems,
     locadorGlosaOverrides: state.locadorGlosaOverrides,
     locadorEntregas: state.locadorEntregas,
-    locadorPlazos: state.locadorPlazos,
+    locadorInformacion: state.locadorInformacion,
     locadorPerfil: state.locadorPerfil,
     locadorModalidad: state.locadorModalidad,
     observaciones: state.observaciones || [],
@@ -2225,8 +2270,8 @@ function buildPrintHTMLLocadores(s) {
   .logo img { max-height: 60px; }
   .title { text-align: center; flex: 1; }
   .title h1 { font-size: 14px; margin: 0; }
-  .title h2 { font-size: 13px; margin: 8px 0 0 0; font-weight: bold; }
-  .title h3 { font-size: 12px; margin: 4px 0 0 0; font-weight: normal; text-transform: uppercase; }
+  .title h2 { font-size: 12px; margin: 8px 0 0 0; font-weight: bold; }
+  .title h3 { font-size: 12px; margin: 4px 0 0 0; font-weight: bold; text-transform: uppercase; }
   .req-num { font-size: 12px; font-weight: bold; margin-top: 8px; }
   .sec { font-size: 11px; font-weight: bold; margin: 14px 0 4px; }
   .box { white-space: pre-wrap; margin-bottom: 8px; }
@@ -2300,8 +2345,8 @@ function locGlosaPrint(item, s) {
       <table><thead><tr><th>N°</th><th>Plazo del entregable</th><th>Condición de entrega</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="3" style="text-align:center">—</td></tr>'}</tbody></table>`;
   }
-  if (item.kind === 'tabla_plazos') {
-    const plazos = s.locadorPlazos || [];
+  if (item.kind === 'tabla_informacion') {
+    const plazos = s.locadorInformacion || [];
     const rows = plazos.map((e, i) => `<tr><td style="text-align:center">${i + 1}</td><td>${esc(e.entregable || '')}</td><td>${esc(e.plazo || '')}</td></tr>`).join('');
     return `<h3 class="sec">${esc(pre)}${esc(titulo)}</h3>
       <table><thead><tr><th>N°</th><th>Entregable</th><th>Plazo de presentación del entregable</th></tr></thead>
@@ -2353,8 +2398,8 @@ function buildPrintHTML(s) {
     .hdr .logo { width:170px; border-right:1px solid #000; padding:8px; text-align:center; }
     .hdr .title { flex:1; text-align:center; padding:8px; }
     .hdr .title h1 { font-size:14px; margin:0 0 4px; }
-    .hdr .title h2 { font-size:13px; margin:8px 0 0 0; font-weight:bold; }
-    .hdr .title h3 { font-size:12px; margin:4px 0 0 0; font-weight:normal; text-transform:uppercase; }
+    .hdr .title h2 { font-size:12px; margin:8px 0 0 0; font-weight:bold; }
+    .hdr .title h3 { font-size:12px; margin:4px 0 0 0; font-weight:bold; text-transform:uppercase; }
     .hdr .title .req-num { font-size:12px; margin:10px 0 0 0; font-weight:bold; background:#f0f0f0; display:inline-block; padding:4px 12px; border-radius:4px; }
     h3.sec { font-size:12px; margin:14px 0 4px; }
     .fld { margin-bottom:8px; }
