@@ -14,6 +14,8 @@ import { renderRegistroRequerimientoView, initRegistroRequerimientoView } from '
 import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } from './views/requerimiento/evaluacionRequerimientoView.js';
 
 // Contrataciones
+import { renderDecView, initDecView } from './views/contratacion/decView.js';
+import { renderProgramacionView, initProgramacionView } from './views/contratacion/programacionView.js';
 import { renderActosPreparativosView, initActosPreparativosView } from './views/contratacion/actosPreparativosView.js';
 import { renderInvitacionesView, initInvitacionesView } from './views/contratacion/invitacionesView.js';
 import { renderConsultasView, initConsultasView } from './views/contratacion/consultasView.js';
@@ -66,6 +68,8 @@ const routes = {
 
   // ========== CONTRATACIONES ==========
   'contrataciones': { render: renderActosPreparativosView, init: initActosPreparativosView },
+  'dec/dec': { render: renderDecView, init: initDecView },
+  'dec/programacion': { render: renderProgramacionView, init: initProgramacionView },
   'dec/actos': { render: renderActosPreparativosView, init: initActosPreparativosView },
   'dec/invitaciones': { render: renderInvitacionesView, init: initInvitacionesView },
   'dec/consultas': { render: renderConsultasView, init: initConsultasView },

@@ -20,6 +20,7 @@ import entidadRouter from './routes/entidad.js';
 import fichanetRouter from './routes/fichanet.js';
 import adjuntosRouter from './routes/adjuntos.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
+import contratacionesRouter from './routes/contrataciones.js';
 import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
@@ -304,6 +305,9 @@ app.use('/api/logotipos', crudRouter({
 
 // Rutas especiales para requerimientos ANTES del CRUD genérico
 app.use('/api/requerimientos', requerimientosEspecialRouter);
+
+// Contrataciones (DEC y Programación)
+app.use('/api/contrataciones', contratacionesRouter);
 
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',

@@ -50,7 +50,19 @@ async function renderApp() {
       content = renderFormBienesView();
       setTimeout(() => initFormBienesView(), 50);
     }
-    // ========== CONTRATACIONES Y SUBRUTAS ==========
+    // ========== CONTRATACIONES — DEC ==========
+    else if (currentRoute === 'dec/dec') {
+      const module = await import('./views/contratacion/decView.js');
+      content = module.renderDecView();
+      setTimeout(() => module.initDecView(), 50);
+    }
+    // ========== CONTRATACIONES — Programación ==========
+    else if (currentRoute === 'dec/programacion') {
+      const module = await import('./views/contratacion/programacionView.js');
+      content = module.renderProgramacionView();
+      setTimeout(() => module.initProgramacionView(), 50);
+    }
+    // ========== CONTRATACIONES Y SUBRUTAS (legacy) ==========
     else if (currentRoute === 'contrataciones' || 
              currentRoute === 'dec/actos' ||
              currentRoute === 'dec/invitaciones' ||

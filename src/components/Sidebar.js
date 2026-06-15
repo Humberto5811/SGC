@@ -14,6 +14,8 @@
     { 
       label: 'Contrataciones', icon: 'bi-cart-check', roles: ['dec', 'admin'],
       submenu: [
+        { path: 'dec/dec', label: 'DEC', icon: 'bi-file-earmark-check' },
+        { path: 'dec/programacion', label: 'Programación', icon: 'bi-calendar-check' },
         { path: 'dec/actos', label: 'Actos Preparativos', icon: 'bi-file-earmark-text' },
         { path: 'dec/invitaciones', label: 'Invitaciones', icon: 'bi-envelope' },
         { path: 'dec/consultas', label: 'Consultas', icon: 'bi-question-circle' },
