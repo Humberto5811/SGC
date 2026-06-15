@@ -72,6 +72,62 @@ function debounce(fn, ms) {
   return function (...args) { clearTimeout(timer); timer = setTimeout(() => fn.apply(this, args), ms); };
 }
 
+// ---------- Autocomplete compartido Catálogo SIGAMEF ----------
+// Busca en /catalogo/search, prioriza resultados que comienzan con el texto,
+// muestra scroll vertical con todos los resultados, y ejecuta onSelect al elegir.
+// PRIORIDAD 1: descripción/código comienza con el texto buscado
+// PRIORIDAD 2: descripción/código contiene el texto en cualquier posición
+function autocompleteCatalogo({ inputId, resultsId, tipoBien, onSelect, renderItem }) {
+  const input = document.getElementById(inputId);
+  const box = document.getElementById(resultsId);
+  if (!input || !box) return;
+
+  const handler = debounce(async () => {
+    const q = input.value.trim();
+    if (q.length < 2) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="text-muted small">Buscando…</div>';
+    try {
+      const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q)}&tipo_bien=${tipoBien}&limit=200`);
+      let rows = (resp && resp.data) || [];
+      if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
+
+      // Priorización client-side como respaldo a la del backend
+      const lowerQ = q.toLowerCase();
+      rows.sort((a, b) => {
+        const aName = (a.nombre_item || '').toLowerCase();
+        const bName = (b.nombre_item || '').toLowerCase();
+        const aCode = (a.item_bien || '').toLowerCase();
+        const bCode = (b.item_bien || '').toLowerCase();
+
+        // Prioridad 1: comienza con el texto buscado (en nombre o código)
+        const aStarts = aName.startsWith(lowerQ) || aCode.startsWith(lowerQ);
+        const bStarts = bName.startsWith(lowerQ) || bCode.startsWith(lowerQ);
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+
+        // Dentro del mismo grupo, orden alfabético por nombre
+        return aName.localeCompare(bName);
+      });
+
+      const itemsHtml = rows.map((r) => renderItem(r)).join('');
+      box.innerHTML = `<div class="list-group mb-2" style="max-height: 300px; overflow-y: auto;">${itemsHtml}</div>`;
+
+      box.querySelectorAll('.autocomplete-item').forEach((el) => {
+        el.onclick = () => {
+          onSelect(el.dataset);
+          box.innerHTML = '';
+          input.value = '';
+        };
+      });
+    } catch (e) {
+      box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
+    }
+  }, 300);
+
+  input.oninput = handler;
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); handler(); } };
+}
+
 // ---------- Helpers de glosas (c…18) ----------
 function tituloDe(item) {
   const o = state.glosaOverrides[item.key];
@@ -665,51 +721,9 @@ async function buscarAreas() {
 }
 const buscarAreasDebounced = debounce(buscarAreas, 300);
 
-async function buscarItems() {
-  const q = (document.getElementById('itemSearch') || {}).value || '';
-  const box = document.getElementById('itemResults');
-  if (!box) return;
-  if (q.trim().length < 2) { box.innerHTML = ''; return; }
-  box.innerHTML = '<div class="text-muted small">Buscando…</div>';
-  try {
-    const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q.trim())}&tipo_bien=B&limit=15`);
-    const rows = (resp && resp.data) || [];
-    if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
-    
-    // Construir badges para cada producto
-    const badgesFn = (r) => {
-      let badges = '';
-      if (r.ficha_tecnica) badges += '<span class="badge bg-info ms-1">F.T.</span>';
-      if (r.producto_controlado) badges += '<span class="badge bg-danger ms-1">P.C.</span>';
-      if (r.acuerdo_marco) badges += '<span class="badge bg-success ms-1">A.M.</span>';
-      return badges;
-    };
-    
-    box.innerHTML = `<div class="list-group mb-2" style="max-height: 300px; overflow-y: auto;">${rows.map((r) => `
-      <button type="button" class="list-group-item list-group-item-action item-pick"
-        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-ft="${r.ficha_tecnica ? '1' : '0'}" data-pc="${r.producto_controlado ? '1' : '0'}" data-am="${r.acuerdo_marco ? '1' : '0'}" data-precio="${Number(r.precio_unitario) || 0}">
-        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')}) S/. ${Number(r.precio_unitario || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-        ${badgesFn(r)}
-      </button>`).join('')}</div>`;
-    box.querySelectorAll('.item-pick').forEach((b) => b.onclick = () => {
-      collectInputs();
-      state.items.push({
-        item_bien: b.dataset.cod, nombre_item: b.dataset.nom,
-        unidad_medida: b.dataset.um, cantidad: 1,
-        ficha_tecnica: b.dataset.ft === '1',
-        producto_controlado: b.dataset.pc === '1',
-        acuerdo_marco: b.dataset.am === '1',
-        precio_unitario: Number(b.dataset.precio) || 0,
-      });
-      box.innerHTML = '';
-      document.getElementById('itemSearch').value = '';
-      rerenderBienesBody();
-    });
-  } catch (e) {
-    box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
-  }
-}
-const buscarItemsDebounced = debounce(buscarItems, 300);
+// NOTA: buscarItems, buscarItemsServicio, buscarItemsLocador y sus debounced
+// han sido reemplazados por la función compartida autocompleteCatalogo
+// que se configura directamente en attachBienes/attachServicios/attachLocadores.
 
 // Re-renderiza el formulario completo conservando lo escrito.
 function rerenderBienesBody() {
@@ -795,13 +809,42 @@ function attachBienes() {
     areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
   }
 
+  // Autocomplete Catálogo SIGAMEF para Bienes (tipo_bien = B)
+  autocompleteCatalogo({
+    inputId: 'itemSearch',
+    resultsId: 'itemResults',
+    tipoBien: 'B',
+    renderItem: (r) => {
+      let badges = '';
+      if (r.ficha_tecnica) badges += '<span class="badge bg-info ms-1">F.T.</span>';
+      if (r.producto_controlado) badges += '<span class="badge bg-danger ms-1">P.C.</span>';
+      if (r.acuerdo_marco) badges += '<span class="badge bg-success ms-1">A.M.</span>';
+      const precio = Number(r.precio_unitario || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return `<button type="button" class="list-group-item list-group-item-action autocomplete-item"
+        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-ft="${r.ficha_tecnica ? '1' : '0'}" data-pc="${r.producto_controlado ? '1' : '0'}" data-am="${r.acuerdo_marco ? '1' : '0'}" data-precio="${Number(r.precio_unitario) || 0}">
+        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')}) S/. ${precio}</span>
+        ${badges}
+      </button>`;
+    },
+    onSelect: (data) => {
+      collectInputs();
+      state.items.push({
+        item_bien: data.cod, nombre_item: data.nom,
+        unidad_medida: data.um, cantidad: 1,
+        ficha_tecnica: data.ft === '1',
+        producto_controlado: data.pc === '1',
+        acuerdo_marco: data.am === '1',
+        precio_unitario: Number(data.precio) || 0,
+      });
+      rerenderBienesBody();
+    },
+  });
+  // Botón manual ejecuta búsqueda
   const itemBtn = document.getElementById('itemBtn');
-  if (itemBtn) itemBtn.onclick = buscarItems;
-  const itemSearch = document.getElementById('itemSearch');
-  if (itemSearch) {
-    itemSearch.oninput = buscarItemsDebounced;
-    itemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItems(); } };
-  }
+  if (itemBtn) itemBtn.onclick = () => {
+    const evt = new Event('input');
+    document.getElementById('itemSearch')?.dispatchEvent(evt);
+  };
 
   document.querySelectorAll('.req-it').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
@@ -1383,36 +1426,6 @@ function rerenderServiciosBody(skipCollect) {
   attachServicios();
 }
 
-async function buscarItemsServicio() {
-  const q = (document.getElementById('srvItemSearch') || {}).value || '';
-  const box = document.getElementById('srvItemResults');
-  if (!box) return;
-  if (q.trim().length < 2) { box.innerHTML = ''; return; }
-  box.innerHTML = '<div class="text-muted small">Buscando…</div>';
-  try {
-    const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q.trim())}&tipo_bien=S&limit=15`);
-    const rows = (resp && resp.data) || [];
-    if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Catálogo SIGAMEF.</div>'; return; }
-    box.innerHTML = `<div class="list-group mb-2" style="max-height: 200px; overflow-y: auto;">${rows.map((r) => `
-      <button type="button" class="list-group-item list-group-item-action srv-item-pick"
-        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-precio="${Number(r.precio_unitario) || 0}">
-        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')})</span>
-      </button>`).join('')}</div>`;
-    box.querySelectorAll('.srv-item-pick').forEach((b) => b.onclick = () => {
-      collectServicioInputs();
-      state.servicioItems.push({
-        item_bien: b.dataset.cod, nombre_item: b.dataset.nom,
-        unidad_medida: b.dataset.um, monto: Number(b.dataset.precio) || 0,
-      });
-      box.innerHTML = '';
-      document.getElementById('srvItemSearch').value = '';
-      rerenderServiciosBody();
-    });
-  } catch (e) {
-    box.innerHTML = `<div class="text-danger small">Error: ${esc(e.message)}</div>`;
-  }
-}
-const buscarItemsServicioDebounced = debounce(buscarItemsServicio, 300);
 
 function attachServicios() {
   const back = document.getElementById('reqBack');
@@ -1450,13 +1463,31 @@ function attachServicios() {
     areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
   }
 
+  // Autocomplete Catálogo SIGAMEF para Servicios (tipo_bien = S)
+  autocompleteCatalogo({
+    inputId: 'srvItemSearch',
+    resultsId: 'srvItemResults',
+    tipoBien: 'S',
+    renderItem: (r) => `
+      <button type="button" class="list-group-item list-group-item-action autocomplete-item"
+        data-cod="${esc(r.item_bien)}" data-nom="${esc(r.nombre_item)}" data-um="${esc(r.unidad_medida || '')}" data-precio="${Number(r.precio_unitario) || 0}">
+        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')})</span>
+      </button>`,
+    onSelect: (data) => {
+      collectServicioInputs();
+      state.servicioItems.push({
+        item_bien: data.cod, nombre_item: data.nom,
+        unidad_medida: data.um, monto: Number(data.precio) || 0,
+      });
+      rerenderServiciosBody();
+    },
+  });
+  // Botón manual ejecuta búsqueda
   const srvItemBtn = document.getElementById('srvItemBtn');
-  if (srvItemBtn) srvItemBtn.onclick = buscarItemsServicio;
-  const srvItemSearch = document.getElementById('srvItemSearch');
-  if (srvItemSearch) {
-    srvItemSearch.oninput = buscarItemsServicioDebounced;
-    srvItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsServicio(); } };
-  }
+  if (srvItemBtn) srvItemBtn.onclick = () => {
+    const evt = new Event('input');
+    document.getElementById('srvItemSearch')?.dispatchEvent(evt);
+  };
 
   document.querySelectorAll('.srv-it-monto').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
@@ -1629,7 +1660,7 @@ function buildPrintHTMLServicios(s) {
   </div>
 
   <h3 class="sec">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL SERVICIO</h3>
-  <div class="fld"><div class="box">${esc((s.area && s.area.nombre) || '')}${s.area && s.area.responsable ? ' — Responsable: ' + esc(s.area.responsable) : ''}</div></div>
+  <div class="fld"><div class="box">${esc((s.area && s.area.nombre) || '')}${s.area && s.area.responsable ? ' — Centro: ' + esc(s.area.responsable) : ''}</div></div>
 
   <h3 class="sec">2. DENOMINACIÓN DE LA CONTRATACIÓN</h3>
   <div class="fld"><div class="box">${esc(s.denominacion || '')}</div></div>
@@ -2065,30 +2096,6 @@ function rerenderLocadoresBody(skipCollect) {
   attachLocadores();
 }
 
-async function buscarItemsLocador() {
-  const q = (document.getElementById('locItemSearch') || {}).value || '';
-  const box = document.getElementById('locItemResults');
-  if (!box) return;
-  if (q.trim().length < 2) { box.innerHTML = ''; return; }
-  box.innerHTML = '<div class="text-muted small">Buscando…</div>';
-  try {
-    const resp = await api.get(`/catalogo/search?search=${encodeURIComponent(q.trim())}&tipo_bien=S&limit=15`);
-    const items = (resp && resp.data) || [];
-    if (!items.length) { box.innerHTML = '<div class="text-warning small">Sin resultados.</div>'; return; }
-    box.innerHTML = `<div class="list-group list-group-flush" style="max-height:200px; overflow-y:auto;">${items.map((it) => `
-      <button type="button" class="list-group-item list-group-item-action py-1 loc-add-item" data-code="${esc(it.item_bien || it.codigo)}" data-name="${esc(it.nombre_item || it.descripcion || '')}" data-unit="${esc(it.unidad_medida || '')}">
-        <strong>${esc(it.item_bien || it.codigo)}</strong> — ${esc(it.nombre_item || it.descripcion)} <span class="text-muted">(${esc(it.unidad_medida || '')})</span>
-      </button>`).join('')}</div>`;
-    box.querySelectorAll('.loc-add-item').forEach((b) => b.onclick = () => {
-      state.locadorItems.push({ item_bien: b.dataset.code, nombre_item: b.dataset.name, unidad_medida: b.dataset.unit, monto: 0 });
-      box.innerHTML = '';
-      document.getElementById('locItemSearch').value = '';
-      rerenderLocadoresBody();
-    });
-  } catch (e) { box.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`; }
-}
-const buscarItemsLocadorDebounced = debounce(buscarItemsLocador, 300);
-
 function attachLocadores() {
   // Volver
   const back = document.getElementById('reqBack');
@@ -2125,14 +2132,30 @@ function attachLocadores() {
     areaSearch.oninput = buscarAreasDebounced;
     areaSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarAreas(); } };
   }
-  // Buscar items
+  // Autocomplete Catálogo SIGAMEF para Locadores (tipo_bien = S)
+  autocompleteCatalogo({
+    inputId: 'locItemSearch',
+    resultsId: 'locItemResults',
+    tipoBien: 'S',
+    renderItem: (r) => `
+      <button type="button" class="list-group-item list-group-item-action autocomplete-item"
+        data-code="${esc(r.item_bien)}" data-name="${esc(r.nombre_item)}" data-unit="${esc(r.unidad_medida || '')}">
+        <strong>${esc(r.item_bien || '')}</strong> — ${esc(r.nombre_item || '')} <span class="text-muted small">(${esc(r.unidad_medida || '')})</span>
+      </button>`,
+    onSelect: (data) => {
+      state.locadorItems.push({
+        item_bien: data.code, nombre_item: data.name,
+        unidad_medida: data.unit, monto: 0,
+      });
+      rerenderLocadoresBody();
+    },
+  });
+  // Botón manual ejecuta búsqueda
   const locItemBtn = document.getElementById('locItemBtn');
-  const locItemSearch = document.getElementById('locItemSearch');
-  if (locItemBtn) locItemBtn.onclick = buscarItemsLocador;
-  if (locItemSearch) {
-    locItemSearch.oninput = buscarItemsLocadorDebounced;
-    locItemSearch.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarItemsLocador(); } };
-  }
+  if (locItemBtn) locItemBtn.onclick = () => {
+    const evt = new Event('input');
+    document.getElementById('locItemSearch')?.dispatchEvent(evt);
+  };
   // Monto inputs: actualizar total en vivo
   document.querySelectorAll('.loc-it-monto').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
@@ -2427,7 +2450,7 @@ function buildPrintHTML(s) {
   </div>
 
   <h3 class="sec">1. ÁREA USUARIA / DEPENDENCIA QUE REQUIERE EL BIEN</h3>
-  <div class="fld"><div class="box">${esc((s.area && s.area.nombre) || '')}${s.area && s.area.responsable ? ' — Responsable: ' + esc(s.area.responsable) : ''}</div></div>
+  <div class="fld"><div class="box">${esc((s.area && s.area.nombre) || '')}${s.area && s.area.responsable ? ' — Centro: ' + esc(s.area.responsable) : ''}</div></div>
 
   <h3 class="sec">2. DENOMINACIÓN DE LA CONTRATACIÓN</h3>
   <div class="fld"><div class="box">${esc(s.denominacion || '')}</div></div>

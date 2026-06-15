@@ -1,0 +1,15 @@
+No analizar todo el repositorio.
+
+Trabajar únicamente sobre los archivos indicados.
+
+No ejecutar npm install.
+
+No ejecutar docker compose.
+
+No ejecutar pruebas completas.
+
+No reconstruir contenedores.
+
+No modificar módulos que no fueron solicitados.
+
+Reutilizar componentes existentes antes de crear nuevos.

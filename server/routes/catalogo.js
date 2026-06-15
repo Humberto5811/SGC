@@ -31,12 +31,15 @@ router.use('/', bulkImportRouter({
   ],
 }));
 
-// GET /search — búsqueda con filtro por tipo_bien (B o S)
+// GET /search — búsqueda con filtro por tipo_bien (B o S) y priorización
+// PRIORIDAD 1: descripción comienza con el texto buscado (nombre_item ILIKE 'texto%')
+// PRIORIDAD 2: descripción contiene el texto en cualquier posición
 router.get('/search', async (req, res, next) => {
   try {
     const search = (req.query.search || '').trim();
     const tipoBien = (req.query.tipo_bien || '').trim();
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '15', 10)));
+    // Aumentamos el límite para devolver todas las coincidencias (máx 300)
+    const limit = Math.min(300, Math.max(1, parseInt(req.query.limit || '200', 10)));
     const params = [];
     const conditions = [];
     if (tipoBien) {
@@ -44,12 +47,23 @@ router.get('/search', async (req, res, next) => {
       conditions.push(`tipo_bien = $${params.length}`);
     }
     if (search) {
+      // Condición para búsqueda amplia (contiene)
       params.push(`%${search}%`);
       conditions.push(`(item_bien ILIKE $${params.length} OR nombre_item ILIKE $${params.length})`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Priorización:
+    //   priority = 0: nombre_item o item_bien comienza con el texto buscado
+    //   priority = 1: solo contiene el texto en otra posición
+    // Luego orden alfabético por nombre_item dentro de cada grupo
+    const orderClause = search
+      ? `CASE WHEN nombre_item ILIKE $${params.length + 1} OR item_bien ILIKE $${params.length + 1} THEN 0 ELSE 1 END, nombre_item ASC`
+      : 'nombre_item ASC';
+    if (search) {
+      params.push(`${search}%`);
+    }
     params.push(limit);
-    const sql = `SELECT * FROM catalogo_sigamef ${where} ORDER BY item_bien LIMIT $${params.length}`;
+    const sql = `SELECT * FROM catalogo_sigamef ${where} ORDER BY ${orderClause} LIMIT $${params.length}`;
     const { rows } = await query(sql, params);
     res.json({ data: rows });
   } catch (err) { next(err); }
