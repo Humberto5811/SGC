@@ -1,25 +1,23 @@
-// Utilidades compartidas entre Registro y Evaluación de Requerimientos:
-//   - intent de apertura para editar desde Evaluación (pendingOpenId)
+// Utilidades compartidas entre Registro, Evaluación, DEC y Programación.
+//   - intent de apertura para editar desde Evaluación
 //   - badge de estado uniforme
-//   - cuadro de diálogo de texto (observación / subsanación) basado en Bootstrap
 //   - ciclo de observaciones/subsanaciones persistido en el payload
+//   - historial coloreado por actor
+//   - diálogo de texto
 import { requerimientosService } from '../../services/requerimientosService.js';
 
-// Intent para abrir un requerimiento a editar desde Evaluación (se navega a Registro).
-// editingFromEvaluacion: cuando es true, el formulario oculta títulos de Registro y
-// el botón "Volver" regresa al listado de Evaluación.
 export const reqShared = { pendingOpenId: null, editingFromEvaluacion: false, onBackToEvaluacion: null };
 
 function esc(s) {
   return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    .replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
 }
 
 function safeParse(payload) {
   try { return JSON.parse(payload || '{}'); } catch (_) { return {}; }
 }
 
-// Badge de estado uniforme para ambos listados.
+// Badge de estado uniforme.
 export function estadoBadge(estado) {
   const e = String(estado || '');
   let cls = 'bg-secondary';
@@ -29,29 +27,56 @@ export function estadoBadge(estado) {
   return `<span class="badge ${cls}">${esc(e || '—')}</span>`;
 }
 
-// Devuelve la última observación del payload (o null).
 export function ultimaObservacion(req) {
   const obs = safeParse(req && req.payload).observaciones || [];
   return obs.length ? obs[obs.length - 1] : null;
 }
 
-// Devuelve todas las observaciones del payload.
 export function todasObservaciones(req) {
   return safeParse(req && req.payload).observaciones || [];
 }
 
-// Genera HTML del historial completo de observaciones/subsanaciones.
+// Genera HTML del historial coloreado por actor/origen.
+// DEC → verde, GERENTE → rojo, USUARIO → azul, PROGRAMACIÓN → naranja
 export function historialHtml(observaciones) {
   if (!observaciones || !observaciones.length) {
     return '<div class="text-muted fst-italic">No hay observaciones registradas.</div>';
   }
   const items = observaciones.map((o) => {
-    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-    let html = `<div class="border rounded p-2 mb-2" style="font-size:0.9em;">`;
-    html += `<div class="fw-bold text-danger"><i class="bi bi-chat-left-dots"></i> Observación #${o.ronda || '?'} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
+    const origen = (o.origen || 'GERENTE').toUpperCase();
+    const ronda = o.ronda || '?';
+    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', { 
+      year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+    }) : '';
+
+    // Color por origen
+    let colorClass, bgClass, label;
+    if (origen === 'DEC') {
+      colorClass = 'text-success';
+      bgClass = 'bg-success-subtle border-success';
+      label = 'Observación DEC';
+    } else if (origen === 'PROGRAMACIÓN' || origen === 'PROGRAMACION') {
+      colorClass = 'text-warning';
+      bgClass = 'bg-warning-subtle border-warning';
+      label = 'Observación Programación';
+    } else if (origen === 'USUARIO') {
+      colorClass = 'text-primary';
+      bgClass = 'bg-primary-subtle border-primary';
+      label = 'Observación Usuario';
+    } else {
+      colorClass = 'text-danger';
+      bgClass = 'bg-danger-subtle border-danger';
+      label = 'Observación Gerente';
+    }
+
+    let html = `<div class="border rounded p-2 mb-2 ${bgClass}" style="font-size:0.9em;">`;
+    html += `<div class="fw-bold ${colorClass}"><i class="bi bi-chat-left-dots"></i> ${label} #${ronda} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
     html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || '')}</div>`;
+    
     if (o.subsanacion) {
-      const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE', { 
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+      }) : '';
       html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta del usuario ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
       html += `<div style="white-space:pre-wrap;">${esc(o.subsanacion)}</div>`;
     } else {
@@ -63,21 +88,25 @@ export function historialHtml(observaciones) {
   return `<div class="mb-3"><label class="form-label fw-bold">Historial de la conversación</label>${items.join('')}</div>`;
 }
 
-// Agrega una observación (gerente) → estado "Observado".
-export async function addObservacion(req, motivo, gerente) {
+// Agrega una observación (cualquier origen) con estado personalizado.
+export async function addObservacionCustom(req, motivo, origen, gerente, nuevoEstado) {
   const payload = safeParse(req.payload);
   payload.observaciones = payload.observaciones || [];
   payload.observaciones.push({
     ronda: payload.observaciones.length + 1,
     motivo,
-    gerente: gerente || 'gerente',
+    gerente: gerente || origen || 'sistema',
+    origen: origen || 'GERENTE',
     fecha: new Date().toISOString(),
     subsanacion: null,
   });
-  await requerimientosService.update(req.id, { estado: 'Observado', payload: JSON.stringify(payload) });
+  await requerimientosService.update(req.id, { 
+    estado: nuevoEstado || 'Observado', 
+    payload: JSON.stringify(payload) 
+  });
 }
 
-// Agrega la subsanación del usuario a la última observación abierta → "En tramite de aprobación".
+// Agrega la subsanación del usuario a la última observación abierta.
 export async function addSubsanacion(req, texto, usuario) {
   const payload = safeParse(req.payload);
   payload.observaciones = payload.observaciones || [];
@@ -89,20 +118,20 @@ export async function addSubsanacion(req, texto, usuario) {
       break;
     }
   }
-  await requerimientosService.update(req.id, { estado: 'En tramite de aprobación', payload: JSON.stringify(payload) });
+  await requerimientosService.update(req.id, { 
+    estado: 'En tramite de aprobación', 
+    payload: JSON.stringify(payload) 
+  });
 }
 
-// Cuadro de diálogo con un texto opcional de solo lectura y un textarea editable.
-// Resuelve con el texto ingresado (trim) o null si se cancela/cierra.
-// Si opts.readOnlyMode es true, solo muestra el historial sin textarea ni botón de acción.
+// Agrega una observación (gerente) → estado "Observado".
+export async function addObservacion(req, motivo, gerente) {
+  return addObservacionCustom(req, motivo, 'GERENTE', gerente, 'Observado');
+}
+
+// Cuadro de diálogo con historial + textarea.
 export function showTextModal(opts = {}) {
   const id = 'modTxt_' + Date.now();
-  const ro = opts.readonlyText
-    ? `<div class="mb-3">
-         <label class="form-label fw-bold">${esc(opts.readonlyLabel || 'Observación del gerente')}</label>
-         <div class="alert alert-warning mb-0" style="white-space:pre-wrap;">${esc(opts.readonlyText)}</div>
-       </div>`
-    : '';
   const hist = opts.historyHtml || '';
   const inputSection = opts.readOnlyMode ? '' : `
             <label class="form-label">${esc(opts.label || 'Detalle')}</label>
@@ -121,7 +150,6 @@ export function showTextModal(opts = {}) {
           </div>
           <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
             ${hist}
-            ${ro}
             ${inputSection}
           </div>
           <div class="modal-footer">
@@ -146,6 +174,57 @@ export function showTextModal(opts = {}) {
         modal.hide();
       };
     }
+    el.addEventListener('hidden.bs.modal', () => {
+      wrap.remove();
+      if (!resolved) resolve(null);
+    }, { once: true });
+    modal.show();
+  });
+}
+
+// Modal para mostrar historial + texto + botones personalizados (para derivar)
+export function showObservarModal(opts = {}) {
+  const id = 'modObs_' + Date.now();
+  const hist = opts.historyHtml || '';
+  const btnsHtml = (opts.buttons || []).map((b, i) => {
+    return `<button type="button" id="${id}_btn_${i}" class="btn ${b.cls || 'btn-primary'}">${esc(b.label || 'Aceptar')}</button>`;
+  }).join('');
+  const html = `
+    <div class="modal fade" id="${id}" tabindex="-1">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">${esc(opts.title || 'Observación')}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
+            ${hist}
+            <label class="form-label">${esc(opts.label || 'Detalle')}</label>
+            <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || '')}"></textarea>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            ${btnsHtml}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const wrap = document.createElement('div');
+  document.body.appendChild(wrap);
+  wrap.innerHTML = html;
+  const el = document.getElementById(id);
+  const modal = new bootstrap.Modal(el);
+  return new Promise((resolve) => {
+    let resolved = false;
+    (opts.buttons || []).forEach((b, i) => {
+      document.getElementById(`${id}_btn_${i}`).onclick = () => {
+        const v = (document.getElementById(`${id}_txt`).value || '').trim();
+        if (!v) { alert('Por favor ingrese el texto.'); return; }
+        resolved = true;
+        resolve({ action: b.action, text: v });
+        modal.hide();
+      };
+    });
     el.addEventListener('hidden.bs.modal', () => {
       wrap.remove();
       if (!resolved) resolve(null);
