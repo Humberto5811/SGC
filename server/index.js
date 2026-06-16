@@ -20,6 +20,7 @@ import entidadRouter from './routes/entidad.js';
 import fichanetRouter from './routes/fichanet.js';
 import pedidosSigamefRouter from './routes/pedidosSigamef.js';
 import adjuntosRouter from './routes/adjuntos.js';
+import programacionRouter from './routes/programacion.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
 import contratacionesRouter from './routes/contrataciones.js';
 import requireAuth from './middleware/requireAuth.js';
@@ -252,6 +253,7 @@ app.use('/api/glosas-locadores', glosasLocadoresRouter);
 app.use('/api/entidad', entidadRouter);
 app.use('/api/fichanet', fichanetRouter);
 app.use('/api/pedidos-sigamef', pedidosSigamefRouter);
+app.use('/api/programacion', programacionRouter);
 
 // Endpoints adicionales de glosas
 app.get('/api/entregas', async (_req, res, next) => {

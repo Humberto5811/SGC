@@ -4,6 +4,7 @@ export const ROUTE_ROLES = {
   'admin/usuarios': ['admin'],
   'au/requerimientos/registro': ['au', 'admin'],
   'au/requerimientos/evaluacion': ['au', 'admin'],
+  'au/programacion': ['au', 'admin'],
   'requerimientos/nuevo/bienes': ['au', 'admin'],
   'dec/dec': ['dec', 'admin'],
   'dec/programacion': ['dec', 'admin'],
