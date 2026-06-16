@@ -8,7 +8,8 @@
       label: 'Requerimientos', icon: 'bi-file-text', roles: ['au', 'admin'],
       submenu: [
         { path: 'au/requerimientos/registro', label: 'Registro de Requerimientos', icon: 'bi-pencil-square' },
-        { path: 'au/requerimientos/evaluacion', label: 'Evaluación de Requerimientos', icon: 'bi-check-circle' }
+        { path: 'au/requerimientos/evaluacion', label: 'Evaluación de Requerimientos', icon: 'bi-check-circle' },
+        { path: 'au/programacion', label: 'Programación', icon: 'bi-calendar-check' }
       ]
     },
     { 

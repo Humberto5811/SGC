@@ -38,6 +38,9 @@ import { renderSiafView, initSiafView } from './views/registroDatos/siafView.js'
 import { renderFichaNetView, initFichaNetView } from './views/registroDatos/fichaNetView.js';
 import { renderCarrerasProfesionalesView, initCarrerasProfesionalesView } from './views/registroDatos/carrerasProfesionalesView.js';
 
+// Programación
+import { renderProgramacionView, initProgramacionView } from './views/programacion/programacionView.js';
+
 // Mantenimiento - Glosas de Requerimientos
 import { renderFormatoBienesView, initFormatoBienesView } from './views/glosasRequerimientos/formatoBienesView.js';
 import { renderFormatoServiciosView, initFormatoServiciosView } from './views/glosasRequerimientos/formatoServiciosView.js';
@@ -79,6 +82,9 @@ const routes = {
   'ejecucion/presentacion': { render: renderPresentacionEntregableView, init: initPresentacionEntregableView },
   'ejecucion/ampliacion': { render: renderAmpliacionResolucionView, init: initAmpliacionResolucionView },
   'ejecucion/pago': { render: renderDerivacionPagoView, init: initDerivacionPagoView },
+
+  // ========== PROGRAMACIÓN ==========
+  'au/programacion': { render: renderProgramacionView, init: initProgramacionView },
 
   // ========== MANTENIMIENTO - REGISTRO DE DATOS ==========
   'mantenimiento': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
