@@ -32,19 +32,27 @@ const FIELDS = [
 ];
 
 const COLUMNS = [
-  { name: 'codigo_pedido', label: 'Código Pedido', width: '120px' },
-  { name: 'ano_eje', label: 'Año', width: '60px' },
-  { name: 'tipo', label: 'Tipo', width: '55px' },
-  { name: 'nro_pedido', label: 'Nro Pedido', width: '100px' },
-  { name: 'centro', label: 'Centro', width: '90px' },
-  { name: 'centro_costo', label: 'Centro Costo', width: '100px' },
-  { name: 'fecha_pedido', label: 'Fecha Pedido', width: '100px', type: 'date' },
-  { name: 'grupo_bien', label: 'Grupo Bien', width: '90px' },
+  { name: 'codigo_pedido', label: 'Cód. Pedido', width: '95px' },
+  { name: 'ano_eje', label: 'Año', width: '45px' },
+  { name: 'tipo', label: 'Tipo', width: '40px' },
+  { name: 'nro_pedido', label: 'Nro Pedido', width: '80px' },
+  { name: 'centro', label: 'Centro', width: '60px' },
+  { name: 'centro_costo', label: 'C. Costo', width: '65px' },
+  { name: 'fecha_pedido', label: 'Fecha', width: '80px', type: 'date' },
+  { name: 'fuente_fto', label: 'Fuente Fto', width: '70px' },
+  { name: 'sec_func', label: 'Sec. Func.', width: '70px' },
+  { name: 'grupo_bien', label: 'Grupo', width: '55px' },
+  { name: 'clase_bien', label: 'Clase', width: '55px' },
+  { name: 'familia_bien', label: 'Familia', width: '55px' },
+  { name: 'item_bien', label: 'Item', width: '50px' },
+  { name: 'codigo_sigamef', label: 'Cód. SIGAMEF', width: '95px' },
   { name: 'descripcion', label: 'Descripción' },
-  { name: 'cant_solicitada', label: 'Cantidad', width: '85px', type: 'money' },
-  { name: 'precio_unitario', label: 'P. Unit.', width: '90px', type: 'money' },
-  { name: 'total_item', label: 'Total Item', width: '100px', type: 'money' },
-  { name: 'estado', label: 'Estado', width: '75px' },
+  { name: 'especifica', label: 'Específica', width: '70px' },
+  { name: 'unidad_medida', label: 'U. Medida', width: '65px' },
+  { name: 'cant_solicitada', label: 'Cantidad', width: '65px', type: 'money' },
+  { name: 'precio_unitario', label: 'P. Unit.', width: '70px', type: 'money' },
+  { name: 'total_item', label: 'Total', width: '75px', type: 'money' },
+  { name: 'estado', label: 'Estado', width: '60px' },
 ];
 
 const view = createCrudView({
@@ -56,6 +64,8 @@ const view = createCrudView({
   columns: COLUMNS,
   excel: true,
   importPath: '/pedidos-sigamef/import',
+  importAlwaysReplace: true,
+  tableStyle: 'font-family: Arial, sans-serif; font-size: 10px;',
 });
 
 export const renderPedidosSigamefView = view.render;

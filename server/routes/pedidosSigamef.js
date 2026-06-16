@@ -55,7 +55,22 @@ router.post('/import', async (req, res, next) => {
       if (maxRows.length) lastNum = parseInt(maxRows[0].codigo_pedido.replace('PED-', ''), 10) || 0;
     }
 
-    for (const r of importRows) {
+    for (const raw of importRows) {
+      // Normalize column aliases from common SIGAMEF Excel headers
+      const r = { ...raw };
+      if (!r.tipo && r.tipo_bien) r.tipo = r.tipo_bien;
+      if (!r.nro_pedido && r.numero_pedido) r.nro_pedido = r.numero_pedido;
+      if (!r.nro_pedido && r.pedido) r.nro_pedido = r.pedido;
+      if (!r.cant_solicitada && r.cantidad) r.cant_solicitada = r.cantidad;
+      if (!r.cant_solicitada && r.cantidad_solicitada) r.cant_solicitada = r.cantidad_solicitada;
+      if (!r.precio_unitario && r.precio) r.precio_unitario = r.precio;
+      if (!r.unidad_medida && r.unidad) r.unidad_medida = r.unidad;
+      if (!r.fuente_fto && r.fuente) r.fuente_fto = r.fuente;
+      if (!r.fuente_fto && r.fuente_financiamiento) r.fuente_fto = r.fuente_financiamiento;
+      if (!r.sec_func && r.secuencia_funcional) r.sec_func = r.secuencia_funcional;
+      if (!r.sec_func && r.secfunc) r.sec_func = r.secfunc;
+      if (!r.codigo_sigamef && r.codigo) r.codigo_sigamef = r.codigo;
+
       lastNum++;
       const codigo = `PED-${String(lastNum).padStart(6, '0')}`;
       const rowVals = [codigo];
@@ -112,7 +127,7 @@ router.get('/', async (req, res, next) => {
 
     params.push(pageSize);
     params.push(offset);
-    const { rows } = await query(`SELECT * FROM ${TABLE} ${where} ORDER BY id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
+    const { rows } = await query(`SELECT * FROM ${TABLE} ${where} ORDER BY id ASC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
 
     res.json({ data: rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (err) { next(err); }
@@ -137,7 +152,7 @@ router.get('/search', async (req, res, next) => {
     }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     params.push(limit);
-    const { rows } = await query(`SELECT * FROM ${TABLE} ${where} ORDER BY id DESC LIMIT $${params.length}`, params);
+    const { rows } = await query(`SELECT * FROM ${TABLE} ${where} ORDER BY id ASC LIMIT $${params.length}`, params);
     res.json({ data: rows });
   } catch (err) { next(err); }
 });
