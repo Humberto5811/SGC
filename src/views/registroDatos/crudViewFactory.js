@@ -25,6 +25,8 @@ const PAGE_SIZE = 50;
 export function createCrudView(cfg) {
   const { resource, title, icon = 'bi-table', subtitle = '', fields, columns, excel = false } = cfg;
   const importPath = cfg.importPath || null;
+  const importAlwaysReplace = cfg.importAlwaysReplace || false;
+  const tableStyle = cfg.tableStyle || '';
   const onPrint = typeof cfg.onPrint === 'function' ? cfg.onPrint : null;
   const printTitle = cfg.printTitle || 'Imprimir / PDF';
 
@@ -170,7 +172,7 @@ export function createCrudView(cfg) {
         </div>
       </div></div>
       <div class="card"><div class="card-body p-0"><div class="table-responsive">
-        <table class="table table-hover table-bordered table-sm mb-0">
+        <table class="table table-hover table-bordered table-sm mb-0"${tableStyle ? ` style="${tableStyle}"` : ''}>
           <thead class="table-dark"><tr>${ths}<th style="width:90px;" class="text-center">Acciones</th></tr></thead>
           <tbody id="${id('body')}"><tr><td colspan="${columns.length + 1}" class="text-center text-muted py-4">Cargando...</td></tr></tbody>
         </table>
@@ -324,9 +326,10 @@ export function createCrudView(cfg) {
           Object.keys(r).forEach((k) => { rec[k.toLowerCase().trim()] = r[k]; });
           return rec;
         });
-        const mode = state.total > 0
-          ? (confirm(`Se encontraron ${rows.length} registros.\n\nACEPTAR = REEMPLAZAR los datos actuales (${state.total}).\nCANCELAR = AGREGAR a los existentes.`) ? 'replace' : 'append')
-          : 'replace';
+        const mode = importAlwaysReplace ? 'replace'
+          : state.total > 0
+            ? (confirm(`Se encontraron ${rows.length} registros.\n\nACEPTAR = REEMPLAZAR los datos actuales (${state.total}).\nCANCELAR = AGREGAR a los existentes.`) ? 'replace' : 'append')
+            : 'replace';
         const resp = await api.post(importPath, { rows, mode });
         state.page = 1; state.search = '';
         const si = document.getElementById(id('search')); if (si) si.value = '';
