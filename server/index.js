@@ -18,6 +18,7 @@ import glosasServiciosRouter from './routes/glosasServicios.js';
 import glosasLocadoresRouter from './routes/glosasLocadores.js';
 import entidadRouter from './routes/entidad.js';
 import fichanetRouter from './routes/fichanet.js';
+import pedidosSigamefRouter from './routes/pedidosSigamef.js';
 import adjuntosRouter from './routes/adjuntos.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
 import contratacionesRouter from './routes/contrataciones.js';
@@ -250,6 +251,7 @@ app.use('/api/glosas-servicios', glosasServiciosRouter);
 app.use('/api/glosas-locadores', glosasLocadoresRouter);
 app.use('/api/entidad', entidadRouter);
 app.use('/api/fichanet', fichanetRouter);
+app.use('/api/pedidos-sigamef', pedidosSigamefRouter);
 
 // Endpoints adicionales de glosas
 app.get('/api/entregas', async (_req, res, next) => {

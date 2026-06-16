@@ -42,7 +42,7 @@
           submenu: [
             { path: 'mantenimiento/usuarios', label: 'Usuarios y Permisos', icon: 'bi-people' },
             { path: 'mantenimiento/catalogo', label: 'Catálogo SIGAMEF', icon: 'bi-book' },
-            { path: 'mantenimiento/fichas', label: 'Fichas Técnicas', icon: 'bi-card-list' },
+            { path: 'mantenimiento/pedidos-sigamef', label: 'Pedidos SIGAMEF', icon: 'bi-card-list' },
             { path: 'mantenimiento/configuracion', label: 'Configuración Documentaria', icon: 'bi-gear' },
             { path: 'mantenimiento/metas', label: 'Metas y Áreas', icon: 'bi-bullseye' },
             { path: 'mantenimiento/ordenes', label: 'Órdenes', icon: 'bi-receipt' },
