@@ -30,7 +30,7 @@ import { renderDerivacionPagoView, initDerivacionPagoView } from './views/ejecuc
 
 // Mantenimiento - Registros de datos
 import { renderCatalogoSigamefView, initCatalogoSigamefView } from './views/registroDatos/catalogoSigamefView.js';
-import { renderFichasTecnicasView, initFichasTecnicasView } from './views/registroDatos/fichasTecnicasView.js';
+import { renderPedidosSigamefView, initPedidosSigamefView } from './views/registroDatos/pedidosSigamefView.js';
 import { renderConfiguracionDocView, initConfiguracionDocView } from './views/registroDatos/configuracionDocView.js';
 import { renderMetasAreasView, initMetasAreasView } from './views/registroDatos/metasAreasView.js';
 import { renderOrdenesView, initOrdenesView } from './views/registroDatos/ordenesView.js';
@@ -85,7 +85,7 @@ const routes = {
   'admin/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
-  'mantenimiento/fichas': { render: renderFichasTecnicasView, init: initFichasTecnicasView },
+  'mantenimiento/pedidos-sigamef': { render: renderPedidosSigamefView, init: initPedidosSigamefView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },
   'mantenimiento/metas': { render: renderMetasAreasView, init: initMetasAreasView },
   'mantenimiento/ordenes': { render: renderOrdenesView, init: initOrdenesView },

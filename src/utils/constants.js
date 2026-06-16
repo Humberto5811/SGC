@@ -17,7 +17,7 @@ export const ROUTE_ROLES = {
   'ejecucion/ampliacion': ['dec', 'admin'],
   'ejecucion/pago': ['dec', 'admin'],
   'mantenimiento/catalogo': ['admin'],
-  'mantenimiento/fichas': ['admin'],
+  'mantenimiento/pedidos-sigamef': ['admin'],
   'mantenimiento/configuracion': ['admin'],
   'mantenimiento/metas': ['admin'],
   'mantenimiento/usuarios': ['admin'],

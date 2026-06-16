@@ -319,6 +319,39 @@ CREATE TABLE IF NOT EXISTS carreras_profesionales (
 CREATE INDEX IF NOT EXISTS idx_carreras_nombre_trgm ON carreras_profesionales USING gin (nombre_carrera gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_carreras_tipo ON carreras_profesionales (tipo_carrera);
 
+-- ============ PEDIDOS SIGAMEF ============
+CREATE TABLE IF NOT EXISTS pedidos_sigamef (
+  id SERIAL PRIMARY KEY,
+  codigo_pedido VARCHAR(20) UNIQUE,
+  ano_eje VARCHAR(4),
+  tipo VARCHAR(10),
+  nro_pedido VARCHAR(20),
+  centro VARCHAR(100),
+  centro_costo VARCHAR(100),
+  fecha_pedido VARCHAR(20),
+  fuente_fto VARCHAR(100),
+  sec_func VARCHAR(100),
+  clase_bien VARCHAR(100),
+  familia_bien VARCHAR(100),
+  item_bien VARCHAR(100),
+  codigo_sigamef VARCHAR(100),
+  descripcion TEXT,
+  especifica VARCHAR(100),
+  unidad_medida VARCHAR(60),
+  cant_solicitada NUMERIC(14,4) DEFAULT 0,
+  precio_unitario NUMERIC(14,4) DEFAULT 0,
+  total_item NUMERIC(14,4) DEFAULT 0,
+  estado VARCHAR(30) DEFAULT 'Activo',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pedidos_codigo ON pedidos_sigamef (codigo_pedido);
+CREATE INDEX IF NOT EXISTS idx_pedidos_nro ON pedidos_sigamef (nro_pedido);
+CREATE INDEX IF NOT EXISTS idx_pedidos_tipo ON pedidos_sigamef (tipo);
+CREATE INDEX IF NOT EXISTS idx_pedidos_desc_trgm ON pedidos_sigamef USING gin (descripcion gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_pedidos_codsig_trgm ON pedidos_sigamef USING gin (codigo_sigamef gin_trgm_ops);
+
 -- ============ GLOSAS LOCADORES ============
 CREATE TABLE IF NOT EXISTS glosas_locadores (
   id SERIAL PRIMARY KEY,

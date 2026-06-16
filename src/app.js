@@ -88,7 +88,7 @@ else if (currentRoute === 'mantenimiento/locacion') {
 else if (currentRoute === 'mantenimiento' || 
          currentRoute === 'mantenimiento/usuarios' ||
          currentRoute === 'mantenimiento/catalogo' ||
-         currentRoute === 'mantenimiento/fichas' ||
+         currentRoute === 'mantenimiento/pedidos-sigamef' ||
          currentRoute === 'mantenimiento/configuracion' ||
          currentRoute === 'mantenimiento/metas' ||
          currentRoute === 'mantenimiento/ordenes' ||
