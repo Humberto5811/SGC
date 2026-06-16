@@ -331,6 +331,7 @@ CREATE TABLE IF NOT EXISTS pedidos_sigamef (
   fecha_pedido VARCHAR(20),
   fuente_fto VARCHAR(100),
   sec_func VARCHAR(100),
+  grupo_bien VARCHAR(100),
   clase_bien VARCHAR(100),
   familia_bien VARCHAR(100),
   item_bien VARCHAR(100),

@@ -7,7 +7,7 @@ import pool, { query } from '../db.js';
 const TABLE = 'pedidos_sigamef';
 const COLUMNS = [
   'codigo_pedido', 'ano_eje', 'tipo', 'nro_pedido', 'centro', 'centro_costo',
-  'fecha_pedido', 'fuente_fto', 'sec_func', 'clase_bien', 'familia_bien',
+  'fecha_pedido', 'fuente_fto', 'sec_func', 'grupo_bien', 'clase_bien', 'familia_bien',
   'item_bien', 'codigo_sigamef', 'descripcion', 'especifica', 'unidad_medida',
   'cant_solicitada', 'precio_unitario', 'total_item', 'estado',
 ];

@@ -16,6 +16,7 @@ const FIELDS = [
   { name: 'fuente_fto', label: 'Fuente Financiamiento', col: 4 },
   { name: 'sec_func', label: 'Secuencia Funcional', col: 4 },
   // Datos del Item
+  { name: 'grupo_bien', label: 'Grupo Bien', col: 4 },
   { name: 'clase_bien', label: 'Clase Bien', col: 4 },
   { name: 'familia_bien', label: 'Familia Bien', col: 4 },
   { name: 'item_bien', label: 'Item Bien', col: 4 },
@@ -38,6 +39,7 @@ const COLUMNS = [
   { name: 'centro', label: 'Centro', width: '90px' },
   { name: 'centro_costo', label: 'Centro Costo', width: '100px' },
   { name: 'fecha_pedido', label: 'Fecha Pedido', width: '100px', type: 'date' },
+  { name: 'grupo_bien', label: 'Grupo Bien', width: '90px' },
   { name: 'descripcion', label: 'Descripción' },
   { name: 'cant_solicitada', label: 'Cantidad', width: '85px', type: 'money' },
   { name: 'precio_unitario', label: 'P. Unit.', width: '90px', type: 'money' },
