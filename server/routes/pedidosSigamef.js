@@ -56,20 +56,22 @@ router.post('/import', async (req, res, next) => {
     }
 
     for (const raw of importRows) {
-      // Normalize column aliases from common SIGAMEF Excel headers
-      const r = { ...raw };
+      // Normalize: spaces→underscores, remove accents, then apply aliases
+      const r = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const nk = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_').toLowerCase().trim();
+        r[nk] = v;
+      }
+      // Also keep original lowercase+trimmed keys for exact matches
+      for (const [k, v] of Object.entries(raw)) {
+        const ok = k.toLowerCase().trim();
+        if (!r[ok]) r[ok] = v;
+      }
+      // Aliases
       if (!r.tipo && r.tipo_bien) r.tipo = r.tipo_bien;
       if (!r.nro_pedido && r.numero_pedido) r.nro_pedido = r.numero_pedido;
-      if (!r.nro_pedido && r.pedido) r.nro_pedido = r.pedido;
-      if (!r.cant_solicitada && r.cantidad) r.cant_solicitada = r.cantidad;
-      if (!r.cant_solicitada && r.cantidad_solicitada) r.cant_solicitada = r.cantidad_solicitada;
-      if (!r.precio_unitario && r.precio) r.precio_unitario = r.precio;
-      if (!r.unidad_medida && r.unidad) r.unidad_medida = r.unidad;
-      if (!r.fuente_fto && r.fuente) r.fuente_fto = r.fuente;
-      if (!r.fuente_fto && r.fuente_financiamiento) r.fuente_fto = r.fuente_financiamiento;
-      if (!r.sec_func && r.secuencia_funcional) r.sec_func = r.secuencia_funcional;
-      if (!r.sec_func && r.secfunc) r.sec_func = r.secfunc;
-      if (!r.codigo_sigamef && r.codigo) r.codigo_sigamef = r.codigo;
+      if (!r.codigo_sigamef && r.codigo_sigamef) { /* already matched */ }
+      if (!r.especifica && r.especifica) { /* already matched after accent removal */ }
 
       lastNum++;
       const codigo = `PED-${String(lastNum).padStart(6, '0')}`;
