@@ -1,6 +1,6 @@
 import { renderCatalogoSigamefView, initCatalogoSigamefView } from './registroDatos/catalogoSigamefView.js';
 import { renderUsuariosPermisosView, initUsuariosPermisosView } from './registroDatos/usuariosPermisosView.js';
-import { renderFichasTecnicasView, initFichasTecnicasView } from './registroDatos/fichasTecnicasView.js';
+import { renderPedidosSigamefView, initPedidosSigamefView } from './registroDatos/pedidosSigamefView.js';
 import { renderConfiguracionDocView, initConfiguracionDocView } from './registroDatos/configuracionDocView.js';
 import { renderMetasAreasView, initMetasAreasView } from './registroDatos/metasAreasView.js';
 import { renderOrdenesView, initOrdenesView } from './registroDatos/ordenesView.js';
@@ -18,7 +18,7 @@ import { renderEntidadView, initEntidadView } from './institucional/entidadView.
 const subRoutes = {
   'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
-  'mantenimiento/fichas': { render: renderFichasTecnicasView, init: initFichasTecnicasView },
+  'mantenimiento/pedidos-sigamef': { render: renderPedidosSigamefView, init: initPedidosSigamefView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },
   'mantenimiento/metas': { render: renderMetasAreasView, init: initMetasAreasView },
   'mantenimiento/ordenes': { render: renderOrdenesView, init: initOrdenesView },
