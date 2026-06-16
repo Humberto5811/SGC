@@ -40,34 +40,33 @@ router.post('/import', async (req, res, next) => {
       await client.query(`TRUNCATE TABLE ${TABLE} RESTART IDENTITY`);
     }
 
-    let inserted = 0;
     const allCols = ['codigo_pedido', ...IMPORT_COLS];
-    const BATCH = 500;
-    for (let i = 0; i < importRows.length; i += BATCH) {
-      const chunk = importRows.slice(i, i + BATCH);
-      const values = [];
-      const tuples = [];
-      for (let idx = 0; idx < chunk.length; idx++) {
-        const r = chunk[idx];
-        // Auto-generate codigo_pedido
-        const lastCode = await nextCodigoPedido(client);
-        const rowVals = [lastCode];
-        for (const c of IMPORT_COLS) {
-          let v = r[c];
-          if (c === 'total_item') {
-            v = (parseFloat(r.cant_solicitada) || 0) * (parseFloat(r.precio_unitario) || 0);
-          }
-          rowVals.push(v == null ? '' : String(v));
+    const placeholders = allCols.map((_, i) => `$${i + 1}`).join(', ');
+    const sql = `INSERT INTO ${TABLE} (${allCols.join(', ')}) VALUES (${placeholders})`;
+    let inserted = 0;
+    let lastNum = 0;
+
+    // Get current max codigo_pedido number
+    if (mode !== 'replace') {
+      const { rows: maxRows } = await client.query(
+        `SELECT codigo_pedido FROM ${TABLE} WHERE codigo_pedido LIKE 'PED-%' ORDER BY codigo_pedido DESC LIMIT 1`
+      );
+      if (maxRows.length) lastNum = parseInt(maxRows[0].codigo_pedido.replace('PED-', ''), 10) || 0;
+    }
+
+    for (const r of importRows) {
+      lastNum++;
+      const codigo = `PED-${String(lastNum).padStart(6, '0')}`;
+      const rowVals = [codigo];
+      for (const c of IMPORT_COLS) {
+        let v = r[c];
+        if (c === 'total_item') {
+          v = (parseFloat(r.cant_solicitada) || 0) * (parseFloat(r.precio_unitario) || 0);
         }
-        const base = values.length;
-        values.push(...rowVals);
-        const ph = allCols.map((_, ci) => `$${base + ci + 1}`).join(', ');
-        tuples.push(`(${ph})`);
-        // Insert per-row to get sequential codigo_pedido
-        const sql = `INSERT INTO ${TABLE} (${allCols.join(', ')}) VALUES (${ph})`;
-        await client.query(sql, rowVals);
-        inserted++;
+        rowVals.push(v == null ? '' : String(v));
       }
+      await client.query(sql, rowVals);
+      inserted++;
     }
 
     await client.query('COMMIT');
