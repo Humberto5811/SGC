@@ -12,6 +12,7 @@ const COLUMNS = [
   'cant_solicitada', 'precio_unitario', 'total_item', 'estado',
 ];
 const IMPORT_COLS = COLUMNS.filter((c) => c !== 'codigo_pedido');
+const NUMERIC_COLS = new Set(['cant_solicitada', 'precio_unitario', 'total_item']);
 const SEARCH_COLS = ['nro_pedido', 'codigo_sigamef', 'descripcion', 'centro', 'codigo_pedido'];
 
 const router = express.Router();
@@ -63,7 +64,11 @@ router.post('/import', async (req, res, next) => {
         if (c === 'total_item') {
           v = (parseFloat(r.cant_solicitada) || 0) * (parseFloat(r.precio_unitario) || 0);
         }
-        rowVals.push(v == null ? '' : String(v));
+        if (NUMERIC_COLS.has(c)) {
+          rowVals.push(parseFloat(v) || 0);
+        } else {
+          rowVals.push(v == null ? '' : String(v));
+        }
       }
       await client.query(sql, rowVals);
       inserted++;
