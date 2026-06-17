@@ -8,8 +8,7 @@
       label: 'Requerimientos', icon: 'bi-file-text', roles: ['au', 'admin'],
       submenu: [
         { path: 'au/requerimientos/registro', label: 'Registro de Requerimientos', icon: 'bi-pencil-square' },
-        { path: 'au/requerimientos/evaluacion', label: 'Evaluación de Requerimientos', icon: 'bi-check-circle' },
-        { path: 'au/programacion', label: 'Programación', icon: 'bi-calendar-check' }
+        { path: 'au/requerimientos/evaluacion', label: 'Evaluación de Requerimientos', icon: 'bi-check-circle' }
       ]
     },
     { 
@@ -158,7 +157,6 @@
     
     const hasSubmenu = item.submenu && item.submenu.length > 0;
     const isActive = isRouteActive(item.path, item.submenu);
-    // Mostrar el submenú si la ruta actual está dentro de él
     const isOpen = shouldBeOpen(item);
     const menuId = `menu_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
     
@@ -266,23 +264,6 @@ function handleSubmenuClick(e) {
   
   // Verificar si el submenú actual está visible
   const isCurrentlyVisible = currentSubmenuContainer && currentSubmenuContainer.style.display === 'block';
-  
-  // CERRAR OTROS SUBMENÚS DEL MISMO NIVEL (opcional, comentado para mantener anidamiento)
-  // Si quieres que los submenús anidados también se cierren entre sí, descomenta esto:
-  /*
-  const parentItem = this.closest('.nav-item');
-  if (parentItem) {
-    parentItem.querySelectorAll('.nav-sublink[data-submenu]').forEach(sublink => {
-      const submenuId = sublink.dataset.submenu;
-      const submenu = document.getElementById(submenuId);
-      const chevron = sublink.querySelector('.chevron-sub');
-      if (submenuId !== currentSubmenuId && submenu && submenu.style.display === 'block') {
-        submenu.style.display = 'none';
-        if (chevron) chevron.classList.remove('rotated');
-      }
-    });
-  }
-  */
   
   // Abrir o cerrar el submenú actual
   if (currentSubmenuContainer) {

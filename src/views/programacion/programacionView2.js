@@ -1,5 +1,4 @@
-// Bandeja de Programación — muestra requerimientos aprobados con asociación de pedidos y consolidación
-import { requerimientosService } from '../../services/requerimientosService.js';
+// src/views/programacion/programacionView.js
 import { programacionService } from '../../services/programacionService.js';
 import { authService } from '../../services/authService.js';
 
@@ -12,7 +11,7 @@ let paqueteReqIds = new Set();
 let selectedIds = new Set();
 
 // ==================== RENDER ====================
-function renderProgramacionView() {
+export function renderProgramacionView() {
   return `
     <div class="container-fluid">
       <div class="d-flex justify-content-between align-items-center mb-3">
@@ -21,14 +20,17 @@ function renderProgramacionView() {
           <p class="text-muted mb-0">Asociar pedidos SIGAMEF y consolidar requerimientos aprobados.</p>
         </div>
         <div class="d-flex gap-2">
-          <button id="progConsolidar" class="btn btn-sm btn-primary" disabled><i class="bi bi-box-seam"></i> Consolidar Requerimientos</button>
+          <button id="progConsolidar" class="btn btn-sm btn-success" disabled>
+            <i class="bi bi-box-seam"></i> Consolidar Requerimientos
+          </button>
+          <span id="progSeleccionados" class="badge bg-secondary align-self-center">0 seleccionados</span>
           <button id="progReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
         </div>
       </div>
       <hr/>
       <ul class="nav nav-tabs mb-3" id="progTabs">
-        <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">Bandeja</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-tab="paquetes">Paquetes</a></li>
+        <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">📋 Bandeja</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-tab="paquetes">📦 Paquetes</a></li>
       </ul>
       <div id="progContent"><div class="text-muted">Cargando…</div></div>
     </div>
@@ -37,6 +39,7 @@ function renderProgramacionView() {
         font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal;
       }
       #progContent .badge { font-weight: normal !important; font-size: 10pt !important; }
+      .btn-xs { padding: 1px 6px; font-size: 11px; }
     </style>
   `;
 }
@@ -49,7 +52,7 @@ async function loadBandeja() {
   if (!cont) return;
   try {
     const [respReq, countMap, paqList] = await Promise.all([
-      requerimientosService.listConDetalles({ pageSize: 500 }),
+      programacionService.getRequerimientos(),
       programacionService.getPedidosCount(),
       programacionService.listPaquetes(),
     ]);
@@ -57,26 +60,24 @@ async function loadBandeja() {
     pedidosCountMap = countMap || {};
     paquetesList = (paqList && paqList.data) || [];
 
-    // Build set of requerimiento_ids already in a paquete
     paqueteReqIds = new Set();
-    // We need the detail of each paquete to know which req_ids are inside
-    // Instead, use a backend endpoint or derive from paquetes details
-    // For efficiency, fetch all paquete details in parallel
     const paqDetailsPromises = paquetesList.map((p) => programacionService.getPaquete(p.id));
     const paqDetails = await Promise.all(paqDetailsPromises);
-    const paqDetailsMap = {};
     paqDetails.forEach((d) => {
       if (d && d.requerimientos) {
         d.requerimientos.forEach((r) => paqueteReqIds.add(r.id));
-        paqDetailsMap[d.paquete.id] = d;
       }
     });
 
-    let rows = (respReq && respReq.data) || [];
-    // Only show "Aprobado" or "Programado" requerimientos
+    let rows = [];
+    if (respReq && respReq.data) {
+      rows = respReq.data;
+    } else if (Array.isArray(respReq)) {
+      rows = respReq;
+    }
+
     rows = rows.filter((r) => /aprobad|programad/i.test(String(r.estado || '')));
 
-    // Compute monto_total
     rows = rows.map((r) => {
       let monto_total = 0;
       try {
@@ -98,16 +99,10 @@ async function loadBandeja() {
     });
     allRows = rows;
 
-    // Separate: rows in paquetes vs standalone
-    const standaloneRows = rows.filter((r) => !paqueteReqIds.has(r.id));
-
-    // Build combined list: standalone + paquetes interleaved by position
-    // Show paquetes at the position of their first requerimiento
     const combinedItems = [];
     const usedPaqIds = new Set();
     for (const r of rows) {
       if (paqueteReqIds.has(r.id)) {
-        // Find which paquete
         for (const pd of paqDetails) {
           if (!pd || !pd.paquete) continue;
           const pId = pd.paquete.id;
@@ -122,7 +117,6 @@ async function loadBandeja() {
         combinedItems.push({ type: 'req', req: r });
       }
     }
-    // Add any paquetes that weren't matched (edge case)
     for (const pd of paqDetails) {
       if (pd && pd.paquete && !usedPaqIds.has(pd.paquete.id)) {
         combinedItems.push({ type: 'paquete', paquete: pd.paquete, detail: pd });
@@ -148,10 +142,9 @@ async function loadBandeja() {
               <th>Área Usuaria</th>
               <th>Denominación</th>
               <th class="text-center">Monto</th>
-              <th class="text-center">CMN</th>
               <th>Estado</th>
               <th class="text-center">Pedidos</th>
-              <th style="width:130px;" class="text-center">Acciones</th>
+              <th style="width:180px;" class="text-center">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -164,15 +157,15 @@ async function loadBandeja() {
                 return `
                 <tr class="table-warning" style="cursor:pointer;" data-paquete-id="${p.id}">
                   <td></td>
-                  <td colspan="4"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span></td>
-                  <td class="text-center">${d.resumen ? 'S/. ' + d.resumen.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : ''}</td>
+                  <td colspan="3"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span></td>
                   <td></td>
+                  <td class="text-center">${d.resumen ? 'S/. ' + d.resumen.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : ''}</td>
                   <td><span class="badge ${estadoBg}">${esc(p.estado)}</span></td>
                   <td class="text-center">${d.pedidos ? d.pedidos.length : 0}</td>
                   <td class="text-center">
-                    <button class="btn btn-xs btn-outline-info prog-paq-detail" data-id="${p.id}" title="Ver Detalle" style="${style}"><i class="bi bi-eye" style="font-size:11px;"></i></button>
-                    ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-success prog-paq-approve" data-id="${p.id}" title="Aprobar" style="${style}"><i class="bi bi-check-circle" style="font-size:11px;"></i></button>` : ''}
-                    ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-danger prog-paq-del" data-id="${p.id}" title="Eliminar" style="${style}"><i class="bi bi-trash" style="font-size:11px;"></i></button>` : ''}
+                    <button class="btn btn-xs btn-outline-info prog-paq-detail" data-id="${p.id}" title="Ver Detalle"><i class="bi bi-eye"></i></button>
+                    ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-success prog-paq-approve" data-id="${p.id}" title="Aprobar"><i class="bi bi-check-circle"></i></button>` : ''}
+                    ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-danger prog-paq-del" data-id="${p.id}" title="Eliminar"><i class="bi bi-trash"></i></button>` : ''}
                   </td>
                 </tr>`;
               }
@@ -180,23 +173,21 @@ async function loadBandeja() {
               const pedCnt = pedidosCountMap[r.id] || 0;
               const inPaq = paqueteReqIds.has(r.id);
               const aprobado = /aprobad/i.test(String(r.estado || ''));
-              const programado = /programad/i.test(String(r.estado || ''));
               const canSelect = aprobado && !inPaq && pedCnt > 0;
               return `
               <tr>
                 <td><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : 'Ya consolidado') : 'Seleccionar'}"></td>
-                <td>${esc(r.codigo || ('#' + r.id))}</td>
+                <td><strong>${esc(r.codigo || ('REQ-' + String(r.id).padStart(5, '0')))}</strong></td>
                 <td><span class="badge bg-secondary text-uppercase" style="font-size:0.65rem;">${esc(r.tipo)}</span></td>
                 <td>${esc(r.area || '')}</td>
                 <td class="small">${esc(r.denominacion || '')}</td>
-                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</td>
-                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${estadoBadge(r.estado)}</td>
+                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : 'S/. 0.00'}</td>
+                <td><span class="badge bg-success">${esc(r.estado)}</span></td>
                 <td class="text-center">
                   ${pedCnt > 0 ? `<a href="#" class="prog-ver-pedidos text-success" data-id="${r.id}" title="Ver pedidos asociados">📎 ${pedCnt}</a>` : '<span class="text-muted small">0</span>'}
                 </td>
                 <td class="text-center" style="white-space:nowrap;">
-                  <button class="btn btn-xs btn-success prog-add-pedido" data-id="${r.id}" title="Agregar Pedido" style="${style}"><i class="bi bi-plus-circle" style="font-size:11px;"></i></button>
+                  <button class="btn btn-xs btn-success prog-add-pedido" data-id="${r.id}" title="Agregar Pedido SIGAMEF" style="${style}"><i class="bi bi-plus-circle"></i> Pedido</button>
                 </td>
               </tr>`;
             }).join('')}
@@ -205,6 +196,7 @@ async function loadBandeja() {
       </div>`;
 
     bindBandejaEvents(cont);
+    updateConsolidarBtn();
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
@@ -218,7 +210,6 @@ function estadoBadge(estado) {
 }
 
 function bindBandejaEvents(cont) {
-  // Select all
   const selectAll = cont.querySelector('#progSelectAll');
   if (selectAll) selectAll.onchange = () => {
     cont.querySelectorAll('.prog-select:not(:disabled)').forEach((cb) => {
@@ -229,20 +220,16 @@ function bindBandejaEvents(cont) {
     updateConsolidarBtn();
   };
 
-  // Individual checkboxes
   cont.querySelectorAll('.prog-select').forEach((cb) => cb.onchange = () => {
     if (cb.checked) selectedIds.add(Number(cb.dataset.id));
     else selectedIds.delete(Number(cb.dataset.id));
     updateConsolidarBtn();
   });
 
-  // Agregar Pedido
   cont.querySelectorAll('.prog-add-pedido').forEach((b) => b.onclick = () => openAsociarPedidosModal(Number(b.dataset.id)));
 
-  // Ver pedidos
   cont.querySelectorAll('.prog-ver-pedidos').forEach((a) => { a.onclick = (e) => { e.preventDefault(); openVerPedidosModal(Number(a.dataset.id)); }; });
 
-  // Paquete detail
   cont.querySelectorAll('.prog-paq-detail').forEach((b) => b.onclick = () => openPaqueteDetail(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-paq-approve').forEach((b) => b.onclick = () => aprobarPaquete(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-paq-del').forEach((b) => b.onclick = () => eliminarPaquete(Number(b.dataset.id)));
@@ -250,15 +237,17 @@ function bindBandejaEvents(cont) {
 
 function updateConsolidarBtn() {
   const btn = document.getElementById('progConsolidar');
-  if (btn) btn.disabled = selectedIds.size < 2;
+  const label = document.getElementById('progSeleccionados');
+  const count = selectedIds.size;
+  if (btn) btn.disabled = count < 2;
+  if (label) label.textContent = `${count} seleccionados`;
 }
 
 // ==================== MODAL: ASOCIAR PEDIDOS ====================
 async function openAsociarPedidosModal(requerimientoId) {
   const req = allRows.find((r) => r.id === requerimientoId);
-  const reqLabel = req ? (req.codigo || '#' + req.id) : '#' + requerimientoId;
+  const reqLabel = req ? (req.codigo || 'REQ-' + String(req.id).padStart(5, '0')) : '#' + requerimientoId;
 
-  // Get current associations
   let currentPedidos = [];
   try {
     const resp = await programacionService.getPedidos(requerimientoId);
@@ -308,7 +297,7 @@ async function openAsociarPedidosModal(requerimientoId) {
                         <td class="text-end">${parseFloat(p.cant_solicitada || 0).toFixed(2)}</td>
                         <td class="text-end">${parseFloat(p.precio_unitario || 0).toFixed(2)}</td>
                         <td class="text-end">${parseFloat(p.total_item || 0).toFixed(2)}</td>
-                        <td class="text-center"><button class="btn btn-xs btn-outline-danger remove-ped" data-idx="${i}" title="Eliminar"><i class="bi bi-trash" style="font-size:10px;"></i></button></td>
+                        <td class="text-center"><button class="btn btn-xs btn-outline-danger remove-ped" data-idx="${i}" title="Eliminar"><i class="bi bi-trash"></i></button></td>
                       </tr>
                     `).join('')}
                   </tbody>
@@ -327,7 +316,6 @@ async function openAsociarPedidosModal(requerimientoId) {
     modal.querySelector('#closeAsociar').onclick = () => modal.remove();
     modal.querySelector('#cancelAsociar').onclick = () => modal.remove();
 
-    // Search
     const searchInput = modal.querySelector('#buscarPedidoInput');
     const searchBtn = modal.querySelector('#buscarPedidoBtn');
     const resultsDiv = modal.querySelector('#buscarPedidoResults');
@@ -342,7 +330,6 @@ async function openAsociarPedidosModal(requerimientoId) {
           resultsDiv.innerHTML = '<p class="text-muted small">No se encontraron pedidos.</p>';
           return;
         }
-        // Filter out already associated
         const assocIds = new Set(tempPedidos.map((p) => p.id));
         resultsDiv.innerHTML = `
           <table class="table table-sm table-bordered" style="font-size:10px; font-family:Arial;">
@@ -360,7 +347,7 @@ async function openAsociarPedidosModal(requerimientoId) {
                   <td class="text-end">${parseFloat(p.precio_unitario || 0).toFixed(2)}</td>
                   <td class="text-end">${parseFloat(p.total_item || 0).toFixed(2)}</td>
                   <td class="text-center">
-                    ${assocIds.has(p.id) ? '<span class="text-success">✓</span>' : `<button class="btn btn-xs btn-outline-success add-ped-result" data-ped='${JSON.stringify(p).replace(/'/g, '&#39;')}' title="Agregar"><i class="bi bi-plus-circle" style="font-size:10px;"></i></button>`}
+                    ${assocIds.has(p.id) ? '<span class="text-success">✓</span>' : `<button class="btn btn-xs btn-outline-success add-ped-result" data-ped='${JSON.stringify(p).replace(/'/g, '&#39;')}' title="Agregar"><i class="bi bi-plus-circle"></i></button>`}
                   </td>
                 </tr>
               `).join('')}
@@ -382,7 +369,6 @@ async function openAsociarPedidosModal(requerimientoId) {
     searchBtn.onclick = doSearch;
     searchInput.onkeydown = (e) => { if (e.key === 'Enter') doSearch(); };
 
-    // Remove pedido
     modal.querySelectorAll('.remove-ped').forEach((b) => {
       b.onclick = () => {
         const idx = Number(b.dataset.idx);
@@ -393,16 +379,13 @@ async function openAsociarPedidosModal(requerimientoId) {
       };
     });
 
-    // Save
     modal.querySelector('#guardarAsociar').onclick = async () => {
       try {
-        // Delete removed ones
         for (const orig of currentPedidos) {
           if (!tempPedidos.some((tp) => tp.id === orig.id)) {
             await programacionService.eliminarAsociacion(orig.asociacion_id);
           }
         }
-        // Add new ones
         if (newPedidoIds.length) {
           const user = authService.getCurrentUser();
           await programacionService.asociarPedidos({
@@ -412,10 +395,10 @@ async function openAsociarPedidosModal(requerimientoId) {
           });
         }
         modal.remove();
-        alert('Pedidos asociados correctamente.');
+        alert('✅ Pedidos asociados correctamente.');
         loadBandeja();
       } catch (e) {
-        alert('Error al guardar: ' + e.message);
+        alert('❌ Error al guardar: ' + e.message);
       }
     };
   }
@@ -427,7 +410,7 @@ async function openAsociarPedidosModal(requerimientoId) {
 // ==================== MODAL: VER PEDIDOS ====================
 async function openVerPedidosModal(requerimientoId) {
   const req = allRows.find((r) => r.id === requerimientoId);
-  const reqLabel = req ? (req.codigo || '#' + req.id) : '#' + requerimientoId;
+  const reqLabel = req ? (req.codigo || 'REQ-' + String(req.id).padStart(5, '0')) : '#' + requerimientoId;
   let pedidos = [];
   try {
     const resp = await programacionService.getPedidos(requerimientoId);
@@ -479,7 +462,6 @@ function openConsolidarModal() {
   const selReqs = allRows.filter((r) => selectedIds.has(r.id));
   if (selReqs.length < 2) { alert('Seleccione al menos 2 requerimientos.'); return; }
 
-  // Validations
   for (const r of selReqs) {
     if (/anulad/i.test(String(r.estado || ''))) { alert(`${r.codigo} está anulado.`); return; }
     if (/programad/i.test(String(r.estado || ''))) { alert(`${r.codigo} ya fue programado.`); return; }
@@ -493,18 +475,18 @@ function openConsolidarModal() {
   modal.innerHTML = `
     <div class="modal-dialog">
       <div class="modal-content">
-        <div class="modal-header bg-primary text-white">
+        <div class="modal-header bg-success text-white">
           <h5 class="modal-title"><i class="bi bi-box-seam"></i> Consolidar Requerimientos</h5>
           <button type="button" class="btn-close btn-close-white" id="closeConsolidar"></button>
         </div>
         <div class="modal-body">
           <p><strong>Requerimientos seleccionados:</strong></p>
-          <ul>${selReqs.map((r) => `<li>${esc(r.codigo || '#' + r.id)} — ${esc(r.denominacion || r.area || '')}</li>`).join('')}</ul>
+          <ul>${selReqs.map((r) => `<li>${esc(r.codigo || 'REQ-' + String(r.id).padStart(5, '0'))} — ${esc(r.denominacion || r.area || '')}</li>`).join('')}</ul>
           <p class="fw-bold">Cantidad: ${selReqs.length} requerimientos</p>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelConsolidar">Cancelar</button>
-          <button class="btn btn-primary" id="crearPaquete"><i class="bi bi-box-seam"></i> Crear Paquete</button>
+          <button class="btn btn-success" id="crearPaquete"><i class="bi bi-box-seam"></i> Crear Paquete</button>
         </div>
       </div>
     </div>`;
@@ -519,11 +501,11 @@ function openConsolidarModal() {
         usuario: user ? (user.nombre || user.dni || '') : '',
       });
       modal.remove();
-      alert(`Paquete ${resp.paquete.codigo_paquete} creado exitosamente.`);
+      alert(`✅ Paquete ${resp.paquete.codigo_paquete} creado exitosamente.`);
       selectedIds = new Set();
       loadBandeja();
     } catch (e) {
-      alert('Error al crear paquete: ' + e.message);
+      alert('❌ Error al crear paquete: ' + e.message);
     }
   };
 
@@ -581,7 +563,7 @@ async function openPaqueteDetail(paqueteId) {
             <tbody>
               ${reqs.map((r) => `
                 <tr>
-                  <td>${esc(r.codigo || '#' + r.id)}</td>
+                  <td>${esc(r.codigo || 'REQ-' + String(r.id).padStart(5, '0'))}</td>
                   <td><span class="badge bg-secondary text-uppercase" style="font-size:0.65rem;">${esc(r.tipo)}</span></td>
                   <td>${esc(r.area || '')}</td>
                   <td class="small">${esc(r.denominacion || '')}</td>
@@ -635,10 +617,10 @@ async function aprobarPaquete(id) {
   try {
     const user = authService.getCurrentUser();
     await programacionService.aprobarPaquete(id, { usuario: user ? (user.nombre || user.dni || '') : '' });
-    alert('Paquete aprobado exitosamente.');
+    alert('✅ Paquete aprobado exitosamente.');
     loadBandeja();
   } catch (e) {
-    alert('Error al aprobar: ' + e.message);
+    alert('❌ Error al aprobar: ' + e.message);
   }
 }
 
@@ -646,10 +628,10 @@ async function eliminarPaquete(id) {
   if (!confirm('¿Eliminar este paquete? Los requerimientos quedarán libres.')) return;
   try {
     await programacionService.eliminarPaquete(id);
-    alert('Paquete eliminado.');
+    alert('✅ Paquete eliminado.');
     loadBandeja();
   } catch (e) {
-    alert('Error al eliminar: ' + e.message);
+    alert('❌ Error al eliminar: ' + e.message);
   }
 }
 
@@ -730,7 +712,7 @@ function printPaquete(detail) {
     <p class="section">Requerimientos (${reqs.length})</p>
     <table>
       <tr><th>Código</th><th>Tipo</th><th>Área</th><th>Denominación</th><th>Estado</th></tr>
-      ${reqs.map((r) => `<tr><td>${esc(r.codigo)}</td><td>${esc(r.tipo)}</td><td>${esc(r.area)}</td><td>${esc(r.denominacion)}</td><td>${esc(r.estado)}</td></tr>`).join('')}
+      ${reqs.map((r) => `<tr><td>${esc(r.codigo || 'REQ-' + String(r.id).padStart(5, '0'))}</td><td>${esc(r.tipo)}</td><td>${esc(r.area)}</td><td>${esc(r.denominacion)}</td><td>${esc(r.estado)}</td></tr>`).join('')}
     </table>
 
     <p class="section">Pedidos SIGAMEF Asociados (${peds.length})</p>
@@ -745,7 +727,7 @@ function printPaquete(detail) {
 }
 
 // ==================== INIT ====================
-function initProgramacionView() {
+export function initProgramacionView() {
   const reload = document.getElementById('progReload');
   if (reload) reload.onclick = () => {
     if (currentTab === 'bandeja') loadBandeja();
@@ -755,7 +737,6 @@ function initProgramacionView() {
   const consolidarBtn = document.getElementById('progConsolidar');
   if (consolidarBtn) consolidarBtn.onclick = () => openConsolidarModal();
 
-  // Tabs
   document.querySelectorAll('#progTabs .nav-link').forEach((tab) => {
     tab.onclick = (e) => {
       e.preventDefault();
@@ -770,5 +751,3 @@ function initProgramacionView() {
   currentTab = 'bandeja';
   loadBandeja();
 }
-
-export { renderProgramacionView, initProgramacionView };
