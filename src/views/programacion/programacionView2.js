@@ -1,6 +1,9 @@
 // src/views/programacion/programacionView.js
 import { programacionService } from '../../services/programacionService.js';
+import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
+import { todasObservaciones, historialHtml, showTextModal } from '../requerimiento/reqShared.js';
+import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -35,14 +38,37 @@ export function renderProgramacionView() {
       <div id="progContent"><div class="text-muted">Cargando…</div></div>
     </div>
     <style>
-      #progContent .prog-table, #progContent .prog-table th, #progContent .prog-table td {
+      #progContent .req-list-table, #progContent .req-list-table th, #progContent .req-list-table td {
         font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal;
       }
-      #progContent .badge { font-weight: normal !important; font-size: 10pt !important; }
+      #progContent .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
+      #progContent .req-list-table strong { font-weight: normal; }
       .btn-xs { padding: 1px 6px; font-size: 11px; }
     </style>
   `;
 }
+
+function getPayloadItemTexts(r) {
+  let codigosSigamef = '<span class="text-muted small">—</span>';
+  let descripcionesBien = '<span class="text-muted small">—</span>';
+  try {
+    const p = JSON.parse(r.payload || '{}');
+    const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
+    if (Array.isArray(items) && items.length) {
+      codigosSigamef = items.map((it) => esc(it.item_bien || '')).join(', ');
+      descripcionesBien = items.map((it) => esc(it.nombre_item || '')).join(', ');
+    }
+  } catch (_) {}
+  return { codigosSigamef, descripcionesBien };
+}
+
+// Estados visibles en bandeja de Programación (historial completo del flujo)
+const ESTADOS_BANDEJA_PROG = [
+  'Aprobado DEC',
+  'Observado Programación',
+  'Aprobado Programación',
+  'Programado',
+];
 
 let currentTab = 'bandeja';
 
@@ -51,18 +77,32 @@ async function loadBandeja() {
   const cont = document.getElementById('progContent');
   if (!cont) return;
   try {
-    const [respReq, countMap, paqList] = await Promise.all([
-      programacionService.getRequerimientos(),
-      programacionService.getPedidosCount(),
-      programacionService.listPaquetes(),
-    ]);
+    cont.innerHTML = '<div class="text-muted">Cargando…</div>';
+    let respReq;
+    try {
+      respReq = await programacionService.getRequerimientos();
+    } catch (_) {
+      respReq = await contratacionesService.listProgramacion({ pageSize: 200 });
+    }
+    let countMap = {};
+    let paqList = { data: [] };
+    try { countMap = await programacionService.getPedidosCount(); } catch (_) {}
+    try { paqList = await programacionService.listPaquetes(); } catch (_) {}
 
     pedidosCountMap = countMap || {};
     paquetesList = (paqList && paqList.data) || [];
 
     paqueteReqIds = new Set();
-    const paqDetailsPromises = paquetesList.map((p) => programacionService.getPaquete(p.id));
-    const paqDetails = await Promise.all(paqDetailsPromises);
+    let paqDetails = [];
+    if (paquetesList.length) {
+      try {
+        paqDetails = await Promise.all(
+          paquetesList.map((p) => programacionService.getPaquete(p.id).catch(() => null))
+        );
+      } catch (_) {
+        paqDetails = [];
+      }
+    }
     paqDetails.forEach((d) => {
       if (d && d.requerimientos) {
         d.requerimientos.forEach((r) => paqueteReqIds.add(r.id));
@@ -76,7 +116,7 @@ async function loadBandeja() {
       rows = respReq;
     }
 
-    rows = rows.filter((r) => /aprobad|programad/i.test(String(r.estado || '')));
+    rows = rows.filter((r) => ESTADOS_BANDEJA_PROG.includes(String(r.estado || '')));
 
     rows = rows.map((r) => {
       let monto_total = 0;
@@ -132,19 +172,29 @@ async function loadBandeja() {
 
     const style = 'padding: 2px 6px; font-size: 11px;';
     cont.innerHTML = `
+      <style>
+        #progContent .req-list-table, #progContent .req-list-table th, #progContent .req-list-table td {
+          font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal;
+        }
+        #progContent .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
+        #progContent .req-list-table strong { font-weight: normal; }
+      </style>
       <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle prog-table">
+        <table class="table table-sm table-hover align-middle req-list-table">
           <thead class="table-light">
             <tr>
               <th style="width:35px;"><input type="checkbox" id="progSelectAll" title="Seleccionar todos"></th>
               <th>Código</th>
               <th>Tipo</th>
-              <th>Área Usuaria</th>
-              <th>Denominación</th>
-              <th class="text-center">Monto</th>
+              <th>Código SIGAMEF</th>
+              <th>Descripción del bien</th>
+              <th>Área usuaria</th>
+              <th>Centro</th>
+              <th class="text-center">Monto Total</th>
+              <th class="text-center">CMN N°</th>
               <th>Estado</th>
               <th class="text-center">Pedidos</th>
-              <th style="width:180px;" class="text-center">Acciones</th>
+              <th style="width:280px;" class="text-center">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -157,11 +207,13 @@ async function loadBandeja() {
                 return `
                 <tr class="table-warning" style="cursor:pointer;" data-paquete-id="${p.id}">
                   <td></td>
-                  <td colspan="3"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span></td>
-                  <td></td>
+                  <td colspan="6"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span></td>
                   <td class="text-center">${d.resumen ? 'S/. ' + d.resumen.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : ''}</td>
+                  <td class="text-center"><span class="text-muted">—</span></td>
                   <td><span class="badge ${estadoBg}">${esc(p.estado)}</span></td>
-                  <td class="text-center">${d.pedidos ? d.pedidos.length : 0}</td>
+                  <td class="text-center">
+                    <button class="btn btn-xs btn-outline-success" disabled title="Pedidos del paquete" style="${style}"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-success" style="font-size:9px;padding:1px 4px;">${d.pedidos ? d.pedidos.length : 0}</span></button>
+                  </td>
                   <td class="text-center">
                     <button class="btn btn-xs btn-outline-info prog-paq-detail" data-id="${p.id}" title="Ver Detalle"><i class="bi bi-eye"></i></button>
                     ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-success prog-paq-approve" data-id="${p.id}" title="Aprobar"><i class="bi bi-check-circle"></i></button>` : ''}
@@ -172,22 +224,35 @@ async function loadBandeja() {
               const r = item.req;
               const pedCnt = pedidosCountMap[r.id] || 0;
               const inPaq = paqueteReqIds.has(r.id);
-              const aprobado = /aprobad/i.test(String(r.estado || ''));
-              const canSelect = aprobado && !inPaq && pedCnt > 0;
+              const esAprobadoDec = r.estado === 'Aprobado DEC';
+              const esObservado = r.estado === 'Observado Programación';
+              const puedeGestionar = esAprobadoDec || esObservado;
+              const canSelect = esAprobadoDec && !inPaq && pedCnt > 0;
+              const { codigosSigamef, descripcionesBien } = getPayloadItemTexts(r);
               return `
               <tr>
-                <td><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : 'Ya consolidado') : 'Seleccionar'}"></td>
-                <td><strong>${esc(r.codigo || ('REQ-' + String(r.id).padStart(5, '0')))}</strong></td>
+                <td><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
+                <td>${esc(r.codigo || ('REQ-' + String(r.id).padStart(5, '0')))}</td>
                 <td><span class="badge bg-secondary text-uppercase" style="font-size:0.65rem;">${esc(r.tipo)}</span></td>
+                <td class="small">${codigosSigamef}</td>
+                <td class="small">${descripcionesBien}</td>
                 <td>${esc(r.area || '')}</td>
-                <td class="small">${esc(r.denominacion || '')}</td>
+                <td>${esc(r.responsable || r.centro_nombre || '')}</td>
                 <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : 'S/. 0.00'}</td>
-                <td><span class="badge bg-success">${esc(r.estado)}</span></td>
+                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
+                <td>${estadoBadge(r.estado)}</td>
                 <td class="text-center">
-                  ${pedCnt > 0 ? `<a href="#" class="prog-ver-pedidos text-success" data-id="${r.id}" title="Ver pedidos asociados">📎 ${pedCnt}</a>` : '<span class="text-muted small">0</span>'}
+                  ${pedCnt > 0
+                    ? `<button class="btn btn-xs btn-outline-success prog-ver-pedidos" data-id="${r.id}" title="Ver pedidos asociados" style="${style}"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-success" style="font-size:9px;padding:1px 4px;">${pedCnt}</span></button>`
+                    : `<button class="btn btn-xs btn-outline-secondary" disabled title="Sin pedidos asociados" style="${style}"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-secondary" style="font-size:9px;padding:1px 4px;">0</span></button>`
+                  }
                 </td>
                 <td class="text-center" style="white-space:nowrap;">
-                  <button class="btn btn-xs btn-success prog-add-pedido" data-id="${r.id}" title="Agregar Pedido SIGAMEF" style="${style}"><i class="bi bi-plus-circle"></i> Pedido</button>
+                  <button class="btn btn-xs btn-success prog-add-pedido" data-id="${r.id}" title="Agregar Pedido SIGAMEF" style="${style}"${puedeGestionar ? '' : ' disabled'}><i class="bi bi-plus-circle"></i> Pedido</button>
+                  <button class="btn btn-xs btn-outline-primary prog-ver" data-id="${r.id}" title="Ver documento" style="${style}"><i class="bi bi-eye"></i></button>
+                  <button class="btn btn-xs btn-outline-info prog-attach" data-id="${r.id}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size:9px;padding:1px 4px;">0</span></button>
+                  <button class="btn btn-xs btn-outline-danger prog-observar" data-id="${r.id}" title="Observar" style="${style}"${puedeGestionar ? '' : ' disabled'}><i class="bi bi-chat-left-dots"></i></button>
+                  <button class="btn btn-xs btn-success prog-aprobar" data-id="${r.id}" title="Aprobar" style="${style}"${esAprobadoDec ? '' : ' disabled'}><i class="bi bi-check-circle"></i> Aprobar</button>
                 </td>
               </tr>`;
             }).join('')}
@@ -204,8 +269,9 @@ async function loadBandeja() {
 
 function estadoBadge(estado) {
   const e = String(estado || '');
+  if (/observ/i.test(e)) return `<span class="badge bg-danger">${esc(e)}</span>`;
+  if (e === 'Programado') return `<span class="badge bg-primary">${esc(e)}</span>`;
   if (/aprobad/i.test(e)) return `<span class="badge bg-success">${esc(e)}</span>`;
-  if (/programad/i.test(e)) return `<span class="badge bg-primary">${esc(e)}</span>`;
   return `<span class="badge bg-secondary">${esc(e)}</span>`;
 }
 
@@ -227,8 +293,13 @@ function bindBandejaEvents(cont) {
   });
 
   cont.querySelectorAll('.prog-add-pedido').forEach((b) => b.onclick = () => openAsociarPedidosModal(Number(b.dataset.id)));
+  cont.querySelectorAll('.prog-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
+  cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
+  cont.querySelectorAll('.prog-aprobar').forEach((b) => b.onclick = () => aprobarProgramacion(Number(b.dataset.id)));
+  cont.querySelectorAll('.prog-observar').forEach((b) => b.onclick = () => observarProgramacion(Number(b.dataset.id)));
+  allRows.forEach((r) => cargarContadorAdjuntos(r.id));
 
-  cont.querySelectorAll('.prog-ver-pedidos').forEach((a) => { a.onclick = (e) => { e.preventDefault(); openVerPedidosModal(Number(a.dataset.id)); }; });
+  cont.querySelectorAll('.prog-ver-pedidos').forEach((b) => b.onclick = () => openVerPedidosModal(Number(b.dataset.id)));
 
   cont.querySelectorAll('.prog-paq-detail').forEach((b) => b.onclick = () => openPaqueteDetail(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-paq-approve').forEach((b) => b.onclick = () => aprobarPaquete(Number(b.dataset.id)));
@@ -243,7 +314,106 @@ function updateConsolidarBtn() {
   if (label) label.textContent = `${count} seleccionados`;
 }
 
+async function aprobarProgramacion(id) {
+  if (!confirm('¿Confirmar aprobación desde Programación? Estado: Aprobado Programación.')) return;
+  try {
+    const user = authService.getCurrentUser() || {};
+    const res = await contratacionesService.aprobarProgramacion(id, user.dni || user.nombre || 'sistema');
+    if (res && res.success === false) throw new Error('No se pudo aprobar');
+    loadBandeja();
+  } catch (e) {
+    alert('Error al aprobar: ' + e.message);
+  }
+}
+
+async function observarProgramacion(id) {
+  const req = allRows.find((x) => String(x.id) === String(id));
+  if (!req) return;
+  const motivo = await showTextModal({
+    title: 'Observar requerimiento desde Programación',
+    historyHtml: historialHtml(todasObservaciones(req)),
+    label: 'Motivo de la observación',
+    placeholder: 'Indique el motivo...',
+    buttonText: 'Observar',
+    buttonClass: 'btn-danger',
+  });
+  if (!motivo) return;
+  try {
+    const user = authService.getCurrentUser() || {};
+    await contratacionesService.observarProgramacion(id, motivo, user.dni || user.nombre || 'sistema');
+    loadBandeja();
+  } catch (e) {
+    alert('Error al observar: ' + e.message);
+  }
+}
+
 // ==================== MODAL: ASOCIAR PEDIDOS ====================
+function setupDraggableModal(modalEl) {
+  if (modalEl._dragCleanup) modalEl._dragCleanup();
+  const dialog = modalEl.querySelector('.modal-dialog');
+  const header = modalEl.querySelector('.modal-header');
+  if (!dialog || !header) return;
+
+  modalEl.style.background = 'transparent';
+  modalEl.style.pointerEvents = 'none';
+  dialog.style.pointerEvents = 'auto';
+  dialog.style.position = 'fixed';
+  dialog.style.margin = '0';
+  dialog.style.zIndex = '1055';
+
+  if (!modalEl._posInit) {
+    dialog.style.top = '80px';
+    dialog.style.left = '50%';
+    dialog.style.transform = 'translateX(-50%)';
+    modalEl._posInit = true;
+  }
+
+  header.style.cursor = 'move';
+  header.style.userSelect = 'none';
+
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const onMouseDown = (e) => {
+    if (e.target.closest('.btn-close')) return;
+    dragging = true;
+    const rect = dialog.getBoundingClientRect();
+    dialog.style.transform = 'none';
+    dialog.style.left = `${rect.left}px`;
+    dialog.style.top = `${rect.top}px`;
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+    e.preventDefault();
+  };
+  const onMouseMove = (e) => {
+    if (!dragging) return;
+    dialog.style.left = `${e.clientX - offsetX}px`;
+    dialog.style.top = `${e.clientY - offsetY}px`;
+  };
+  const onMouseUp = () => { dragging = false; };
+
+  header.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+  modalEl._dragCleanup = () => {
+    header.removeEventListener('mousedown', onMouseDown);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+}
+
+function pedidoSearchAction(p, assocIds) {
+  const inList = assocIds.has(p.id);
+  const yaAsignado = inList || p.asignado_este || p.asignado_otro || p.asignado;
+  if (yaAsignado) {
+    let title = 'Ya agregado a este requerimiento';
+    if (p.asignado_otro) title = `Ya asignado a ${p.requerimiento_codigo || 'otro requerimiento'}`;
+    return `<button class="btn btn-xs btn-outline-primary" disabled title="${esc(title)}"><i class="bi bi-check-circle-fill"></i></button>`;
+  }
+  return `<button class="btn btn-xs btn-outline-primary add-ped-result" data-ped='${JSON.stringify(p).replace(/'/g, '&#39;')}' title="Agregar"><i class="bi bi-plus-circle"></i></button>`;
+}
+
 async function openAsociarPedidosModal(requerimientoId) {
   const req = allRows.find((r) => r.id === requerimientoId);
   const reqLabel = req ? (req.codigo || 'REQ-' + String(req.id).padStart(5, '0')) : '#' + requerimientoId;
@@ -259,15 +429,16 @@ async function openAsociarPedidosModal(requerimientoId) {
 
   const modal = document.createElement('div');
   modal.className = 'modal fade show d-block';
-  modal.style.background = 'rgba(0,0,0,0.5)';
+  modal.style.background = 'transparent';
+  modal.style.pointerEvents = 'none';
   modal.setAttribute('tabindex', '-1');
 
   function renderModal() {
     modal.innerHTML = `
       <div class="modal-dialog modal-lg modal-dialog-scrollable">
-        <div class="modal-content">
-          <div class="modal-header bg-success text-white">
-            <h5 class="modal-title"><i class="bi bi-link-45deg"></i> Asociar Pedidos SIGAMEF — ${esc(reqLabel)}</h5>
+        <div class="modal-content shadow">
+          <div class="modal-header bg-success text-white prog-modal-drag">
+            <h5 class="modal-title"><i class="bi bi-link-45deg"></i> Asociar Pedidos SIGAMEF al Requerimiento ${esc(reqLabel)}</h5>
             <button type="button" class="btn-close btn-close-white" id="closeAsociar"></button>
           </div>
           <div class="modal-body">
@@ -285,14 +456,14 @@ async function openAsociarPedidosModal(requerimientoId) {
               ${tempPedidos.length === 0 ? '<p class="text-muted small">No hay pedidos asociados.</p>' : `
                 <table class="table table-sm table-bordered" style="font-size:10px; font-family:Arial;">
                   <thead class="table-light"><tr>
-                    <th>Código</th><th>Año</th><th>Tipo</th><th>Nro Pedido</th><th>Centro</th>
+                    <th>Año</th><th>Tipo</th><th>Pedido Sigamef</th><th>Centro</th><th>Código SIGAMEF</th>
                     <th>Descripción</th><th>Cantidad</th><th>P.Unit.</th><th>Total</th><th>Acción</th>
                   </tr></thead>
                   <tbody>
                     ${tempPedidos.map((p, i) => `
                       <tr>
-                        <td>${esc(p.codigo_pedido)}</td><td>${esc(p.ano_eje)}</td><td>${esc(p.tipo)}</td>
-                        <td>${esc(p.nro_pedido)}</td><td>${esc(p.centro)}</td>
+                        <td>${esc(p.ano_eje)}</td><td>${esc(p.tipo)}</td>
+                        <td>${esc(p.nro_pedido)}</td><td>${esc(p.centro)}</td><td class="small">${esc(p.codigo_sigamef || '')}</td>
                         <td class="small">${esc(p.descripcion)}</td>
                         <td class="text-end">${parseFloat(p.cant_solicitada || 0).toFixed(2)}</td>
                         <td class="text-end">${parseFloat(p.precio_unitario || 0).toFixed(2)}</td>
@@ -313,8 +484,15 @@ async function openAsociarPedidosModal(requerimientoId) {
       </div>
     `;
 
-    modal.querySelector('#closeAsociar').onclick = () => modal.remove();
-    modal.querySelector('#cancelAsociar').onclick = () => modal.remove();
+    setupDraggableModal(modal);
+    modal.querySelector('#closeAsociar').onclick = () => {
+      if (modal._dragCleanup) modal._dragCleanup();
+      modal.remove();
+    };
+    modal.querySelector('#cancelAsociar').onclick = () => {
+      if (modal._dragCleanup) modal._dragCleanup();
+      modal.remove();
+    };
 
     const searchInput = modal.querySelector('#buscarPedidoInput');
     const searchBtn = modal.querySelector('#buscarPedidoBtn');
@@ -324,7 +502,7 @@ async function openAsociarPedidosModal(requerimientoId) {
       const q = searchInput.value.trim();
       if (!q) return;
       try {
-        const resp = await programacionService.buscarPedido(q);
+        const resp = await programacionService.buscarPedido(q, requerimientoId);
         const results = (resp && resp.data) || [];
         if (!results.length) {
           resultsDiv.innerHTML = '<p class="text-muted small">No se encontraron pedidos.</p>';
@@ -334,21 +512,19 @@ async function openAsociarPedidosModal(requerimientoId) {
         resultsDiv.innerHTML = `
           <table class="table table-sm table-bordered" style="font-size:10px; font-family:Arial;">
             <thead class="table-light"><tr>
-              <th>Código</th><th>Año</th><th>Tipo</th><th>Nro</th><th>Centro</th>
+              <th>Año</th><th>Tipo</th><th>Pedido Sigamef</th><th>Centro</th><th>Código SIGAMEF</th>
               <th>Descripción</th><th>Cantidad</th><th>P.Unit.</th><th>Total</th><th></th>
             </tr></thead>
             <tbody>
               ${results.map((p) => `
                 <tr>
-                  <td>${esc(p.codigo_pedido)}</td><td>${esc(p.ano_eje)}</td><td>${esc(p.tipo)}</td>
-                  <td>${esc(p.nro_pedido)}</td><td>${esc(p.centro)}</td>
+                  <td>${esc(p.ano_eje)}</td><td>${esc(p.tipo)}</td>
+                  <td>${esc(p.nro_pedido)}</td><td>${esc(p.centro)}</td><td class="small">${esc(p.codigo_sigamef || '')}</td>
                   <td class="small">${esc(p.descripcion)}</td>
                   <td class="text-end">${parseFloat(p.cant_solicitada || 0).toFixed(2)}</td>
                   <td class="text-end">${parseFloat(p.precio_unitario || 0).toFixed(2)}</td>
                   <td class="text-end">${parseFloat(p.total_item || 0).toFixed(2)}</td>
-                  <td class="text-center">
-                    ${assocIds.has(p.id) ? '<span class="text-success">✓</span>' : `<button class="btn btn-xs btn-outline-success add-ped-result" data-ped='${JSON.stringify(p).replace(/'/g, '&#39;')}' title="Agregar"><i class="bi bi-plus-circle"></i></button>`}
-                  </td>
+                  <td class="text-center">${pedidoSearchAction(p, assocIds)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -356,6 +532,10 @@ async function openAsociarPedidosModal(requerimientoId) {
         resultsDiv.querySelectorAll('.add-ped-result').forEach((b) => {
           b.onclick = () => {
             const ped = JSON.parse(b.dataset.ped);
+            if (ped.asignado_otro) {
+              alert(`Este pedido ya está asignado a ${ped.requerimiento_codigo || 'otro requerimiento'}.`);
+              return;
+            }
             tempPedidos.push(ped);
             newPedidoIds.push(ped.id);
             renderModal();
@@ -394,6 +574,7 @@ async function openAsociarPedidosModal(requerimientoId) {
             usuario: user ? (user.nombre || user.dni || '') : '',
           });
         }
+        if (modal._dragCleanup) modal._dragCleanup();
         modal.remove();
         alert('✅ Pedidos asociados correctamente.');
         loadBandeja();
@@ -512,6 +693,52 @@ function openConsolidarModal() {
   document.body.appendChild(modal);
 }
 
+function paquetePedidosFooter(peds) {
+  const montoTotal = peds.reduce((s, p) => s + Number(p.total_item || 0), 0);
+  const codigos = [...new Set(peds.map((p) => String(p.codigo_sigamef || '').trim()).filter(Boolean))];
+  const mismoCodigo = codigos.length === 1 && peds.length > 0;
+  const cantidadTotal = mismoCodigo
+    ? peds.reduce((s, p) => s + Math.round(Number(p.cant_solicitada || 0)), 0)
+    : null;
+  const money = (n) => 'S/. ' + Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return { montoTotal, cantidadTotal, money };
+}
+
+function paquetePedidosTableHtml(peds) {
+  const fmtMoney = (n) => parseFloat(n || 0).toFixed(2);
+  const fmtQty = (n) => String(Math.round(Number(n || 0)));
+  const { montoTotal, cantidadTotal, money } = paquetePedidosFooter(peds);
+  return `
+    <table class="table table-sm table-bordered mb-0 req-list-table">
+      <thead class="table-light"><tr>
+        <th>Año</th><th>Tipo</th><th>Requerimiento</th><th>Pedido Sigamef</th><th>Centro</th><th>Área usuaria</th>
+        <th>Meta</th><th>Clasificador</th><th>Código SIGAMEF</th><th>Descripción</th><th>Unidad medida</th>
+        <th>Cantidad</th><th>Precio unitario</th><th>Precio total</th>
+      </tr></thead>
+      <tbody>
+        ${peds.length ? peds.map((p) => `
+          <tr>
+            <td>${esc(p.ano_eje)}</td>
+            <td>${esc(p.tipo)}</td>
+            <td>${esc(p.requerimiento_codigo || ('REQ-' + String(p.requerimiento_id || '').padStart(5, '0')))}</td>
+            <td>${esc(p.nro_pedido)}</td>
+            <td>${esc(p.centro)}</td>
+            <td class="small">${esc(p.area_usuaria || '')}</td>
+            <td>${esc(p.sec_func || '')}</td>
+            <td>${esc(p.especifica || '')}</td>
+            <td class="small">${esc(p.codigo_sigamef || '')}</td>
+            <td class="small">${esc(p.descripcion)}</td>
+            <td>${esc(p.unidad_medida || '')}</td>
+            <td class="text-end">${fmtQty(p.cant_solicitada)}</td>
+            <td class="text-end">${fmtMoney(p.precio_unitario)}</td>
+            <td class="text-end">${fmtMoney(p.total_item)}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="14" class="text-center text-muted">No hay pedidos asociados.</td></tr>'}
+        ${peds.length ? `<tr class="table-light"><td colspan="11"></td><td class="text-end">${cantidadTotal != null ? `<strong>${cantidadTotal}</strong>` : ''}</td><td class="text-end"><strong>Total</strong></td><td class="text-end"><strong>${money(montoTotal)}</strong></td></tr>` : ''}
+      </tbody>
+    </table>`;
+}
+
 // ==================== PAQUETE DETAIL ====================
 async function openPaqueteDetail(paqueteId) {
   const cont = document.getElementById('progContent');
@@ -521,7 +748,6 @@ async function openPaqueteDetail(paqueteId) {
     const p = d.paquete;
     const reqs = d.requerimientos || [];
     const peds = d.pedidos || [];
-    const res = d.resumen || {};
 
     cont.innerHTML = `
       <div class="mb-3">
@@ -545,54 +771,9 @@ async function openPaqueteDetail(paqueteId) {
       </div>
 
       <div class="card mb-3">
-        <div class="card-header"><h6 class="mb-0">Resumen Consolidado</h6></div>
-        <div class="card-body">
-          <div class="row">
-            <div class="col-md-3"><strong>Monto Total:</strong> S/. ${(res.monto_total || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}</div>
-            <div class="col-md-3"><strong>Centros:</strong> ${(res.centros || []).join(', ') || '—'}</div>
-            <div class="col-md-3"><strong>Específicas:</strong> ${(res.especificas || []).join(', ') || '—'}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card mb-3">
-        <div class="card-header"><h6 class="mb-0">Requerimientos (${reqs.length})</h6></div>
-        <div class="card-body p-0">
-          <table class="table table-sm table-bordered mb-0 prog-table">
-            <thead class="table-light"><tr><th>Código</th><th>Tipo</th><th>Área</th><th>Denominación</th><th>Estado</th></tr></thead>
-            <tbody>
-              ${reqs.map((r) => `
-                <tr>
-                  <td>${esc(r.codigo || 'REQ-' + String(r.id).padStart(5, '0'))}</td>
-                  <td><span class="badge bg-secondary text-uppercase" style="font-size:0.65rem;">${esc(r.tipo)}</span></td>
-                  <td>${esc(r.area || '')}</td>
-                  <td class="small">${esc(r.denominacion || '')}</td>
-                  <td>${estadoBadge(r.estado)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card mb-3">
-        <div class="card-header"><h6 class="mb-0">Pedidos SIGAMEF Asociados (${peds.length})</h6></div>
-        <div class="card-body p-0">
-          <table class="table table-sm table-bordered mb-0 prog-table">
-            <thead class="table-light"><tr><th>Código</th><th>Año</th><th>Tipo</th><th>Nro</th><th>Centro</th><th>Descripción</th><th>Cantidad</th><th>P.Unit.</th><th>Total</th></tr></thead>
-            <tbody>
-              ${peds.map((p) => `
-                <tr>
-                  <td>${esc(p.codigo_pedido)}</td><td>${esc(p.ano_eje)}</td><td>${esc(p.tipo)}</td>
-                  <td>${esc(p.nro_pedido)}</td><td>${esc(p.centro)}</td>
-                  <td class="small">${esc(p.descripcion)}</td>
-                  <td class="text-end">${parseFloat(p.cant_solicitada || 0).toFixed(2)}</td>
-                  <td class="text-end">${parseFloat(p.precio_unitario || 0).toFixed(2)}</td>
-                  <td class="text-end">${parseFloat(p.total_item || 0).toFixed(2)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+        <div class="card-header"><h6 class="mb-0">Pedidos SIGAMEF asociados a requerimientos (${peds.length})</h6></div>
+        <div class="card-body p-0 table-responsive">
+          ${paquetePedidosTableHtml(peds)}
         </div>
       </div>
 
@@ -681,9 +862,10 @@ async function loadPaquetesTab() {
 // ==================== REPORT ====================
 function printPaquete(detail) {
   const p = detail.paquete;
-  const reqs = detail.requerimientos || [];
   const peds = detail.pedidos || [];
-  const res = detail.resumen || {};
+  const fmtMoney = (n) => parseFloat(n || 0).toFixed(2);
+  const fmtQty = (n) => String(Math.round(Number(n || 0)));
+  const { montoTotal, cantidadTotal, money } = paquetePedidosFooter(peds);
 
   const w = window.open('', '_blank');
   w.document.write(`<!DOCTYPE html><html><head><title>Reporte ${p.codigo_paquete}</title>
@@ -704,21 +886,22 @@ function printPaquete(detail) {
        <strong>Creado por:</strong> ${esc(p.usuario_creacion)}</p>
     ${p.estado === 'Aprobado' ? `<p><strong>Aprobado por:</strong> ${esc(p.usuario_aprobacion)} &nbsp;&nbsp; <strong>Fecha aprobación:</strong> ${p.fecha_aprobacion ? String(p.fecha_aprobacion).slice(0, 10) : ''}</p>` : ''}
 
-    <p class="section">Resumen Consolidado</p>
-    <p><strong>Monto Total:</strong> S/. ${(res.monto_total || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })} &nbsp;&nbsp;
-       <strong>Centros:</strong> ${(res.centros || []).join(', ') || '—'} &nbsp;&nbsp;
-       <strong>Específicas:</strong> ${(res.especificas || []).join(', ') || '—'}</p>
-
-    <p class="section">Requerimientos (${reqs.length})</p>
+    <p class="section">Pedidos SIGAMEF asociados a requerimientos (${peds.length})</p>
     <table>
-      <tr><th>Código</th><th>Tipo</th><th>Área</th><th>Denominación</th><th>Estado</th></tr>
-      ${reqs.map((r) => `<tr><td>${esc(r.codigo || 'REQ-' + String(r.id).padStart(5, '0'))}</td><td>${esc(r.tipo)}</td><td>${esc(r.area)}</td><td>${esc(r.denominacion)}</td><td>${esc(r.estado)}</td></tr>`).join('')}
-    </table>
-
-    <p class="section">Pedidos SIGAMEF Asociados (${peds.length})</p>
-    <table>
-      <tr><th>Código</th><th>Año</th><th>Tipo</th><th>Nro</th><th>Centro</th><th>Descripción</th><th>Cant.</th><th>P.Unit.</th><th>Total</th></tr>
-      ${peds.map((p) => `<tr><td>${esc(p.codigo_pedido)}</td><td>${esc(p.ano_eje)}</td><td>${esc(p.tipo)}</td><td>${esc(p.nro_pedido)}</td><td>${esc(p.centro)}</td><td>${esc(p.descripcion)}</td><td class="text-end">${parseFloat(p.cant_solicitada || 0).toFixed(2)}</td><td class="text-end">${parseFloat(p.precio_unitario || 0).toFixed(2)}</td><td class="text-end">${parseFloat(p.total_item || 0).toFixed(2)}</td></tr>`).join('')}
+      <tr>
+        <th>Año</th><th>Tipo</th><th>Requerimiento</th><th>Pedido Sigamef</th><th>Centro</th><th>Área usuaria</th>
+        <th>Meta</th><th>Clasificador</th><th>Código SIGAMEF</th><th>Descripción</th><th>Unidad medida</th>
+        <th>Cantidad</th><th>Precio unitario</th><th>Precio total</th>
+      </tr>
+      ${peds.map((ped) => `<tr>
+        <td>${esc(ped.ano_eje)}</td><td>${esc(ped.tipo)}</td>
+        <td>${esc(ped.requerimiento_codigo || '')}</td><td>${esc(ped.nro_pedido)}</td><td>${esc(ped.centro)}</td>
+        <td>${esc(ped.area_usuaria || '')}</td><td>${esc(ped.sec_func || '')}</td><td>${esc(ped.especifica || '')}</td>
+        <td>${esc(ped.codigo_sigamef || '')}</td><td>${esc(ped.descripcion)}</td><td>${esc(ped.unidad_medida || '')}</td>
+        <td class="text-end">${fmtQty(ped.cant_solicitada)}</td><td class="text-end">${fmtMoney(ped.precio_unitario)}</td>
+        <td class="text-end">${fmtMoney(ped.total_item)}</td>
+      </tr>`).join('')}
+      <tr><td colspan="11"></td><td class="text-end">${cantidadTotal != null ? `<strong>${cantidadTotal}</strong>` : ''}</td><td class="text-end"><strong>Total</strong></td><td class="text-end"><strong>${money(montoTotal)}</strong></td></tr>
     </table>
 
     <br/><button onclick="window.print()">Imprimir</button>
@@ -728,26 +911,32 @@ function printPaquete(detail) {
 
 // ==================== INIT ====================
 export function initProgramacionView() {
-  const reload = document.getElementById('progReload');
-  if (reload) reload.onclick = () => {
-    if (currentTab === 'bandeja') loadBandeja();
-    else loadPaquetesTab();
-  };
-
-  const consolidarBtn = document.getElementById('progConsolidar');
-  if (consolidarBtn) consolidarBtn.onclick = () => openConsolidarModal();
-
-  document.querySelectorAll('#progTabs .nav-link').forEach((tab) => {
-    tab.onclick = (e) => {
-      e.preventDefault();
-      document.querySelectorAll('#progTabs .nav-link').forEach((t) => t.classList.remove('active'));
-      tab.classList.add('active');
-      currentTab = tab.dataset.tab;
+  try {
+    const reload = document.getElementById('progReload');
+    if (reload) reload.onclick = () => {
       if (currentTab === 'bandeja') loadBandeja();
       else loadPaquetesTab();
     };
-  });
 
-  currentTab = 'bandeja';
-  loadBandeja();
+    const consolidarBtn = document.getElementById('progConsolidar');
+    if (consolidarBtn) consolidarBtn.onclick = () => openConsolidarModal();
+
+    document.querySelectorAll('#progTabs .nav-link').forEach((tab) => {
+      tab.onclick = (e) => {
+        e.preventDefault();
+        document.querySelectorAll('#progTabs .nav-link').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentTab = tab.dataset.tab;
+        if (currentTab === 'bandeja') loadBandeja();
+        else loadPaquetesTab();
+      };
+    });
+
+    currentTab = 'bandeja';
+    loadBandeja();
+  } catch (e) {
+    const cont = document.getElementById('progContent');
+    if (cont) cont.innerHTML = `<div class="alert alert-danger">Error al iniciar Programación: ${esc(e.message)}</div>`;
+    console.error('initProgramacionView:', e);
+  }
 }

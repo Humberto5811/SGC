@@ -57,8 +57,8 @@ async function renderApp() {
       setTimeout(() => module.initDecView(), 50);
     }
     // ========== CONTRATACIONES — Programación ==========
-    else if (currentRoute === 'dec/programacion') {
-      const module = await import('./views/contratacion/programacionView.js');
+    else if (currentRoute === 'dec/programacion' || currentRoute === 'au/programacion') {
+      const module = await import('./views/programacion/programacionView2.js');
       content = module.renderProgramacionView();
       setTimeout(() => module.initProgramacionView(), 50);
     }

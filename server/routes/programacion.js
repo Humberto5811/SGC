@@ -4,6 +4,41 @@ import { query } from '../db.js';
 
 const router = express.Router();
 
+// ==================== REQUERIMIENTOS (BANDEJA) ====================
+
+// GET /api/programacion/requerimientos — bandeja: Aprobado DEC, Observado Programación
+router.get('/requerimientos', async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '200', 10)));
+    const offset = (page - 1) * pageSize;
+    const estados = ['Aprobado DEC', 'Observado Programación', 'Aprobado Programación', 'Programado'];
+    const placeholders = estados.map((_, i) => `$${i + 1}`).join(', ');
+    const params = [...estados, pageSize, offset];
+
+    const { rows } = await query(`
+      SELECT
+        r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado,
+        r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
+        COALESCE(c.nombre, '') AS centro_nombre
+      FROM requerimientos r
+      LEFT JOIN areas a ON r.area = a.nombre
+      LEFT JOIN centros c ON a.centro_id = c.id
+      WHERE r.estado IN (${placeholders})
+      ORDER BY r.id DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `, params);
+
+    const countRes = await query(
+      `SELECT COUNT(*)::int AS total FROM requerimientos WHERE estado IN (${placeholders})`,
+      estados
+    );
+    const total = countRes.rows[0].total;
+
+    res.json({ data: rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
+  } catch (err) { next(err); }
+});
+
 // ==================== ASOCIACIÓN DE PEDIDOS SIGAMEF ====================
 
 // GET /api/programacion/pedidos/:requerimientoId — listar pedidos asociados a un requerimiento
@@ -35,6 +70,13 @@ router.post('/pedidos', async (req, res, next) => {
     }
     let inserted = 0;
     for (const pid of pedido_ids) {
+      const existente = await query(
+        'SELECT requerimiento_id FROM requerimiento_pedidos WHERE pedido_sigamef_id = $1',
+        [pid]
+      );
+      if (existente.rows.length && existente.rows[0].requerimiento_id !== Number(requerimiento_id)) {
+        return res.status(400).json({ error: 'Uno o más pedidos ya están asignados a otro requerimiento.' });
+      }
       try {
         await query(`
           INSERT INTO requerimiento_pedidos (requerimiento_id, pedido_sigamef_id, usuario_registro)
@@ -70,22 +112,33 @@ router.get('/pedidos-count', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/programacion/buscar-pedido?q=... — buscar pedidos SIGAMEF por código o descripción
+// GET /api/programacion/buscar-pedido?q=...&requerimiento_id=... — buscar pedidos SIGAMEF
 router.get('/buscar-pedido', async (req, res, next) => {
   try {
     const q = (req.query.q || '').trim();
+    const requerimientoId = parseInt(req.query.requerimiento_id || '0', 10) || null;
     if (!q) return res.json({ data: [] });
     const { rows } = await query(`
-      SELECT id, codigo_pedido, ano_eje, tipo, nro_pedido, centro, centro_costo,
-             fecha_pedido, descripcion, cant_solicitada, precio_unitario, total_item,
-             codigo_sigamef, unidad_medida
-      FROM pedidos_sigamef
-      WHERE codigo_pedido ILIKE $1 OR nro_pedido ILIKE $1 OR descripcion ILIKE $1
-            OR codigo_sigamef ILIKE $1
-      ORDER BY id ASC
+      SELECT p.id, p.codigo_pedido, p.ano_eje, p.tipo, p.nro_pedido, p.centro, p.centro_costo,
+             p.fecha_pedido, p.descripcion, p.cant_solicitada, p.precio_unitario, p.total_item,
+             p.codigo_sigamef, p.unidad_medida,
+             rp.requerimiento_id AS req_asignado_id,
+             r.codigo AS requerimiento_codigo
+      FROM pedidos_sigamef p
+      LEFT JOIN requerimiento_pedidos rp ON rp.pedido_sigamef_id = p.id
+      LEFT JOIN requerimientos r ON r.id = rp.requerimiento_id
+      WHERE p.codigo_pedido ILIKE $1 OR p.nro_pedido ILIKE $1 OR p.descripcion ILIKE $1
+            OR p.codigo_sigamef ILIKE $1
+      ORDER BY p.id ASC
       LIMIT 20
     `, [`%${q}%`]);
-    res.json({ data: rows });
+    const data = rows.map((row) => ({
+      ...row,
+      asignado: !!row.req_asignado_id,
+      asignado_este: requerimientoId && row.req_asignado_id === requerimientoId,
+      asignado_otro: !!row.req_asignado_id && row.req_asignado_id !== requerimientoId,
+    }));
+    res.json({ data });
   } catch (err) { next(err); }
 });
 
@@ -114,9 +167,12 @@ router.get('/paquetes/:id', async (req, res, next) => {
 
     // Requerimientos del paquete
     const { rows: reqs } = await query(`
-      SELECT r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado, r.payload
+      SELECT r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado, r.payload,
+             COALESCE(c.nombre, r.responsable, '') AS centro_nombre
       FROM paquete_requerimientos pr
       JOIN requerimientos r ON pr.requerimiento_id = r.id
+      LEFT JOIN areas a ON r.area = a.nombre
+      LEFT JOIN centros c ON a.centro_id = c.id
       WHERE pr.paquete_id = $1
       ORDER BY r.id ASC
     `, [id]);
@@ -126,37 +182,58 @@ router.get('/paquetes/:id', async (req, res, next) => {
     let pedidos = [];
     if (reqIds.length) {
       const { rows: peds } = await query(`
-        SELECT DISTINCT p.id, p.codigo_pedido, p.ano_eje, p.tipo, p.nro_pedido, p.centro,
-               p.centro_costo, p.descripcion, p.cant_solicitada, p.precio_unitario, p.total_item,
-               p.codigo_sigamef, p.unidad_medida, rp.requerimiento_id
+        SELECT p.id, p.ano_eje, p.tipo, p.nro_pedido, p.centro, p.descripcion,
+               p.cant_solicitada, p.precio_unitario, p.total_item,
+               p.codigo_sigamef, p.sec_func, p.especifica, p.unidad_medida,
+               rp.requerimiento_id, r.codigo AS requerimiento_codigo,
+               COALESCE(NULLIF(TRIM(r.area), ''), a.nombre, '') AS area_usuaria
         FROM requerimiento_pedidos rp
         JOIN pedidos_sigamef p ON rp.pedido_sigamef_id = p.id
+        JOIN requerimientos r ON rp.requerimiento_id = r.id
+        LEFT JOIN areas a ON a.nombre = r.area OR a.codigo = r.area
         WHERE rp.requerimiento_id = ANY($1)
-        ORDER BY p.id ASC
+        ORDER BY r.codigo ASC, p.nro_pedido ASC
       `, [reqIds]);
       pedidos = peds;
     }
 
-    // Resumen consolidado
-    let cantidadTotal = 0, montoTotal = 0;
-    const centrosSet = new Set(), metasSet = new Set(), especificasSet = new Set();
-    for (const r of reqs) {
-      try {
-        const p = JSON.parse(r.payload || '{}');
-        const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
-        if (Array.isArray(items)) {
-          items.forEach((it) => {
-            cantidadTotal += Number(it.cantidad || it.cant_solicitada || 0);
-            montoTotal += r.tipo === 'bienes'
-              ? (Number(it.precio_unitario || 0) * Number(it.cantidad || 0))
-              : Number(it.monto || 0);
-          });
-        }
-      } catch (_) {}
-    }
+    // Completar área usuaria y unidad de medida si faltan
     for (const ped of pedidos) {
+      const req = reqs.find((r) => r.id === ped.requerimiento_id);
+      if (!req) continue;
+      if (!ped.area_usuaria || !String(ped.area_usuaria).trim()) {
+        ped.area_usuaria = req.area || '';
+        if (!ped.area_usuaria) {
+          try {
+            const pl = JSON.parse(req.payload || '{}');
+            ped.area_usuaria = (pl.area && pl.area.nombre) || pl.area_usuaria || '';
+          } catch (_) {}
+        }
+      }
+      if (!ped.unidad_medida || !String(ped.unidad_medida).trim()) {
+        try {
+          const pl = JSON.parse(req.payload || '{}');
+          const items = req.tipo === 'servicios' ? (pl.servicioItems || [])
+            : req.tipo === 'locacion' ? (pl.locadorItems || []) : (pl.items || []);
+          const match = items.find((it) =>
+            String(it.item_bien || it.codigo_sigamef || '') === String(ped.codigo_sigamef || '')
+            || String(it.nombre_item || '').toLowerCase() === String(ped.descripcion || '').toLowerCase()
+          );
+          if (match) ped.unidad_medida = match.unidad_medida || match.unidad || '';
+        } catch (_) {}
+      }
+    }
+
+    // Resumen consolidado (suma de pedidos SIGAMEF asociados)
+    let cantidadTotal = 0;
+    let montoTotal = 0;
+    const centrosSet = new Set();
+    const metasSet = new Set();
+    for (const ped of pedidos) {
+      cantidadTotal += Number(ped.cant_solicitada || 0);
+      montoTotal += Number(ped.total_item || 0);
       if (ped.centro) centrosSet.add(ped.centro);
-      if (ped.especifica) especificasSet.add(ped.especifica);
+      if (ped.sec_func) metasSet.add(ped.sec_func);
     }
 
     res.json({
@@ -164,11 +241,10 @@ router.get('/paquetes/:id', async (req, res, next) => {
       requerimientos: reqs,
       pedidos,
       resumen: {
-        cantidad_total: cantidadTotal,
+        cantidad_total: Number(cantidadTotal.toFixed(2)),
         monto_total: Number(montoTotal.toFixed(2)),
         centros: [...centrosSet],
         metas: [...metasSet],
-        especificas: [...especificasSet],
       }
     });
   } catch (err) { next(err); }

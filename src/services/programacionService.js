@@ -51,7 +51,11 @@ export const programacionService = {
    * @param {string} q - Término de búsqueda
    * @returns {Promise} Lista de pedidos encontrados
    */
-  buscarPedido: (q) => api.get(`/programacion/buscar-pedido?q=${encodeURIComponent(q)}`),
+  buscarPedido: (q, requerimientoId) => {
+    const params = new URLSearchParams({ q });
+    if (requerimientoId) params.set('requerimiento_id', String(requerimientoId));
+    return api.get(`/programacion/buscar-pedido?${params.toString()}`);
+  },
 
   /**
    * Obtiene todos los pedidos SIGAMEF (para selección en modales)
