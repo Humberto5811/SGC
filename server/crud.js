@@ -12,7 +12,7 @@ import { query } from './db.js';
  */
 export function crudRouter(cfg) {
   const router = express.Router();
-  const { table, columns, searchCols = [], orderBy = 'id' } = cfg;
+  const { table, columns, searchCols = [], orderBy = 'id', afterCreate, afterUpdate } = cfg;
 
   // LISTAR con ?page=&pageSize=&search=
   router.get('/', async (req, res, next) => {
@@ -63,6 +63,7 @@ export function crudRouter(cfg) {
       const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
       const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
       const { rows } = await query(sql, values);
+      if (afterCreate) await afterCreate(rows[0], req.body);
       res.status(201).json(rows[0]);
     } catch (err) { next(err); }
   });
@@ -70,6 +71,11 @@ export function crudRouter(cfg) {
   // ACTUALIZAR
   router.put('/:id', async (req, res, next) => {
     try {
+      let prev = null;
+      if (afterUpdate) {
+        const prevRes = await query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
+        prev = prevRes.rows[0] || null;
+      }
       const keys = columns.filter((c) => req.body[c] !== undefined);
       if (!keys.length) return res.status(400).json({ error: 'Sin datos válidos' });
       const values = keys.map((k) => req.body[k]);
@@ -77,6 +83,7 @@ export function crudRouter(cfg) {
       const sql = `UPDATE ${table} SET ${setClause}, updated_at = NOW() WHERE id = $1 RETURNING *`;
       const { rows } = await query(sql, [req.params.id, ...values]);
       if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
+      if (afterUpdate && prev) await afterUpdate(rows[0], prev, req.body);
       res.json(rows[0]);
     } catch (err) { next(err); }
   });

@@ -275,6 +275,14 @@ CREATE TABLE IF NOT EXISTS requerimientos (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS estado_actual VARCHAR(60);
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS responsable_actual VARCHAR(200);
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS fecha_estado_actual TIMESTAMP;
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS historial_estados JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS sub_modulo_actual VARCHAR(120);
+ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS historial_movimientos JSONB DEFAULT '[]'::jsonb;
+CREATE INDEX IF NOT EXISTS idx_requerimientos_sub_modulo ON requerimientos (sub_modulo_actual);
+
 -- Add cmn column to existing requerimientos table (for databases created before cmn was added)
 ALTER TABLE requerimientos ADD COLUMN IF NOT EXISTS cmn VARCHAR(5);
 

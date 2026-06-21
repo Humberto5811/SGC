@@ -5,6 +5,14 @@
 //   - historial coloreado por actor
 //   - diálogo de texto
 import { requerimientosService } from '../../services/requerimientosService.js';
+import { api } from '../../services/apiService.js';
+import { getUserDisplayName } from '../../utils/userDisplay.js';
+import { trazabilidadService } from '../../services/trazabilidadService.js';
+import { renderTimeline, timelineModalStyles } from '../../services/timelineService.js';
+import {
+  estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
+} from '../../utils/trazabilidad.js';
+import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel } from '../../utils/observacionDestino.js';
 
 export const reqShared = { pendingOpenId: null, editingFromEvaluacion: false, onBackToEvaluacion: null };
 
@@ -22,7 +30,7 @@ export function estadoBadge(estado) {
   const e = String(estado || '');
   let cls = 'bg-secondary';
   if (/tr[aá]mite/i.test(e)) cls = 'bg-warning text-dark';
-  else if (/observ/i.test(e)) cls = 'bg-danger';
+  else if (/observ/i.test(e)) cls = 'bg-danger text-white';
   else if (/aprobad/i.test(e)) cls = 'bg-success';
   return `<span class="badge ${cls}">${esc(e || '—')}</span>`;
 }
@@ -33,7 +41,22 @@ export function ultimaObservacion(req) {
 }
 
 export function todasObservaciones(req) {
-  return safeParse(req && req.payload).observaciones || [];
+  if (!req) return [];
+  let payload = req.payload;
+  if (typeof payload === 'string') {
+    payload = safeParse(payload);
+  } else if (!payload || typeof payload !== 'object') {
+    payload = safeParse(req.payload);
+  }
+  return Array.isArray(payload.observaciones) ? payload.observaciones : [];
+}
+
+export async function verHistorialObservaciones(req, opts = {}) {
+  return showTextModal({
+    title: opts.title || 'Historial de observaciones',
+    historyHtml: historialHtml(todasObservaciones(req)),
+    readOnlyMode: true,
+  });
 }
 
 // Genera HTML del historial coloreado por actor/origen.
@@ -72,6 +95,9 @@ export function historialHtml(observaciones) {
     let html = `<div class="border rounded p-2 mb-2 ${bgClass}" style="font-size:0.9em;">`;
     html += `<div class="fw-bold ${colorClass}"><i class="bi bi-chat-left-dots"></i> ${label} #${ronda} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
     html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || '')}</div>`;
+    if (o.destino_submodulo || o.destino_persona) {
+      html += `<div class="small text-muted"><i class="bi bi-arrow-right-circle"></i> Dirigida a: <strong>${esc(o.destino_persona || '—')}</strong> · ${esc(o.destino_submodulo || '—')}</div>`;
+    }
     
     if (o.subsanacion) {
       const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE', { 
@@ -79,6 +105,9 @@ export function historialHtml(observaciones) {
       }) : '';
       html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta del usuario ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
       html += `<div style="white-space:pre-wrap;">${esc(o.subsanacion)}</div>`;
+      if (o.subsanacion_destino_submodulo || o.subsanacion_destino_persona) {
+        html += `<div class="small text-muted mt-1"><i class="bi bi-arrow-return-right"></i> Subsanación enviada a: <strong>${esc(o.subsanacion_destino_persona || '—')}</strong> · ${esc(o.subsanacion_destino_submodulo || '—')}</div>`;
+      }
     } else {
       html += `<div class="text-muted fst-italic mt-1"><small>Sin respuesta aún</small></div>`;
     }
@@ -89,7 +118,7 @@ export function historialHtml(observaciones) {
 }
 
 // Agrega una observación (cualquier origen) con estado personalizado.
-export async function addObservacionCustom(req, motivo, origen, gerente, nuevoEstado) {
+export async function addObservacionCustom(req, motivo, origen, gerente, nuevoEstado, destino = {}) {
   const payload = safeParse(req.payload);
   payload.observaciones = payload.observaciones || [];
   payload.observaciones.push({
@@ -97,36 +126,242 @@ export async function addObservacionCustom(req, motivo, origen, gerente, nuevoEs
     motivo,
     gerente: gerente || origen || 'sistema',
     origen: origen || 'GERENTE',
+    origen_submodulo: destino.origen_submodulo || '',
+    destino_submodulo: destino.destino_submodulo || '',
+    destino_etapa: destino.destino_etapa || '',
+    destino_persona: destino.destino_persona || '',
     fecha: new Date().toISOString(),
     subsanacion: null,
   });
   await requerimientosService.update(req.id, { 
     estado: nuevoEstado || 'Observado', 
-    payload: JSON.stringify(payload) 
+    payload: JSON.stringify(payload),
+    usuario_modificacion: gerente || origen || 'gerente',
   });
 }
 
-// Agrega la subsanación del usuario a la última observación abierta.
-export async function addSubsanacion(req, texto, usuario) {
-  const payload = safeParse(req.payload);
-  payload.observaciones = payload.observaciones || [];
-  for (let i = payload.observaciones.length - 1; i >= 0; i--) {
-    if (!payload.observaciones[i].subsanacion) {
-      payload.observaciones[i].subsanacion = texto;
-      payload.observaciones[i].usuario_subsana = usuario || 'usuario';
-      payload.observaciones[i].fecha_subsana = new Date().toISOString();
-      break;
-    }
-  }
-  await requerimientosService.update(req.id, { 
-    estado: 'En tramite de aprobación', 
-    payload: JSON.stringify(payload) 
+// Agrega la subsanación y deriva al submódulo destino seleccionado.
+export async function addSubsanacion(req, texto, usuario, destino = {}) {
+  await requerimientosService.subsanarConDestino(req.id, {
+    respuesta: texto,
+    usuario: usuario || 'usuario',
+    origen_submodulo: destino.origen_submodulo || 'Registro de Requerimiento',
+    destino_submodulo: destino.destino_submodulo || '',
+    destino_etapa: destino.destino_etapa || '',
+    destino_persona: destino.destino_persona || '',
   });
 }
 
 // Agrega una observación (gerente) → estado "Observado".
-export async function addObservacion(req, motivo, gerente) {
-  return addObservacionCustom(req, motivo, 'GERENTE', gerente, 'Observado');
+export async function addObservacion(req, motivo, gerente, destino = {}) {
+  return addObservacionCustom(req, motivo, 'GERENTE', gerente, 'Observado', destino);
+}
+
+function buildDestinoSelectorsHtml(id, defaultSubmodulo = '') {
+  const opts = SUBMODULOS_DESTINO.map((s) =>
+    `<option value="${esc(s.label)}" data-code="${esc(s.code)}" ${s.label === defaultSubmodulo ? 'selected' : ''}>${esc(s.label)}</option>`,
+  ).join('');
+  return `
+    <div class="row g-2 mb-3 border rounded p-2 bg-light">
+      <div class="col-md-6">
+        <label class="form-label small fw-semibold mb-1">Submódulo destino</label>
+        <select id="${id}_destSub" class="form-select form-select-sm">${opts}</select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small fw-semibold mb-1">Persona destino</label>
+        <div class="input-group input-group-sm mb-1">
+          <input type="text" id="${id}_buscarUsr" class="form-control" placeholder="Buscar en Usuarios y Permisos…" />
+          <button type="button" id="${id}_btnBuscarUsr" class="btn btn-outline-primary" title="Buscar usuario"><i class="bi bi-search"></i></button>
+        </div>
+        <div id="${id}_usrResults" class="mb-1" style="display:none"></div>
+        <select id="${id}_destPer" class="form-select form-select-sm"></select>
+        <input type="text" id="${id}_destPerOtro" class="form-control form-control-sm mt-1" placeholder="O escriba otro nombre…">
+      </div>
+    </div>`;
+}
+
+function formatUsuarioNombre(u) {
+  if (!u) return '';
+  return String(u.nombre || [u.apellidos, u.nombres].filter(Boolean).join(' ').trim() || u.username || u.dni || '').trim();
+}
+
+function wireDestinoSelectors(id) {
+  const subEl = document.getElementById(`${id}_destSub`);
+  const perEl = document.getElementById(`${id}_destPer`);
+  const otroEl = document.getElementById(`${id}_destPerOtro`);
+  const buscarEl = document.getElementById(`${id}_buscarUsr`);
+  const btnBuscar = document.getElementById(`${id}_btnBuscarUsr`);
+  const resultsEl = document.getElementById(`${id}_usrResults`);
+  const refreshPersonas = () => {
+    const label = subEl.value;
+    const personas = getPersonasForSubmodulo(label);
+    perEl.innerHTML = personas.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
+      + '<option value="__otro__">Otro…</option>';
+  };
+  const seleccionarUsuario = (nombre) => {
+    if (!nombre) return;
+    perEl.value = '__otro__';
+    otroEl.value = nombre;
+    resultsEl.style.display = 'none';
+    resultsEl.innerHTML = '';
+    buscarEl.value = nombre;
+  };
+  const buscarUsuarios = async () => {
+    const q = (buscarEl.value || '').trim();
+    if (q.length < 2) {
+      alert('Ingrese al menos 2 caracteres para buscar.');
+      return;
+    }
+    resultsEl.style.display = 'block';
+    resultsEl.innerHTML = '<div class="text-muted small p-2">Buscando…</div>';
+    try {
+      const resp = await api.list('usuarios', { page: 1, pageSize: 15, search: q, estado: 'Activo' });
+      const rows = (resp && resp.data) || [];
+      if (!rows.length) {
+        resultsEl.innerHTML = '<div class="text-muted small p-2 border rounded">Sin usuarios activos.</div>';
+        return;
+      }
+      resultsEl.innerHTML = `<div class="list-group list-group-flush border rounded" style="max-height:140px;overflow-y:auto">${rows.map((u) => {
+        const nom = formatUsuarioNombre(u);
+        const det = [u.dni, u.cargo, u.descripcion_area || u.descripcionArea].filter(Boolean).join(' · ');
+        return `<button type="button" class="list-group-item list-group-item-action py-1 px-2 usr-pick" data-nom="${esc(nom)}">
+          <strong>${esc(nom)}</strong>${det ? `<br><span class="text-muted small">${esc(det)}</span>` : ''}
+        </button>`;
+      }).join('')}</div>`;
+      resultsEl.querySelectorAll('.usr-pick').forEach((b) => {
+        b.onclick = () => seleccionarUsuario(b.dataset.nom);
+      });
+    } catch (e) {
+      resultsEl.innerHTML = `<div class="alert alert-danger py-1 px-2 small mb-0">${esc(e.message)}</div>`;
+    }
+  };
+  subEl.onchange = refreshPersonas;
+  btnBuscar.onclick = buscarUsuarios;
+  buscarEl.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarUsuarios(); } };
+  refreshPersonas();
+  return () => {
+    const sub = getSubmoduloByLabel(subEl.value);
+    let persona = perEl.value;
+    if (persona === '__otro__' || otroEl.value.trim()) {
+      persona = otroEl.value.trim() || persona;
+    }
+    if (!persona || persona === '__otro__') {
+      alert('Indique la persona destino de la observación.');
+      return null;
+    }
+    return {
+      destino_submodulo: subEl.value,
+      destino_etapa: sub?.code || '',
+      destino_persona: persona,
+    };
+  };
+}
+
+/** Modal de observación con selección de submódulo y persona destino. */
+export function showObservacionDirigidaModal(opts = {}) {
+  const id = 'modObsDir_' + Date.now();
+  const hist = opts.historyHtml || '';
+  const destHtml = buildDestinoSelectorsHtml(id, opts.defaultDestinoSubmodulo || 'Registro de Requerimiento');
+  const html = `
+    <div class="modal fade" id="${id}" tabindex="-1">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">${esc(opts.title || 'Registrar observación')}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+            ${opts.origenSubmodulo ? `<div class="alert alert-light border small py-2 mb-2">Origen: <strong>${esc(opts.origenSubmodulo)}</strong></div>` : ''}
+            ${hist}
+            ${destHtml}
+            <label class="form-label">${esc(opts.label || 'Motivo de la observación')}</label>
+            <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || 'Describa la observación…')}"></textarea>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="${id}_ok" class="btn ${opts.buttonClass || 'btn-danger'}">${esc(opts.buttonText || 'Registrar observación')}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const wrap = document.createElement('div');
+  document.body.appendChild(wrap);
+  wrap.innerHTML = html;
+  const el = document.getElementById(id);
+  const modal = new bootstrap.Modal(el);
+  const readDestino = wireDestinoSelectors(id);
+  return new Promise((resolve) => {
+    let resolved = false;
+    document.getElementById(`${id}_ok`).onclick = () => {
+      const motivo = (document.getElementById(`${id}_txt`).value || '').trim();
+      if (!motivo) { alert('Ingrese el motivo de la observación.'); return; }
+      const destino = readDestino();
+      if (!destino) return;
+      resolved = true;
+      resolve({
+        motivo,
+        ...destino,
+        origen_submodulo: opts.origenSubmodulo || '',
+      });
+      modal.hide();
+    };
+    el.addEventListener('hidden.bs.modal', () => {
+      wrap.remove();
+      if (!resolved) resolve(null);
+    }, { once: true });
+    modal.show();
+  });
+}
+
+/** Modal de subsanación con selección de submódulo y persona destino. */
+export function showSubsanacionDirigidaModal(opts = {}) {
+  const id = 'modSubDir_' + Date.now();
+  const hist = opts.historyHtml || '';
+  const destHtml = buildDestinoSelectorsHtml(id, opts.defaultDestinoSubmodulo || 'Evaluación de Requerimiento');
+  const html = `
+    <div class="modal fade" id="${id}" tabindex="-1">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">${esc(opts.title || 'Subsanar observación')}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+            ${hist}
+            ${destHtml}
+            <label class="form-label">${esc(opts.label || 'Subsanación realizada')}</label>
+            <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || 'Describa la subsanación…')}"></textarea>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="${id}_ok" class="btn ${opts.buttonClass || 'btn-primary'}">${esc(opts.buttonText || 'Enviar subsanación')}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const wrap = document.createElement('div');
+  document.body.appendChild(wrap);
+  wrap.innerHTML = html;
+  const el = document.getElementById(id);
+  const modal = new bootstrap.Modal(el);
+  const readDestino = wireDestinoSelectors(id);
+  return new Promise((resolve) => {
+    let resolved = false;
+    document.getElementById(`${id}_ok`).onclick = () => {
+      const texto = (document.getElementById(`${id}_txt`).value || '').trim();
+      if (!texto) { alert('Ingrese la subsanación realizada.'); return; }
+      const destino = readDestino();
+      if (!destino) return;
+      resolved = true;
+      resolve({ texto, ...destino, origen_submodulo: opts.origenSubmodulo || 'Registro de Requerimiento' });
+      modal.hide();
+    };
+    el.addEventListener('hidden.bs.modal', () => {
+      wrap.remove();
+      if (!resolved) resolve(null);
+    }, { once: true });
+    modal.show();
+  });
 }
 
 // Cuadro de diálogo con historial + textarea.
@@ -230,5 +465,68 @@ export function showObservarModal(opts = {}) {
       if (!resolved) resolve(null);
     }, { once: true });
     modal.show();
+  });
+}
+
+export async function showTrazabilidadModal(requerimientoId) {
+  const modal = document.createElement('div');
+  modal.className = 'modal fade show d-block';
+  modal.style.background = 'rgba(0,0,0,.45)';
+    modal.innerHTML = `
+    <style>${timelineModalStyles()}</style>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-dark text-white">
+          <h5 class="modal-title"><i class="bi bi-signpost-split"></i> Trazabilidad del expediente</h5>
+          <button type="button" class="btn-close btn-close-white" id="closeTraza"></button>
+        </div>
+        <div class="modal-body"><div class="text-muted small">Cargando historial…</div></div>
+        <div class="modal-footer py-2"><button type="button" class="btn btn-secondary btn-sm" id="cerrarTrazaFooter">Cerrar</button></div>
+      </div>
+    </div>`;
+  const close = () => modal.remove();
+  modal.querySelector('#closeTraza').onclick = close;
+  modal.querySelector('#cerrarTrazaFooter')?.addEventListener('click', close);
+  document.body.appendChild(modal);
+
+  try {
+    const data = await trazabilidadService.get(requerimientoId);
+    const req = data.requerimiento || {};
+    const movCount = (data.historialMovimientos || []).length;
+    const histCount = (data.historialEstados || []).length;
+    const eventCount = movCount || histCount;
+    modal.querySelector('.modal-body').innerHTML = `
+      <div class="mb-3">
+        <div><strong>${esc(req.codigo || ('#' + requerimientoId))}</strong> — ${esc(req.denominacion || req.tipo || '')}</div>
+        <div class="small text-muted">${esc(req.area || '')} · ${esc(req.centro || '')}</div>
+      </div>
+      <div class="row g-2 mb-3 small">
+        <div class="col-md-3"><strong>Estado actual:</strong><br/>${estadoActualBadge(data.estadoActual, data.estadoActualTexto)}</div>
+        <div class="col-md-3"><strong>Submódulo:</strong><br/>${esc(data.subModuloActual || '—')}</div>
+        <div class="col-md-3"><strong>Responsable:</strong><br/>${esc(data.responsableActual || '—')}</div>
+        <div class="col-md-3"><strong>Días en etapa:</strong><br/>${diasEnEstadoBadge({ dias_en_estado: data.diasEnEstado })}${data.retrasado || Number(data.diasEnEstado) > 10 ? retrasadoIndicator({ dias_en_estado: data.diasEnEstado }) : ''}</div>
+        <div class="col-12"><strong>Desde:</strong> ${esc(fmtDateTime(data.fechaEstadoActual || data.fechaIngresoActual))}</div>
+      </div>
+      <hr class="my-2"/>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="fw-bold mb-0">Recorrido completo (${eventCount} eventos)</h6>
+        <small class="text-muted">Más reciente arriba</small>
+      </div>
+      <div class="traza-modal-scroll">
+        <div class="traza-timeline-wrap">${renderTimeline(data)}</div>
+      </div>
+    `;
+  } catch (e) {
+    modal.querySelector('.modal-body').innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+  }
+}
+
+export function bindTrazabilidadButtons(container) {
+  if (!container) return;
+  container.querySelectorAll('.req-traza').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      showTrazabilidadModal(btn.dataset.id);
+    };
   });
 }

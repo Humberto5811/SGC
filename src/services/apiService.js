@@ -6,7 +6,12 @@ function authHeaders() {
     const raw = localStorage.getItem('currentUser');
     if (raw) {
       const user = JSON.parse(raw);
-      if (user && user.id) return { 'x-user-id': String(user.id) };
+      const h = {};
+      if (user && user.id) h['x-user-id'] = String(user.id);
+      if (user && (user.username || user.nombre || user.dni)) {
+        h['x-user-name'] = String(user.username || user.nombre || user.dni);
+      }
+      return h;
     }
   } catch (_) { }
   return {};
@@ -37,6 +42,7 @@ export const api = {
   get: (path) => request(path),
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
+  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
   del: (path) => request(path, { method: 'DELETE' }),
   list: (resource, { page = 1, pageSize = 50, search = '', ...extra } = {}) => {
     const q = new URLSearchParams({ page, pageSize, search });

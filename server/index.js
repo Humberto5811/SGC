@@ -21,7 +21,27 @@ import fichanetRouter from './routes/fichanet.js';
 import pedidosSigamefRouter from './routes/pedidosSigamef.js';
 import adjuntosRouter from './routes/adjuntos.js';
 import programacionRouter from './routes/programacion.js';
+import usuariosRouter from './routes/usuarios.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
+import { inicializarTrazabilidad, registrarMovimiento, inferAccion } from './lib/trazabilidad.js';
+import { trazaFromObservacionEntry } from './lib/observacionDestino.js';
+
+function extractObservacionTrazabilidad(payloadStr, estadoAnterior, estadoNuevo) {
+  try {
+    const p = JSON.parse(payloadStr || '{}');
+    const obs = Array.isArray(p.observaciones) ? p.observaciones : [];
+    if (/observ/i.test(String(estadoNuevo || ''))) {
+      const last = obs[obs.length - 1];
+      if (last?.motivo) return trazaFromObservacionEntry(last);
+    }
+    if (/tr[aá]mite/i.test(String(estadoNuevo || '')) && /observ/i.test(String(estadoAnterior || ''))) {
+      for (let i = obs.length - 1; i >= 0; i -= 1) {
+        if (obs[i].subsanacion) return trazaFromObservacionEntry(obs[i]);
+      }
+    }
+  } catch (_) {}
+  return '';
+}
 import contratacionesRouter from './routes/contrataciones.js';
 import requireAuth from './middleware/requireAuth.js';
 
@@ -254,6 +274,7 @@ app.use('/api/entidad', entidadRouter);
 app.use('/api/fichanet', fichanetRouter);
 app.use('/api/pedidos-sigamef', pedidosSigamefRouter);
 app.use('/api/programacion', programacionRouter);
+app.use('/api/usuarios', usuariosRouter);
 
 // Endpoints adicionales de glosas
 app.get('/api/entregas', async (_req, res, next) => {
@@ -318,6 +339,33 @@ app.use('/api/requerimientos', crudRouter({
   columns: ['tipo', 'codigo', 'cmn', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
   searchCols: ['codigo', 'denominacion', 'area', 'responsable', 'tipo'],
   orderBy: 'id DESC',
+  afterCreate: async (row, body) => {
+    await inicializarTrazabilidad(row.id, body.usuario_modificacion || 'Sistema');
+  },
+  afterUpdate: async (row, prev, body) => {
+    if (body.estado && body.estado !== prev.estado) {
+      const observacion = extractObservacionTrazabilidad(
+        body.payload != null ? body.payload : prev.payload,
+        prev.estado,
+        body.estado,
+      );
+      await registrarMovimiento({
+        requerimientoId: row.id,
+        estadoNuevo: body.estado,
+        usuario: body.usuario_modificacion || prev.usuario_modificacion || 'Sistema',
+        accion: inferAccion(prev.estado, body.estado),
+        observacion,
+      });
+    } else if (body.payload != null && String(body.payload) !== String(prev.payload || '')) {
+      await registrarMovimiento({
+        requerimientoId: row.id,
+        estadoNuevo: row.estado || prev.estado,
+        usuario: body.usuario_modificacion || prev.usuario_modificacion || 'Sistema',
+        accion: 'editado',
+        observacion: 'Actualización del expediente',
+      });
+    }
+  },
 }));
 
 // Adjuntos

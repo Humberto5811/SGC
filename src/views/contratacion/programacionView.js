@@ -3,7 +3,8 @@
 // Acciones: Ver, Adjuntos (readOnly), Observar, Aprobar
 import { authService } from '../../services/authService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { estadoBadge, todasObservaciones, historialHtml, showTextModal } from '../requerimiento/reqShared.js';
+import { estadoBadge, todasObservaciones, historialHtml, showTextModal, verHistorialObservaciones } from '../requerimiento/reqShared.js';
+import { isEstadoObservado } from '../../utils/trazabilidad.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 
 function esc(s) {
@@ -123,6 +124,10 @@ async function aprobarProgramacion(id) {
 async function observarProgramacion(id) {
   const req = (lastRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
+  if (isEstadoObservado(req.estado)) {
+    await verHistorialObservaciones(req, { title: 'Historial de observaciones — Programación' });
+    return;
+  }
   const allObs = todasObservaciones(req);
   const motivo = await showTextModal({
     title: 'Observar requerimiento desde Programacion',

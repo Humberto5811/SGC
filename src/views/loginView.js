@@ -1,3 +1,5 @@
+import { permisosFromRol } from '../utils/permissionsCatalog.js';
+
 function renderLoginView() {
   return `
     <div class="container mt-5">
@@ -11,12 +13,12 @@ function renderLoginView() {
             <div class="card-body">
               <form id="loginForm">
                 <div class="mb-3">
-                  <label class="form-label">DNI / Usuario</label>
-                  <input type="text" id="dni" class="form-control" placeholder="Ingrese su DNI" required>
+                  <label class="form-label">Usuario</label>
+                  <input type="text" id="username" class="form-control" placeholder="Ej. hnizama" required autocomplete="username">
                 </div>
                 <div class="mb-3">
                   <label class="form-label">Contrase&ntilde;a</label>
-                  <input type="password" id="password" class="form-control" placeholder="Ingrese su contrase&ntilde;a" required>
+                  <input type="password" id="password" class="form-control" placeholder="Ingrese su contrase&ntilde;a" required autocomplete="current-password">
                 </div>
                 <div id="errorMsg" class="alert alert-danger d-none"></div>
                 <button type="submit" class="btn btn-primary w-100">Ingresar</button>
@@ -35,22 +37,22 @@ function initLoginView() {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const dni = document.getElementById('dni').value.trim();
+    const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
     const errorMsg = document.getElementById('errorMsg');
 
     const onSuccess = (user) => {
+      if (!user.permisos) user.permisos = permisosFromRol(user.rol || 'usuario');
       localStorage.setItem('currentUser', JSON.stringify(user));
-      window.location.hash = '#/dashboard';
+      window.location.hash = user.debeCambiarPassword ? '#/cambio-password' : '#/dashboard';
       window.location.reload();
     };
 
-    // 1) Intentar autenticar contra el backend (multiusuario).
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dni, password }),
+        body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -63,19 +65,11 @@ function initLoginView() {
         return;
       }
     } catch (err) {
-      // El backend no está disponible: usar respaldo local.
-      console.warn('[login] Backend no disponible, usando respaldo local:', err.message);
+      console.warn('[login] Backend no disponible:', err.message);
     }
 
-    // 2) Respaldo: usuarios en localStorage (modo sin servidor).
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const user = users.find((u) => u.dni === dni);
-    if (user) {
-      onSuccess(user);
-    } else {
-      errorMsg.textContent = 'Usuario no encontrado. Pruebe con: admin, au, o dec';
-      errorMsg.classList.remove('d-none');
-    }
+    errorMsg.textContent = 'No se pudo conectar con el servidor. Verifique que el backend esté activo.';
+    errorMsg.classList.remove('d-none');
   });
 }
 

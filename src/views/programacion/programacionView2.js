@@ -2,8 +2,18 @@
 import { programacionService } from '../../services/programacionService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
-import { todasObservaciones, historialHtml, showTextModal } from '../requerimiento/reqShared.js';
+import { todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from '../requerimiento/reqShared.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
+import {
+  bandejaTraceHeaders, renderTraceRowCells, enrichReqRow,
+  renderFilterBarHtml, readFilterParams, applyBandejaFilters,
+  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
+  renderActionMenuCell, bindActionMenus, bindBandejaToolbar, isEstadoObservado,
+} from '../../utils/trazabilidad.js';
+import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
+import { fetchBandejaProgramacion } from '../../utils/bandejaRequerimientos.js';
+import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -20,7 +30,7 @@ export function renderProgramacionView() {
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-calendar-check"></i> Programación</h3>
-          <p class="text-muted mb-0">Asociar pedidos SIGAMEF y consolidar requerimientos aprobados.</p>
+          <p class="text-muted mb-0">Expedientes que llegaron a Programación (vía DEC o subsanación). Asocie pedidos SIGAMEF y consolide.</p>
         </div>
         <div class="d-flex gap-2">
           <button id="progConsolidar" class="btn btn-sm btn-success" disabled>
@@ -35,6 +45,8 @@ export function renderProgramacionView() {
         <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">📋 Bandeja</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-tab="paquetes">📦 Paquetes</a></li>
       </ul>
+      <div id="progTrazaSummaryWrap">${renderSummaryCardsHtml('progTrazaSummary')}</div>
+      <div id="progFilterWrap">${renderFilterBarHtml('prog')}</div>
       <div id="progContent"><div class="text-muted">Cargando…</div></div>
     </div>
     <style>
@@ -62,15 +74,8 @@ function getPayloadItemTexts(r) {
   return { codigosSigamef, descripcionesBien };
 }
 
-// Estados visibles en bandeja de Programación (historial completo del flujo)
-const ESTADOS_BANDEJA_PROG = [
-  'Aprobado DEC',
-  'Observado Programación',
-  'Aprobado Programación',
-  'Programado',
-];
-
 let currentTab = 'bandeja';
+let progListFilters = {};
 
 // ==================== LOAD ====================
 async function loadBandeja() {
@@ -78,12 +83,7 @@ async function loadBandeja() {
   if (!cont) return;
   try {
     cont.innerHTML = '<div class="text-muted">Cargando…</div>';
-    let respReq;
-    try {
-      respReq = await programacionService.getRequerimientos();
-    } catch (_) {
-      respReq = await contratacionesService.listProgramacion({ pageSize: 200 });
-    }
+    let rows = await fetchBandejaProgramacion(progListFilters);
     let countMap = {};
     let paqList = { data: [] };
     try { countMap = await programacionService.getPedidosCount(); } catch (_) {}
@@ -109,35 +109,9 @@ async function loadBandeja() {
       }
     });
 
-    let rows = [];
-    if (respReq && respReq.data) {
-      rows = respReq.data;
-    } else if (Array.isArray(respReq)) {
-      rows = respReq;
-    }
-
-    rows = rows.filter((r) => ESTADOS_BANDEJA_PROG.includes(String(r.estado || '')));
-
-    rows = rows.map((r) => {
-      let monto_total = 0;
-      try {
-        const payload = JSON.parse(r.payload || '{}');
-        if (r.tipo === 'servicios') {
-          if (Array.isArray(payload.servicioItems)) monto_total = payload.servicioItems.reduce((s, it) => s + (Number(it.monto) || 0), 0);
-        } else if (r.tipo === 'locacion') {
-          if (Array.isArray(payload.locadorItems)) monto_total = payload.locadorItems.reduce((s, it) => s + (Number(it.monto) || 0), 0);
-        } else {
-          if (Array.isArray(payload.items)) monto_total = payload.items.reduce((s, it) => s + ((Number(it.precio_unitario) || 0) * (Number(it.cantidad) || 0)), 0);
-        }
-      } catch (_) {}
-      return { ...r, monto_total: Number(monto_total.toFixed(2)) };
-    });
-
-    rows.sort((a, b) => {
-      const n = (r) => { const m = String(r.codigo || '').match(/(\d+)/); return m ? Number(m[1]) : (r.id || 0); };
-      return n(a) - n(b);
-    });
+    rows = applyBandejaFilters(rows, progListFilters);
     allRows = rows;
+    updateSummaryCards(rows, 'progTrazaSummary');
 
     const combinedItems = [];
     const usedPaqIds = new Set();
@@ -166,53 +140,30 @@ async function loadBandeja() {
     selectedIds = new Set();
 
     if (!combinedItems.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos aprobados en la bandeja.</div>';
+      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos que coincidan con los filtros.</div>';
       return;
     }
 
     const style = 'padding: 2px 6px; font-size: 11px;';
-    cont.innerHTML = `
-      <style>
-        #progContent .req-list-table, #progContent .req-list-table th, #progContent .req-list-table td {
-          font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal;
-        }
-        #progContent .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
-        #progContent .req-list-table strong { font-weight: normal; }
-      </style>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle req-list-table">
-          <thead class="table-light">
-            <tr>
-              <th style="width:35px;"><input type="checkbox" id="progSelectAll" title="Seleccionar todos"></th>
-              <th>Código</th>
-              <th>Tipo</th>
-              <th>Código SIGAMEF</th>
-              <th>Descripción del bien</th>
-              <th>Área usuaria</th>
-              <th>Centro</th>
-              <th class="text-center">Monto Total</th>
-              <th class="text-center">CMN N°</th>
-              <th>Estado</th>
-              <th class="text-center">Pedidos</th>
-              <th style="width:280px;" class="text-center">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${combinedItems.map((item) => {
+    const pedidosHeader = '<th class="text-center" style="width:72px;">Pedidos</th>';
+    cont.innerHTML = wrapBandejaTable({
+      containerId: 'progContent',
+      prefix: 'prog',
+      headExtraBefore: '<th style="width:35px;"><input type="checkbox" id="progSelectAll" title="Seleccionar todos"></th>',
+      extraColsBeforeAcc: pedidosHeader,
+      bodyHtml: combinedItems.map((item) => {
               if (item.type === 'paquete') {
                 const p = item.paquete;
                 const d = item.detail;
                 const cnt = d.requerimientos ? d.requerimientos.length : 0;
-                const estadoBg = p.estado === 'Aprobado' ? 'bg-success' : 'bg-info';
                 return `
                 <tr class="table-warning" style="cursor:pointer;" data-paquete-id="${p.id}">
                   <td></td>
-                  <td colspan="6"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span></td>
-                  <td class="text-center">${d.resumen ? 'S/. ' + d.resumen.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : ''}</td>
-                  <td class="text-center"><span class="text-muted">—</span></td>
-                  <td><span class="badge ${estadoBg}">${esc(p.estado)}</span></td>
+                  <td colspan="9"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span>
+                    <span class="text-muted small ms-2">${d.resumen ? 'S/. ' + d.resumen.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : ''}</span>
+                  </td>
                   <td class="text-center">
-                    <button class="btn btn-xs btn-outline-success" disabled title="Pedidos del paquete" style="${style}"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-success" style="font-size:9px;padding:1px 4px;">${d.pedidos ? d.pedidos.length : 0}</span></button>
+                    <span class="badge bg-success">${d.pedidos ? d.pedidos.length : 0}</span>
                   </td>
                   <td class="text-center">
                     <button class="btn btn-xs btn-outline-info prog-paq-detail" data-id="${p.id}" title="Ver Detalle"><i class="bi bi-eye"></i></button>
@@ -225,42 +176,32 @@ async function loadBandeja() {
               const pedCnt = pedidosCountMap[r.id] || 0;
               const inPaq = paqueteReqIds.has(r.id);
               const esAprobadoDec = r.estado === 'Aprobado DEC';
-              const esObservado = r.estado === 'Observado Programación';
+              const esObservado = isEstadoObservado(r.estado);
               const puedeGestionar = esAprobadoDec || esObservado;
               const canSelect = esAprobadoDec && !inPaq && pedCnt > 0;
-              const { codigosSigamef, descripcionesBien } = getPayloadItemTexts(r);
               return `
-              <tr>
-                <td><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
-                <td>${esc(r.codigo || ('REQ-' + String(r.id).padStart(5, '0')))}</td>
-                <td><span class="badge bg-secondary text-uppercase" style="font-size:0.65rem;">${esc(r.tipo)}</span></td>
-                <td class="small">${codigosSigamef}</td>
-                <td class="small">${descripcionesBien}</td>
-                <td>${esc(r.area || '')}</td>
-                <td>${esc(r.responsable || r.centro_nombre || '')}</td>
-                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : 'S/. 0.00'}</td>
-                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${estadoBadge(r.estado)}</td>
-                <td class="text-center">
+              <tr data-req-id="${r.id}">
+                <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
+                ${renderTraceRowCells(r, { prefix: 'prog', escFn: esc })}
+                <td class="text-center" onclick="event.stopPropagation()">
                   ${pedCnt > 0
-                    ? `<button class="btn btn-xs btn-outline-success prog-ver-pedidos" data-id="${r.id}" title="Ver pedidos asociados" style="${style}"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-success" style="font-size:9px;padding:1px 4px;">${pedCnt}</span></button>`
-                    : `<button class="btn btn-xs btn-outline-secondary" disabled title="Sin pedidos asociados" style="${style}"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-secondary" style="font-size:9px;padding:1px 4px;">0</span></button>`
-                  }
+                    ? `<button class="btn btn-xs btn-outline-success prog-ver-pedidos" data-id="${r.id}" title="Ver pedidos" style="${style}"><span class="chip chip-adj">📎 ${pedCnt}</span></button>`
+                    : `<span class="text-muted small">—</span>`}
                 </td>
-                <td class="text-center" style="white-space:nowrap;">
-                  <button class="btn btn-xs btn-success prog-add-pedido" data-id="${r.id}" title="Agregar Pedido SIGAMEF" style="${style}"${puedeGestionar ? '' : ' disabled'}><i class="bi bi-plus-circle"></i> Pedido</button>
-                  <button class="btn btn-xs btn-outline-primary prog-ver" data-id="${r.id}" title="Ver documento" style="${style}"><i class="bi bi-eye"></i></button>
-                  <button class="btn btn-xs btn-outline-info prog-attach" data-id="${r.id}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size:9px;padding:1px 4px;">0</span></button>
-                  <button class="btn btn-xs btn-outline-danger prog-observar" data-id="${r.id}" title="Observar" style="${style}"${puedeGestionar ? '' : ' disabled'}><i class="bi bi-chat-left-dots"></i></button>
-                  <button class="btn btn-xs btn-success prog-aprobar" data-id="${r.id}" title="Aprobar" style="${style}"${esAprobadoDec ? '' : ' disabled'}><i class="bi bi-check-circle"></i> Aprobar</button>
-                </td>
+                ${renderActionMenuCell(r.id, progMenuItems(r), progHiddenActions(r))}
               </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
+            }).join(''),
+    });
 
     bindBandejaEvents(cont);
+    bindTrazabilidadButtons(cont);
+    bindActionMenus(cont, {
+      detail: (id) => {
+        const req = allRows.find((x) => String(x.id) === String(id));
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
+      },
+    });
+    bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
     updateConsolidarBtn();
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
@@ -318,7 +259,7 @@ async function aprobarProgramacion(id) {
   if (!confirm('¿Confirmar aprobación desde Programación? Estado: Aprobado Programación.')) return;
   try {
     const user = authService.getCurrentUser() || {};
-    const res = await contratacionesService.aprobarProgramacion(id, user.dni || user.nombre || 'sistema');
+    const res = await contratacionesService.aprobarProgramacion(id, getUserDisplayName(user));
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadBandeja();
   } catch (e) {
@@ -329,18 +270,28 @@ async function aprobarProgramacion(id) {
 async function observarProgramacion(id) {
   const req = allRows.find((x) => String(x.id) === String(id));
   if (!req) return;
-  const motivo = await showTextModal({
+  if (isEstadoObservado(req.estado)) {
+    await verHistorialObservaciones(req, { title: 'Historial de observaciones — Programación' });
+    return;
+  }
+  const data = await showObservacionDirigidaModal({
     title: 'Observar requerimiento desde Programación',
     historyHtml: historialHtml(todasObservaciones(req)),
-    label: 'Motivo de la observación',
+    origenSubmodulo: 'Programación',
+    defaultDestinoSubmodulo: 'Registro de Requerimiento',
     placeholder: 'Indique el motivo...',
     buttonText: 'Observar',
     buttonClass: 'btn-danger',
   });
-  if (!motivo) return;
+  if (!data) return;
   try {
     const user = authService.getCurrentUser() || {};
-    await contratacionesService.observarProgramacion(id, motivo, user.dni || user.nombre || 'sistema');
+    await contratacionesService.observarProgramacion(id, data.motivo, getUserDisplayName(user), {
+      destino_submodulo: data.destino_submodulo,
+      destino_etapa: data.destino_etapa,
+      destino_persona: data.destino_persona,
+      origen_submodulo: data.origen_submodulo || 'Programación',
+    });
     loadBandeja();
   } catch (e) {
     alert('Error al observar: ' + e.message);
@@ -930,6 +881,13 @@ export function initProgramacionView() {
         if (currentTab === 'bandeja') loadBandeja();
         else loadPaquetesTab();
       };
+    });
+
+    bindBandejaToolbar({
+      prefix: 'prog',
+      onFilter: () => { progListFilters = readFilterParams('prog'); if (currentTab === 'bandeja') loadBandeja(); },
+      onClear: () => { progListFilters = {}; if (currentTab === 'bandeja') loadBandeja(); },
+      onExecutiveToggle: () => { if (currentTab === 'bandeja') loadBandeja(); },
     });
 
     currentTab = 'bandeja';

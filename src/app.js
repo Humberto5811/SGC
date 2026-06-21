@@ -1,6 +1,7 @@
 ﻿import { initRouter, getCurrentRoute } from './router.js';
 import { storageService } from './services/storageService.js';
 import { authService } from './services/authService.js';
+import { permissionsService } from './services/permissionsService.js';
 import { renderNavbar } from './components/Navbar.js';
 import { renderSidebar, initSidebar } from './components/Sidebar.js';
 import { renderFormBienesView, initFormBienesView } from './views/formBienesView.js';
@@ -16,8 +17,26 @@ async function renderApp() {
   const currentRoute = getCurrentRoute();
   const currentUser = authService.getCurrentUser();
   const isLoginRoute = currentRoute === 'login';
+  const isCambioPasswordRoute = currentRoute === 'cambio-password';
+  const isAuthScreen = isLoginRoute || isCambioPasswordRoute;
+  window.__sgcPermissions = { permissionsService };
+
+  if (currentUser?.debeCambiarPassword && !isCambioPasswordRoute) {
+    window.location.hash = '#/cambio-password';
+    return;
+  }
+
+  let accessDeniedBanner = '';
+  const deniedMsg = sessionStorage.getItem('sgc_access_denied');
+  if (deniedMsg) {
+    accessDeniedBanner = `<div class="alert alert-warning alert-dismissible fade show" role="alert">
+      <i class="bi bi-shield-exclamation"></i> ${deniedMsg}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Cerrar"></button>
+    </div>`;
+    sessionStorage.removeItem('sgc_access_denied');
+  }
   
-  if (!currentUser && !isLoginRoute) {
+  if (!currentUser && !isAuthScreen) {
     window.location.hash = '#/login';
     return;
   }
@@ -29,7 +48,12 @@ async function renderApp() {
       const loginModule = await import('./views/loginView.js');
       content = loginModule.renderLoginView();
       setTimeout(() => loginModule.initLoginView(), 50);
-    } 
+    }
+    else if (currentRoute === 'cambio-password') {
+      const cpModule = await import('./views/cambioPasswordView.js');
+      content = cpModule.renderCambioPasswordView();
+      setTimeout(() => cpModule.initCambioPasswordView(), 50);
+    }
     // Dashboard
     else if (currentRoute === 'dashboard') {
       const dashboardModule = await import('./views/dashboardView.js');
@@ -148,33 +172,35 @@ else if (currentRoute === 'mantenimiento' ||
     `;
   }
   
-  const sidebarHtml = isLoginRoute ? '' : renderSidebar(currentRoute);
-  const mainMargin = isLoginRoute ? '0' : '280px';
+  const sidebarHtml = isAuthScreen ? '' : renderSidebar(currentRoute);
+  const mainMargin = isAuthScreen ? '0' : '280px';
   
   appEl.innerHTML = `
     ${renderNavbar()}
     ${sidebarHtml}
     <main style="margin-left: ${mainMargin}; padding: 24px; transition: all 0.3s ease; min-height: 100vh; background: #f8f9fa;">
       <div class="container-fluid">
+        ${accessDeniedBanner}
         ${content}
       </div>
     </main>
   `;
   
   // Inicializar el sidebar (para que funcionen los clics en submenús)
-  if (!isLoginRoute) {
+  if (!isAuthScreen) {
     setTimeout(() => {
       if (typeof initSidebar === 'function') {
         initSidebar();
       }
+      permissionsService.applyActivityButtons(document);
     }, 100);
   }
   
   // Configurar botón de logout global
   const logoutBtn = document.querySelector('[data-action="logout"]');
   if (logoutBtn) {
-    logoutBtn.onclick = () => {
-      authService.logout();
+    logoutBtn.onclick = async () => {
+      await authService.logout();
       window.location.hash = '#/login';
       renderApp();
     };

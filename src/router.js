@@ -4,6 +4,7 @@ import { userService } from './services/userService.js';
 
 // Vistas principales
 import { renderLoginView, initLoginView } from './views/loginView.js';
+import { renderCambioPasswordView, initCambioPasswordView } from './views/cambioPasswordView.js';
 import { renderDashboardView, initDashboardView } from './views/dashboardView.js';
 
 // Administración de usuarios (Registro de datos)
@@ -59,6 +60,7 @@ const defaultRoute = 'login';
 const routes = {
   // Autenticación
   login: { render: renderLoginView, init: initLoginView },
+  'cambio-password': { render: renderCambioPasswordView, init: initCambioPasswordView },
   
   // Dashboard principal
   dashboard: { render: renderDashboardView, init: initDashboardView },
@@ -119,7 +121,9 @@ function parseHash() {
   // Si el hash está vacío, ir a dashboard (si hay usuario) o login
   if (!hash) {
     const currentUser = authService.getCurrentUser();
-    return currentUser ? 'dashboard' : 'login';
+    if (!currentUser) return 'login';
+    if (currentUser.debeCambiarPassword) return 'cambio-password';
+    return 'dashboard';
   }
   return hash;
 }
@@ -128,16 +132,20 @@ function getCurrentRoute() {
   return parseHash();
 }
 
-function canAccessRoute(route, action = 'view') {
+function canAccessRoute(route, action = 'VER') {
   const currentUser = authService.getCurrentUser();
   if (!currentUser) {
     return route === 'login';
   }
+  if (currentUser.debeCambiarPassword) {
+    return route === 'cambio-password';
+  }
+  if (route === 'login' || route === 'cambio-password') return false;
+  if (route === 'dashboard') return true;
   const allowedRoles = ROUTE_ROLES[route] || [];
   const roleOk = allowedRoles.length === 0 || allowedRoles.includes(currentUser.rol);
-  const user = userService.findByDni(currentUser.dni);
-  const permOk = userService.hasPermission(user, route, action);
-  return roleOk && permOk;
+  if (!roleOk) return false;
+  return userService.hasPermission(currentUser, route, action);
 }
 
 function initRouter(onRouteChange) {
@@ -146,8 +154,13 @@ function initRouter(onRouteChange) {
     const route = getCurrentRoute();
     
     // Verificar acceso
-    if (!canAccessRoute(route)) {
+  if (!canAccessRoute(route)) {
       const currentUser = authService.getCurrentUser();
+      if (currentUser?.debeCambiarPassword) {
+        location.hash = '#/cambio-password';
+        return;
+      }
+      sessionStorage.setItem('sgc_access_denied', 'No tiene permisos para acceder a este módulo.');
       location.hash = currentUser ? '#/dashboard' : '#/login';
       return;
     }
@@ -165,14 +178,21 @@ function initRouter(onRouteChange) {
   // Inicializar hash si no existe
   if (!location.hash || location.hash === '#') {
     const currentUser = authService.getCurrentUser();
-    location.hash = currentUser ? '#/dashboard' : '#/login';
+    if (!currentUser) location.hash = '#/login';
+    else if (currentUser.debeCambiarPassword) location.hash = '#/cambio-password';
+    else location.hash = '#/dashboard';
   }
 
   // Verificar acceso a la ruta inicial
   const route = getCurrentRoute();
   if (!canAccessRoute(route)) {
     const currentUser = authService.getCurrentUser();
-    location.hash = currentUser ? '#/dashboard' : '#/login';
+    if (currentUser?.debeCambiarPassword) {
+      location.hash = '#/cambio-password';
+    } else {
+      sessionStorage.setItem('sgc_access_denied', 'No tiene permisos para acceder a este módulo.');
+      location.hash = currentUser ? '#/dashboard' : '#/login';
+    }
   } else {
     const routeConfig = routes[route];
     if (routeConfig) {

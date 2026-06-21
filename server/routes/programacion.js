@@ -1,6 +1,13 @@
 // Programación — endpoints para asociación de pedidos y paquetes de consolidación
 import express from 'express';
 import { query } from '../db.js';
+import {
+  TRAZA_EXTRA_SELECT,
+  enrichRequerimientoRow,
+  registrarMovimiento,
+  buildListFilters,
+  ETAPAS,
+} from '../lib/trazabilidad.js';
 
 const router = express.Router();
 
@@ -12,30 +19,48 @@ router.get('/requerimientos', async (req, res, next) => {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '200', 10)));
     const offset = (page - 1) * pageSize;
-    const estados = ['Aprobado DEC', 'Observado Programación', 'Aprobado Programación', 'Programado'];
+    const estados = ['Aprobado DEC', 'Observado Programación', 'Aprobado Programación', 'Programado', 'En Programación'];
     const placeholders = estados.map((_, i) => `$${i + 1}`).join(', ');
-    const params = [...estados, pageSize, offset];
+    const { whereExtra, params: filterParams } = buildListFilters(req.query);
+    const params = [...estados, ...filterParams];
+
+    let where = `WHERE (
+      r.estado IN (${placeholders})
+      OR (r.estado_actual = 'PROGRAMACION' AND r.estado IN ('En tramite de aprobación', 'Observado', 'Observado Programación'))
+    )`;
+    if (whereExtra) where += ` AND ${whereExtra}`;
+
+    const countRes = await query(
+      `SELECT COUNT(*)::int AS total FROM requerimientos r LEFT JOIN areas a ON r.area = a.nombre LEFT JOIN centros c ON a.centro_id = c.id ${where}`,
+      params
+    );
+    const total = countRes.rows[0].total;
+
+    params.push(pageSize, offset);
+    const limitIdx = params.length - 1;
+    const offsetIdx = params.length;
 
     const { rows } = await query(`
       SELECT
         r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado,
         r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
-        COALESCE(c.nombre, '') AS centro_nombre
+        COALESCE(c.nombre, c.codigo, a.responsable, '') AS centro_nombre,
+        ${TRAZA_EXTRA_SELECT}
       FROM requerimientos r
       LEFT JOIN areas a ON r.area = a.nombre
       LEFT JOIN centros c ON a.centro_id = c.id
-      WHERE r.estado IN (${placeholders})
-      ORDER BY r.id DESC
-      LIMIT $${params.length - 1} OFFSET $${params.length}
+      ${where}
+      ORDER BY r.codigo ASC NULLS LAST, r.id ASC
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `, params);
 
-    const countRes = await query(
-      `SELECT COUNT(*)::int AS total FROM requerimientos WHERE estado IN (${placeholders})`,
-      estados
-    );
-    const total = countRes.rows[0].total;
-
-    res.json({ data: rows, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
+    res.json({
+      data: rows.map(enrichRequerimientoRow),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    });
   } catch (err) { next(err); }
 });
 
@@ -322,10 +347,20 @@ router.put('/paquetes/:id/aprobar', async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: 'Paquete no encontrado' });
 
     // Marcar requerimientos del paquete como "Programado"
-    await query(`
-      UPDATE requerimientos SET estado = 'Programado', updated_at = NOW()
-      WHERE id IN (SELECT requerimiento_id FROM paquete_requerimientos WHERE paquete_id = $1)
-    `, [id]);
+    const reqIds = await query(
+      'SELECT requerimiento_id FROM paquete_requerimientos WHERE paquete_id = $1',
+      [id]
+    );
+    for (const row of reqIds.rows) {
+      await registrarMovimiento({
+        requerimientoId: row.requerimiento_id,
+        estadoNuevo: 'Programado',
+        usuario: usuario || 'Programación',
+        accion: 'aprobado',
+        observacion: `Paquete ${id} aprobado — consolidación programada`,
+        responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
+      });
+    }
 
     res.json({ ok: true, paquete: rows[0] });
   } catch (err) { next(err); }

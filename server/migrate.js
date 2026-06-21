@@ -39,13 +39,21 @@ export async function runMigrations() {
   for (const u of DEFAULT_USERS) {
     const hash = await bcrypt.hash(u.password, 10);
     await query(
-      `INSERT INTO usuarios (dni, nombre, rol, email, password_hash)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (dni) DO NOTHING`,
+      `INSERT INTO usuarios (dni, username, nombre, rol, email, password_hash, debe_cambiar_password)
+       VALUES ($1, $1, $2, $3, $4, $5, FALSE)
+       ON CONFLICT (dni) DO UPDATE SET username = COALESCE(usuarios.username, EXCLUDED.username)`,
       [u.dni, u.nombre, u.rol, u.email, hash]
     );
   }
   console.log('[db] Usuarios por defecto verificados.');
+
+  try {
+    const { rebuildAllHistorial } = await import('./lib/trazabilidad.js');
+    const n = await rebuildAllHistorial();
+    if (n > 0) console.log(`[db] Historial de trazabilidad reconstruido en ${n} requerimiento(s).`);
+  } catch (err) {
+    console.warn('[db] Rebuild trazabilidad:', err.message);
+  }
 
   // Asegura un registro de entidad
   const { rows } = await query('SELECT COUNT(*)::int AS n FROM entidad');

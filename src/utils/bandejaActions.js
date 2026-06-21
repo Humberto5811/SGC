@@ -1,0 +1,117 @@
+// Menús contextuales ⋮ por bandeja (sin lógica de negocio — solo UI)
+export function registroMenuItems(r) {
+  const e = String(r.estado || '');
+  const aprobado = /aprobad/i.test(e);
+  const observado = /observ/i.test(e);
+  const enTramite = /tr[aá]mite/i.test(e);
+  const puedeAprobar = !aprobado && !observado && !enTramite;
+  return [
+    { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+    { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
+    { act: 'obs', label: observado ? 'Observaciones / subsanar' : 'Observaciones', icon: 'bi-chat-left-dots' },
+    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
+    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
+  ];
+}
+
+export function registroHiddenActions(r, esc) {
+  const e = String(r.estado || '');
+  const aprobado = /aprobad/i.test(e);
+  const observado = /observ/i.test(e);
+  const enTramite = /tr[aá]mite/i.test(e);
+  const puedeAprobar = !aprobado && !observado && !enTramite;
+  return `
+    <button type="button" class="req-open" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
+    <button type="button" class="req-print" data-act-trigger="download" data-id="${r.id}"></button>
+    <button type="button" class="req-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(e)}"></button>
+    ${observado ? `<button type="button" class="req-observado" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
+    <button type="button" class="req-approve" data-act-trigger="approve" data-id="${r.id}" ${puedeAprobar ? '' : 'disabled'}></button>
+    ${aprobado ? `<button type="button" class="req-ver-obs" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
+    <button type="button" class="req-traza-hidden req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
+    <button type="button" class="req-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>`;
+}
+
+export function evalMenuItems(r) {
+  const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
+  const observado = /observ/i.test(String(r.estado || ''));
+  const aprobado = /aprobad/i.test(String(r.estado || ''));
+  return [
+    { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+    { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
+    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots', disabled: !(enTramite || observado || aprobado) },
+    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: aprobado || !enTramite },
+    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
+  ];
+}
+
+export function evalHiddenActions(r, esc) {
+  const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
+  const observado = /observ/i.test(String(r.estado || ''));
+  const aprobado = /aprobad/i.test(String(r.estado || ''));
+  return `
+    <button type="button" class="eval-edit" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
+    <button type="button" class="eval-print" data-act-trigger="download" data-id="${r.id}"></button>
+    <button type="button" class="eval-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}"></button>
+    <button type="button" class="eval-observar" data-act-trigger="obs" data-id="${r.id}" ${(enTramite || observado || aprobado) ? '' : 'disabled'}></button>
+    <button type="button" class="eval-approve" data-act-trigger="approve" data-id="${r.id}" ${aprobado || !enTramite ? 'disabled' : ''}></button>
+    <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
+    <button type="button" class="eval-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>`;
+}
+
+export function decMenuItems(r) {
+  const esObservado = /observ/i.test(String(r.estado || ''));
+  const esAprobado = r.estado === 'Aprobado';
+  return [
+    { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots' },
+    { act: 'approve', label: 'Aprobar DEC', icon: 'bi-check-circle', disabled: !esAprobado },
+    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+  ];
+}
+
+export function decHiddenActions(r) {
+  return `
+    <button type="button" class="dec-ver" data-act-trigger="download" data-id="${r.id}" data-perm-act="VER"></button>
+    <button type="button" class="dec-attach" data-act-trigger="attach" data-id="${r.id}" data-perm-act="VER"></button>
+    <button type="button" class="dec-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
+    <button type="button" class="dec-aprobar" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>
+    <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
+}
+
+export function progMenuItems(r) {
+  const esObservado = /observ/i.test(String(r.estado || ''));
+  const esAprobadoDec = r.estado === 'Aprobado DEC';
+  const enProgramacion = r.estado === 'En Programación';
+  const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
+  return [
+    { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+    { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
+    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots', disabled: !puedeGestionar && !esObservado },
+    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !esAprobadoDec },
+    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+  ];
+}
+
+export function progHiddenActions(r) {
+  const esObservado = /observ/i.test(String(r.estado || ''));
+  const esAprobadoDec = r.estado === 'Aprobado DEC';
+  const enProgramacion = r.estado === 'En Programación';
+  const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
+  return `
+    <button type="button" class="prog-add-pedido" data-act-trigger="pedido" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
+    <button type="button" class="prog-ver" data-act-trigger="download" data-id="${r.id}"></button>
+    <button type="button" class="prog-attach" data-act-trigger="attach" data-id="${r.id}"></button>
+    <button type="button" class="prog-observar" data-act-trigger="obs" data-id="${r.id}" ${puedeGestionar || esObservado ? '' : 'disabled'}></button>
+    <button type="button" class="prog-aprobar" data-act-trigger="approve" data-id="${r.id}" ${esAprobadoDec ? '' : 'disabled'}></button>
+    <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
+}

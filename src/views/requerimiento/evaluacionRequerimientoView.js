@@ -1,11 +1,18 @@
-// Evaluación de Requerimientos — listado de requerimientos derivados al gerente.
-// Reutiliza la estructura del listado de Registro (mismas columnas) y agrega el
-// ciclo de observaciones/subsanaciones. Solo muestra requerimientos cuyo estado
-// es distinto de "Registrado" (es decir, los que el usuario ya envió a aprobación).
+// Evaluación de Requerimientos
 import { authService } from '../../services/authService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
-import { reqShared, estadoBadge, addObservacion, ultimaObservacion, todasObservaciones, historialHtml, showTextModal } from './reqShared.js';
+import { reqShared, addObservacion, todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from './reqShared.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento } from './registroRequerimientoView.js';
+import {
+  renderFilterBarHtml, readFilterParams, enrichReqRow,
+  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
+  renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  isEstadoObservado,
+} from '../../utils/trazabilidad.js';
+import { fetchBandejaEvaluacion } from '../../utils/bandejaRequerimientos.js';
+import { evalMenuItems, evalHiddenActions } from '../../utils/bandejaActions.js';
+import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -13,6 +20,7 @@ function esc(s) {
 }
 
 let lastEvalRows = [];
+let listFilters = {};
 
 function renderEvaluacionRequerimientoView() {
   return `
@@ -20,10 +28,12 @@ function renderEvaluacionRequerimientoView() {
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-check-circle"></i> Evaluación de Requerimientos</h3>
-          <p class="text-muted mb-0">Revise, observe o apruebe los requerimientos enviados a aprobación.</p>
+          <p class="text-muted mb-0">Expedientes enviados a evaluación. El estado se actualiza al avanzar hacia DEC o al ser observados.</p>
         </div>
         <button id="evalReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
+      ${renderSummaryCardsHtml('evalTrazaSummary')}
+      ${renderFilterBarHtml('eval')}
       <hr/>
       <div id="evalList"><div class="text-muted">Cargando…</div></div>
     </div>
@@ -34,135 +44,52 @@ async function loadEvaluacionList() {
   const cont = document.getElementById('evalList');
   if (!cont) return;
   try {
-    const resp = await requerimientosService.listConDetalles({ pageSize: 200 });
-    let rows = (resp && resp.data) || [];
-
-    // Calcular monto_total desde el payload.
-    rows = rows.map((r) => {
-      let monto_total = 0;
-      try {
-        const payload = JSON.parse(r.payload || '{}');
-        if (r.tipo === 'servicios') {
-          if (Array.isArray(payload.servicioItems)) {
-            monto_total = payload.servicioItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
-          }
-        } else if (r.tipo === 'locacion') {
-          if (Array.isArray(payload.locadorItems)) {
-            monto_total = payload.locadorItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
-          }
-        } else {
-          if (Array.isArray(payload.items)) {
-            monto_total = payload.items.reduce((sum, it) =>
-              sum + ((Number(it.precio_unitario) || 0) * (Number(it.cantidad) || 0)), 0);
-          }
-        }
-      } catch (_) {}
-      return { ...r, monto_total: Number(monto_total.toFixed(2)) };
-    });
-
-    // Solo los que ya fueron enviados a aprobación (cualquier estado distinto de "Registrado").
-    rows = rows.filter((r) => String(r.estado || 'Registrado') !== 'Registrado');
-
-    rows = rows.slice().sort((a, b) => {
-      const getNum = (r) => {
-        if (r && r.codigo) { const m = String(r.codigo).match(/(\d+)/); if (m) return Number(m[1]); }
-        return Number(r && r.id) || 0;
-      };
-      return getNum(a) - getNum(b);
-    });
+    let rows = await fetchBandejaEvaluacion(listFilters);
     lastEvalRows = rows;
+    updateSummaryCards(rows, 'evalTrazaSummary');
 
     if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos en evaluación.</div>';
+      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos enviados a evaluación.</div>';
       return;
     }
 
-    cont.innerHTML = `
-      <style>
-        #evalList .req-list-table,
-        #evalList .req-list-table th,
-        #evalList .req-list-table td { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal; }
-        #evalList .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
-        #evalList .req-list-table strong { font-weight: normal; }
-      </style>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle req-list-table">
-          <thead class="table-light">
-            <tr>
-              <th>Código</th>
-              <th>Tipo</th>
-              <th>Código SIGAMEF</th>
-              <th>Descripción del bien</th>
-              <th>Área usuaria</th>
-              <th>Centro</th>
-              <th class="text-center">Monto Total</th>
-              <th class="text-center">CMN N°</th>
-              <th>Estado</th>
-              <th style="width: 180px;" class="text-center">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((r) => {
-              let codigosSigamef = '<span class="text-muted small">—</span>';
-              let descripcionesBien = '<span class="text-muted small">—</span>';
-              try {
-                const p = JSON.parse(r.payload || '{}');
-                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
-                if (Array.isArray(items) && items.length) {
-                  codigosSigamef = items.map((it) => esc(it.item_bien || '')).join(', ');
-                  descripcionesBien = items.map((it) => esc(it.nombre_item || '')).join(', ');
-                }
-              } catch (_) {}
-              const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
-              const observado = /observ/i.test(String(r.estado || ''));
-              const aprobado = /aprobad/i.test(String(r.estado || ''));
-              const style = 'padding: 2px 6px; font-size: 11px;';
-              const observarBtn = `<button class="btn btn-xs ${aprobado ? 'btn-outline-secondary' : 'btn-danger'} eval-observar" data-id="${r.id}" title="${aprobado ? 'Ver observaciones' : 'Observar'}" style="${style}" ${(enTramite || observado || aprobado) ? '' : 'disabled'}><i class="bi bi-chat-left-dots" style="font-size: 11px;"></i></button>`;
-              const aprobarBtn = aprobado
-                ? `<button class="btn btn-xs btn-success" data-id="${r.id}" title="Aprobado" style="${style}" disabled><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`
-                : `<button class="btn btn-xs btn-outline-success eval-approve" data-id="${r.id}" title="Aprobar" style="${style}" ${enTramite ? '' : 'disabled'}><i class="bi bi-check-circle" style="font-size: 11px;"></i></button>`;
-              return `
-              <tr>
-                <td>${esc(r.codigo || ('#' + r.id))}</td>
-                <td><span class="badge bg-secondary text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo)}</span></td>
-                <td class="small">${codigosSigamef}</td>
-                <td class="small">${descripcionesBien}</td>
-                <td>${esc(r.area || '')}</td>
-                <td>${esc(r.responsable || r.centro_nombre || '')}</td>
-                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</td>
-                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${estadoBadge(r.estado)}</td>
-                <td class="text-center" style="white-space: nowrap;">
-                  <button class="btn btn-xs btn-outline-primary eval-edit" data-id="${r.id}" title="Editar" style="${style}" ${aprobado ? 'disabled' : ''}><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-outline-dark eval-print" data-id="${r.id}" title="Documento" style="${style}"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-outline-info eval-attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
-                  ${observarBtn}
-                  ${aprobarBtn}
-                  <button class="btn btn-xs btn-outline-danger eval-del" data-id="${r.id}" title="Eliminar" style="${style}" ${aprobado ? 'disabled' : ''}><i class="bi bi-trash" style="font-size: 11px;"></i></button>
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
+    cont.innerHTML = wrapBandejaTable({
+      containerId: 'evalList',
+      prefix: 'eval',
+      bodyHtml: rows.map((r) => `
+        <tr data-req-id="${r.id}">
+          ${renderTraceRowCells(r, { prefix: 'eval', escFn: esc })}
+          ${renderActionMenuCell(r.id, evalMenuItems(r), evalHiddenActions(r, esc))}
+        </tr>`).join(''),
+    });
 
+    bindTrazabilidadButtons(cont);
+    bindActionMenus(cont, {
+      detail: (id) => {
+        const req = rows.find((x) => String(x.id) === String(id));
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, /aprobad/i.test(String(req.estado || ''))) });
+      },
+    });
+    bindRowDetailPanel(cont, rows, {
+      onAdjuntos: (id) => {
+        const req = rows.find((x) => String(x.id) === String(id));
+        manageAdjuntos(id, req && /aprobad/i.test(String(req.estado || '')));
+      },
+    });
     cont.querySelectorAll('.eval-edit').forEach((b) => b.onclick = () => editarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-attach').forEach((b) => b.onclick = () => {
-      const readOnly = /aprobad/i.test(String(b.dataset.estado || ''));
-      manageAdjuntos(b.dataset.id, readOnly);
+      manageAdjuntos(b.dataset.id, /aprobad/i.test(String(b.dataset.estado || '')));
     });
     cont.querySelectorAll('.eval-observar').forEach((b) => b.onclick = () => observarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-approve').forEach((b) => b.onclick = () => approveRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-del').forEach((b) => b.onclick = () => eliminarRequerimiento(b.dataset.id));
-
     rows.forEach((r) => cargarContadorAdjuntos(r.id));
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
 }
 
-// Editar el requerimiento dentro de la vista de Evaluación (sin navegar a Registro).
 function editarRequerimiento(id) {
   const cont = document.getElementById('evalList');
   if (!cont) return;
@@ -190,28 +117,30 @@ function editarRequerimiento(id) {
 async function observarRequerimiento(id) {
   const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
-  const allObs = todasObservaciones(req);
   const aprobado = /aprobad/i.test(String(req.estado || ''));
-  if (aprobado) {
-    await showTextModal({
-      title: 'Historial de observaciones',
-      historyHtml: historialHtml(allObs),
-      readOnlyMode: true,
-    });
+  if (aprobado || isEstadoObservado(req.estado)) {
+    await verHistorialObservaciones(req, { title: 'Historial de observaciones — Evaluación' });
     return;
   }
-  const motivo = await showTextModal({
+  const allObs = todasObservaciones(req);
+  const data = await showObservacionDirigidaModal({
     title: 'Observar requerimiento',
     historyHtml: historialHtml(allObs),
-    label: 'Nueva observación',
+    origenSubmodulo: 'Evaluación de Requerimiento',
+    defaultDestinoSubmodulo: 'Registro de Requerimiento',
     placeholder: 'Indique el motivo de la observación…',
     buttonText: 'Guardar observación',
     buttonClass: 'btn-danger',
   });
-  if (!motivo) return;
+  if (!data) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    await addObservacion(req, motivo, user.dni || user.usuario || 'gerente');
+    await addObservacion(req, data.motivo, getUserDisplayName(user), {
+      destino_submodulo: data.destino_submodulo,
+      destino_etapa: data.destino_etapa,
+      destino_persona: data.destino_persona,
+      origen_submodulo: data.origen_submodulo,
+    });
     loadEvaluacionList();
   } catch (e) {
     alert('Error al guardar la observación: ' + e.message);
@@ -221,7 +150,8 @@ async function observarRequerimiento(id) {
 async function approveRequerimiento(id) {
   if (!confirm('¿Aprobar este requerimiento?')) return;
   try {
-    const res = await requerimientosService.update(id, { estado: 'Aprobado' });
+    const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
+    const res = await requerimientosService.aprobarEvaluacion(id, getUserDisplayName(user));
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadEvaluacionList();
   } catch (e) {
@@ -240,6 +170,12 @@ async function eliminarRequerimiento(id) {
 }
 
 function initEvaluacionRequerimientoView() {
+  bindBandejaToolbar({
+    prefix: 'eval',
+    onFilter: () => { listFilters = readFilterParams('eval'); loadEvaluacionList(); },
+    onClear: () => { listFilters = {}; loadEvaluacionList(); },
+    onExecutiveToggle: () => loadEvaluacionList(),
+  });
   const reload = document.getElementById('evalReload');
   if (reload) reload.onclick = () => loadEvaluacionList();
   loadEvaluacionList();

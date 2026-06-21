@@ -1,10 +1,19 @@
 // DEC (Documento de Evaluacion de Contrataciones)
-// Muestra requerimientos visibles para DEC: Aprobado, Aprobado DEC, Observado DEC, Observado Programacion
-// Acciones: Ver, Adjuntos (readOnly), Observar, Aprobar
 import { authService } from '../../services/authService.js';
+import { permissionsService } from '../../services/permissionsService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { reqShared, estadoBadge, todasObservaciones, historialHtml, showTextModal } from '../requerimiento/reqShared.js';
-import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento } from '../requerimiento/registroRequerimientoView.js';
+import { fetchBandejaDEC } from '../../utils/bandejaRequerimientos.js';
+import { reqShared, todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from '../requerimiento/reqShared.js';
+import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
+import {
+  renderFilterBarHtml, readFilterParams,
+  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
+  renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  isEstadoObservado,
+} from '../../utils/trazabilidad.js';
+import { decMenuItems, decHiddenActions } from '../../utils/bandejaActions.js';
+import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -12,6 +21,7 @@ function esc(s) {
 }
 
 let lastRows = [];
+let listFilters = {};
 
 function renderDecView() {
   return `
@@ -19,10 +29,12 @@ function renderDecView() {
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-file-earmark-check"></i> DEC — Dependencia Encargada de las Contrataciones</h3>
-          <p class="text-muted mb-0">Requerimientos aprobados por el Gerente pendientes de revisión de la DEC.</p>
+          <p class="text-muted mb-0">Expedientes aprobados en evaluación y derivados a DEC. Gestione la revisión cuando corresponda.</p>
         </div>
         <button id="decReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
+      ${renderSummaryCardsHtml('decTrazaSummary')}
+      ${renderFilterBarHtml('dec')}
       <hr/>
       <div id="decList"><div class="text-muted">Cargando…</div></div>
     </div>
@@ -33,103 +45,39 @@ async function loadDecList() {
   const cont = document.getElementById('decList');
   if (!cont) return;
   try {
-    const resp = await contratacionesService.listDEC({ pageSize: 200 });
-    let rows = (resp && resp.data) || [];
-
-    rows = rows.map((r) => {
-      let monto_total = 0;
-      try {
-        const payload = JSON.parse(r.payload || '{}');
-        if (r.tipo === 'servicios' && Array.isArray(payload.servicioItems)) {
-          monto_total = payload.servicioItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
-        } else if (r.tipo === 'locacion' && Array.isArray(payload.locadorItems)) {
-          monto_total = payload.locadorItems.reduce((sum, it) => sum + (Number(it.monto) || 0), 0);
-        } else if (Array.isArray(payload.items)) {
-          monto_total = payload.items.reduce((sum, it) => sum + ((Number(it.precio_unitario) || 0) * (Number(it.cantidad) || 0)), 0);
-        }
-      } catch (_) {}
-      return { ...r, monto_total: Number(monto_total.toFixed(2)) };
-    });
-
-    rows = rows.slice().sort((a, b) => {
-      const getNum = (r) => { if (r && r.codigo) { const m = String(r.codigo).match(/(\d+)/); if (m) return Number(m[1]); } return Number(r && r.id) || 0; };
-      return getNum(a) - getNum(b);
-    });
+    let rows = await fetchBandejaDEC(listFilters);
     lastRows = rows;
+    updateSummaryCards(rows, 'decTrazaSummary');
 
     if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos pendientes para DEC.</div>';
+      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos derivados a DEC.</div>';
       return;
     }
 
-    const style = 'padding: 2px 6px; font-size: 11px;';
-    cont.innerHTML = `
-      <style>
-        #decList .req-list-table,
-        #decList .req-list-table th,
-        #decList .req-list-table td { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal; }
-        #decList .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
-        #decList .req-list-table strong { font-weight: normal; }
-      </style>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle req-list-table">
-          <thead class="table-light">
-            <tr>
-              <th>Código</th>
-              <th>Tipo</th>
-              <th>Código SIGAMEF</th>
-              <th>Descripción del bien</th>
-              <th>Área usuaria</th>
-              <th>Centro</th>
-              <th class="text-center">Monto Total</th>
-              <th class="text-center">CMN N°</th>
-              <th>Estado</th>
-              <th style="width: 240px;" class="text-center">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((r) => {
-              let codigosSigamef = '<span class="text-muted small">—</span>';
-              let descripcionesBien = '<span class="text-muted small">—</span>';
-              try {
-                const p = JSON.parse(r.payload || '{}');
-                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
-                if (Array.isArray(items) && items.length) {
-                  codigosSigamef = items.map((it) => esc(it.item_bien || '')).join(', ');
-                  descripcionesBien = items.map((it) => esc(it.nombre_item || '')).join(', ');
-                }
-              } catch (_) {}
-              const esAprobado = r.estado === 'Aprobado';
-              return `
-              <tr>
-                <td>${esc(r.codigo || ('#' + r.id))}</td>
-                <td><span class="badge bg-secondary text-uppercase" style="font-size: 0.65rem;">${esc(r.tipo)}</span></td>
-                <td class="small">${codigosSigamef}</td>
-                <td class="small">${descripcionesBien}</td>
-                <td>${esc(r.area || '')}</td>
-                <td>${esc(r.responsable || r.centro_nombre || '')}</td>
-                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</td>
-                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${estadoBadge(r.estado)}</td>
-                <td class="text-center" style="white-space: nowrap;">
-                  <button class="btn btn-xs btn-outline-primary dec-ver" data-id="${r.id}" title="Ver documento" style="${style}"><i class="bi bi-eye" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-outline-info dec-attach" data-id="${r.id}" title="Adjuntos" style="${style}"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
-                  <button class="btn btn-xs btn-outline-danger dec-observar" data-id="${r.id}" title="Observar" style="${style}"><i class="bi bi-chat-left-dots" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-success dec-aprobar" data-id="${r.id}" title="Aprobar" style="${style}"${esAprobado ? '' : ' disabled'}><i class="bi bi-check-circle" style="font-size: 11px;"></i> Aprobar</button>
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
-
-    cont.querySelectorAll('.dec-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-    cont.querySelectorAll('.dec-attach').forEach((b) => b.onclick = () => {
-      manageAdjuntos(b.dataset.id, true);
+    cont.innerHTML = wrapBandejaTable({
+      containerId: 'decList',
+      prefix: 'dec',
+      bodyHtml: rows.map((r) => `
+        <tr data-req-id="${r.id}">
+          ${renderTraceRowCells(r, { prefix: 'dec', escFn: esc })}
+          ${renderActionMenuCell(r.id, decMenuItems(r), decHiddenActions(r))}
+        </tr>`).join(''),
     });
+
+    bindTrazabilidadButtons(cont);
+    bindActionMenus(cont, {
+      detail: (id) => {
+        const req = rows.find((x) => String(x.id) === String(id));
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
+      },
+    });
+    bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
+    cont.querySelectorAll('.dec-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
+    cont.querySelectorAll('.dec-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
     cont.querySelectorAll('.dec-aprobar').forEach((b) => b.onclick = () => aprobarDec(b.dataset.id));
     cont.querySelectorAll('.dec-observar').forEach((b) => b.onclick = () => observarDec(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));
+    permissionsService.applyActivityButtons(cont);
   } catch (e) {
     cont.innerHTML = '<div class="alert alert-danger">Error al cargar: ' + esc(e.message) + '</div>';
   }
@@ -139,7 +87,7 @@ async function aprobarDec(id) {
   if (!confirm('Confirmar aprobacion desde DEC? El expediente pasara a Programacion.')) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    const res = await contratacionesService.aprobarDEC(id, user.dni || 'dec');
+    const res = await contratacionesService.aprobarDEC(id, getUserDisplayName(user));
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadDecList();
   } catch (e) {
@@ -150,19 +98,29 @@ async function aprobarDec(id) {
 async function observarDec(id) {
   const req = (lastRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
+  if (isEstadoObservado(req.estado)) {
+    await verHistorialObservaciones(req, { title: 'Historial de observaciones — DEC' });
+    return;
+  }
   const allObs = todasObservaciones(req);
-  const motivo = await showTextModal({
+  const data = await showObservacionDirigidaModal({
     title: 'Observar requerimiento desde DEC',
     historyHtml: historialHtml(allObs),
-    label: 'Motivo de la observacion',
+    origenSubmodulo: 'DEC',
+    defaultDestinoSubmodulo: 'Registro de Requerimiento',
     placeholder: 'Indique el motivo de la observacion...',
     buttonText: 'Observar',
     buttonClass: 'btn-danger',
   });
-  if (!motivo) return;
+  if (!data) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    await contratacionesService.observarDEC(id, motivo, user.dni || 'dec');
+    await contratacionesService.observarDEC(id, data.motivo, getUserDisplayName(user), {
+      destino_submodulo: data.destino_submodulo,
+      destino_etapa: data.destino_etapa,
+      destino_persona: data.destino_persona,
+      origen_submodulo: data.origen_submodulo || 'DEC',
+    });
     loadDecList();
   } catch (e) {
     alert('Error al observar: ' + e.message);
@@ -170,6 +128,12 @@ async function observarDec(id) {
 }
 
 function initDecView() {
+  bindBandejaToolbar({
+    prefix: 'dec',
+    onFilter: () => { listFilters = readFilterParams('dec'); loadDecList(); },
+    onClear: () => { listFilters = {}; loadDecList(); },
+    onExecutiveToggle: () => loadDecList(),
+  });
   const reload = document.getElementById('decReload');
   if (reload) reload.onclick = () => loadDecList();
   loadDecList();

@@ -1,67 +1,66 @@
 // Rutas personalizadas para requerimientos (más allá de CRUD básico)
 import express from 'express';
 import { query } from '../db.js';
+import {
+  TRAZA_EXTRA_SELECT,
+  enrichRequerimientoRow,
+  registrarMovimiento,
+  registrarSubsanacionDerivacion,
+  obtenerTrazabilidad,
+  buildListFilters,
+  ETAPAS,
+} from '../lib/trazabilidad.js';
 
 const router = express.Router();
 
-// GET /api/requerimientos/listar-con-detalles - Obtener requerimientos con centro
+const BASE_FROM = `
+  FROM requerimientos r
+  LEFT JOIN areas a ON r.area = a.nombre
+  LEFT JOIN centros c ON a.centro_id = c.id
+`;
+
+// GET /api/requerimientos/listar-con-detalles
 router.get('/listar-con-detalles', async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '100', 10)));
     const offset = (page - 1) * pageSize;
-    const search = (req.query.search || '').trim();
+    const { whereExtra, params: filterParams } = buildListFilters(req.query);
 
-    // Construir WHERE con búsqueda (si existe)
-    const params = [];
-    let where = '';
-    if (search) {
-      params.push(`%${search}%`);
-      params.push(`%${search}%`);
-      params.push(`%${search}%`);
-      params.push(`%${search}%`);
-      where = `WHERE r.codigo ILIKE $1 OR r.denominacion ILIKE $2 OR r.area ILIKE $3 OR r.responsable ILIKE $4`;
-    }
+    let where = 'WHERE 1=1';
+    const params = [...filterParams];
+    if (whereExtra) where += ` AND ${whereExtra}`;
 
-    // Obtener total
-    const countSql = `
-      SELECT COUNT(*)::int AS total 
-      FROM requerimientos r
-      LEFT JOIN areas a ON r.area = a.nombre
-      LEFT JOIN centros c ON a.centro_id = c.id
-      ${where}
-    `;
-    const countParams = where ? params.slice(0, 4) : [];
-    const countResult = await query(countSql, countParams);
+    const countSql = `SELECT COUNT(*)::int AS total ${BASE_FROM} ${where}`;
+    const countResult = await query(countSql, params);
     const total = countResult.rows[0].total;
 
-    // Agregar paginación
-    params.push(pageSize);
-    params.push(offset);
-    const nextParamNum = params.length - 1;
+    params.push(pageSize, offset);
+    const limitIdx = params.length - 1;
+    const offsetIdx = params.length;
 
     const dataSql = `
-      SELECT 
-        r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado, 
+      SELECT
+        r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado,
         r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
-        COALESCE(c.nombre, '') as centro_nombre
-      FROM requerimientos r
-      LEFT JOIN areas a ON r.area = a.nombre
-      LEFT JOIN centros c ON a.centro_id = c.id
+        COALESCE(c.nombre, c.codigo, a.responsable, '') AS centro_nombre,
+        ${TRAZA_EXTRA_SELECT}
+      ${BASE_FROM}
       ${where}
-      ORDER BY r.id DESC
-      LIMIT $${nextParamNum} OFFSET $${nextParamNum + 1}
+      ORDER BY r.codigo ASC NULLS LAST, r.id ASC
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `;
-    
-    const result = await query(dataSql, params);
-    const rows = result.rows || [];
 
-    res.json({ 
-      data: rows, 
-      total, 
-      page, 
-      pageSize, 
-      totalPages: Math.max(1, Math.ceil(total / pageSize)) 
+    const result = await query(dataSql, params);
+    const rows = (result.rows || []).map(enrichRequerimientoRow);
+
+    res.json({
+      data: rows,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      etapas: Object.entries(ETAPAS).map(([k, v]) => ({ codigo: k, label: v.label })),
     });
   } catch (err) {
     console.error('[requerimientos/listar-con-detalles] Error:', err);
@@ -69,30 +68,47 @@ router.get('/listar-con-detalles', async (req, res, next) => {
   }
 });
 
+// GET /api/requerimientos/:id/trazabilidad
+router.get('/:requerimientoId/trazabilidad', async (req, res, next) => {
+  try {
+    const data = await obtenerTrazabilidad(req.params.requerimientoId);
+    if (!data) return res.status(404).json({ error: 'Requerimiento no encontrado' });
+    res.json(data);
+  } catch (err) { next(err); }
+});
+
 // PUT /api/requerimientos/:requerimientoId/solicitar-aprobacion
 router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-
-    // Verificar que el requerimiento existe
-    const reqCheck = await query('SELECT id, estado FROM requerimientos WHERE id = $1', [requerimientoId]);
-    if (!reqCheck || reqCheck.rowCount === 0) {
+    const { usuario } = req.body || {};
+    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    if (!reqCheck?.rowCount) {
       return res.status(404).json({ success: false, error: 'Requerimiento no encontrado' });
     }
 
-    // Cambiar estado a "En tramite de aprobación"
-    const res2 = await query(
-      `UPDATE requerimientos 
-       SET estado = 'En tramite de aprobación', updated_at = NOW()
-       WHERE id = $1
-       RETURNING id, codigo, estado`,
-      [requerimientoId]
-    );
+    let payload = {};
+    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+    payload.historial_evaluacion.push({
+      tipo: 'derivacion',
+      usuario: usuario || 'Usuario AU',
+      fecha: new Date().toISOString(),
+      observacion: 'Solicitud de aprobación enviada a evaluación',
+    });
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    res.json({ success: true, requerimiento: res2.rows[0] });
-  } catch (err) {
-    next(err);
-  }
+    const updated = await registrarMovimiento({
+      requerimientoId,
+      estadoNuevo: 'En tramite de aprobación',
+      usuario: usuario || 'Usuario AU',
+      accion: 'derivado',
+      observacion: 'Solicitud de aprobación enviada a evaluación',
+      responsable: ETAPAS.EVALUACION.responsable,
+    });
+
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+  } catch (err) { next(err); }
 });
 
 // PUT /api/requerimientos/:requerimientoId/observar
@@ -115,12 +131,18 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
       fecha: new Date().toISOString(),
     });
 
-    const res2 = await query(
-      `UPDATE requerimientos SET estado = 'Observado', payload = $2, updated_at = NOW()
-       WHERE id = $1 RETURNING id, codigo, estado`,
-      [requerimientoId, JSON.stringify(payload)]
-    );
-    res.json({ success: true, requerimiento: res2.rows[0] });
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+
+    const updated = await registrarMovimiento({
+      requerimientoId,
+      estadoNuevo: 'Observado',
+      usuario: usuario || 'Gerente',
+      accion: 'observado',
+      observacion: motivo,
+      responsable: ETAPAS.EVALUACION.responsable,
+    });
+
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }
 });
 
@@ -128,7 +150,9 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
 router.put('/:requerimientoId/subsanar', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { respuesta, usuario } = req.body || {};
+    const {
+      respuesta, usuario, origen_submodulo, destino_submodulo, destino_etapa, destino_persona,
+    } = req.body || {};
     if (!respuesta) return res.status(400).json({ success: false, error: 'Subsanación requerida' });
 
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
@@ -136,20 +160,40 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
 
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    if (!Array.isArray(payload.observaciones)) payload.observaciones = [];
+    for (let i = payload.observaciones.length - 1; i >= 0; i -= 1) {
+      if (!payload.observaciones[i].subsanacion) {
+        payload.observaciones[i].subsanacion = respuesta;
+        payload.observaciones[i].usuario_subsana = usuario || '';
+        payload.observaciones[i].fecha_subsana = new Date().toISOString();
+        payload.observaciones[i].subsanacion_origen_submodulo = origen_submodulo || 'Registro de Requerimiento';
+        payload.observaciones[i].subsanacion_destino_submodulo = destino_submodulo || '';
+        payload.observaciones[i].subsanacion_destino_etapa = destino_etapa || '';
+        payload.observaciones[i].subsanacion_destino_persona = destino_persona || '';
+        break;
+      }
+    }
     if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
     payload.historial_evaluacion.push({
       tipo: 'subsanacion',
       respuesta,
       usuario: usuario || '',
       fecha: new Date().toISOString(),
+      destino_submodulo: destino_submodulo || '',
+    });
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+
+    const updated = await registrarSubsanacionDerivacion({
+      requerimientoId,
+      usuario: usuario || 'Usuario AU',
+      textoSubsanacion: respuesta,
+      origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
+      destinoSubmodulo: destino_submodulo || '',
+      destinoEtapa: destino_etapa || '',
+      destinoPersona: destino_persona || '',
     });
 
-    const res2 = await query(
-      `UPDATE requerimientos SET estado = 'En tramite de aprobación', payload = $2, updated_at = NOW()
-       WHERE id = $1 RETURNING id, codigo, estado`,
-      [requerimientoId, JSON.stringify(payload)]
-    );
-    res.json({ success: true, requerimiento: res2.rows[0] });
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }
 });
 
@@ -170,13 +214,18 @@ router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
       usuario: usuario || '',
       fecha: new Date().toISOString(),
     });
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const res2 = await query(
-      `UPDATE requerimientos SET estado = 'Aprobado', payload = $2, updated_at = NOW()
-       WHERE id = $1 RETURNING id, codigo, estado`,
-      [requerimientoId, JSON.stringify(payload)]
-    );
-    res.json({ success: true, requerimiento: res2.rows[0] });
+    const updated = await registrarMovimiento({
+      requerimientoId,
+      estadoNuevo: 'Aprobado',
+      usuario: usuario || 'Gerente',
+      accion: 'aprobado',
+      observacion: 'Aprobado en evaluación — derivado a DEC',
+      responsable: ETAPAS.DEC.responsable,
+    });
+
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }
 });
 

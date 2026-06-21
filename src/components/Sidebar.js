@@ -1,6 +1,26 @@
 ﻿export function renderSidebar(currentRoute) {
   const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
   const userRole = currentUser?.rol;
+
+  function canShowRoute(path) {
+    if (!path) return true;
+    if (userRole === 'admin') return true;
+    const { permissionsService } = window.__sgcPermissions || {};
+    if (permissionsService?.canAccessRoute) return permissionsService.canAccessRoute(path);
+    return true;
+  }
+
+  function filterMenuItems(items) {
+    return items.map((item) => {
+      if (item.submenu) {
+        const submenu = filterMenuItems(item.submenu);
+        if (!submenu.length) return null;
+        return { ...item, submenu };
+      }
+      if (item.path && !canShowRoute(item.path)) return null;
+      return item;
+    }).filter(Boolean);
+  }
   
   const menuStructure = [
     { path: 'dashboard', label: 'Dashboard', icon: 'bi-grid-3x3-gap-fill', roles: ['admin', 'au', 'dec', 'usuario'] },
@@ -152,7 +172,7 @@
       <nav style="padding: 0 12px 20px 12px;">
   `;
   
-  for (const item of menuStructure) {
+  for (const item of filterMenuItems(menuStructure)) {
     if (item.roles && !item.roles.includes(userRole)) continue;
     
     const hasSubmenu = item.submenu && item.submenu.length > 0;

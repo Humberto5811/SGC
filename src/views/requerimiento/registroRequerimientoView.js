@@ -5,11 +5,19 @@
 //   - 1) Área usuaria: búsqueda contra Metas y Áreas (código o nombre) + responsable
 //   - 2) Denominación de la contratación (manual)
 //   - 3) Objetivo (3.1) y Finalidad (3.2) (manual)
-//   - 4) a) Ítems del Catálogo SIGAMEF (código/descripción) + cantidad; b) características técnicas
-//   - c)…18 + firmas + 14.1 (entregables): se cargan automáticamente del Formato Bienes de Glosas
-//   - Si un ítem SIGAMEF tiene Ficha Técnica (F.T.), se adjunta su Ficha NET al final del documento
+//   - 4) a) Ítems del Catálogo SIGAMEF (código/descripción) + cantidad; b) características técnicas por ítem
+//   - Vinculación automática con Ficha NET (snapshot inmutable) integrada en formulario y PDF del numeral 4
 import { api } from '../../services/apiService.js';
 import { authService } from '../../services/authService.js';
+import { getByCodigoSigamef } from '../../services/fichaNetService.js';
+import {
+  applyFichaNetToItem,
+  renderFichaNetAlert,
+  renderFichaNetContentBlock,
+  showFichaNetPreviewModal,
+  renderRequerimientoItemsPrintSection,
+  FICHA_NET_PRINT_CSS,
+} from '../../utils/fichaNetIntegration.js';
 import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { glosasServiciosService } from '../../services/glosasServiciosService.js';
 import { glosasLocadoresService } from '../../services/glosasLocadoresService.js';
@@ -18,7 +26,16 @@ import { adjuntosService } from '../../services/adjuntosService.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
 import { MODELO_SERVICIOS } from '../glosasRequerimientos/formatoServiciosModelo.js';
 import { MODELO_LOCADORES } from '../glosasRequerimientos/formatoLocadoresModelo.js';
-import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showTextModal } from './reqShared.js';
+import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showSubsanacionDirigidaModal, bindTrazabilidadButtons } from './reqShared.js';
+import {
+  renderFilterBarHtml, readFilterParams, enrichReqRow,
+  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
+  renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  buildExportRowData, updateBandejaAdjCount,
+} from '../../utils/trazabilidad.js';
+import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
+import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
@@ -41,7 +58,7 @@ let state = {
   objetivo: '',
   finalidad: '',
   caracteristicas: '',     // 4b
-  items: [],               // { item_bien, nombre_item, unidad_medida, cantidad, ficha_tecnica }
+  items: [],               // { item_bien, nombre_item, unidad_medida, cantidad, ficha_tecnica, codigoSigamef, fichaNetId, fichaNetVersion, fichaNetSnapshot, caracteristicas_tecnicas }
   glosaOverrides: {},      // overrides de c)…18 (cargados del Formato Bienes de Glosas)
   entregas: [],            // 14.1
   // --- Servicios ---
@@ -60,6 +77,7 @@ let state = {
 
 // Últimas filas cargadas en el listado (para exportar a Excel)
 let lastListRows = [];
+let registroListFilters = {};
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -181,25 +199,38 @@ function renderSelect() {
         <h5 class="mb-0"><i class="bi bi-list-check"></i> Requerimientos registrados</h5>
         <button id="reqExport" class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-excel"></i> Exportar reporte</button>
       </div>
+      ${renderSummaryCardsHtml('reqTrazaSummary')}
+      ${renderFilterBarHtml('req')}
       <div id="reqList"><div class="text-muted">Cargando…</div></div>
     </div>
   `;
 }
-// Botón de aprobación dinámico según el estado del requerimiento.
-function aprobarBtnHtml(r) {
+// Botones de aprobación / observación (mismo patrón visual que Evaluación, DEC y Programación).
+function accionesObservacionAprobacionHtml(r) {
   const e = String(r.estado || 'Registrado');
   const base = 'btn btn-xs';
   const style = 'padding: 2px 6px; font-size: 11px;';
-  if (/observ/i.test(e)) {
-    return `<button class="${base} btn-danger req-observado" data-id="${r.id}" title="Observado — ver observación y subsanar" style="${style}">Observado</button>`;
+  const observado = isEstadoObservado(e);
+  const aprobado = /aprobad/i.test(e);
+  const enTramite = /tr[aá]mite/i.test(e);
+
+  const alerta = observado ? observadoAlertBadge('Observado — subsanar observación') : '';
+  const iconoObs = observado
+    ? observadoAccionHtml(r.id, 'Observado — ver observación y subsanar')
+    : '';
+
+  let btnEstado = '';
+  if (observado) {
+    btnEstado = `<button class="${base} btn-outline-secondary" disabled title="Pendiente subsanación" style="${style}"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
+  } else if (enTramite) {
+    btnEstado = `<button class="${base} btn-outline-secondary" disabled title="En trámite de aprobación" style="${style}"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
+  } else if (aprobado) {
+    btnEstado = `<button class="${base} btn-success req-ver-obs" data-id="${r.id}" title="Aprobado — ver observaciones" style="${style}"><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
+  } else {
+    btnEstado = `<button class="${base} btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación" style="${style}"><i class="bi bi-send" style="font-size: 11px;"></i></button>`;
   }
-  if (/tr[aá]mite/i.test(e)) {
-    return `<button class="${base} btn-outline-secondary" data-id="${r.id}" title="En trámite de aprobación" style="${style}" disabled><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
-  }
-  if (/aprobad/i.test(e)) {
-    return `<button class="${base} btn-success req-ver-obs" data-id="${r.id}" title="Aprobado — ver observaciones" style="${style}"><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
-  }
-  return `<button class="${base} btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación" style="${style}"><i class="bi bi-send" style="font-size: 11px;"></i></button>`;
+
+  return `${alerta}${iconoObs}${btnEstado}`;
 }
 
 // Diálogo de subsanación: muestra la observación del gerente y solicita la respuesta.
@@ -207,18 +238,24 @@ async function abrirSubsanacion(id) {
   const req = (lastListRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
   const allObs = todasObservaciones(req);
-  const texto = await showTextModal({
+  const data = await showSubsanacionDirigidaModal({
     title: 'Subsanar observación',
     historyHtml: historialHtml(allObs),
-    label: 'Subsanación realizada',
+    origenSubmodulo: 'Registro de Requerimiento',
+    defaultDestinoSubmodulo: 'Evaluación de Requerimiento',
     placeholder: 'Describa la subsanación realizada…',
     buttonText: 'Solicitar aprobación',
     buttonClass: 'btn-primary',
   });
-  if (!texto) return;
+  if (!data) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    await addSubsanacion(req, texto, user.dni || user.usuario || 'usuario');
+    await addSubsanacion(req, data.texto, getUserDisplayName(user), {
+      destino_submodulo: data.destino_submodulo,
+      destino_etapa: data.destino_etapa,
+      destino_persona: data.destino_persona,
+      origen_submodulo: data.origen_submodulo,
+    });
     loadList();
   } catch (e) {
     alert('Error al enviar la subsanación: ' + e.message);
@@ -241,42 +278,11 @@ async function loadList() {
   const cont = document.getElementById('reqList');
   if (!cont) return;
   try {
-    const resp = await requerimientosService.listConDetalles({ pageSize: 200 });
-    let rows = (resp && resp.data) || [];
+    const resp = await requerimientosService.listConDetalles({ pageSize: 200, ...registroListFilters });
+    let rows = ((resp && resp.data) || []).map(enrichReqRow);
     
-    // Calcular monto_total para cada requerimiento (desde el payload)
-    rows = rows.map((r) => {
-      let monto_total = 0;
-      try {
-        const payload = JSON.parse(r.payload || '{}');
-        if (r.tipo === 'servicios') {
-          if (payload.servicioItems && Array.isArray(payload.servicioItems)) {
-            monto_total = payload.servicioItems.reduce((sum, item) => sum + (Number(item.monto) || 0), 0);
-          }
-        } else if (r.tipo === 'locacion') {
-          if (payload.locadorItems && Array.isArray(payload.locadorItems)) {
-            monto_total = payload.locadorItems.reduce((sum, item) => sum + (Number(item.monto) || 0), 0);
-          }
-        } else {
-          if (payload.items && Array.isArray(payload.items)) {
-            monto_total = payload.items.reduce((sum, item) => {
-              const precio = Number(item.precio_unitario) || 0;
-              const cantidad = Number(item.cantidad) || 0;
-              return sum + (precio * cantidad);
-            }, 0);
-          }
-        }
-      } catch (e) {
-        console.error(`Error procesando payload del requerimiento ${r.id}:`, e);
-      }
-      return {
-        ...r,
-        monto_total: Number(monto_total.toFixed(2))
-      };
-    });
-    
-    // Ordenar ascendente por número de código (si existe) o por `id` como fallback
-    rows = (rows || []).slice().sort((a, b) => {
+    // Ordenar ascendente por número de código
+    rows = rows.slice().sort((a, b) => {
       const getNum = (r) => {
         if (r && r.codigo) {
           const m = String(r.codigo).match(/(\d+)/);
@@ -287,95 +293,44 @@ async function loadList() {
       return getNum(a) - getNum(b);
     });
     lastListRows = rows;
+    updateSummaryCards(rows, 'reqTrazaSummary');
     if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">Aún no hay requerimientos registrados.</div>';
       return;
     }
-    cont.innerHTML = `
-      <style>
-        #reqList .req-list-table,
-        #reqList .req-list-table th,
-        #reqList .req-list-table td { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal; }
-        #reqList .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
-        #reqList .req-list-table strong { font-weight: normal; }
-      </style>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle req-list-table">
-          <thead class="table-light">
-            <tr>
-              <th>Código</th>
-              <th>Tipo</th>
-              <th>Código SIGAMEF</th>
-              <th>Descripción del bien</th>
-              <th>Área usuaria</th>
-              <th>Centro</th>
-              <th class="text-center">Monto Total</th>
-              <th class="text-center">CMN N°</th>
-              <th>Estado</th>
-              <th style="width: 150px;" class="text-center">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((r) => {
-              // Extraer items del payload para mostrar código y descripción
-              let codigosSigamef = '';
-              let descripcionesBien = '';
-              try {
-                const p = JSON.parse(r.payload || '{}');
-                const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
-                if (Array.isArray(items) && items.length) {
-                  codigosSigamef = items.map(it => esc(it.item_bien || '')).join(', ');
-                  descripcionesBien = items.map(it => esc(it.nombre_item || '')).join(', ');
-                } else {
-                  codigosSigamef = '<span class="text-muted small">—</span>';
-                  descripcionesBien = '<span class="text-muted small">—</span>';
-                }
-              } catch (_) {
-                codigosSigamef = '<span class="text-muted small">—</span>';
-                descripcionesBien = '<span class="text-muted small">—</span>';
-              }
-              const tipoBadge = r.tipo === 'servicios' ? 'bg-success' : r.tipo === 'locacion' ? 'bg-info' : 'bg-primary';
-              const tipoLabel = r.tipo === 'servicios' ? 'Servicio' : r.tipo === 'locacion' ? 'Locador' : 'Bien';
-              return `
-              <tr>
-                <td>${esc(r.codigo || ('#' + r.id))}</td>
-                <td><span class="badge ${tipoBadge} text-uppercase" style="font-size: 0.65rem;">${esc(tipoLabel)}</span></td>
-                <td class="small">${codigosSigamef}</td>
-                <td class="small">${descripcionesBien}</td>
-                <td>${esc(r.area || '')}</td>
-                <td>${esc(r.responsable || r.centro_nombre || '')}</td>
-                <td class="text-center">${r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00'}</td>
-                <td class="text-center">${r.cmn ? esc(r.cmn) : '<span class="text-muted">—</span>'}</td>
-                <td>${estadoBadge(r.estado)}</td>
-                <td class="text-center" style="white-space: nowrap;">
-                  ${(() => { const _aprobado = /aprobad/i.test(String(r.estado || '')); return `
-                  <button class="btn btn-xs btn-outline-primary req-open" data-id="${r.id}" title="Abrir" style="padding: 2px 6px; font-size: 11px;" ${_aprobado ? 'disabled' : ''}><i class="bi bi-pencil" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-outline-dark req-print" data-id="${r.id}" title="Documento" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-printer" style="font-size: 11px;"></i></button>
-                  <button class="btn btn-xs btn-outline-info req-attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}" title="Adjuntos" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-paperclip" style="font-size: 11px;"></i> <span class="badge bg-info adjunto-count-${r.id}" style="font-size: 9px; padding: 1px 4px;">0</span></button>
-                  ${aprobarBtnHtml(r)}
-                  <button class="btn btn-xs btn-outline-danger req-del" data-id="${r.id}" title="Eliminar" style="padding: 2px 6px; font-size: 11px;" ${_aprobado ? 'disabled' : ''}><i class="bi bi-trash" style="font-size: 11px;"></i></button>
-                  `; })()}
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
+    cont.innerHTML = wrapBandejaTable({
+      containerId: 'reqList',
+      prefix: 'req',
+      bodyHtml: rows.map((r) => `
+        <tr data-req-id="${r.id}">
+          ${renderTraceRowCells(r, { prefix: 'req', escFn: esc })}
+          ${renderActionMenuCell(r.id, registroMenuItems(r), registroHiddenActions(r, esc))}
+        </tr>`).join(''),
+    });
+    bindTrazabilidadButtons(cont);
+    bindActionMenus(cont, {
+      detail: (id) => {
+        const req = rows.find((x) => String(x.id) === String(id));
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, /aprobad/i.test(String(req.estado || ''))) });
+      },
+      approve: (id) => solicitarAprobacion(id),
+    });
+    bindRowDetailPanel(cont, rows, {
+      onAdjuntos: (id) => {
+        const req = rows.find((x) => String(x.id) === String(id));
+        manageAdjuntos(id, req && /aprobad/i.test(String(req.estado || '')));
+      },
+    });
     cont.querySelectorAll('.req-open').forEach((b) => b.onclick = () => openRequerimiento(b.dataset.id));
     cont.querySelectorAll('.req-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
     cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => {
-      const readOnly = /aprobad/i.test(String(b.dataset.estado || ''));
-      manageAdjuntos(b.dataset.id, readOnly);
+      manageAdjuntos(b.dataset.id, /aprobad/i.test(String(b.dataset.estado || '')));
     });
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
-    cont.querySelectorAll('.req-observado').forEach((b) => b.onclick = () => abrirSubsanacion(b.dataset.id));
+    cont.querySelectorAll('.req-observado, .req-observacion-icon').forEach((b) => b.onclick = () => abrirSubsanacion(b.dataset.id));
     cont.querySelectorAll('.req-ver-obs').forEach((b) => b.onclick = () => verObservacionesReadOnly(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
-    
-    // Cargar contadores de adjuntos para cada requerimiento
-    rows.forEach((r) => {
-      cargarContadorAdjuntos(r.id);
-    });
+    rows.forEach((r) => cargarContadorAdjuntos(r.id));
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
@@ -385,33 +340,11 @@ function exportarReporte() {
   try {
     const rows = lastListRows || [];
     if (!rows.length) { alert('No hay requerimientos para exportar.'); return; }
-    const data = rows.map((r) => {
-      let codigos = '';
-      let descrip = '';
-      try {
-        const p = JSON.parse(r.payload || '{}');
-        const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
-        if (Array.isArray(items) && items.length) {
-          codigos = items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
-          descrip = items.map((it) => it.nombre_item || '').filter(Boolean).join(', ');
-        }
-      } catch (_) { /* payload no-JSON */ }
-      return {
-        'Código': r.codigo || ('#' + r.id),
-        'Tipo': r.tipo === 'servicios' ? 'Servicio' : r.tipo === 'locacion' ? 'Locador' : 'Bien',
-        'Código SIGAMEF': codigos,
-        'Descripción': descrip,
-        'Área usuaria': r.area || '',
-        'Centro': r.responsable || r.centro_nombre || '',
-        'Monto Total': Number(r.monto_total) || 0,
-        'CMN N°': r.cmn || '',
-        'Estado': r.estado || '',
-      };
-    });
+    const data = rows.map((r) => buildExportRowData(r));
     const ws = XLSX.utils.json_to_sheet(data);
     ws['!cols'] = [
-      { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 45 }, { wch: 32 },
-      { wch: 24 }, { wch: 14 }, { wch: 10 }, { wch: 22 },
+      { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 40 }, { wch: 28 }, { wch: 22 },
+      { wch: 14 }, { wch: 22 }, { wch: 24 }, { wch: 8 }, { wch: 20 }, { wch: 10 },
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Requerimientos');
@@ -433,6 +366,12 @@ function attachSelect() {
   });
   const rl = document.getElementById('reqExport');
   if (rl) rl.onclick = exportarReporte;
+  bindBandejaToolbar({
+    prefix: 'req',
+    onFilter: () => { registroListFilters = readFilterParams('req'); loadList(); },
+    onClear: () => { registroListFilters = {}; loadList(); },
+    onExecutiveToggle: () => loadList(),
+  });
   loadList();
 }
 
@@ -578,16 +517,14 @@ function renderBienes() {
           ${renderItemsTable()}
         </div>
         <div class="mb-3">
-          <div class="fw-bold mb-1">b) Características técnicas</div>
-          <textarea id="caracteristicas" class="form-control" rows="3" placeholder="Detalle las características técnicas. Se adjunta ficha net, donde se detallan las características técnicas del bien, en caso de corresponder.">${esc(state.caracteristicas)}</textarea>
+          ${renderItemsFichaSections()}
         </div>
 
       </div></div>
 
       <!-- c)…18 + firmas (cargado automáticamente del Formato Bienes de Glosas) -->
-      <div class="card">
-        <div class="card-header bg-light fw-bold"><i class="bi bi-file-text"></i> Cláusulas del Formato de Bienes (c hasta 18)</div>
-        <div class="card-body" id="reqGlosa">${MODELO.map(renderGlosaSection).join('')}</div>
+      <div class="card border-0 shadow-sm">
+        <div class="card-body pt-2" id="reqGlosa">${MODELO.map(renderGlosaSection).join('')}</div>
       </div>
     </div>
   `;
@@ -614,7 +551,45 @@ function renderItemsTable() {
     </div>`;
 }
 
-// Render de una sección de glosa (c…18, headings, 14.1 plazo, firmas). Editable.
+function syncEntregaCantidadFromItems() {
+  const total = totalCantidadItems();
+  ensureEntregas();
+  if (state.entregas[0]) {
+    state.entregas[0].cantidad = total;
+    const el = document.querySelector('.req-ent[data-i="0"][data-f="cantidad"]');
+    if (el && document.activeElement !== el) el.value = total;
+    refreshEntTotal();
+  }
+}
+
+function renderItemsFichaSections() {
+  if (!state.items.length) {
+    return `<div class="fw-bold mb-1">b) Características técnicas</div>
+      <div class="text-muted small border rounded p-3">Agregue ítems en el apartado a) para vincular automáticamente la Ficha NET.</div>`;
+  }
+  const multi = state.items.length > 1;
+  return state.items.map((it, i) => {
+    const linked = !!(it.fichaNetSnapshot && it.fichaNetId != null);
+    const manual = it.caracteristicas_tecnicas ?? (!multi ? state.caracteristicas : '') ?? '';
+    const header = multi
+      ? `<div class="fw-bold mt-3 mb-2 border-bottom pb-1">ÍTEM ${i + 1} — ${esc(it.item_bien)} — ${esc(it.nombre_item)}</div>`
+      : '';
+    const previewBtn = linked
+      ? `<button type="button" class="btn btn-sm btn-outline-info req-ficha-preview" data-i="${i}"><i class="bi bi-eye"></i> Ver Ficha NET</button>`
+      : '';
+    const manualField = linked
+      ? renderFichaNetContentBlock(it.fichaNetSnapshot)
+      : `<textarea class="form-control req-item-car" data-i="${i}" rows="4" placeholder="Ingrese las características técnicas del ítem…">${esc(manual)}</textarea>`;
+    return `${header}
+      <div class="mb-3 req-item-ficha" data-i="${i}">
+        <div class="fw-bold mb-1">b) Características técnicas${multi ? ` (Ítem ${i + 1})` : ''}</div>
+        <div class="mb-2">${renderFichaNetAlert(linked)}</div>
+        ${manualField}
+        ${previewBtn ? `<div class="mt-2">${previewBtn}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
 function renderGlosaSection(item) {
   if (item.kind === 'firmas') return renderFirmas();
   if (item.kind === 'plazo') return renderPlazo(item);
@@ -740,6 +715,11 @@ function collectInputs() {
   if (document.getElementById('objetivo') != null) state.objetivo = g('objetivo') || '';
   if (document.getElementById('finalidad') != null) state.finalidad = g('finalidad') || '';
   if (document.getElementById('caracteristicas') != null) state.caracteristicas = g('caracteristicas') || '';
+  document.querySelectorAll('.req-item-car').forEach((el) => {
+    const i = Number(el.dataset.i);
+    if (state.items[i]) state.items[i].caracteristicas_tecnicas = el.value;
+  });
+  state.caracteristicas = state.items.map((it) => it.caracteristicas_tecnicas).filter(Boolean).join('\n\n---\n\n');
   if (document.getElementById('reqCmn') != null) {
     const raw = g('reqCmn') || '';
     const num = parseInt(raw.replace(/\D/g, ''), 10);
@@ -778,11 +758,8 @@ function attachBienes() {
   const save = document.getElementById('reqSave');
   if (save) save.onclick = () => saveRequerimiento();
   const print = document.getElementById('reqPrint');
-  if (print) print.onclick = async () => {
+  if (print) print.onclick = () => {
     collectInputs();
-    setMsg('info', 'Generando documento…');
-    state.fichas = await fetchFichasParaItems(state.items);
-    setMsg('', '');
     openPrintWindow(buildState());
   };
 
@@ -826,16 +803,31 @@ function attachBienes() {
         ${badges}
       </button>`;
     },
-    onSelect: (data) => {
+    onSelect: async (data) => {
       collectInputs();
-      state.items.push({
-        item_bien: data.cod, nombre_item: data.nom,
-        unidad_medida: data.um, cantidad: 1,
+      const item = {
+        item_bien: data.cod,
+        codigoSigamef: data.cod,
+        nombre_item: data.nom,
+        unidad_medida: data.um,
+        cantidad: 1,
         ficha_tecnica: data.ft === '1',
         producto_controlado: data.pc === '1',
         acuerdo_marco: data.am === '1',
         precio_unitario: Number(data.precio) || 0,
-      });
+        fichaNetId: null,
+        fichaNetVersion: null,
+        fichaNetSnapshot: null,
+        caracteristicas_tecnicas: '',
+      };
+      state.items.push(item);
+      try {
+        const ficha = await getByCodigoSigamef(data.cod);
+        applyFichaNetToItem(item, ficha);
+      } catch (_) {
+        applyFichaNetToItem(item, null);
+      }
+      syncEntregaCantidadFromItems();
       rerenderBienesBody();
     },
   });
@@ -846,14 +838,23 @@ function attachBienes() {
     document.getElementById('itemSearch')?.dispatchEvent(evt);
   };
 
+  document.querySelectorAll('.req-ficha-preview').forEach((b) => {
+    b.onclick = () => {
+      const it = state.items[Number(b.dataset.i)];
+      if (it && it.fichaNetSnapshot) showFichaNetPreviewModal(it.fichaNetSnapshot);
+    };
+  });
+
   document.querySelectorAll('.req-it').forEach((el) => el.oninput = () => {
     const i = Number(el.dataset.i);
     if (state.items[i]) state.items[i].cantidad = Number(el.value) || 0;
     refreshItemsTotal();
+    syncEntregaCantidadFromItems();
   });
   document.querySelectorAll('.req-it-del').forEach((b) => b.onclick = () => {
     collectInputs();
     state.items.splice(Number(b.dataset.i), 1);
+    syncEntregaCantidadFromItems();
     rerenderBienesBody();
   });
 
@@ -875,6 +876,8 @@ function attachBienes() {
     state.entregas[i][f] = f === 'cantidad' ? (Number(el.value) || 0) : el.value;
     if (f === 'cantidad') refreshEntTotal();
   });
+
+  syncEntregaCantidadFromItems();
 }
 
 function buildState() {
@@ -884,28 +887,26 @@ function buildState() {
 // =========================================================================
 // GUARDAR / ABRIR / ELIMINAR
 // =========================================================================
-async function fetchFichasParaItems(items) {
-  // Para cada ítem con F.T., busca su Ficha NET por código (idcartcodigosiga).
-  const fichas = [];
+async function ensureFichaNetOnItems(items) {
   for (const it of items) {
-    if (!it.ficha_tecnica) continue;
+    if (it.fichaNetSnapshot && it.fichaNetId != null) continue;
+    if (!it.codigoSigamef) it.codigoSigamef = it.item_bien;
     try {
-      const resp = await api.list('fichanet', { page: 1, pageSize: 5, search: it.item_bien });
-      const rows = (resp && resp.data) || [];
-      const match = rows.find((r) => String(r.idcartcodigosiga || '').trim() === String(it.item_bien).trim()) || rows[0];
-      if (match) fichas.push(match);
-    } catch (_) { /* opcional */ }
+      const ficha = await getByCodigoSigamef(it.item_bien);
+      applyFichaNetToItem(it, ficha);
+    } catch (_) {
+      applyFichaNetToItem(it, null);
+    }
   }
-  return fichas;
 }
 
 async function saveRequerimiento() {
   collectInputs();
   setMsg('info', 'Guardando requerimiento…');
   const user = authService.getCurrentUser();
-  const usuario = (user && (user.dni || user.nombre)) || 'sistema';
-  const fichas = await fetchFichasParaItems(state.items);
-  state.fichas = fichas;
+  const usuario = getUserDisplayName(user) || 'sistema';
+  await ensureFichaNetOnItems(state.items);
+  collectInputs();
 
   const payloadObj = {
     area: state.area,
@@ -915,7 +916,6 @@ async function saveRequerimiento() {
     items: state.items,
     glosaOverrides: state.glosaOverrides,
     entregas: state.entregas,
-    fichas,
     header: state.header,
     observaciones: state.observaciones || [],
   };
@@ -986,12 +986,23 @@ function applyPayload(row) {
   state.items = Array.isArray(p.items) ? p.items : [];
   state.glosaOverrides = p.glosaOverrides || {};
   state.entregas = Array.isArray(p.entregas) && p.entregas.length ? p.entregas : [];
-  state.fichas = Array.isArray(p.fichas) ? p.fichas : [];
   state.observaciones = Array.isArray(p.observaciones) ? p.observaciones : [];
+  const fichasLegacy = Array.isArray(p.fichas) ? p.fichas : [];
+  state.items.forEach((it) => {
+    if (!it.codigoSigamef) it.codigoSigamef = it.item_bien;
+    if (it.fichaNetSnapshot && it.fichaNetId != null) return;
+    const legacy = fichasLegacy.find((f) => String(f.idcartcodigosiga || '').trim() === String(it.item_bien || '').trim());
+    if (legacy) applyFichaNetToItem(it, legacy);
+    else if (p.caracteristicas && state.items.length === 1 && !it.caracteristicas_tecnicas) {
+      it.caracteristicas_tecnicas = p.caracteristicas;
+    }
+  });
+  state.caracteristicas = state.items.map((it) => it.caracteristicas_tecnicas).filter(Boolean).join('\n\n---\n\n') || p.caracteristicas || '';
   if (p.header) state.header = p.header;
 }
 
 async function openRequerimiento(id) {
+  closeDetailPanel();
   try {
     const row = await requerimientosService.getById(id);
     resetState();
@@ -1067,7 +1078,7 @@ function resetState() {
     header: { logo: '', entidadNombre: '' },
     area: { codigo: '', nombre: '', responsable: '' },
     denominacion: '', objetivo: '', finalidad: '', caracteristicas: '',
-    items: [], glosaOverrides: {}, entregas: [], fichas: [], observaciones: [],
+    items: [], glosaOverrides: {}, entregas: [], observaciones: [],
     servicioItems: [], servicioGlosaOverrides: {}, servicioEntregas: [], servicioInformacion: [],
     locadorItems: [], locadorGlosaOverrides: {}, locadorEntregas: [],
     locadorPerfil: { formacion: '', titulo: '', habilitacion: '', serum: '', otros: '' }, locadorModalidad: '',
@@ -1075,6 +1086,7 @@ function resetState() {
 }
 
 async function newRequerimiento(tipo) {
+  closeDetailPanel();
   if (tipo === 'bienes') {
     resetState();
     setRootLoading();
@@ -1111,24 +1123,28 @@ function setRootLoading() {
 }
 
 function showSelect() {
+  closeDetailPanel();
   state.view = 'select';
   const root = document.getElementById('reqRoot');
   if (root) { root.innerHTML = renderSelect(); attachSelect(); }
 }
 
 function showBienes() {
+  closeDetailPanel();
   state.view = 'bienes';
   const root = document.getElementById('reqRoot');
   if (root) { root.innerHTML = renderBienes(); attachBienes(); }
 }
 
 function showServicios() {
+  closeDetailPanel();
   state.view = 'servicios';
   const root = document.getElementById('reqRoot');
   if (root) { root.innerHTML = renderServicios(); attachServicios(); }
 }
 
 function showLocadores() {
+  closeDetailPanel();
   state.view = 'locacion';
   const root = document.getElementById('reqRoot');
   if (root) { root.innerHTML = renderLocadores(); attachLocadores(); }
@@ -1542,7 +1558,7 @@ async function saveRequerimientoServicio() {
   collectServicioInputs();
   setMsg('info', 'Guardando requerimiento de servicios…');
   const user = authService.getCurrentUser();
-  const usuario = (user && (user.dni || user.nombre)) || 'sistema';
+  const usuario = getUserDisplayName(user) || 'sistema';
 
   const cmnRaw = state.cmn || '';
   const cmnNum = parseInt(cmnRaw.replace(/\D/g, ''), 10);
@@ -2409,10 +2425,6 @@ function buildPrintHTML(s) {
 
   const glosa = MODELO.map((item) => glosaPrint(item, s)).join('');
 
-  const fichasHTML = (s.fichas && s.fichas.length)
-    ? `<div class="pagebreak"></div><h3 style="text-align:center">FICHAS TÉCNICAS (FICHA NET) ADJUNTAS</h3>${s.fichas.map((f) => fichaNetPrint(f, ent, logo)).join('<div class="pagebreak"></div>')}`
-    : '';
-
   return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Requerimiento — ${esc(s.denominacion || 'Bienes')}</title>
   <style>
     * { box-sizing:border-box; }
@@ -2433,10 +2445,10 @@ function buildPrintHTML(s) {
     th { background:#eee; }
     .firma { display:flex; justify-content:space-around; text-align:center; margin-top:120px; }
     .firma .l { border-top:1px solid #000; width:40%; padding-top:4px; }
-    .pagebreak { page-break-before: always; }
     @media print { body { padding:10px 18px; } button { display:none; } }
     .bar { text-align:center; margin-bottom:14px; }
     .bar button { padding:8px 18px; font-size:13px; cursor:pointer; }
+    ${FICHA_NET_PRINT_CSS}
   </style></head><body>
   <div class="bar"><button onclick="window.print()">🖨 Imprimir / Guardar como PDF</button></div>
   <div class="hdr"><div class="logo">${logoImg}</div>
@@ -2466,7 +2478,7 @@ function buildPrintHTML(s) {
     <tfoot><tr><th colspan="4" style="text-align:right">TOTAL</th><th style="text-align:right">${totalItems}</th></tr></tfoot>
     </table>
   </div>
-  <div class="fld"><div class="lbl">b) Características técnicas</div><div class="box">${esc(s.caracteristicas || '')}</div></div>
+  ${renderRequerimientoItemsPrintSection(s.items)}
 
   ${glosa}
 
@@ -2475,7 +2487,6 @@ function buildPrintHTML(s) {
     <div class="l">FIRMA DEL JEFE Y/O<br>DIRECTOR GENERAL</div>
   </div>
 
-  ${fichasHTML}
   </body></html>`;
 }
 
@@ -2504,24 +2515,6 @@ function glosaPrint(item, s) {
       <tfoot><tr><th style="text-align:right">TOTAL</th><th style="text-align:right">${tot}</th><th colspan="2"></th></tr></tfoot></table>`;
   }
   return `<h3 class="sec">${esc(pre)}${esc(glosaTituloPrint(item, s))}</h3><div class="box">${esc(glosaContPrint(item, s))}</div>`;
-}
-
-function fichaNetPrint(f, ent, logo) {
-  const logoImg = logo ? `<img src="${logo}" style="max-height:60px;max-width:120px;object-fit:contain;">` : '';
-  const box = (l, v) => `<div class="fld"><div class="lbl">${esc(l)}</div><div class="box">${esc(v)}</div></div>`;
-  return `
-    <div class="hdr"><div class="logo">${logoImg}</div>
-      <div class="title"><h1>REGISTRO FICHA NET</h1><h2>${esc(ent)}</h2></div></div>
-    ${box('Clase de Artículo', f.dsclase)}
-    ${box('Sub Clase de Artículo', f.dssubclase)}
-    ${box('Código MEF', f.idcartcodigosiga)}
-    ${box('Nombre', f.dscartnombre)}
-    ${box('Otra(s) Denominación(es)', f.dscclasdescripcion)}
-    ${box('Característica', f.dscartcaracteristica)}
-    ${box('Documentos', f.dscartdocumentos)}
-    ${box('Forma de Presentación', f.dscartpresentacion)}
-    ${box('Vigencia', f.dscartfechavencimiento)}
-    ${box('Observación', f.dscartobservaciones)}`;
 }
 
 function openPrintWindow(s) {
@@ -2681,26 +2674,27 @@ async function cargarContadorAdjuntos(requerimientoId) {
     const adjuntos = await adjuntosService.getAdjuntos(requerimientoId);
     const count = (adjuntos && adjuntos.adjuntos && adjuntos.adjuntos.length) || 0;
     const badge = document.querySelector(`.adjunto-count-${requerimientoId}`);
-    if (badge) {
-      badge.textContent = count;
-    }
+    if (badge) badge.textContent = count;
+    updateBandejaAdjCount(requerimientoId, count);
   } catch (err) {
     console.error('Error cargando contador de adjuntos:', err);
   }
 }
 
 async function solicitarAprobacion(requerimientoId) {
-  if (!confirm('¿Solicitar aprobación de este requerimiento? El estado cambiará a "En tramite de aprobación".')) {
+  if (!confirm('¿Aprobar y enviar este requerimiento a Evaluación de Requerimientos?')) {
     return;
   }
 
   try {
-    const res = await api.put(`/requerimientos/${requerimientoId}/solicitar-aprobacion`, {});
+    const res = await api.put(`/requerimientos/${requerimientoId}/solicitar-aprobacion`, {
+      usuario: getUserDisplayName(authService.getCurrentUser()),
+    });
     if (res && res.success) {
-      alert('Aprobación solicitada correctamente. El requerimiento está en trámite.');
+      alert('Requerimiento enviado a Evaluación de Requerimientos correctamente.');
       loadList();
     } else {
-      alert('Error al solicitar aprobación');
+      alert('Error al enviar a evaluación');
     }
   } catch (err) {
     alert('Error: ' + err.message);
