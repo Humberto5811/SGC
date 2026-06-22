@@ -1,10 +1,37 @@
-export function renderContratacionesView() {
+export function renderContratacionesView(currentRoute) {
+  // Detectar ruta actual si no se pasa como argumento
+  const route = currentRoute || location.hash.replace(/^#\/?/, '');
+
+  // Delegar a Actos Preparatorios
+  if (route === 'dec/actos') {
+    import('./contratacion/actosPreparativosView.js').then(m => {
+      const appContent = document.querySelector('main .container-fluid');
+      if (appContent) {
+        appContent.innerHTML = m.renderActosPreparativosView();
+        setTimeout(() => m.initActosPreparativosView(), 50);
+      }
+    });
+    return '<div class="text-muted">Cargando Actos Preparatorios...</div>';
+  }
+
+  // Delegar a Programación
+  if (route === 'au/programacion') {
+    import('./programacion/programacionView.js').then(m => {
+      const appContent = document.querySelector('main .container-fluid');
+      if (appContent) {
+        appContent.innerHTML = m.renderProgramacionView();
+        setTimeout(() => m.initProgramacionView(), 50);
+      }
+    });
+    return '<div class="text-muted">Cargando Programación...</div>';
+  }
+
   return `
     <div class="dashboard-container">
       <div class="welcome-banner">
         <div class="welcome-banner-content">
           <h2>
-            <i class="bi bi-cart-check"></i> 
+            <i class="bi bi-cart-check"></i>
             Gestión de Contrataciones
           </h2>
           <p>Procesos de compra, licitaciones y contratos</p>
@@ -50,9 +77,13 @@ export function renderContratacionesView() {
   `;
 }
 
-export function initContratacionesView() {
+export function initContratacionesView(currentRoute) {
+  const route = currentRoute || location.hash.replace(/^#\/?/, '');
+  // If delegated to another view, skip init
+  if (route === 'dec/actos' || route === 'au/programacion') return;
+
   console.log("Vista de contrataciones inicializada");
-  
+
   const tbody = document.getElementById('contratacionesTable');
   if (tbody) {
     tbody.innerHTML = `
