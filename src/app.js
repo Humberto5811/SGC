@@ -50,9 +50,20 @@ async function renderApp() {
       content = renderFormBienesView();
       setTimeout(() => initFormBienesView(), 50);
     }
+    // ========== ACTOS PREPARATORIOS ==========
+    else if (currentRoute === 'dec/actos') {
+      const module = await import('./views/contratacion/actosPreparativosView.js');
+      content = module.renderActosPreparativosView();
+      setTimeout(() => module.initActosPreparativosView(), 50);
+    }
+    // ========== PROGRAMACIÓN ==========
+    else if (currentRoute === 'au/programacion') {
+      const module = await import('./views/programacion/programacionView.js');
+      content = module.renderProgramacionView();
+      setTimeout(() => module.initProgramacionView(), 50);
+    }
     // ========== CONTRATACIONES Y SUBRUTAS ==========
     else if (currentRoute === 'contrataciones' || 
-             currentRoute === 'dec/actos' ||
              currentRoute === 'dec/invitaciones' ||
              currentRoute === 'dec/consultas' ||
              currentRoute === 'dec/cotizaciones' ||
