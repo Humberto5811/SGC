@@ -245,11 +245,24 @@ router.put('/paquetes/:id/aprobar', async (req, res, next) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Paquete no encontrado' });
 
-    // Marcar requerimientos del paquete como "Programado"
+    // Marcar requerimientos del paquete como "En Actos Preparatorios"
     await query(`
-      UPDATE requerimientos SET estado = 'Programado', updated_at = NOW()
+      UPDATE requerimientos
+      SET estado = 'En Actos Preparatorios', submodulo_actual = 'Actos Preparatorios',
+          fecha_estado_actual = NOW(), updated_at = NOW()
       WHERE id IN (SELECT requerimiento_id FROM paquete_requerimientos WHERE paquete_id = $1)
     `, [id]);
+
+    // Registrar trazabilidad para cada requerimiento
+    const { rows: reqIds } = await query(
+      'SELECT requerimiento_id FROM paquete_requerimientos WHERE paquete_id = $1', [id]
+    );
+    for (const r of reqIds) {
+      await query(`
+        INSERT INTO trazabilidad_expedientes (requerimiento_id, accion, origen, destino, usuario_origen, usuario_destino)
+        VALUES ($1, 'APROBACION', 'PROGRAMACION', 'ACTOS PREPARATORIOS', $2, '')
+      `, [r.requerimiento_id, usuario || '']);
+    }
 
     res.json({ ok: true, paquete: rows[0] });
   } catch (err) { next(err); }
