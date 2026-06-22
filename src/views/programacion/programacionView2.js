@@ -14,6 +14,8 @@ import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js'
 import { fetchBandejaProgramacion } from '../../utils/bandejaRequerimientos.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
+import { loadPaquetesConsolidacionTab, openPaquetePanel, highlightPedidoInPaquetesMatriz } from './paquetesConsolidacionView.js';
+import { loadPedidosConsolidacionTab } from './pedidosConsolidacionView.js';
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -44,6 +46,7 @@ export function renderProgramacionView() {
       <ul class="nav nav-tabs mb-3" id="progTabs">
         <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">📋 Bandeja</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-tab="paquetes">📦 Paquetes</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-tab="pedidos">📑 Pedidos</a></li>
       </ul>
       <div id="progTrazaSummaryWrap">${renderSummaryCardsHtml('progTrazaSummary')}</div>
       <div id="progFilterWrap">${renderFilterBarHtml('prog')}</div>
@@ -79,6 +82,7 @@ let progListFilters = {};
 
 // ==================== LOAD ====================
 async function loadBandeja() {
+  setTabChrome('bandeja');
   const cont = document.getElementById('progContent');
   if (!cont) return;
   try {
@@ -750,7 +754,9 @@ async function aprobarPaquete(id) {
     const user = authService.getCurrentUser();
     await programacionService.aprobarPaquete(id, { usuario: user ? (user.nombre || user.dni || '') : '' });
     alert('✅ Paquete aprobado exitosamente.');
-    loadBandeja();
+    if (currentTab === 'paquetes') loadPaquetesTab();
+    else if (currentTab === 'pedidos') loadPedidosTab();
+    else loadBandeja();
   } catch (e) {
     alert('❌ Error al aprobar: ' + e.message);
   }
@@ -761,53 +767,49 @@ async function eliminarPaquete(id) {
   try {
     await programacionService.eliminarPaquete(id);
     alert('✅ Paquete eliminado.');
-    loadBandeja();
+    if (currentTab === 'paquetes') loadPaquetesTab();
+    else if (currentTab === 'pedidos') loadPedidosTab();
+    else loadBandeja();
   } catch (e) {
     alert('❌ Error al eliminar: ' + e.message);
   }
 }
 
-// ==================== PAQUETES TAB ====================
+function setTabChrome(tab) {
+  const showBandeja = tab === 'bandeja';
+  const summary = document.getElementById('progTrazaSummaryWrap');
+  const filters = document.getElementById('progFilterWrap');
+  const consolidar = document.getElementById('progConsolidar');
+  const selBadge = document.getElementById('progSeleccionados');
+  if (summary) summary.style.display = showBandeja ? '' : 'none';
+  if (filters) filters.style.display = showBandeja ? '' : 'none';
+  if (consolidar) consolidar.style.display = showBandeja ? '' : 'none';
+  if (selBadge) selBadge.style.display = showBandeja ? '' : 'none';
+}
+
+async function goToPaqueteFromPedido(paqueteId, pedidoId) {
+  document.querySelectorAll('#progTabs .nav-link').forEach((t) => t.classList.remove('active'));
+  const tab = document.querySelector('#progTabs [data-tab="paquetes"]');
+  if (tab) tab.classList.add('active');
+  currentTab = 'paquetes';
+  await loadPaquetesTab();
+  openPaquetePanel(paqueteId);
+  highlightPedidoInPaquetesMatriz(paqueteId, pedidoId);
+}
+
 async function loadPaquetesTab() {
-  const cont = document.getElementById('progContent');
-  if (!cont) return;
-  try {
-    const resp = await programacionService.listPaquetes();
-    const paquetes = (resp && resp.data) || [];
-    if (!paquetes.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay paquetes creados.</div>';
-      return;
-    }
-    cont.innerHTML = `
-      <div class="table-responsive">
-        <table class="table table-sm table-hover prog-table">
-          <thead class="table-light">
-            <tr><th>Código</th><th>Estado</th><th>Requerimientos</th><th>Creado por</th><th>Fecha</th><th class="text-center">Acciones</th></tr>
-          </thead>
-          <tbody>
-            ${paquetes.map((p) => `
-              <tr>
-                <td><strong>${esc(p.codigo_paquete)}</strong></td>
-                <td><span class="badge ${p.estado === 'Aprobado' ? 'bg-success' : 'bg-info'}">${esc(p.estado)}</span></td>
-                <td>${p.cant_requerimientos || 0}</td>
-                <td>${esc(p.usuario_creacion)}</td>
-                <td>${p.fecha_creacion ? String(p.fecha_creacion).slice(0, 10) : ''}</td>
-                <td class="text-center">
-                  <button class="btn btn-xs btn-outline-info paq-tab-detail" data-id="${p.id}" title="Ver Detalle"><i class="bi bi-eye"></i></button>
-                  ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-success paq-tab-approve" data-id="${p.id}" title="Aprobar"><i class="bi bi-check-circle"></i></button>` : ''}
-                  ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-danger paq-tab-del" data-id="${p.id}" title="Eliminar"><i class="bi bi-trash"></i></button>` : ''}
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>`;
-    cont.querySelectorAll('.paq-tab-detail').forEach((b) => b.onclick = () => openPaqueteDetail(Number(b.dataset.id)));
-    cont.querySelectorAll('.paq-tab-approve').forEach((b) => b.onclick = () => aprobarPaquete(Number(b.dataset.id)));
-    cont.querySelectorAll('.paq-tab-del').forEach((b) => b.onclick = () => eliminarPaquete(Number(b.dataset.id)));
-  } catch (e) {
-    cont.innerHTML = `<div class="alert alert-danger">Error: ${esc(e.message)}</div>`;
-  }
+  setTabChrome('paquetes');
+  await loadPaquetesConsolidacionTab('progContent', {
+    onApprove: aprobarPaquete,
+    onDelete: eliminarPaquete,
+  });
+}
+
+async function loadPedidosTab() {
+  setTabChrome('pedidos');
+  await loadPedidosConsolidacionTab('progContent', {
+    onGoToPaquete: goToPaqueteFromPedido,
+  });
 }
 
 // ==================== REPORT ====================
@@ -866,7 +868,8 @@ export function initProgramacionView() {
     const reload = document.getElementById('progReload');
     if (reload) reload.onclick = () => {
       if (currentTab === 'bandeja') loadBandeja();
-      else loadPaquetesTab();
+      else if (currentTab === 'paquetes') loadPaquetesTab();
+      else loadPedidosTab();
     };
 
     const consolidarBtn = document.getElementById('progConsolidar');
@@ -879,7 +882,8 @@ export function initProgramacionView() {
         tab.classList.add('active');
         currentTab = tab.dataset.tab;
         if (currentTab === 'bandeja') loadBandeja();
-        else loadPaquetesTab();
+        else if (currentTab === 'paquetes') loadPaquetesTab();
+        else loadPedidosTab();
       };
     });
 

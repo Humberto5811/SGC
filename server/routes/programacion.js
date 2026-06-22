@@ -8,6 +8,8 @@ import {
   buildListFilters,
   ETAPAS,
 } from '../lib/trazabilidad.js';
+import { buildMatrizSeguimientoPedidos } from '../lib/pedidosMatriz.js';
+import { buildMatrizConsolidacionPaquetes } from '../lib/paquetesMatriz.js';
 
 const router = express.Router();
 
@@ -65,6 +67,14 @@ router.get('/requerimientos', async (req, res, next) => {
 });
 
 // ==================== ASOCIACIÓN DE PEDIDOS SIGAMEF ====================
+
+// GET /api/programacion/pedidos/matriz-seguimiento
+router.get('/pedidos/matriz-seguimiento', async (req, res, next) => {
+  try {
+    const data = await buildMatrizSeguimientoPedidos();
+    res.json(data);
+  } catch (err) { next(err); }
+});
 
 // GET /api/programacion/pedidos/:requerimientoId — listar pedidos asociados a un requerimiento
 router.get('/pedidos/:requerimientoId', async (req, res, next) => {
@@ -168,6 +178,14 @@ router.get('/buscar-pedido', async (req, res, next) => {
 });
 
 // ==================== PAQUETES DE CONSOLIDACIÓN ====================
+
+// GET /api/programacion/paquetes/matriz-consolidacion
+router.get('/paquetes/matriz-consolidacion', async (req, res, next) => {
+  try {
+    const data = await buildMatrizConsolidacionPaquetes();
+    res.json(data);
+  } catch (err) { next(err); }
+});
 
 // GET /api/programacion/paquetes — listar paquetes
 router.get('/paquetes', async (req, res, next) => {

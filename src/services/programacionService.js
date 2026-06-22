@@ -115,6 +115,12 @@ export const programacionService = {
    */
   reportePaquete: (id) => api.get(`/programacion/paquetes/${id}/reporte`),
 
+  /** Matriz de consolidación (pestaña Paquetes) */
+  getMatrizConsolidacion: () => api.get('/programacion/paquetes/matriz-consolidacion'),
+
+  /** Matriz de seguimiento de pedidos SIGAMEF (pestaña Pedidos) */
+  getMatrizPedidos: () => api.get('/programacion/pedidos/matriz-seguimiento'),
+
   // ==================== UTILIDADES ====================
 
   /**
