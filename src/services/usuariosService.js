@@ -10,6 +10,7 @@ export const usuariosService = {
     return api.get(`/usuarios/export${q ? `?${q}` : ''}`);
   },
   get: (id) => api.get(`/usuarios/${id}`),
+  getPermisos: (id) => api.get(`/usuarios/${id}/permisos`),
   create: (body) => api.post('/usuarios', body),
   update: (id, body) => api.put(`/usuarios/${id}`, body),
   setEstado: (id, estado, usuarioOperacion) => api.patch(`/usuarios/${id}/estado`, {

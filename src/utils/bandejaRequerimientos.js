@@ -60,6 +60,7 @@ export function etapasAlcanzadas(req) {
   }
   if ((payload.historial_dec || []).length) registrarEtapa(etapas, 'DEC');
   if ((payload.historial_programacion || []).length) registrarEtapa(etapas, 'PROGRAMACION');
+  if ((payload.historial_actos || []).length) registrarEtapa(etapas, 'ACTOS_PREPARATORIOS');
 
   registrarEtapa(etapas, ubic);
   registrarEtapa(etapas, mapEstadoToUbicacion(estado));
@@ -134,11 +135,17 @@ export function requerimientoVisibleEnDEC(req) {
   return maxEtapaAlcanzadaIndex(req) >= etapaIndex('DEC');
 }
 
-/** Programación: solo los que llegaron a Programación (vía DEC o subsanación directa). */
+/** Programación: bandeja maestra — todo expediente que pasó por Programación. */
 export function requerimientoVisibleEnProgramacion(req) {
   if (!req) return false;
-  return maxEtapaAlcanzadaIndex(req) >= etapaIndex('PROGRAMACION')
-    || resolveUbicacionExpediente(req) === 'PROGRAMACION';
+  if (etapasAlcanzadas(req).has('PROGRAMACION')) return true;
+  const payload = parsePayload(req);
+  if (Array.isArray(payload.historial_programacion) && payload.historial_programacion.length) return true;
+  const estado = String(req?.estado || '').trim();
+  if (['Aprobado DEC', 'Observado Programación', 'En Programación', 'Aprobado Programación', 'Programado'].includes(estado)) {
+    return true;
+  }
+  return resolveUbicacionExpediente(req) === 'PROGRAMACION';
 }
 
 export function sortRequerimientosByCodigo(rows) {
@@ -170,6 +177,78 @@ export async function fetchBandejaDEC(filters = {}) {
 }
 
 export async function fetchBandejaProgramacion(filters = {}) {
-  const rows = await fetchAllRequerimientosBandeja(filters);
-  return rows.filter(requerimientoVisibleEnProgramacion);
+  try {
+    const { contratacionesService } = await import('../services/contratacionesService.js');
+    const resp = await contratacionesService.listProgramacion({ pageSize: 500, ...filters });
+    let list = sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
+    list = list.filter(requerimientoVisibleEnProgramacion);
+    return list;
+  } catch (_) {
+    const rows = await fetchAllRequerimientosBandeja(filters);
+    return rows.filter(requerimientoVisibleEnProgramacion);
+  }
+}
+
+/** Actos / Coordinación CM: tablero de supervisión con trazabilidad completa. */
+export function requerimientoVisibleEnActosPreparatorios(req) {
+  if (!req) return false;
+  const etapa = String(req?.estado_actual || req?.estadoActual || '').toUpperCase();
+  const etapasCm = new Set([
+    'ACTOS_PREPARATORIOS', 'INVITACIONES', 'RECEPCION_COTIZACIONES',
+    'CUADRO_COMPARATIVO', 'CCP', 'EJECUCION', 'FINALIZADO', 'OBSERVADO',
+  ]);
+  if (etapasCm.has(etapa)) return true;
+  if (resolveUbicacionExpediente(req) === 'ACTOS_PREPARATORIOS') return true;
+  const estado = String(req?.estado || '').trim();
+  if (estado === 'Programado' || /^Aprobado Programaci/i.test(estado)) return true;
+  try {
+    const p = typeof req.payload === 'string' ? JSON.parse(req.payload || '{}') : (req.payload || {});
+    if (Array.isArray(p.historial_actos) && p.historial_actos.length) return true;
+  } catch (_) {}
+  return false;
+}
+
+/** Enriquece filas con código de paquete asociado (matriz consolidación). */
+export async function enrichActosRowsWithPaquete(rows) {
+  try {
+    const { programacionService } = await import('../services/programacionService.js');
+    const matriz = await programacionService.getMatrizConsolidacion();
+    const map = new Map();
+    (matriz?.paquetes || []).forEach((g) => {
+      const codigo = g.paquete?.codigo_paquete;
+      (g.filas || []).forEach((f) => {
+        if (f.requerimiento_id && codigo) map.set(f.requerimiento_id, codigo);
+      });
+    });
+    return (rows || []).map((r) => ({
+      ...r,
+      codigo_paquete: map.get(r.id) || r.codigo_paquete || null,
+    }));
+  } catch (_) {
+    return rows || [];
+  }
+}
+
+export async function fetchBandejaActosPreparatorios(filters = {}, options = {}) {
+  let list = [];
+  try {
+    const { contratacionesService } = await import('../services/contratacionesService.js');
+    const apiFilters = { pageSize: 500, ...filters };
+    if (filters.mi_equipo) apiFilters.mi_equipo = filters.mi_equipo;
+    if (filters.solo_mios) apiFilters.solo_mios = filters.solo_mios;
+    const resp = await contratacionesService.listActos(apiFilters);
+    list = sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
+  } catch (_) {
+    const rows = await fetchAllRequerimientosBandeja(filters);
+    list = rows.filter(requerimientoVisibleEnActosPreparatorios);
+  }
+  if (options.soloMios && options.usuarioNombre) {
+    const me = String(options.usuarioNombre).toLowerCase();
+    list = list.filter((r) => {
+      const resp = String(r.responsable_actual || r.responsableActual || '').toLowerCase();
+      if (/coordinador.*contratos/i.test(resp)) return false;
+      return resp.includes(me) || me.split(' ').some((p) => p.length > 2 && resp.includes(p));
+    });
+  }
+  return list;
 }

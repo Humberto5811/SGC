@@ -164,8 +164,12 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
     for (let i = payload.observaciones.length - 1; i >= 0; i -= 1) {
       if (!payload.observaciones[i].subsanacion) {
         payload.observaciones[i].subsanacion = respuesta;
+        payload.observaciones[i].respuesta = respuesta;
         payload.observaciones[i].usuario_subsana = usuario || '';
+        payload.observaciones[i].usuario_respuesta = usuario || '';
+        payload.observaciones[i].modulo_respuesta = origen_submodulo || 'Registro de Requerimiento';
         payload.observaciones[i].fecha_subsana = new Date().toISOString();
+        payload.observaciones[i].fecha_respuesta = new Date().toISOString();
         payload.observaciones[i].subsanacion_origen_submodulo = origen_submodulo || 'Registro de Requerimiento';
         payload.observaciones[i].subsanacion_destino_submodulo = destino_submodulo || '';
         payload.observaciones[i].subsanacion_destino_etapa = destino_etapa || '';

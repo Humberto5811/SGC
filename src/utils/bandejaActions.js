@@ -1,4 +1,6 @@
 // Menús contextuales ⋮ por bandeja (sin lógica de negocio — solo UI)
+import { getObservacionPendiente, observacionPendienteParaSubmodulo } from './observacionDestino.js';
+
 export function registroMenuItems(r) {
   const e = String(r.estado || '');
   const aprobado = /aprobad/i.test(e);
@@ -91,10 +93,14 @@ export function progMenuItems(r) {
   const esAprobadoDec = r.estado === 'Aprobado DEC';
   const enProgramacion = r.estado === 'En Programación';
   const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
+  const pending = getObservacionPendiente(r);
+  const pendProg = observacionPendienteParaSubmodulo(pending, 'Programación');
+  const obsLabel = pendProg ? 'Responder observación' : 'Observaciones';
+  const obsEnabled = puedeGestionar || esObservado || pendProg;
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
-    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots', disabled: !puedeGestionar && !esObservado },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !obsEnabled },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !esAprobadoDec },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
@@ -107,11 +113,62 @@ export function progHiddenActions(r) {
   const esAprobadoDec = r.estado === 'Aprobado DEC';
   const enProgramacion = r.estado === 'En Programación';
   const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
+  const pending = getObservacionPendiente(r);
+  const pendProg = observacionPendienteParaSubmodulo(pending, 'Programación');
+  const obsEnabled = puedeGestionar || esObservado || pendProg;
   return `
     <button type="button" class="prog-add-pedido" data-act-trigger="pedido" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
     <button type="button" class="prog-ver" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="prog-attach" data-act-trigger="attach" data-id="${r.id}"></button>
-    <button type="button" class="prog-observar" data-act-trigger="obs" data-id="${r.id}" ${puedeGestionar || esObservado ? '' : 'disabled'}></button>
+    <button type="button" class="prog-observar" data-act-trigger="obs" data-id="${r.id}" ${obsEnabled ? '' : 'disabled'}></button>
     <button type="button" class="prog-aprobar" data-act-trigger="approve" data-id="${r.id}" ${esAprobadoDec ? '' : 'disabled'}></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
+}
+
+export function actosMenuItems(r, opts = {}) {
+  const { esCoordinador = false, esAsignadoAMi = false, esPoolCoordinador = false } = opts;
+  const esObservado = /observ/i.test(String(r.estado || ''));
+  const pending = getObservacionPendiente(r);
+  const pendActos = observacionPendienteParaSubmodulo(pending, 'Actos Preparatorios');
+  const obsLabel = pendActos ? 'Responder observación' : (esObservado ? 'Observaciones' : 'Observar');
+  const items = [
+    { act: 'detail', label: 'Ver expediente', icon: 'bi-eye' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
+    { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+  ];
+  if (esCoordinador) {
+    items.push(
+      { act: 'approve', label: esPoolCoordinador ? 'Asignar analista' : 'Reasignar', icon: 'bi-person-check' },
+      { act: 'deriveAnalyst', label: 'Derivar a analista', icon: 'bi-person-plus' },
+      { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
+      { act: 'derive', label: 'Derivar (otro destino)', icon: 'bi-arrow-right-circle' },
+    );
+  } else if (esAsignadoAMi) {
+    items.push(
+      { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
+      { act: 'approve', label: 'Aprobar → Invitaciones', icon: 'bi-check-circle' },
+    );
+  }
+  return items;
+}
+
+export function actosHiddenActions(r, opts = {}) {
+  const { esCoordinador = false, esAsignadoAMi = false } = opts;
+  let html = `
+    <button type="button" class="actos-ver" data-act-trigger="download" data-id="${r.id}" data-perm-act="VER"></button>
+    <button type="button" class="actos-attach" data-act-trigger="attach" data-id="${r.id}" data-perm-act="VER"></button>
+    <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
+  if (esCoordinador) {
+    html += `
+    <button type="button" class="actos-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
+    <button type="button" class="actos-derivar-analista" data-act-trigger="deriveAnalyst" data-id="${r.id}" data-perm-act="DERIVAR"></button>
+    <button type="button" class="actos-derivar" data-act-trigger="derive" data-id="${r.id}" data-perm-act="DERIVAR"></button>
+    <button type="button" class="actos-asignar" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>`;
+  } else if (esAsignadoAMi) {
+    html += `
+    <button type="button" class="actos-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
+    <button type="button" class="actos-aprobar-inv" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>`;
+  }
+  return html;
 }

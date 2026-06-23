@@ -25,4 +25,29 @@ export const contratacionesService = {
   async observarProgramacion(id, motivo, usuario = '', destino = {}) {
     return api.put(`/contrataciones/programacion/observar/${id}`, { motivo, usuario, ...destino });
   },
+
+  // Actos Preparatorios
+  async listActos(params = {}) {
+    const q = new URLSearchParams(params).toString();
+    return api.get(`/contrataciones/actos${q ? `?${q}` : ''}`);
+  },
+  async listActosUsuarios(params = {}) {
+    const q = new URLSearchParams(params).toString();
+    return api.get(`/contrataciones/actos/usuarios${q ? `?${q}` : ''}`);
+  },
+  async asignarActos(id, analista, usuario = '', opts = {}) {
+    return api.put(`/contrataciones/actos/asignar/${id}`, { analista, usuario, ...opts });
+  },
+  async reasignarActos(id, analista, usuario = '', opts = {}) {
+    return api.put(`/contrataciones/actos/reasignar/${id}`, { analista, usuario, ...opts });
+  },
+  async observarActos(id, motivo, usuario = '', destino = {}) {
+    return api.put(`/contrataciones/actos/observar/${id}`, { motivo, usuario, ...destino });
+  },
+  async derivarActos(id, body = {}) {
+    return api.put(`/contrataciones/actos/derivar/${id}`, body);
+  },
+  async aprobarActosInvitaciones(id, responsableDestino, usuario = '') {
+    return api.put(`/contrataciones/actos/aprobar/${id}`, { responsable_destino: responsableDestino, usuario });
+  },
 };

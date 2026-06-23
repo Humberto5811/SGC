@@ -15,7 +15,9 @@ const USER_FROM = `
 
 function mapUser(row) {
   if (!row) return null;
-  const permisos = normalizePermisos(row.permisos, row.rol);
+  const permisos = row.permisos != null && typeof row.permisos === 'object'
+    ? normalizePermisos(row.permisos, row.rol, { explicit: true })
+    : normalizePermisos(row.permisos, row.rol);
   const centro = row.centro || row.area_responsable || row.centro_codigo || '';
   return {
     id: row.id,
@@ -319,6 +321,19 @@ router.post('/:id/reset-password', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/usuarios/:id/permisos
+router.get('/:id/permisos', async (req, res, next) => {
+  try {
+    const { rows } = await query('SELECT id, permisos, rol FROM usuarios WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const row = rows[0];
+    const permisos = row.permisos != null && typeof row.permisos === 'object'
+      ? normalizePermisos(row.permisos, row.rol, { explicit: true })
+      : normalizePermisos(row.permisos, row.rol);
+    res.json({ id: row.id, permisos });
+  } catch (err) { next(err); }
+});
+
 // GET /api/usuarios/:id
 router.get('/:id', async (req, res, next) => {
   try {
@@ -349,7 +364,7 @@ router.post('/', async (req, res, next) => {
     const tempPassword = String(b.password || b.password_temporal || '').trim();
     if (!tempPassword) return res.status(400).json({ error: 'Contraseña temporal requerida' });
 
-    const permisos = normalizePermisos(b.permisos, b.rol || 'usuario');
+    const permisos = normalizePermisos(b.permisos, b.rol || 'usuario', { explicit: true });
     const hash = await bcrypt.hash(tempPassword, 10);
     const nombre = [b.apellidos, b.nombres].filter(Boolean).join(' ').trim() || b.nombre || b.dni;
     const activo = b.estado !== 'Inactivo' && b.activo !== false;
@@ -397,7 +412,7 @@ router.put('/:id', async (req, res, next) => {
     if (!cur.length) return res.status(404).json({ error: 'Usuario no encontrado' });
     const prev = cur[0];
 
-    const permisos = b.permisos ? normalizePermisos(b.permisos, b.rol || prev.rol) : normalizePermisos(prev.permisos, prev.rol);
+    const permisos = b.permisos ? normalizePermisos(b.permisos, b.rol || 'usuario', { explicit: true }) : normalizePermisos(prev.permisos, prev.rol);
     const nombre = [b.apellidos ?? prev.apellidos, b.nombres ?? prev.nombres].filter(Boolean).join(' ').trim() || prev.nombre;
     const activo = b.estado === 'Inactivo' ? false : (b.estado === 'Activo' ? true : (b.activo ?? prev.activo));
 

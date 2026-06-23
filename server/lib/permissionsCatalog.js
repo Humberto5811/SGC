@@ -62,14 +62,37 @@ MODULOS.forEach((m) => m.submodulos.forEach((s) => { if (s.route) ROUTE_TO_SUBMO
 ROUTE_TO_SUBMODULO.dashboard = null;
 
 export function emptyPermisos() {
-  return { modulos: [], submodulos: [], actividades: [] };
+  return { modulos: [], submodulos: [], actividades: [], actividadesPorSubmodulo: {} };
+}
+
+export function getActividadesForSubmodulo(permisos, subId) {
+  const p = permisos || emptyPermisos();
+  const sid = String(subId || '');
+  const map = p.actividadesPorSubmodulo;
+  if (map && typeof map === 'object' && Object.keys(map).length > 0) {
+    return Array.isArray(map[sid]) ? map[sid].map(String) : [];
+  }
+  if ((p.submodulos || []).includes(sid) && Array.isArray(p.actividades) && p.actividades.length) {
+    return p.actividades.map(String);
+  }
+  return [];
+}
+
+function syncFlatActividades(base) {
+  if (base.actividadesPorSubmodulo && Object.keys(base.actividadesPorSubmodulo).length) {
+    base.actividades = [...new Set(Object.values(base.actividadesPorSubmodulo).flat().map(String))];
+  }
 }
 
 export function allPermisos() {
+  const submodulos = MODULOS.flatMap((m) => m.submodulos.map((s) => s.id));
+  const actividadesPorSubmodulo = {};
+  submodulos.forEach((sid) => { actividadesPorSubmodulo[sid] = [...ACTIVIDADES]; });
   return {
     modulos: MODULOS.map((m) => m.id),
-    submodulos: MODULOS.flatMap((m) => m.submodulos.map((s) => s.id)),
+    submodulos,
     actividades: [...ACTIVIDADES],
+    actividadesPorSubmodulo,
   };
 }
 
@@ -80,10 +103,14 @@ export function permisosFromRol(rol) {
     p.modulos = ['REQUERIMIENTOS'];
     p.submodulos = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO'];
     p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR'];
+    p.actividadesPorSubmodulo = {};
+    p.submodulos.forEach((sid) => { p.actividadesPorSubmodulo[sid] = [...p.actividades]; });
   } else if (rol === 'dec') {
     p.modulos = ['CONTRATACIONES', 'EJECUCION'];
     p.submodulos = MODULOS.filter((m) => p.modulos.includes(m.id)).flatMap((m) => m.submodulos.map((s) => s.id));
     p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR', 'DESCARGAR'];
+    p.actividadesPorSubmodulo = {};
+    p.submodulos.forEach((sid) => { p.actividadesPorSubmodulo[sid] = [...p.actividades]; });
   } else {
     p.modulos = [];
     p.submodulos = [];
@@ -92,12 +119,19 @@ export function permisosFromRol(rol) {
   return p;
 }
 
-export function normalizePermisos(raw, rol) {
+export function normalizePermisos(raw, rol, options = {}) {
   if (!raw || typeof raw !== 'object') return permisosFromRol(rol);
   const base = emptyPermisos();
   ['modulos', 'submodulos', 'actividades'].forEach((k) => {
     if (Array.isArray(raw[k])) base[k] = raw[k].map(String);
   });
-  if (!base.modulos.length && !base.submodulos.length && rol) return permisosFromRol(rol);
+  if (raw.actividadesPorSubmodulo && typeof raw.actividadesPorSubmodulo === 'object') {
+    base.actividadesPorSubmodulo = {};
+    Object.entries(raw.actividadesPorSubmodulo).forEach(([subId, acts]) => {
+      if (Array.isArray(acts)) base.actividadesPorSubmodulo[String(subId)] = acts.map(String);
+    });
+  }
+  syncFlatActividades(base);
+  if (!options.explicit && !base.modulos.length && !base.submodulos.length && rol) return permisosFromRol(rol);
   return base;
 }

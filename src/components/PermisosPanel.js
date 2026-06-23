@@ -1,5 +1,6 @@
 import {
   MODULOS, ACTIVIDADES, emptyPermisos, getSubmodulosOfModulo, getModuloOfSubmodulo,
+  getActividadesForSubmodulo,
 } from '../utils/permissionsCatalog.js';
 
 const MODULO_ICONS = {
@@ -74,9 +75,10 @@ function esc(s) {
 }
 
 function renderActividades(sub, selected) {
+  const subActs = getActividadesForSubmodulo(selected, sub.id);
   return ACTIVIDADES.map((act) => {
     const meta = ACTIVIDAD_META[act] || { label: act, icon: 'bi-dot' };
-    const checked = selected.actividades.includes(act);
+    const checked = subActs.includes(act);
     return `
       <label class="perm-act-item ${checked ? 'checked' : ''}" data-sub="${sub.id}">
         <input class="form-check-input perm-act" type="checkbox" data-act="${act}" data-sub="${sub.id}" ${checked ? 'checked' : ''}>
@@ -167,10 +169,19 @@ export function readPermisosFromPanel(container) {
   const p = emptyPermisos();
   root.querySelectorAll('.perm-mod:checked').forEach((el) => p.modulos.push(el.dataset.mod));
   root.querySelectorAll('.perm-sub:checked').forEach((el) => p.submodulos.push(el.dataset.sub));
-  root.querySelectorAll('.perm-act:checked').forEach((el) => p.actividades.push(el.dataset.act));
+
+  const actividadesPorSubmodulo = {};
+  root.querySelectorAll('.perm-sub:checked').forEach((subEl) => {
+    const subId = subEl.dataset.sub;
+    const acts = [];
+    root.querySelectorAll(`.perm-act[data-sub="${subId}"]:checked`).forEach((a) => acts.push(a.dataset.act));
+    actividadesPorSubmodulo[subId] = [...new Set(acts)];
+  });
+  p.actividadesPorSubmodulo = actividadesPorSubmodulo;
+  p.actividades = [...new Set(Object.values(actividadesPorSubmodulo).flat())];
+
   p.modulos = [...new Set(p.modulos)];
   p.submodulos = [...new Set(p.submodulos)];
-  p.actividades = [...new Set(p.actividades)];
   return p;
 }
 
@@ -207,7 +218,9 @@ export function bindPermPanel(container, onChange) {
     MODULOS.forEach((mod) => {
       panel.querySelectorAll(`.perm-sub[data-mod="${mod.id}"]`).forEach((s) => { s.checked = checked; });
       getSubmodulosOfModulo(mod.id).forEach((sid) => {
-        panel.querySelectorAll(`.perm-act[data-sub="${sid}"]`).forEach((a) => { a.checked = checked; });
+        if (!checked) {
+          panel.querySelectorAll(`.perm-act[data-sub="${sid}"]`).forEach((a) => { a.checked = false; });
+        }
         syncActItemStyle(panel, sid);
       });
     });
@@ -219,10 +232,12 @@ export function bindPermPanel(container, onChange) {
       const modId = el.dataset.mod;
       const subs = getSubmodulosOfModulo(modId);
       panel.querySelectorAll(`.perm-sub[data-mod="${modId}"]`).forEach((s) => { s.checked = el.checked; });
-      subs.forEach((sid) => {
-        panel.querySelectorAll(`.perm-act[data-sub="${sid}"]`).forEach((a) => { a.checked = el.checked; });
-        syncActItemStyle(panel, sid);
-      });
+      if (!el.checked) {
+        subs.forEach((sid) => {
+          panel.querySelectorAll(`.perm-act[data-sub="${sid}"]`).forEach((a) => { a.checked = false; });
+          syncActItemStyle(panel, sid);
+        });
+      }
       notify();
     });
   });
@@ -240,7 +255,6 @@ export function bindPermPanel(container, onChange) {
       const modId = el.dataset.mod;
       if (el.checked) {
         panel.querySelector(`.perm-mod[data-mod="${modId}"]`).checked = true;
-        panel.querySelectorAll(`.perm-act[data-sub="${subId}"]`).forEach((a) => { a.checked = true; });
       } else {
         panel.querySelectorAll(`.perm-act[data-sub="${subId}"]`).forEach((a) => { a.checked = false; });
       }
@@ -299,10 +313,10 @@ export function bindPermPanel(container, onChange) {
   });
 }
 
-export function mountPermPanel(container, selected, activeModId) {
+export function mountPermPanel(container, selected, activeModId, onChange) {
   const prev = container.querySelector('.perm-panel')?.dataset.activeMod;
   const active = activeModId || prev || MODULOS[0]?.id;
   container.innerHTML = renderPermPanel(selected, active);
-  bindPermPanel(container);
+  bindPermPanel(container, onChange);
   return active;
 }

@@ -109,9 +109,16 @@ function bindPagination(wrap) {
   }
 }
 
-function refreshPermPanel(wrap, permisos) {
+function syncPermFromPanel(modal) {
+  const wrap = modal?.querySelector?.('#permTreeWrap') || modal;
+  if (wrap?.querySelector?.('.perm-panel')) {
+    state.formPermisos = readPermisosFromPanel(wrap);
+  }
+}
+
+function refreshPermPanel(wrap, permisos, onChange) {
   if (!wrap) return;
-  state.permActiveMod = mountPermPanel(wrap, permisos, state.permActiveMod);
+  state.permActiveMod = mountPermPanel(wrap, permisos, state.permActiveMod, onChange);
 }
 
 export function renderUsuariosPermisosView() {
@@ -347,7 +354,9 @@ async function openForm(id) {
     u = await usuariosService.get(id);
   }
   state.editing = id;
-  state.formPermisos = normalizePermisos(u.permisos, u.rol);
+  state.formPermisos = id && u.permisos
+    ? normalizePermisos(u.permisos, u.rol, { explicit: true })
+    : normalizePermisos(u.permisos, u.rol);
   state.areaPick = u.idArea ? {
     id_area: u.idArea,
     codigo_centro_costo: u.codigo_centro_costo,
@@ -365,6 +374,9 @@ async function openForm(id) {
         <button type="button" class="btn-close btn-close-white" id="closeUsuForm"></button>
       </div>
       <div class="modal-body">
+        <div id="usuSaveFeedback" class="alert alert-success d-none py-2 small mb-3" role="alert">
+          <i class="bi bi-check-circle"></i> Permisos actualizados correctamente.
+        </div>
         <style>
           #usuFormTabs .nav-link { cursor: pointer; border: none; background: transparent; color: #6c757d; }
           #usuFormTabs .nav-link.active { color: #0d6efd; font-weight: 600; border-bottom: 2px solid #0d6efd; border-radius: 0; }
@@ -430,26 +442,28 @@ async function openForm(id) {
   modal.querySelector('#closeUsuForm').onclick = close;
   modal.querySelector('#cancelUsuForm').onclick = close;
 
+  const onPermChange = (p) => { state.formPermisos = p; };
+
   modal.querySelectorAll('#usuFormTabs .nav-link').forEach((tab) => {
     tab.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      const prevTab = modal.querySelector('#usuFormTabs .nav-link.active')?.dataset?.tab;
+      if (prevTab === 'accesos') syncPermFromPanel(modal);
       modal.querySelectorAll('#usuFormTabs .nav-link').forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
       const t = tab.dataset.tab;
       modal.querySelector('#usuTabDatos').classList.toggle('d-none', t !== 'datos');
       modal.querySelector('#usuTabAccesos').classList.toggle('d-none', t !== 'accesos');
       if (t === 'accesos') {
-        const rol = modal.querySelector('#fRol')?.value || u.rol || 'usuario';
-        state.formPermisos = normalizePermisos(state.formPermisos, rol);
-        refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos);
+        refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
       }
       const audit = modal.querySelector('#usuTabAudit');
       if (audit) audit.classList.toggle('d-none', t !== 'audit');
     };
   });
 
-  refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos);
+  refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
 
   const areaResults = modal.querySelector('#fAreaResults');
   async function buscarArea() {
@@ -494,19 +508,28 @@ async function openForm(id) {
     areaTimer = setTimeout(buscarArea, 350);
   };
 
+  let prevRol = modal.querySelector('#fRol').value;
   modal.querySelector('#fRol').onchange = () => {
-    state.formPermisos = permisosFromRol(modal.querySelector('#fRol').value);
-    refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos);
+    syncPermFromPanel(modal);
+    const newRol = modal.querySelector('#fRol').value;
+    if (!confirm('¿Aplicar permisos predeterminados del rol seleccionado? Esto reemplazará la configuración actual de accesos.')) {
+      modal.querySelector('#fRol').value = prevRol;
+      return;
+    }
+    prevRol = newRol;
+    state.formPermisos = permisosFromRol(newRol);
+    refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
   };
 
   if (!id) {
     state.formPermisos = permisosFromRol(modal.querySelector('#fRol').value);
-    refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos);
+    refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
   }
 
   modal.querySelector('#saveUsuForm').onclick = async () => {
+    syncPermFromPanel(modal);
+    const permisos = state.formPermisos;
     const cu = authService.getCurrentUser() || {};
-    const permisos = readPermisosFromPanel(modal.querySelector('#permTreeWrap'));
     const body = {
       dni: modal.querySelector('#fDni').value.trim(),
       username: modal.querySelector('#fUsername').value.trim().toLowerCase(),
@@ -535,10 +558,37 @@ async function openForm(id) {
       return alert('Complete los campos obligatorios: correo, nombres, apellidos y cargo');
     }
     if (!body.descripcion_area && !body.idArea) return alert('Seleccione el área usuaria');
+    const saveBtn = modal.querySelector('#saveUsuForm');
+    const feedback = modal.querySelector('#usuSaveFeedback');
     try {
+      saveBtn.disabled = true;
       if (id) {
         await usuariosService.update(id, body);
-        close();
+        const permResp = await usuariosService.getPermisos(id);
+        const permisosGuardados = permResp?.permisos || permResp;
+        state.formPermisos = normalizePermisos(permisosGuardados, body.rol, { explicit: true });
+        const refreshed = await usuariosService.get(id);
+        Object.assign(u, refreshed);
+        refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
+        const session = authService.getCurrentUser();
+        if (session && String(session.id) === String(id) && refreshed) {
+          authService.setCurrentUser({ ...session, ...refreshed, permisos: state.formPermisos });
+        }
+        const activeTab = modal.querySelector('#usuFormTabs .nav-link.active')?.dataset?.tab;
+        if (feedback) {
+          const msg = activeTab === 'accesos'
+            ? 'Permisos actualizados correctamente.'
+            : 'Usuario actualizado correctamente.';
+          feedback.classList.remove('d-none', 'alert-danger');
+          feedback.classList.add('alert-success');
+          feedback.innerHTML = `<i class="bi bi-check-circle"></i> ${msg}`;
+        }
+        if (activeTab === 'accesos') {
+          modal.querySelectorAll('#usuFormTabs .nav-link').forEach((t) => t.classList.remove('active'));
+          modal.querySelector('[data-tab="accesos"]')?.classList.add('active');
+          modal.querySelector('#usuTabDatos').classList.add('d-none');
+          modal.querySelector('#usuTabAccesos').classList.remove('d-none');
+        }
         loadList();
       } else {
         const resp = await usuariosService.create(body);
@@ -547,7 +597,15 @@ async function openForm(id) {
         if (resp.credenciales?.mensaje) showCredentialsModal(resp.credenciales.mensaje, resp.credenciales.username);
       }
     } catch (e) {
-      alert('Error: ' + e.message);
+      if (feedback) {
+        feedback.classList.remove('d-none', 'alert-success');
+        feedback.classList.add('alert-danger');
+        feedback.innerHTML = `<i class="bi bi-exclamation-triangle"></i> Error al guardar: ${esc(e.message)}`;
+      } else {
+        alert('Error: ' + e.message);
+      }
+    } finally {
+      saveBtn.disabled = false;
     }
   };
 

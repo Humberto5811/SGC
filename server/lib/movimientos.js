@@ -36,6 +36,8 @@ export function normalizeAccion(accion) {
   if (a === 'rechazado') return 'RECHAZADO';
   if (a === 'observado') return 'OBSERVADO';
   if (a === 'subsanacion' || a === 'subsanado') return 'SUBSANADO';
+  if (a === 'asignacion' || a === 'asignado') return 'ASIGNADO';
+  if (a === 'reasignacion' || a === 'reasignado') return 'REASIGNADO';
   if (a === 'derivado') return 'DERIVADO';
   if (a === 'reenviado') return 'REENVIADO';
   if (a === 'firmado') return 'FIRMADO';

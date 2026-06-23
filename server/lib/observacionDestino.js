@@ -17,6 +17,14 @@ export function resolveEstadoFromDestino(destinoSubmodulo, destinoEtapa) {
     case 'PROGRAMACION': return 'En Programación';
     case 'DEC': return 'Aprobado';
     case 'REGISTRADO': return 'Registrado';
+    case 'ACTOS_PREPARATORIOS': return 'Programado';
+    case 'INVITACIONES': return 'En Invitaciones';
+    case 'RECEPCION_COTIZACIONES': return 'En Cotizaciones';
+    case 'CUADRO_COMPARATIVO': return 'En Cuadro Comparativo';
+    case 'CCP': return 'En CCP';
+    case 'EJECUCION': return 'En Ejecución';
+    case 'ALMACEN': return 'En Almacén';
+    case 'TESORERIA': return 'En Tesorería';
     case 'EVALUACION':
     default: return 'En tramite de aprobación';
   }
@@ -30,6 +38,14 @@ export function resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, 
     DEC: 'DEC',
     EVALUACION: 'Director / Gerente',
     REGISTRADO: 'Usuario AU',
+    ACTOS_PREPARATORIOS: 'Coordinador de Contratos Menores',
+    INVITACIONES: 'Especialista Contrataciones',
+    RECEPCION_COTIZACIONES: 'Especialista Contrataciones',
+    CUADRO_COMPARATIVO: 'Especialista Contrataciones',
+    CCP: 'Comité de Compras Públicas',
+    EJECUCION: 'Ejecutor Contractual',
+    ALMACEN: 'Almacén',
+    TESORERIA: 'Tesorería',
   };
   return defaults[code] || 'Sistema';
 }

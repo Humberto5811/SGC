@@ -2,18 +2,23 @@
 import { programacionService } from '../../services/programacionService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
-import { todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from '../requerimiento/reqShared.js';
+import { todasObservaciones, historialHtml, showObservacionDirigidaModal, showSubsanacionDirigidaModal, bindTrazabilidadButtons, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../requerimiento/reqShared.js';
+import { requerimientosService } from '../../services/requerimientosService.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 import {
-  bandejaTraceHeaders, renderTraceRowCells, enrichReqRow,
+  enrichReqRow,
   renderFilterBarHtml, readFilterParams, applyBandejaFilters,
-  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
-  renderActionMenuCell, bindActionMenus, bindBandejaToolbar, isEstadoObservado,
+  renderSummaryCardsHtml, updateSummaryCards,
+  renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  bandejaTableStyles,
 } from '../../utils/trazabilidad.js';
+import { estadoModernBadge } from '../../utils/bandejaUi.js';
 import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
 import { fetchBandejaProgramacion } from '../../utils/bandejaRequerimientos.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
+import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
+import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { loadPaquetesConsolidacionTab, openPaquetePanel, highlightPedidoInPaquetesMatriz } from './paquetesConsolidacionView.js';
 import { loadPedidosConsolidacionTab } from './pedidosConsolidacionView.js';
 
@@ -21,18 +26,16 @@ function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').repla
 
 let allRows = [];
 let pedidosCountMap = {};
-let paquetesList = [];
-let paqueteReqIds = new Set();
 let selectedIds = new Set();
 
 // ==================== RENDER ====================
 export function renderProgramacionView() {
   return `
-    <div class="container-fluid">
+    <div class="container-fluid prog-bandeja-page">
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-calendar-check"></i> Programación</h3>
-          <p class="text-muted mb-0">Expedientes que llegaron a Programación (vía DEC o subsanación). Asocie pedidos SIGAMEF y consolide.</p>
+          <p class="text-muted mb-0">Bandeja maestra de seguimiento: todos los expedientes que pasaron por Programación, con estado y responsable actuales.</p>
         </div>
         <div class="d-flex gap-2">
           <button id="progConsolidar" class="btn btn-sm btn-success" disabled>
@@ -52,29 +55,94 @@ export function renderProgramacionView() {
       <div id="progFilterWrap">${renderFilterBarHtml('prog')}</div>
       <div id="progContent"><div class="text-muted">Cargando…</div></div>
     </div>
-    <style>
-      #progContent .req-list-table, #progContent .req-list-table th, #progContent .req-list-table td {
-        font-family: Arial, Helvetica, sans-serif; font-size: 10pt; font-weight: normal;
-      }
-      #progContent .req-list-table .badge { font-weight: normal !important; font-size: 10pt !important; }
-      #progContent .req-list-table strong { font-weight: normal; }
-      .btn-xs { padding: 1px 6px; font-size: 11px; }
+    <style>${bandejaTableStyles()}${actosBandejaStyles()}
+      .prog-bandeja-page { overflow: visible; padding-bottom: 2rem; }
+      .prog-bandeja-wrap .table-responsive { overflow-x: auto; overflow-y: visible; }
+      .prog-bandeja-wrap .req-list-table { table-layout: auto; width: 100%; min-width: 1280px; }
     </style>
   `;
 }
 
 function getPayloadItemTexts(r) {
-  let codigosSigamef = '<span class="text-muted small">—</span>';
-  let descripcionesBien = '<span class="text-muted small">—</span>';
+  let codigosSigamef = '';
+  let descripcionesBien = '';
   try {
     const p = JSON.parse(r.payload || '{}');
     const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
     if (Array.isArray(items) && items.length) {
-      codigosSigamef = items.map((it) => esc(it.item_bien || '')).join(', ');
-      descripcionesBien = items.map((it) => esc(it.nombre_item || '')).join(', ');
+      codigosSigamef = items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
+      descripcionesBien = items.map((it) => it.nombre_item || '').filter(Boolean).join(', ');
     }
   } catch (_) {}
   return { codigosSigamef, descripcionesBien };
+}
+
+function getResponsableRolDisplay(r) {
+  const resp = String(r?.responsable_actual || r?.responsableActual || '').trim();
+  if (/program/i.test(resp)) return 'Programación';
+  return getRolDisplayFromRow(r);
+}
+
+function renderPedidosAdjuntosCell(pedCnt, reqId) {
+  if (pedCnt > 0) {
+    return `<button type="button" class="btn btn-sm btn-link p-0 prog-ver-pedidos" data-id="${reqId}" title="Ver pedidos SIGAMEF asociados">
+      <span class="badge bg-success">${pedCnt} pedido${pedCnt === 1 ? '' : 's'}</span>
+    </button>`;
+  }
+  return '<span class="text-muted small">Sin pedidos</span>';
+}
+
+function programacionBandejaHeaders() {
+  return `
+    <th style="width:35px;"><input type="checkbox" id="progSelectAll" title="Seleccionar todos"></th>
+    <th class="req-col-timeline" title="Timeline">🕒</th>
+    <th>N° Requerimiento</th>
+    <th>Paquete</th>
+    <th>Pedido SIGAMEF</th>
+    <th>Código SIGAMEF</th>
+    <th>Descripción</th>
+    <th>Área Usuaria</th>
+    <th>Estado Actual</th>
+    <th>Responsable Actual</th>
+    <th>Fecha Asignación</th>
+    <th>Días</th>
+    <th>Pedidos Adjuntos</th>
+    <th class="req-col-acc"></th>`;
+}
+
+function renderProgramacionRowCells(r, opts = {}) {
+  const { pedCnt = 0 } = opts;
+  const { codigosSigamef, descripcionesBien } = getPayloadItemTexts(r);
+  const paqBadge = r.codigo_paquete
+    ? `<span class="badge bg-success">${esc(r.codigo_paquete)}</span>`
+    : '<span class="text-muted small">Sin paquete</span>';
+  const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '';
+  const pedidosDisplay = pedidos ? esc(pedidos) : '<span class="text-muted small">—</span>';
+  const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
+  const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
+  const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
+  const resp = r.responsable_actual || r.responsableActual || '—';
+  const rol = getResponsableRolDisplay(r);
+  const estadoBadgeHtml = estadoModernBadge(
+    r.estado_actual || r.estadoActual,
+    r.estadoActualTexto || r.estado_actual_texto,
+    r.estado,
+  );
+  const nombreItem = descripcionesBien || r.denominacion || '—';
+
+  return `
+    <td class="text-center"><button type="button" class="btn btn-link btn-sm p-0 req-traza text-secondary" data-id="${r.id}" onclick="event.stopPropagation()"><i class="bi bi-clock-history"></i></button></td>
+    <td><strong>${esc(r.codigo || ('#' + r.id))}</strong></td>
+    <td class="actos-col-paq">${paqBadge}</td>
+    <td class="actos-col-pedido small">${pedidosDisplay}</td>
+    <td class="actos-col-sigamef small">${esc(codigosSigamef || '—')}</td>
+    <td class="actos-col-desc"><span class="req-desc-text" title="${esc(nombreItem)}">${esc(nombreItem)}</span></td>
+    <td>${esc(r.area || '—')}</td>
+    <td>${estadoBadgeHtml}</td>
+    <td><div class="req-resp-name">${esc(resp)}</div><div class="req-resp-role">${esc(rol)}</div></td>
+    <td class="small text-muted">${esc(fechaFmt)}</td>
+    <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>
+    <td class="text-center">${renderPedidosAdjuntosCell(pedCnt, r.id)}</td>`;
 }
 
 let currentTab = 'bandeja';
@@ -89,113 +157,42 @@ async function loadBandeja() {
     cont.innerHTML = '<div class="text-muted">Cargando…</div>';
     let rows = await fetchBandejaProgramacion(progListFilters);
     let countMap = {};
-    let paqList = { data: [] };
     try { countMap = await programacionService.getPedidosCount(); } catch (_) {}
-    try { paqList = await programacionService.listPaquetes(); } catch (_) {}
 
     pedidosCountMap = countMap || {};
-    paquetesList = (paqList && paqList.data) || [];
-
-    paqueteReqIds = new Set();
-    let paqDetails = [];
-    if (paquetesList.length) {
-      try {
-        paqDetails = await Promise.all(
-          paquetesList.map((p) => programacionService.getPaquete(p.id).catch(() => null))
-        );
-      } catch (_) {
-        paqDetails = [];
-      }
-    }
-    paqDetails.forEach((d) => {
-      if (d && d.requerimientos) {
-        d.requerimientos.forEach((r) => paqueteReqIds.add(r.id));
-      }
-    });
 
     rows = applyBandejaFilters(rows, progListFilters);
+    rows = rows.map(enrichReqRow);
     allRows = rows;
     updateSummaryCards(rows, 'progTrazaSummary');
 
-    const combinedItems = [];
-    const usedPaqIds = new Set();
-    for (const r of rows) {
-      if (paqueteReqIds.has(r.id)) {
-        for (const pd of paqDetails) {
-          if (!pd || !pd.paquete) continue;
-          const pId = pd.paquete.id;
-          if (usedPaqIds.has(pId)) continue;
-          if (pd.requerimientos.some((pr) => pr.id === r.id)) {
-            combinedItems.push({ type: 'paquete', paquete: pd.paquete, detail: pd });
-            usedPaqIds.add(pId);
-            break;
-          }
-        }
-      } else {
-        combinedItems.push({ type: 'req', req: r });
-      }
-    }
-    for (const pd of paqDetails) {
-      if (pd && pd.paquete && !usedPaqIds.has(pd.paquete.id)) {
-        combinedItems.push({ type: 'paquete', paquete: pd.paquete, detail: pd });
-      }
-    }
-
     selectedIds = new Set();
 
-    if (!combinedItems.length) {
+    if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos que coincidan con los filtros.</div>';
       return;
     }
 
-    const style = 'padding: 2px 6px; font-size: 11px;';
-    const pedidosHeader = '<th class="text-center" style="width:72px;">Pedidos</th>';
-    cont.innerHTML = wrapBandejaTable({
-      containerId: 'progContent',
-      prefix: 'prog',
-      headExtraBefore: '<th style="width:35px;"><input type="checkbox" id="progSelectAll" title="Seleccionar todos"></th>',
-      extraColsBeforeAcc: pedidosHeader,
-      bodyHtml: combinedItems.map((item) => {
-              if (item.type === 'paquete') {
-                const p = item.paquete;
-                const d = item.detail;
-                const cnt = d.requerimientos ? d.requerimientos.length : 0;
-                return `
-                <tr class="table-warning" style="cursor:pointer;" data-paquete-id="${p.id}">
-                  <td></td>
-                  <td colspan="9"><strong>📦 ${esc(p.codigo_paquete)}</strong> <span class="badge bg-secondary">${cnt} REQ</span>
-                    <span class="text-muted small ms-2">${d.resumen ? 'S/. ' + d.resumen.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2 }) : ''}</span>
-                  </td>
-                  <td class="text-center">
-                    <span class="badge bg-success">${d.pedidos ? d.pedidos.length : 0}</span>
-                  </td>
-                  <td class="text-center">
-                    <button class="btn btn-xs btn-outline-info prog-paq-detail" data-id="${p.id}" title="Ver Detalle"><i class="bi bi-eye"></i></button>
-                    ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-success prog-paq-approve" data-id="${p.id}" title="Aprobar"><i class="bi bi-check-circle"></i></button>` : ''}
-                    ${p.estado === 'Pendiente' ? `<button class="btn btn-xs btn-outline-danger prog-paq-del" data-id="${p.id}" title="Eliminar"><i class="bi bi-trash"></i></button>` : ''}
-                  </td>
-                </tr>`;
-              }
-              const r = item.req;
-              const pedCnt = pedidosCountMap[r.id] || 0;
-              const inPaq = paqueteReqIds.has(r.id);
-              const esAprobadoDec = r.estado === 'Aprobado DEC';
-              const esObservado = isEstadoObservado(r.estado);
-              const puedeGestionar = esAprobadoDec || esObservado;
-              const canSelect = esAprobadoDec && !inPaq && pedCnt > 0;
-              return `
-              <tr data-req-id="${r.id}">
-                <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
-                ${renderTraceRowCells(r, { prefix: 'prog', escFn: esc })}
-                <td class="text-center" onclick="event.stopPropagation()">
-                  ${pedCnt > 0
-                    ? `<button class="btn btn-xs btn-outline-success prog-ver-pedidos" data-id="${r.id}" title="Ver pedidos" style="${style}"><span class="chip chip-adj">📎 ${pedCnt}</span></button>`
-                    : `<span class="text-muted small">—</span>`}
-                </td>
-                ${renderActionMenuCell(r.id, progMenuItems(r), progHiddenActions(r))}
-              </tr>`;
-            }).join(''),
-    });
+    const tbody = rows.map((r) => {
+      const pedCnt = pedidosCountMap[r.id] || 0;
+      const inPaq = !!(r.codigo_paquete);
+      const esAprobadoDec = r.estado === 'Aprobado DEC';
+      const canSelect = esAprobadoDec && !inPaq && pedCnt > 0;
+      return `
+        <tr data-req-id="${r.id}">
+          <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
+          ${renderProgramacionRowCells(r, { pedCnt })}
+          ${renderActionMenuCell(r.id, progMenuItems(r), progHiddenActions(r))}
+        </tr>`;
+    }).join('');
+
+    cont.innerHTML = `
+      <div class="table-responsive prog-bandeja-wrap actos-bandeja-wrap">
+        <table class="table table-sm table-hover table-bordered req-list-table mb-0">
+          <thead class="table-light"><tr>${programacionBandejaHeaders()}</tr></thead>
+          <tbody>${tbody}</tbody>
+        </table>
+      </div>`;
 
     bindBandejaEvents(cont);
     bindTrazabilidadButtons(cont);
@@ -260,7 +257,7 @@ function updateConsolidarBtn() {
 }
 
 async function aprobarProgramacion(id) {
-  if (!confirm('¿Confirmar aprobación desde Programación? Estado: Aprobado Programación.')) return;
+  if (!confirm('¿Confirmar aprobación? El expediente pasará a Actos Preparatorios (Programado).')) return;
   try {
     const user = authService.getCurrentUser() || {};
     const res = await contratacionesService.aprobarProgramacion(id, getUserDisplayName(user));
@@ -274,23 +271,51 @@ async function aprobarProgramacion(id) {
 async function observarProgramacion(id) {
   const req = allRows.find((x) => String(x.id) === String(id));
   if (!req) return;
-  if (isEstadoObservado(req.estado)) {
-    await verHistorialObservaciones(req, { title: 'Historial de observaciones — Programación' });
+  const user = authService.getCurrentUser() || {};
+  const userName = getUserDisplayName(user);
+  const pending = getObservacionPendiente(req);
+  const allObs = todasObservaciones(req);
+
+  if (observacionPendienteParaSubmodulo(pending, 'Programación')) {
+    const data = await showSubsanacionDirigidaModal({
+      title: 'Responder observación',
+      historyHtml: historialHtml(allObs),
+      origenSubmodulo: 'Programación',
+      defaultDestinoSubmodulo: 'Actos Preparatorios',
+      label: 'Respuesta a la observación',
+      placeholder: 'Describa la subsanación o respuesta…',
+      buttonText: 'Responder observación',
+      buttonClass: 'btn-primary',
+    });
+    if (!data) return;
+    try {
+      await requerimientosService.subsanarConDestino(id, {
+        respuesta: data.texto,
+        usuario: userName,
+        origen_submodulo: 'Programación',
+        destino_submodulo: data.destino_submodulo,
+        destino_etapa: data.destino_etapa,
+        destino_persona: data.destino_persona,
+      });
+      loadBandeja();
+    } catch (e) {
+      alert('Error al responder: ' + e.message);
+    }
     return;
   }
+
   const data = await showObservacionDirigidaModal({
-    title: 'Observar requerimiento desde Programación',
-    historyHtml: historialHtml(todasObservaciones(req)),
+    title: pending ? 'Continuar conversación — Programación' : 'Observar requerimiento desde Programación',
+    historyHtml: historialHtml(allObs),
     origenSubmodulo: 'Programación',
-    defaultDestinoSubmodulo: 'Registro de Requerimiento',
+    defaultDestinoSubmodulo: 'Actos Preparatorios',
     placeholder: 'Indique el motivo...',
-    buttonText: 'Observar',
+    buttonText: pending ? 'Reenviar observación' : 'Observar',
     buttonClass: 'btn-danger',
   });
   if (!data) return;
   try {
-    const user = authService.getCurrentUser() || {};
-    await contratacionesService.observarProgramacion(id, data.motivo, getUserDisplayName(user), {
+    await contratacionesService.observarProgramacion(id, data.motivo, userName, {
       destino_submodulo: data.destino_submodulo,
       destino_etapa: data.destino_etapa,
       destino_persona: data.destino_persona,
@@ -601,7 +626,7 @@ function openConsolidarModal() {
   for (const r of selReqs) {
     if (/anulad/i.test(String(r.estado || ''))) { alert(`${r.codigo} está anulado.`); return; }
     if (/programad/i.test(String(r.estado || ''))) { alert(`${r.codigo} ya fue programado.`); return; }
-    if (paqueteReqIds.has(r.id)) { alert(`${r.codigo} ya pertenece a un paquete.`); return; }
+    if (r.codigo_paquete) { alert(`${r.codigo} ya pertenece a un paquete.`); return; }
     if (!(pedidosCountMap[r.id] > 0)) { alert(`${r.codigo} no tiene pedidos SIGAMEF asociados.`); return; }
   }
 

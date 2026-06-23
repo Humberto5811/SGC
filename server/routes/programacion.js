@@ -10,59 +10,19 @@ import {
 } from '../lib/trazabilidad.js';
 import { buildMatrizSeguimientoPedidos } from '../lib/pedidosMatriz.js';
 import { buildMatrizConsolidacionPaquetes } from '../lib/paquetesMatriz.js';
+import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
 
 const router = express.Router();
 
 // ==================== REQUERIMIENTOS (BANDEJA) ====================
 
-// GET /api/programacion/requerimientos — bandeja: Aprobado DEC, Observado Programación
+// GET /api/programacion/requerimientos — bandeja maestra Programación (trazabilidad completa)
 router.get('/requerimientos', async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '200', 10)));
-    const offset = (page - 1) * pageSize;
-    const estados = ['Aprobado DEC', 'Observado Programación', 'Aprobado Programación', 'Programado', 'En Programación'];
-    const placeholders = estados.map((_, i) => `$${i + 1}`).join(', ');
-    const { whereExtra, params: filterParams } = buildListFilters(req.query);
-    const params = [...estados, ...filterParams];
-
-    let where = `WHERE (
-      r.estado IN (${placeholders})
-      OR (r.estado_actual = 'PROGRAMACION' AND r.estado IN ('En tramite de aprobación', 'Observado', 'Observado Programación'))
-    )`;
-    if (whereExtra) where += ` AND ${whereExtra}`;
-
-    const countRes = await query(
-      `SELECT COUNT(*)::int AS total FROM requerimientos r LEFT JOIN areas a ON r.area = a.nombre LEFT JOIN centros c ON a.centro_id = c.id ${where}`,
-      params
-    );
-    const total = countRes.rows[0].total;
-
-    params.push(pageSize, offset);
-    const limitIdx = params.length - 1;
-    const offsetIdx = params.length;
-
-    const { rows } = await query(`
-      SELECT
-        r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado,
-        r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
-        COALESCE(c.nombre, c.codigo, a.responsable, '') AS centro_nombre,
-        ${TRAZA_EXTRA_SELECT}
-      FROM requerimientos r
-      LEFT JOIN areas a ON r.area = a.nombre
-      LEFT JOIN centros c ON a.centro_id = c.id
-      ${where}
-      ORDER BY r.codigo ASC NULLS LAST, r.id ASC
-      LIMIT $${limitIdx} OFFSET $${offsetIdx}
-    `, params);
-
-    res.json({
-      data: rows.map(enrichRequerimientoRow),
-      total,
-      page,
-      pageSize,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    });
+    const result = await listarBandejaProgramacion(page, pageSize, req.query);
+    res.json(result);
   } catch (err) { next(err); }
 });
 

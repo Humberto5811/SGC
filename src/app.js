@@ -86,14 +86,40 @@ async function renderApp() {
       content = module.renderProgramacionView();
       setTimeout(() => module.initProgramacionView(), 50);
     }
-    // ========== CONTRATACIONES Y SUBRUTAS (legacy) ==========
-    else if (currentRoute === 'contrataciones' || 
-             currentRoute === 'dec/actos' ||
-             currentRoute === 'dec/invitaciones' ||
-             currentRoute === 'dec/consultas' ||
-             currentRoute === 'dec/cotizaciones' ||
-             currentRoute === 'dec/ccp' ||
-             currentRoute === 'dec/cuadro') {
+    // ========== CONTRATACIONES — Actos Preparatorios ==========
+    else if (currentRoute === 'dec/actos' || currentRoute === 'contrataciones') {
+      const module = await import('./views/contratacion/actosPreparativosView.js');
+      content = module.renderActosPreparativosView();
+      setTimeout(() => module.initActosPreparativosView(), 50);
+    }
+    // ========== CONTRATACIONES — submódulos ==========
+    else if (currentRoute === 'dec/invitaciones') {
+      const module = await import('./views/contratacion/invitacionesView.js');
+      content = module.renderInvitacionesView();
+      setTimeout(() => module.initInvitacionesView(), 50);
+    }
+    else if (currentRoute === 'dec/consultas') {
+      const module = await import('./views/contratacion/consultasView.js');
+      content = module.renderConsultasView();
+      setTimeout(() => module.initConsultasView(), 50);
+    }
+    else if (currentRoute === 'dec/cotizaciones') {
+      const module = await import('./views/contratacion/cotizacionesView.js');
+      content = module.renderCotizacionesView();
+      setTimeout(() => module.initCotizacionesView(), 50);
+    }
+    else if (currentRoute === 'dec/ccp') {
+      const module = await import('./views/contratacion/ccpView.js');
+      content = module.renderCcpView();
+      setTimeout(() => module.initCcpView(), 50);
+    }
+    else if (currentRoute === 'dec/cuadro') {
+      const module = await import('./views/contratacion/cuadroComparativoView.js');
+      content = module.renderCuadroComparativoView();
+      setTimeout(() => module.initCuadroComparativoView(), 50);
+    }
+    // ========== CONTRATACIONES (legacy placeholder) ==========
+    else if (currentRoute === 'contrataciones/nuevo') {
       const module = await import('./views/contratacionesView.js');
       content = module.renderContratacionesView(currentRoute);
       setTimeout(() => module.initContratacionesView(currentRoute), 50);

@@ -43,7 +43,7 @@ export const ESTADO_ACTUAL_TEXTO = {
   EVALUACION: 'En Evaluación de Requerimientos',
   DEC: 'En DEC',
   PROGRAMACION: 'En Programación',
-  ACTOS_PREPARATORIOS: 'En Actos Prep.',
+  ACTOS_PREPARATORIOS: 'En Coordinación CM',
   INVITACIONES: 'En Invitaciones',
   RECEPCION_COTIZACIONES: 'En Recep. Cotiz.',
   VALIDACION_USUARIO: 'En Valid. Usuario',
@@ -86,13 +86,16 @@ export function mapEstadoToUbicacion(estado) {
   if (!e || e === 'Registrado') return 'REGISTRADO';
   if (/observado program/i.test(e)) return 'PROGRAMACION';
   if (/en programaci/i.test(e)) return 'PROGRAMACION';
-  if (/aprobad.*program/i.test(e)) return 'PROGRAMACION';
+  if (/aprobad.*program/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (e === 'Aprobado DEC') return 'PROGRAMACION';
   if (/observado dec/i.test(e)) return 'PROGRAMACION';
   if (e === 'Aprobado') return 'DEC';
   if (e === 'Observado') return 'EVALUACION';
   if (/tr[aá]mite/i.test(e)) return 'EVALUACION';
   if (e === 'Programado') return 'ACTOS_PREPARATORIOS';
+  if (/actos prep/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/observado actos/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/invitaci/i.test(e)) return 'INVITACIONES';
   if (/finaliz/i.test(e)) return 'FINALIZADO';
   return 'REGISTRADO';
 }

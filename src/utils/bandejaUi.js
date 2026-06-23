@@ -5,6 +5,7 @@ import {
   ETAPA_LABELS, isEstadoObservado, getEstadoActualTexto, mapEstadoToUbicacion,
   computeTraceSummary, filterRowsClient,
 } from './trazabilidad.js';
+import { getRolDisplayFromRow } from './observacionDestino.js';
 
 const executiveMode = new Map();
 
@@ -13,7 +14,7 @@ export const ESTADO_BADGE_STYLES = {
   EVALUACION: { bg: '#ffc107', fg: '#212529', label: 'En Evaluación' },
   DEC: { bg: '#6f42c1', label: 'En DEC' },
   PROGRAMACION: { bg: '#0dcaf0', fg: '#055160', label: 'En Programación' },
-  ACTOS_PREPARATORIOS: { bg: '#fd7e14', label: 'En Actos Prep.' },
+  ACTOS_PREPARATORIOS: { bg: '#fd7e14', label: 'En Coordinación CM' },
   INVITACIONES: { bg: '#0a4275', label: 'En Invitaciones' },
   RECEPCION_COTIZACIONES: { bg: '#0a4275', label: 'En Recep. Cotiz.' },
   VALIDACION_USUARIO: { bg: '#ffc107', fg: '#212529', label: 'En Valid. Usuario' },
@@ -142,9 +143,7 @@ export function countObservacionesPendientes(req) {
 }
 
 export function getResponsableRol(row) {
-  return row.subModuloActual || row.sub_modulo_actual
-    || row.estadoActualTexto
-    || getEstadoActualTexto(mapEstadoToUbicacion(row.estado));
+  return getRolDisplayFromRow(row);
 }
 
 export function buildRowTooltip(row) {

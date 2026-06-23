@@ -12,9 +12,11 @@ import { renderTimeline, timelineModalStyles } from '../../services/timelineServ
 import {
   estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
 } from '../../utils/trazabilidad.js';
-import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel } from '../../utils/observacionDestino.js';
+import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
 
 export const reqShared = { pendingOpenId: null, editingFromEvaluacion: false, onBackToEvaluacion: null };
+
+export { getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -66,47 +68,52 @@ export function historialHtml(observaciones) {
     return '<div class="text-muted fst-italic">No hay observaciones registradas.</div>';
   }
   const items = observaciones.map((o) => {
-    const origen = (o.origen || 'GERENTE').toUpperCase();
     const ronda = o.ronda || '?';
-    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', { 
-      year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', {
+      year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
     }) : '';
+    const label = getObservacionOrigenLabel(o);
+    const origen = String(o.origen || o.moduloOrigen || '').toUpperCase();
 
-    // Color por origen
-    let colorClass, bgClass, label;
-    if (origen === 'DEC') {
+    let colorClass, bgClass;
+    if (origen.includes('DEC')) {
       colorClass = 'text-success';
       bgClass = 'bg-success-subtle border-success';
-      label = 'Observación DEC';
-    } else if (origen === 'PROGRAMACIÓN' || origen === 'PROGRAMACION') {
+    } else if (origen.includes('PROGRAM')) {
       colorClass = 'text-warning';
       bgClass = 'bg-warning-subtle border-warning';
-      label = 'Observación Programación';
+    } else if (origen.includes('ACTOS') || String(o.origen_submodulo || '').includes('Actos')) {
+      colorClass = 'text-info';
+      bgClass = 'bg-info-subtle border-info';
+    } else if (origen.includes('INVITAC')) {
+      colorClass = 'text-primary';
+      bgClass = 'bg-primary-subtle border-primary';
     } else if (origen === 'USUARIO') {
       colorClass = 'text-primary';
       bgClass = 'bg-primary-subtle border-primary';
-      label = 'Observación Usuario';
     } else {
       colorClass = 'text-danger';
       bgClass = 'bg-danger-subtle border-danger';
-      label = 'Observación Gerente';
     }
 
     let html = `<div class="border rounded p-2 mb-2 ${bgClass}" style="font-size:0.9em;">`;
-    html += `<div class="fw-bold ${colorClass}"><i class="bi bi-chat-left-dots"></i> ${label} #${ronda} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
-    html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || '')}</div>`;
+    html += `<div class="fw-bold ${colorClass}"><i class="bi bi-chat-left-dots"></i> ${esc(label)} #${ronda} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
+    html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || o.observacion || '')}</div>`;
     if (o.destino_submodulo || o.destino_persona) {
-      html += `<div class="small text-muted"><i class="bi bi-arrow-right-circle"></i> Dirigida a: <strong>${esc(o.destino_persona || '—')}</strong> · ${esc(o.destino_submodulo || '—')}</div>`;
+      html += `<div class="small text-muted"><i class="bi bi-arrow-right-circle"></i> Dirigida a: <strong>${esc(o.destino_persona || '—')}</strong> · ${esc(getSubmoduloDisplayLabel(o.destino_submodulo || o.moduloDestino || '—'))}</div>`;
     }
-    
-    if (o.subsanacion) {
-      const fechaS = o.fecha_subsana ? new Date(o.fecha_subsana).toLocaleDateString('es-PE', { 
-        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' 
-      }) : '';
-      html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta del usuario ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
-      html += `<div style="white-space:pre-wrap;">${esc(o.subsanacion)}</div>`;
+
+    const respuestaTexto = o.respuesta || o.subsanacion;
+    if (respuestaTexto) {
+      const fechaS = o.fecha_respuesta || o.fecha_subsana
+        ? new Date(o.fecha_respuesta || o.fecha_subsana).toLocaleDateString('es-PE', {
+          year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
+        }) : '';
+      const respModulo = getSubmoduloDisplayLabel(o.subsanacion_origen_submodulo || o.modulo_respuesta || 'Usuario');
+      html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta (${esc(respModulo)}) ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
+      html += `<div style="white-space:pre-wrap;">${esc(respuestaTexto)}</div>`;
       if (o.subsanacion_destino_submodulo || o.subsanacion_destino_persona) {
-        html += `<div class="small text-muted mt-1"><i class="bi bi-arrow-return-right"></i> Subsanación enviada a: <strong>${esc(o.subsanacion_destino_persona || '—')}</strong> · ${esc(o.subsanacion_destino_submodulo || '—')}</div>`;
+        html += `<div class="small text-muted mt-1"><i class="bi bi-arrow-return-right"></i> Devuelto a: <strong>${esc(o.subsanacion_destino_persona || '—')}</strong> · ${esc(getSubmoduloDisplayLabel(o.subsanacion_destino_submodulo || '—'))}</div>`;
       }
     } else {
       html += `<div class="text-muted fst-italic mt-1"><small>Sin respuesta aún</small></div>`;

@@ -8,15 +8,28 @@ import {
   buildListFilters,
   ETAPAS,
 } from '../lib/trazabilidad.js';
-import { formatObservacionTraza } from '../lib/observacionDestino.js';
+import { formatObservacionTraza, resolveEstadoFromDestino, resolveResponsableFromDestino, submoduloLabelToEtapa } from '../lib/observacionDestino.js';
+import { appendObservacion } from '../lib/observacionesExpediente.js';
+import {
+  listarBandejaActos,
+  listUsuariosPerfilActos,
+  listUsuariosPorSubmodulo,
+  asignarAnalistaActos,
+  reasignarActos,
+  observarActos,
+  derivarActos,
+  aprobarActosInvitaciones,
+  COORDINADOR_ACTOS,
+} from '../lib/actosPreparatorios.js';
+import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
+import {
+  REQUERIMIENTO_BANDEJA_FROM,
+  REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
+} from '../lib/bandejaRequerimientoSql.js';
 
 const router = express.Router();
 
-const BASE_FROM = `
-  FROM requerimientos r
-  LEFT JOIN areas a ON r.area = a.nombre
-  LEFT JOIN centros c ON a.centro_id = c.id
-`;
+const BASE_FROM = REQUERIMIENTO_BANDEJA_FROM;
 
 async function listarRequerimientosPorEstados(estados, page, pageSize, queryParams = {}, options = {}) {
   const offset = (page - 1) * pageSize;
@@ -46,6 +59,7 @@ async function listarRequerimientosPorEstados(estados, page, pageSize, queryPara
       r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado,
       r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
       COALESCE(c.nombre, c.codigo, a.responsable, '') AS centro_nombre,
+      ${REQUERIMIENTO_BANDEJA_EXTRA_SELECT},
       ${TRAZA_EXTRA_SELECT}
     ${BASE_FROM}
     ${where}
@@ -142,10 +156,7 @@ router.get('/programacion', async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '200', 10)));
-    const estados = ['Aprobado DEC', 'Observado Programación', 'En Programación'];
-    const result = await listarRequerimientosPorEstados(estados, page, pageSize, req.query, {
-      includeProgramacionTrazabilidad: true,
-    });
+    const result = await listarBandejaProgramacion(page, pageSize, req.query);
     res.json(result);
   } catch (err) { next(err); }
 });
@@ -166,11 +177,11 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
 
     const updated = await registrarMovimiento({
       requerimientoId,
-      estadoNuevo: 'Aprobado Programación',
+      estadoNuevo: 'Programado',
       usuario: usuario || 'Programación',
       accion: 'aprobado',
-      observacion: 'Aprobado en Programación',
-      responsable: ETAPAS.PROGRAMACION.responsable,
+      observacion: 'Aprobado en Programación — derivado a Actos Preparatorios',
+      responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
@@ -183,37 +194,125 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
     const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = req.body || {};
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
 
-    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1 AND estado = $2',
-      [requerimientoId, 'Aprobado DEC']);
-    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado o estado inválido' });
+    const reqCheck = await query('SELECT id, payload, estado FROM requerimientos WHERE id = $1', [requerimientoId]);
+    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (!Array.isArray(payload.observaciones)) payload.observaciones = [];
-    payload.observaciones.push({
-      ronda: payload.observaciones.length + 1,
+    appendObservacion(payload, {
       motivo,
-      gerente: usuario || 'programacion',
+      gerente: usuario || 'Programación',
       origen: 'PROGRAMACIÓN',
       origen_submodulo: origen_submodulo || 'Programación',
       destino_submodulo: destino_submodulo || '',
       destino_etapa: destino_etapa || '',
       destino_persona: destino_persona || '',
-      fecha: new Date().toISOString(),
-      subsanacion: null,
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
+    const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'PROGRAMACION').toUpperCase();
+    const estadoNuevo = destino_submodulo || destino_etapa
+      ? resolveEstadoFromDestino(destino_submodulo, destino_etapa)
+      : 'Observado Programación';
+    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+
     const updated = await registrarMovimiento({
       requerimientoId,
-      estadoNuevo: 'Observado Programación',
+      estadoNuevo,
       usuario: usuario || 'Programación',
       accion: 'observado',
       observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-      responsable: destino_persona || ETAPAS.PROGRAMACION.responsable,
+      responsable,
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+  } catch (err) { next(err); }
+});
+
+// ==================== ACTOS PREPARATORIOS ====================
+
+router.get('/actos/usuarios', async (req, res, next) => {
+  try {
+    const perfil = (req.query.perfil || '').trim();
+    const submodulo = (req.query.submodulo || '').trim();
+    const search = (req.query.search || '').trim();
+    if (submodulo) {
+      const data = await listUsuariosPorSubmodulo(submodulo, search);
+      return res.json({ data });
+    }
+    const data = await listUsuariosPerfilActos(perfil, submodulo);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+router.get('/actos', async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '200', 10)));
+    const soloMios = req.query.solo_mios === '1' || req.query.solo_mios === 'true';
+    const miEquipo = req.query.mi_equipo === '1' || req.query.mi_equipo === 'true';
+    const usuarioNombre = req.headers['x-user-name'] || req.query.usuario || '';
+    const result = await listarBandejaActos(page, pageSize, req.query, {
+      soloAsignadosA: soloMios ? usuarioNombre : null,
+      soloMiEquipo: miEquipo,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+router.put('/actos/asignar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { analista, usuario, submodulo_code, submodulo_label } = req.body || {};
+    if (!analista) return res.status(400).json({ success: false, error: 'Analista destino requerido' });
+    const updated = await asignarAnalistaActos(requerimientoId, {
+      analista,
+      usuario: usuario || COORDINADOR_ACTOS,
+      submodulo_code,
+      submodulo_label,
+    });
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado, responsable_actual: updated.responsable_actual } });
+  } catch (err) { next(err); }
+});
+
+router.put('/actos/reasignar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { analista, usuario, submodulo_code, submodulo_label } = req.body || {};
+    if (!analista) return res.status(400).json({ success: false, error: 'Analista destino requerido' });
+    const updated = await reasignarActos(requerimientoId, {
+      analista,
+      usuario,
+      submodulo_code,
+      submodulo_label,
+    });
+    res.json({ success: true, requerimiento: updated });
+  } catch (err) { next(err); }
+});
+
+router.put('/actos/observar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const updated = await observarActos(requerimientoId, req.body || {});
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+  } catch (err) { next(err); }
+});
+
+router.put('/actos/derivar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const updated = await derivarActos(requerimientoId, req.body || {});
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+  } catch (err) { next(err); }
+});
+
+router.put('/actos/aprobar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { responsable_destino, usuario } = req.body || {};
+    if (!responsable_destino) return res.status(400).json({ success: false, error: 'Responsable destino en Invitaciones requerido' });
+    const updated = await aprobarActosInvitaciones(requerimientoId, { responsableDestino: responsable_destino, usuario });
+    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado, estado_actual: updated.estado_actual } });
   } catch (err) { next(err); }
 });
 

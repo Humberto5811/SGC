@@ -19,7 +19,7 @@ export const ETAPAS = {
   EVALUACION: { label: 'Evaluación', responsable: 'Director / Gerente' },
   DEC: { label: 'DEC', responsable: 'DEC' },
   PROGRAMACION: { label: 'Programación', responsable: 'Programador' },
-  ACTOS_PREPARATORIOS: { label: 'Actos Preparatorios', responsable: 'Especialista Contrataciones' },
+  ACTOS_PREPARATORIOS: { label: 'Actos Preparatorios', responsable: 'Coordinador de Contratos Menores' },
   INVITACIONES: { label: 'Invitaciones', responsable: 'Especialista Contrataciones' },
   RECEPCION_COTIZACIONES: { label: 'Recepción de Cotizaciones', responsable: 'Especialista Contrataciones' },
   VALIDACION_USUARIO: { label: 'Validación de Usuario', responsable: 'Área Usuaria' },
@@ -38,7 +38,7 @@ export const ESTADO_ACTUAL_TEXTO = {
   EVALUACION: 'En Evaluación de Requerimientos',
   DEC: 'En DEC',
   PROGRAMACION: 'En Programación',
-  ACTOS_PREPARATORIOS: 'En Actos Prep.',
+  ACTOS_PREPARATORIOS: 'En Coordinación CM',
   INVITACIONES: 'En Invitaciones',
   RECEPCION_COTIZACIONES: 'En Recep. Cotiz.',
   VALIDACION_USUARIO: 'En Valid. Usuario',
@@ -66,13 +66,20 @@ export function mapEstadoToUbicacion(estado) {
   if (!e || e === 'Registrado') return 'REGISTRADO';
   if (/observado program/i.test(e)) return 'PROGRAMACION';
   if (/en programaci/i.test(e)) return 'PROGRAMACION';
-  if (/aprobad.*program/i.test(e)) return 'PROGRAMACION';
+  if (/aprobad.*program/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (e === 'Aprobado DEC') return 'PROGRAMACION';
   if (/observado dec/i.test(e)) return 'PROGRAMACION';
   if (e === 'Aprobado') return 'DEC';
   if (e === 'Observado') return 'EVALUACION';
   if (/tr[aá]mite/i.test(e)) return 'EVALUACION';
   if (e === 'Programado') return 'ACTOS_PREPARATORIOS';
+  if (/actos prep/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/observado actos/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/invitaci/i.test(e)) return 'INVITACIONES';
+  if (/cotizaci/i.test(e)) return 'RECEPCION_COTIZACIONES';
+  if (/cuadro comp/i.test(e)) return 'CUADRO_COMPARATIVO';
+  if (/\bccp\b/i.test(e) || /en ccp/i.test(e)) return 'CCP';
+  if (/ejecuci/i.test(e)) return 'EJECUCION';
   if (/finaliz/i.test(e)) return 'FINALIZADO';
   return 'REGISTRADO';
 }
@@ -258,34 +265,53 @@ function collectRawEvents(row) {
   });
 
   (payload.observaciones || []).forEach((o) => {
-    const origen = String(o.origen || 'GERENTE').toUpperCase();
+    const origen = String(o.origen || o.moduloOrigen || 'GERENTE').toUpperCase();
     let etapa = 'EVALUACION';
-    if (origen === 'DEC') etapa = 'DEC';
+    if (origen.includes('DEC')) etapa = 'DEC';
     else if (origen.includes('PROGRAM')) etapa = 'PROGRAMACION';
-    if (o.motivo) {
+    else if (origen.includes('ACTOS') || String(o.origen_submodulo || '').includes('Actos')) etapa = 'ACTOS_PREPARATORIOS';
+    else if (origen.includes('INVITAC')) etapa = 'INVITACIONES';
+    if (o.motivo || o.observacion) {
       push({
         fecha: o.fecha || row.updated_at || row.created_at,
         etapa,
-        usuario: o.gerente || origen,
-        observacion: o.motivo,
+        usuario: o.gerente || o.usuarioOrigen || origen,
+        observacion: o.motivo || o.observacion,
         accion: 'observado',
         tipoEvento: 'observacion',
       });
     }
-    if (o.subsanacion) {
-      const etapaSub = submoduloLabelToEtapa(o.subsanacion_origen_submodulo)
-        || (origen === 'USUARIO' ? 'REGISTRADO' : origen === 'DEC' ? 'DEC' : origen.includes('PROGRAM') ? 'PROGRAMACION' : 'REGISTRADO');
+    const respuestaTexto = o.respuesta || o.subsanacion;
+    if (respuestaTexto) {
+      const etapaSub = submoduloLabelToEtapa(o.subsanacion_origen_submodulo || o.modulo_respuesta)
+        || (origen.includes('ACTOS') ? 'ACTOS_PREPARATORIOS' : origen.includes('PROGRAM') ? 'PROGRAMACION' : origen === 'DEC' ? 'DEC' : 'REGISTRADO');
       push({
-        fecha: o.fecha_subsana || o.fecha || row.updated_at,
+        fecha: o.fecha_respuesta || o.fecha_subsana || o.fecha || row.updated_at,
         etapa: etapaSub,
-        usuario: o.usuario_subsana || row.usuario_modificacion || 'Usuario AU',
-        observacion: o.subsanacion,
+        usuario: o.usuario_respuesta || o.usuario_subsana || row.usuario_modificacion || 'Usuario AU',
+        observacion: respuestaTexto,
         accion: 'subsanado',
         tipoEvento: 'subsanacion',
         destinoSubmodulo: o.subsanacion_destino_submodulo || '',
         destinoEtapa: o.subsanacion_destino_etapa || submoduloLabelToEtapa(o.subsanacion_destino_submodulo) || '',
       });
     }
+  });
+
+  (payload.historial_actos || []).forEach((h) => {
+    const obsMap = {
+      asignacion: `Asignado a ${h.analista || 'analista'}`,
+      derivacion_analista: `Derivado a ${h.analista || 'analista'}`,
+      aprobacion_invitaciones: `Derivado a Invitaciones — ${h.responsable_destino || ''}`.trim(),
+    };
+    push({
+      fecha: h.fecha,
+      etapa: h.tipo === 'aprobacion_invitaciones' ? 'INVITACIONES' : 'ACTOS_PREPARATORIOS',
+      usuario: h.usuario || 'Coordinador de Contratos Menores',
+      observacion: obsMap[h.tipo] || h.observacion || 'Movimiento en Coordinación CM',
+      accion: h.tipo === 'aprobacion_invitaciones' ? 'aprobado' : h.tipo === 'asignacion' ? 'asignacion' : 'derivado',
+      tipoEvento: 'etapa',
+    });
   });
 
   (payload.historial_dec || []).forEach((h) => {
