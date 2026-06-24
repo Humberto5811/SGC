@@ -18,8 +18,10 @@ import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } fr
 import { renderDecView, initDecView } from './views/contratacion/decView.js';
 import { renderActosPreparativosView, initActosPreparativosView } from './views/contratacion/actosPreparativosView.js';
 import { renderInvitacionesView, initInvitacionesView } from './views/contratacion/invitacionesView.js';
-import { renderConsultasView, initConsultasView } from './views/contratacion/consultasView.js';
-import { renderCotizacionesView, initCotizacionesView } from './views/contratacion/cotizacionesView.js';
+import { renderConsultasObservacionesView, initConsultasObservacionesView } from './views/contratacion/consultasObservacionesView.js';
+import { renderRecepcionCotizacionesView, initRecepcionCotizacionesView } from './views/contratacion/recepcionCotizacionesView.js';
+import { renderValidacionesView, initValidacionesView } from './views/contratacion/validacionesView.js';
+import { renderPortalProveedoresView, initPortalProveedoresView } from './views/portal/portalProveedoresView.js';
 import { renderCcpView, initCcpView } from './views/contratacion/ccpView.js';
 import { renderCuadroComparativoView, initCuadroComparativoView } from './views/contratacion/cuadroComparativoView.js';
 
@@ -76,10 +78,16 @@ const routes = {
   'dec/programacion': { render: renderProgramacionView, init: initProgramacionView },
   'dec/actos': { render: renderActosPreparativosView, init: initActosPreparativosView },
   'dec/invitaciones': { render: renderInvitacionesView, init: initInvitacionesView },
-  'dec/consultas': { render: renderConsultasView, init: initConsultasView },
-  'dec/cotizaciones': { render: renderCotizacionesView, init: initCotizacionesView },
+  'contrataciones/consultas-observaciones': { render: renderConsultasObservacionesView, init: initConsultasObservacionesView },
+  'contrataciones/recepcion-cotizaciones': { render: renderRecepcionCotizacionesView, init: initRecepcionCotizacionesView },
+  'contrataciones/validaciones': { render: renderValidacionesView, init: initValidacionesView },
+  'dec/consultas': { render: renderConsultasObservacionesView, init: initConsultasObservacionesView },
+  'dec/cotizaciones': { render: renderRecepcionCotizacionesView, init: initRecepcionCotizacionesView },
   'dec/ccp': { render: renderCcpView, init: initCcpView },
   'dec/cuadro': { render: renderCuadroComparativoView, init: initCuadroComparativoView },
+
+  // Portal de Proveedores (módulo independiente — acceso público con login propio)
+  'portal-proveedores': { render: renderPortalProveedoresView, init: initPortalProveedoresView },
 
   // ========== EJECUCIÓN ==========
   'ejecucion': { render: renderEjecucionView, init: initEjecucionView },
@@ -134,6 +142,7 @@ function getCurrentRoute() {
 
 function canAccessRoute(route, action = 'VER') {
   const currentUser = authService.getCurrentUser();
+  if (route === 'portal-proveedores') return true;
   if (!currentUser) {
     return route === 'login';
   }

@@ -1,5 +1,24 @@
 import { authService } from './authService.js';
-import { ROUTE_TO_SUBMODULO, normalizePermisos, permisosFromRol, getActividadesForSubmodulo } from '../utils/permissionsCatalog.js';
+import {
+  ROUTE_TO_SUBMODULO,
+  SUBMODULO_ID_ALIASES,
+  LEGACY_ROUTE_REDIRECTS,
+  resolveCanonicalRoute,
+  normalizePermisos,
+  permisosFromRol,
+  getActividadesForSubmodulo,
+  CONTRATACIONES_NUEVOS_SUBMODULOS,
+  CONTRATACIONES_NUEVOS_ACTIVIDADES,
+} from '../utils/permissionsCatalog.js';
+
+function resolveSubmoduloId(subId) {
+  return SUBMODULO_ID_ALIASES[subId] || subId;
+}
+
+function resolveRouteSubmodulo(route) {
+  const canonicalRoute = resolveCanonicalRoute(route);
+  return ROUTE_TO_SUBMODULO[canonicalRoute] || ROUTE_TO_SUBMODULO[route];
+}
 
 function getPermisos(user) {
   const u = user || authService.getCurrentUser();
@@ -23,7 +42,8 @@ export const permissionsService = {
   tieneSubmodulo(subId, user) {
     const u = user || authService.getCurrentUser();
     if (u?.rol === 'admin') return true;
-    return getPermisos(u).submodulos.includes(subId);
+    const canonical = resolveSubmoduloId(subId);
+    return getPermisos(u).submodulos.includes(canonical);
   },
 
   tieneActividad(actividad, user, submoduloId) {
@@ -43,11 +63,21 @@ export const permissionsService = {
     if (!u) return route === 'login';
     if (route === 'login' || route === 'dashboard') return true;
     if (u.rol === 'admin') return true;
-    const subId = ROUTE_TO_SUBMODULO[route];
+    const subId = resolveRouteSubmodulo(route);
     if (!subId) return true;
     const p = getPermisos(u);
-    if (!(p.submodulos || []).includes(subId)) return false;
-    return getActividadesForSubmodulo(p, subId).includes(String(actividad).toUpperCase());
+    const canonical = resolveSubmoduloId(subId);
+    if (!(p.submodulos || []).includes(canonical)) return false;
+    return getActividadesForSubmodulo(p, canonical).includes(String(actividad).toUpperCase());
+  },
+
+  /** Actividades configurables para Consultas, Recepción de Cotizaciones y Validaciones. */
+  getContratacionesNuevosSubmodulos() {
+    return [...CONTRATACIONES_NUEVOS_SUBMODULOS];
+  },
+
+  getContratacionesNuevosActividades() {
+    return [...CONTRATACIONES_NUEVOS_ACTIVIDADES];
   },
 
   /** Oculta botones con data-perm-act="APROBAR" si el usuario no tiene la actividad */

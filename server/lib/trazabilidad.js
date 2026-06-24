@@ -19,7 +19,7 @@ export const ETAPAS = {
   EVALUACION: { label: 'Evaluación', responsable: 'Director / Gerente' },
   DEC: { label: 'DEC', responsable: 'DEC' },
   PROGRAMACION: { label: 'Programación', responsable: 'Programador' },
-  ACTOS_PREPARATORIOS: { label: 'Actos Preparatorios', responsable: 'Coordinador de Contratos Menores' },
+  ACTOS_PREPARATORIOS: { label: 'Coordinación CM', responsable: 'Coordinador de Contratos Menores' },
   INVITACIONES: { label: 'Invitaciones', responsable: 'Especialista Contrataciones' },
   RECEPCION_COTIZACIONES: { label: 'Recepción de Cotizaciones', responsable: 'Especialista Contrataciones' },
   VALIDACION_USUARIO: { label: 'Validación de Usuario', responsable: 'Área Usuaria' },
@@ -73,8 +73,8 @@ export function mapEstadoToUbicacion(estado) {
   if (e === 'Observado') return 'EVALUACION';
   if (/tr[aá]mite/i.test(e)) return 'EVALUACION';
   if (e === 'Programado') return 'ACTOS_PREPARATORIOS';
-  if (/actos prep/i.test(e)) return 'ACTOS_PREPARATORIOS';
-  if (/observado actos/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/actos prep|coordinaci[oó]n cm/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/observado actos|observado coordin/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (/invitaci/i.test(e)) return 'INVITACIONES';
   if (/cotizaci/i.test(e)) return 'RECEPCION_COTIZACIONES';
   if (/cuadro comp/i.test(e)) return 'CUADRO_COMPARATIVO';

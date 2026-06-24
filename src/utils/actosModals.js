@@ -1,4 +1,4 @@
-// Modales — Actos Preparatorios (asignación, derivación, aprobación)
+// Modales — Coordinación CM (asignación, derivación, aprobación)
 import { contratacionesService } from '../services/contratacionesService.js';
 import { SUBMODULOS_DESTINO, getSubmoduloByLabel } from './observacionDestino.js';
 import { esc } from './trazabilidad.js';
@@ -44,7 +44,7 @@ async function loadUsuariosPorSubmodulo(code, search = '') {
 }
 
 export const ASIGNACION_DESTINOS = [
-  { code: 'ACTOS_PREPARATORIOS', label: 'Coordinación CM', subLabel: 'Actos Preparatorios' },
+  { code: 'ACTOS_PREPARATORIOS', label: 'Coordinación CM', subLabel: 'Coordinación CM' },
   { code: 'INVITACIONES', label: 'Invitaciones', subLabel: 'Invitaciones' },
   { code: 'CCP', label: 'CCP', subLabel: 'CCP' },
   { code: 'CUADRO_COMPARATIVO', label: 'Cuadro Comparativo', subLabel: 'Cuadro Comparativo' },
@@ -164,7 +164,7 @@ async function openAsignacionAnalistaModal(opts = {}) {
 
 function radioListHtml(id, usuarios) {
   if (!usuarios.length) {
-    return '<p class="text-muted small">No hay analistas activos con permiso en Actos Preparatorios. Revise Usuarios y Permisos.</p>';
+    return '<p class="text-muted small">No hay analistas activos con permiso en Coordinación CM. Revise Usuarios y Permisos.</p>';
   }
   return `<div class="list-group">${usuarios.map((u, i) => {
     const nom = formatNombre(u);
@@ -302,7 +302,7 @@ export async function showActosDestinoModal(opts = {}) {
         destino_submodulo: subEl.value,
         destino_etapa: sub?.code || '',
         destino_persona: persona,
-        origen_submodulo: opts.origenSubmodulo || 'Actos Preparatorios',
+        origen_submodulo: opts.origenSubmodulo || 'Coordinación CM',
       });
       modal.hide();
     };
@@ -349,6 +349,20 @@ export function actosBandejaStyles() {
     .actos-bandeja-wrap .actos-col-paq { min-width: 100px; }
     .actos-bandeja-wrap .actos-col-pedido { min-width: 110px; white-space: normal; }
     .actos-bandeja-wrap .actos-col-sigamef { min-width: 110px; white-space: normal; }
+    .inv-bandeja-page { overflow: visible; padding-bottom: 2.5rem; }
+    .inv-bandeja-page #invContent { overflow: visible; }
+    .inv-bandeja-wrap .req-list-table { min-width: 1680px; }
+    .inv-bandeja-wrap .req-col-acc .dropdown-menu { min-width: 240px; max-height: none; overflow: visible; }
+    #invTabs { border-bottom: 2px solid #dee2e6; }
+    #invTabs .nav-link {
+      border: 1px solid transparent; border-radius: 6px 6px 0 0; margin-bottom: -2px;
+      color: #495057; background: #f8f9fa;
+    }
+    #invTabs .nav-link.active {
+      border-color: #dee2e6 #dee2e6 #fff; background: #fff; font-weight: 600; color: #0a4275;
+    }
+    #invTabs .nav-link[data-tab="solicitudes"].active { border-top: 3px solid #0a4275; }
+    .inv-tab-panel { border: 1px solid #dee2e6; border-radius: 8px; background: #fff; padding: 1rem; }
   `;
 }
 
@@ -409,7 +423,9 @@ export function renderActosRowCells(r, opts = {}) {
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
 }
 
-export function actosBandejaHeaders() {
+export function actosBandejaHeaders(opts = {}) {
+  const { includeAcc = true } = opts;
+  const accCol = includeAcc ? '<th class="req-col-acc"></th>' : '';
   return `
     <th class="req-col-timeline" title="Timeline">🕒</th>
     <th>N° Requerimiento</th>
@@ -422,5 +438,5 @@ export function actosBandejaHeaders() {
     <th>Responsable Actual</th>
     <th>Fecha Asignación</th>
     <th>Días</th>
-    <th class="req-col-acc"></th>`;
+    ${accCol}`;
 }

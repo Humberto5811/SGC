@@ -4,6 +4,7 @@ import { SUBMODULOS } from './movimientos.js';
 export function submoduloLabelToEtapa(label) {
   const s = String(label || '').trim();
   if (!s) return null;
+  if (/actos prep/i.test(s) || /coordinaci[oó]n cm/i.test(s)) return 'ACTOS_PREPARATORIOS';
   for (const [code, meta] of Object.entries(SUBMODULOS)) {
     if (meta.subModulo === s) return code;
   }

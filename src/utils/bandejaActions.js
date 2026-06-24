@@ -129,7 +129,7 @@ export function actosMenuItems(r, opts = {}) {
   const { esCoordinador = false, esAsignadoAMi = false, esPoolCoordinador = false } = opts;
   const esObservado = /observ/i.test(String(r.estado || ''));
   const pending = getObservacionPendiente(r);
-  const pendActos = observacionPendienteParaSubmodulo(pending, 'Actos Preparatorios');
+  const pendActos = observacionPendienteParaSubmodulo(pending, 'Coordinación CM');
   const obsLabel = pendActos ? 'Responder observación' : (esObservado ? 'Observaciones' : 'Observar');
   const items = [
     { act: 'detail', label: 'Ver expediente', icon: 'bi-eye' },
@@ -171,4 +171,24 @@ export function actosHiddenActions(r, opts = {}) {
     <button type="button" class="actos-aprobar-inv" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>`;
   }
   return html;
+}
+
+export function invitacionesMenuItems(r) {
+  return [
+    { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots' },
+    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'crearSc', label: 'Crear Solicitud de Cotización', icon: 'bi-file-earmark-plus' },
+  ];
+}
+
+export function invitacionesHiddenActions(r) {
+  return `
+    <button type="button" class="inv-ver" data-act-trigger="download" data-id="${r.id}"></button>
+    <button type="button" class="inv-attach" data-act-trigger="attach" data-id="${r.id}"></button>
+    <button type="button" class="inv-obs" data-act-trigger="obs" data-id="${r.id}"></button>
+    <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
+    <button type="button" class="inv-sc" data-act-trigger="crearSc" data-id="${r.id}"></button>`;
 }

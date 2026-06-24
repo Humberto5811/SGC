@@ -50,4 +50,78 @@ export const contratacionesService = {
   async aprobarActosInvitaciones(id, responsableDestino, usuario = '') {
     return api.put(`/contrataciones/actos/aprobar/${id}`, { responsable_destino: responsableDestino, usuario });
   },
+
+  // Invitaciones
+  async listInvitaciones(params = {}) {
+    const q = new URLSearchParams(params).toString();
+    return api.get(`/contrataciones/invitaciones${q ? `?${q}` : ''}`);
+  },
+  async listSolicitudesCotizacion(params = {}) {
+    const q = new URLSearchParams(params).toString();
+    return api.get(`/contrataciones/invitaciones/solicitudes${q ? `?${q}` : ''}`);
+  },
+  async previewCodigoSolicitud() {
+    return api.get('/contrataciones/invitaciones/solicitudes/preview-codigo');
+  },
+  async getCatalogosInvitaciones() {
+    return api.get('/contrataciones/invitaciones/catalogos');
+  },
+  async crearSolicitudCotizacion(body) {
+    return api.post('/contrataciones/invitaciones/solicitudes', body);
+  },
+  async actualizarSolicitudCotizacion(id, body) {
+    return api.put(`/contrataciones/invitaciones/solicitudes/${id}`, body);
+  },
+  async eliminarSolicitudCotizacion(id) {
+    return api.del(`/contrataciones/invitaciones/solicitudes/${id}`);
+  },
+  async getSolicitudDetalle(id) {
+    return api.get(`/contrataciones/invitaciones/solicitudes/${id}`);
+  },
+  async getItemsRequerimientos(ids) {
+    const q = new URLSearchParams({ ids: ids.join(',') }).toString();
+    return api.get(`/contrataciones/invitaciones/requerimientos/items?${q}`);
+  },
+  async listProveedoresSolicitud(solicitudId) {
+    return api.get(`/contrataciones/invitaciones/solicitudes/${solicitudId}/proveedores`);
+  },
+  async agregarProveedorSolicitud(solicitudId, body) {
+    return api.post(`/contrataciones/invitaciones/solicitudes/${solicitudId}/proveedores`, body);
+  },
+  async enviarCorreosSolicitud(solicitudId, invitacionIds) {
+    return api.post(`/contrataciones/invitaciones/solicitudes/${solicitudId}/enviar-correos`, { invitacion_ids: invitacionIds });
+  },
+  async eliminarProveedorSolicitud(solicitudId, invitacionId) {
+    return api.del(`/contrataciones/invitaciones/solicitudes/${solicitudId}/proveedores/${invitacionId}`);
+  },
+  async buscarProveedores(search = '') {
+    const q = new URLSearchParams({ search }).toString();
+    return api.get(`/contrataciones/invitaciones/proveedores?${q}`);
+  },
+  async agregarProveedoresInvitacion(requerimientoId, proveedores, solicitudId) {
+    return api.post(`/contrataciones/invitaciones/requerimiento/${requerimientoId}/proveedores`, { proveedores, solicitud_id: solicitudId });
+  },
+  async enviarInvitaciones(requerimientoId, solicitudId) {
+    return api.post(`/contrataciones/invitaciones/requerimiento/${requerimientoId}/enviar`, { solicitud_id: solicitudId });
+  },
+  async observarInvitaciones(id, body) {
+    return api.put(`/contrataciones/invitaciones/observar/${id}`, body);
+  },
+  async getTableroInvitaciones(solicitudId) {
+    const path = solicitudId ? `/contrataciones/invitaciones/tablero/${solicitudId}` : '/contrataciones/invitaciones/tablero';
+    return api.get(path);
+  },
+  async listConsultasAnalista(params = {}) {
+    const q = new URLSearchParams(params).toString();
+    return api.get(`/contrataciones/portal-analista/consultas${q ? `?${q}` : ''}`);
+  },
+  async responderConsultaAnalista(id, body) {
+    return api.put(`/contrataciones/portal-analista/consultas/${id}/responder`, body);
+  },
+  async listValidaciones(params = {}) {
+    return api.get('/contrataciones/portal-analista/validaciones');
+  },
+  async validarCotizacion(id, body) {
+    return api.put(`/contrataciones/portal-analista/validaciones/${id}`, body);
+  },
 };

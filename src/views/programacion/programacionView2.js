@@ -257,7 +257,7 @@ function updateConsolidarBtn() {
 }
 
 async function aprobarProgramacion(id) {
-  if (!confirm('¿Confirmar aprobación? El expediente pasará a Actos Preparatorios (Programado).')) return;
+  if (!confirm('¿Confirmar aprobación? El expediente pasará a Coordinación CM (Programado).')) return;
   try {
     const user = authService.getCurrentUser() || {};
     const res = await contratacionesService.aprobarProgramacion(id, getUserDisplayName(user));
@@ -281,7 +281,7 @@ async function observarProgramacion(id) {
       title: 'Responder observación',
       historyHtml: historialHtml(allObs),
       origenSubmodulo: 'Programación',
-      defaultDestinoSubmodulo: 'Actos Preparatorios',
+      defaultDestinoSubmodulo: 'Coordinación CM',
       label: 'Respuesta a la observación',
       placeholder: 'Describa la subsanación o respuesta…',
       buttonText: 'Responder observación',
@@ -308,7 +308,7 @@ async function observarProgramacion(id) {
     title: pending ? 'Continuar conversación — Programación' : 'Observar requerimiento desde Programación',
     historyHtml: historialHtml(allObs),
     origenSubmodulo: 'Programación',
-    defaultDestinoSubmodulo: 'Actos Preparatorios',
+    defaultDestinoSubmodulo: 'Coordinación CM',
     placeholder: 'Indique el motivo...',
     buttonText: pending ? 'Reenviar observación' : 'Observar',
     buttonClass: 'btn-danger',
@@ -774,7 +774,7 @@ async function openPaqueteDetail(paqueteId) {
 }
 
 async function aprobarPaquete(id) {
-  if (!confirm('¿Aprobar este paquete? Los requerimientos serán enviados a Actos Preparatorios.')) return;
+  if (!confirm('¿Aprobar este paquete? Los requerimientos serán enviados a Coordinación CM.')) return;
   try {
     const user = authService.getCurrentUser();
     await programacionService.aprobarPaquete(id, { usuario: user ? (user.nombre || user.dni || '') : '' });

@@ -5,7 +5,7 @@ export const SUBMODULOS = {
   EVALUACION: { subModulo: 'Evaluación de Requerimiento', modulo: 'Requerimientos' },
   DEC: { subModulo: 'DEC', modulo: 'Contrataciones' },
   PROGRAMACION: { subModulo: 'Programación', modulo: 'Contrataciones' },
-  ACTOS_PREPARATORIOS: { subModulo: 'Actos Preparatorios', modulo: 'Contrataciones' },
+  ACTOS_PREPARATORIOS: { subModulo: 'Coordinación CM', modulo: 'Contrataciones' },
   INVITACIONES: { subModulo: 'Invitaciones', modulo: 'Contrataciones' },
   RECEPCION_COTIZACIONES: { subModulo: 'Cotizaciones', modulo: 'Contrataciones' },
   VALIDACION_USUARIO: { subModulo: 'Validación Usuario', modulo: 'Contrataciones' },

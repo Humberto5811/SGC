@@ -2,6 +2,7 @@
 
 export const SUBMODULO_DISPLAY_LABELS = {
   'Actos Preparatorios': 'Coordinación CM',
+  'Coordinación CM': 'Coordinación CM',
   'Programación': 'Programación',
   'DEC': 'DEC',
   'Evaluación de Requerimiento': 'Evaluación',
@@ -25,9 +26,18 @@ export const ORIGEN_OBSERVACION_LABELS = {
   USUARIO: 'Usuario AU',
 };
 
+export function normalizeLegacyActosLabel(text) {
+  if (text == null || text === '') return text;
+  return String(text)
+    .replace(/Actos Preparatorios/gi, 'Coordinación CM')
+    .replace(/Actos Preparativos/gi, 'Coordinación CM')
+    .replace(/\bEN ACTOS PREP\.?\b/gi, 'EN COORDINACIÓN CM')
+    .replace(/\bEn Actos Prep\.?\b/gi, 'En Coordinación CM');
+}
+
 export function getSubmoduloDisplayLabel(label) {
   const s = String(label || '').trim();
-  return SUBMODULO_DISPLAY_LABELS[s] || s || '—';
+  return normalizeLegacyActosLabel(SUBMODULO_DISPLAY_LABELS[s] || s || '—');
 }
 
 export function getObservacionOrigenLabel(entry) {
@@ -93,7 +103,7 @@ export const SUBMODULOS_DESTINO = [
   { code: 'EVALUACION', label: 'Evaluación de Requerimiento', personas: ['Director', 'Gerente de Adquisiciones'] },
   { code: 'DEC', label: 'DEC', personas: ['Jefe DEC', 'Especialista DEC'] },
   { code: 'PROGRAMACION', label: 'Programación', personas: ['Programador', 'Jefe de Programación'] },
-  { code: 'ACTOS_PREPARATORIOS', label: 'Actos Preparatorios', personas: ['Coordinador de Contratos Menores', 'Analista de Contratos Menores'] },
+  { code: 'ACTOS_PREPARATORIOS', label: 'Coordinación CM', personas: ['Coordinador de Contratos Menores', 'Analista de Contratos Menores'] },
   { code: 'INVITACIONES', label: 'Invitaciones', personas: ['Especialista Contrataciones'] },
   { code: 'RECEPCION_COTIZACIONES', label: 'Cotizaciones', personas: ['Especialista Contrataciones'] },
   { code: 'VALIDACION_USUARIO', label: 'Validación Usuario', personas: ['Área Usuaria', 'Responsable AU'] },
@@ -105,7 +115,12 @@ export const SUBMODULOS_DESTINO = [
 ];
 
 export function getSubmoduloByLabel(label) {
-  return SUBMODULOS_DESTINO.find((s) => s.label === label) || null;
+  const s = String(label || '').trim();
+  if (!s) return null;
+  if (/actos prep/i.test(s) || /coordinaci[oó]n cm/i.test(s)) {
+    return SUBMODULOS_DESTINO.find((item) => item.code === 'ACTOS_PREPARATORIOS') || null;
+  }
+  return SUBMODULOS_DESTINO.find((item) => item.label === s) || null;
 }
 
 export function getPersonasForSubmodulo(label) {

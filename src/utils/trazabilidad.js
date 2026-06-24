@@ -23,7 +23,7 @@ export const ETAPA_LABELS = {
   EVALUACION: 'Evaluación',
   DEC: 'DEC',
   PROGRAMACION: 'Programación',
-  ACTOS_PREPARATORIOS: 'Actos Preparatorios',
+  ACTOS_PREPARATORIOS: 'Coordinación CM',
   INVITACIONES: 'Invitaciones',
   RECEPCION_COTIZACIONES: 'Recepción Cotizaciones',
   VALIDACION_USUARIO: 'Validación Usuario',
@@ -63,7 +63,7 @@ export const ETAPA_TIMELINE_LABELS = {
   EVALUACION: 'Evaluación de Requerimientos',
   DEC: 'DEC',
   PROGRAMACION: 'Programación',
-  ACTOS_PREPARATORIOS: 'Actos Preparatorios',
+  ACTOS_PREPARATORIOS: 'Coordinación CM',
   INVITACIONES: 'Invitaciones',
   RECEPCION_COTIZACIONES: 'Recepción de Cotizaciones',
   VALIDACION_USUARIO: 'Validación de Usuario',
@@ -93,8 +93,8 @@ export function mapEstadoToUbicacion(estado) {
   if (e === 'Observado') return 'EVALUACION';
   if (/tr[aá]mite/i.test(e)) return 'EVALUACION';
   if (e === 'Programado') return 'ACTOS_PREPARATORIOS';
-  if (/actos prep/i.test(e)) return 'ACTOS_PREPARATORIOS';
-  if (/observado actos/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/actos prep|coordinaci[oó]n cm/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/observado actos|observado coordin/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (/invitaci/i.test(e)) return 'INVITACIONES';
   if (/finaliz/i.test(e)) return 'FINALIZADO';
   return 'REGISTRADO';
@@ -187,7 +187,7 @@ export const SUBMODULOS_FILTRO = [
   'Evaluación de Requerimiento',
   'DEC',
   'Programación',
-  'Actos Preparatorios',
+  'Coordinación CM',
   'Invitaciones',
   'Cotizaciones',
   'Validación Usuario',

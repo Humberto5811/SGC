@@ -2,6 +2,7 @@
 
 export const SUBMODULO_DISPLAY_LABELS = {
   'Actos Preparatorios': 'Coordinación CM',
+  'Coordinación CM': 'Coordinación CM',
   'Programación': 'Programación',
   'DEC': 'DEC',
   'Evaluación de Requerimiento': 'Evaluación',
@@ -25,9 +26,18 @@ export const ORIGEN_OBSERVACION_LABELS = {
   USUARIO: 'Usuario AU',
 };
 
+export function normalizeLegacyActosLabel(text) {
+  if (text == null || text === '') return text;
+  return String(text)
+    .replace(/Actos Preparatorios/gi, 'Coordinación CM')
+    .replace(/Actos Preparativos/gi, 'Coordinación CM')
+    .replace(/\bEN ACTOS PREP\.?\b/gi, 'EN COORDINACIÓN CM')
+    .replace(/\bEn Actos Prep\.?\b/gi, 'En Coordinación CM');
+}
+
 export function getSubmoduloDisplayLabel(label) {
   const s = String(label || '').trim();
-  return SUBMODULO_DISPLAY_LABELS[s] || s || '—';
+  return normalizeLegacyActosLabel(SUBMODULO_DISPLAY_LABELS[s] || s || '—');
 }
 
 export function getObservacionOrigenLabel(entry) {

@@ -180,7 +180,7 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
       estadoNuevo: 'Programado',
       usuario: usuario || 'Programación',
       accion: 'aprobado',
-      observacion: 'Aprobado en Programación — derivado a Actos Preparatorios',
+      observacion: 'Aprobado en Programación — derivado a Coordinación CM',
       responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
     });
 

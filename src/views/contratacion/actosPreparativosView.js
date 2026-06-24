@@ -1,4 +1,4 @@
-// Actos Preparatorios — bandeja (evolución de DEC)
+// Coordinación CM — bandeja (código interno ACTOS_PREPARATORIOS)
 import { authService } from '../../services/authService.js';
 import { permissionsService } from '../../services/permissionsService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
@@ -83,7 +83,7 @@ function renderActosView() {
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-file-earmark-ruled"></i> Coordinación CM</h3>
-          <p class="text-muted mb-0">Actos Preparatorios — expedientes derivados desde Programación. Perfil activo: <strong>${esc(perfil)}</strong></p>
+          <p class="text-muted mb-0">Expedientes asignados a la Coordinación de Contratos Menores. Perfil activo: <strong>${esc(perfil)}</strong></p>
         </div>
         <button id="actosReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
@@ -132,7 +132,7 @@ async function loadActosList() {
     updateSummaryCards(rows, 'actosTrazaSummary');
 
     if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay expedientes en Actos Preparatorios para su bandeja.</div>';
+      cont.innerHTML = '<div class="alert alert-light border">No hay expedientes en Coordinación CM para su bandeja.</div>';
       return;
     }
 
@@ -210,11 +210,11 @@ async function observarActos(id) {
   const pending = getObservacionPendiente(req);
   const allObs = todasObservaciones(req);
 
-  if (observacionPendienteParaSubmodulo(pending, 'Actos Preparatorios')) {
+  if (observacionPendienteParaSubmodulo(pending, 'Coordinación CM')) {
     const data = await showSubsanacionDirigidaModal({
       title: 'Responder observación',
       historyHtml: historialHtml(allObs),
-      origenSubmodulo: 'Actos Preparatorios',
+      origenSubmodulo: 'Coordinación CM',
       defaultDestinoSubmodulo: 'Programación',
       label: 'Respuesta a la observación',
       placeholder: 'Describa la subsanación o respuesta…',
@@ -226,7 +226,7 @@ async function observarActos(id) {
       await requerimientosService.subsanarConDestino(id, {
         respuesta: data.texto,
         usuario: userName,
-        origen_submodulo: 'Actos Preparatorios',
+        origen_submodulo: 'Coordinación CM',
         destino_submodulo: data.destino_submodulo,
         destino_etapa: data.destino_etapa,
         destino_persona: data.destino_persona,
@@ -241,7 +241,7 @@ async function observarActos(id) {
   const data = await showActosDestinoModal({
     title: pending ? 'Continuar conversación — Coordinación CM' : 'Observación',
     historyHtml: historialHtml(allObs),
-    origenSubmodulo: 'Actos Preparatorios',
+    origenSubmodulo: 'Coordinación CM',
     motivoRequired: true,
     buttonText: pending ? 'Reenviar observación' : 'Observar',
     buttonClass: 'btn-danger',
@@ -265,7 +265,7 @@ async function derivarAnalistaActos(id) {
   if (!req) return;
   const ctx = getRowContext(req);
   const data = await showDerivarAnalistaModal({
-    subtitle: 'El expediente permanece en Actos Preparatorios; el analista quedará como responsable.',
+    subtitle: 'El expediente permanece en Coordinación CM; el analista quedará como responsable.',
   });
   if (!data) return;
   try {
@@ -287,7 +287,7 @@ async function derivarActos(id) {
   if (!req) return;
   const data = await showActosDestinoModal({
     title: 'Derivar expediente',
-    origenSubmodulo: 'Actos Preparatorios',
+    origenSubmodulo: 'Coordinación CM',
     motivoRequired: false,
     motivoLabel: 'Observación (opcional)',
     buttonText: 'Derivar',

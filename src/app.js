@@ -98,15 +98,20 @@ async function renderApp() {
       content = module.renderInvitacionesView();
       setTimeout(() => module.initInvitacionesView(), 50);
     }
-    else if (currentRoute === 'dec/consultas') {
-      const module = await import('./views/contratacion/consultasView.js');
-      content = module.renderConsultasView();
-      setTimeout(() => module.initConsultasView(), 50);
+    else if (currentRoute === 'contrataciones/consultas-observaciones' || currentRoute === 'dec/consultas') {
+      const module = await import('./views/contratacion/consultasObservacionesView.js');
+      content = module.renderConsultasObservacionesView();
+      setTimeout(() => module.initConsultasObservacionesView(), 50);
     }
-    else if (currentRoute === 'dec/cotizaciones') {
-      const module = await import('./views/contratacion/cotizacionesView.js');
-      content = module.renderCotizacionesView();
-      setTimeout(() => module.initCotizacionesView(), 50);
+    else if (currentRoute === 'contrataciones/recepcion-cotizaciones' || currentRoute === 'dec/cotizaciones') {
+      const module = await import('./views/contratacion/recepcionCotizacionesView.js');
+      content = module.renderRecepcionCotizacionesView();
+      setTimeout(() => module.initRecepcionCotizacionesView(), 50);
+    }
+    else if (currentRoute === 'contrataciones/validaciones') {
+      const module = await import('./views/contratacion/validacionesView.js');
+      content = module.renderValidacionesView();
+      setTimeout(() => module.initValidacionesView(), 50);
     }
     else if (currentRoute === 'dec/ccp') {
       const module = await import('./views/contratacion/ccpView.js');

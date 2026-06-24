@@ -29,7 +29,7 @@ async function request(path, options = {}) {
     
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
-      throw new Error(error.error || `Error ${res.status}`);
+      throw new Error(error.detail || error.error || `Error ${res.status}`);
     }
     return res.status === 204 ? null : res.json();
   } catch (error) {

@@ -43,6 +43,8 @@ function extractObservacionTrazabilidad(payloadStr, estadoAnterior, estadoNuevo)
   return '';
 }
 import contratacionesRouter from './routes/contrataciones.js';
+import invitacionesRouter from './routes/invitaciones.js';
+import portalRouter, { portalAnalistaRouter } from './routes/portal.js';
 import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
@@ -88,6 +90,7 @@ const loginLimiter = rateLimit({
 
 // ==================== RUTAS PÚBLICAS ====================
 app.use('/api/auth', loginLimiter, authRouter);
+app.use('/api/portal', portalRouter);
 
 // ==================== CARRERAS PROFESIONALES (RUTAS PÚBLICAS - SIN AUTENTICACIÓN) ====================
 
@@ -333,6 +336,8 @@ app.use('/api/requerimientos', requerimientosEspecialRouter);
 
 // Contrataciones (DEC y Programación)
 app.use('/api/contrataciones', contratacionesRouter);
+app.use('/api/contrataciones/invitaciones', invitacionesRouter);
+app.use('/api/contrataciones/portal-analista', portalAnalistaRouter);
 
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',
@@ -401,6 +406,7 @@ async function start() {
   }
   app.listen(PORT, () => {
     console.log(`[api] Servidor SGC escuchando en http://localhost:${PORT}`);
+    console.log('[api] Invitaciones: validación cronograma v2 (consultas dentro del plazo de cotización)');
   });
 }
 

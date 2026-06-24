@@ -1,4 +1,4 @@
-// Lógica de negocio — Actos Preparatorios (Contrataciones)
+// Lógica de negocio — Coordinación CM (Contrataciones; código interno ACTOS_PREPARATORIOS)
 import { query } from '../db.js';
 import {
   registrarMovimiento,
@@ -21,6 +21,7 @@ import {
 } from './bandejaRequerimientoSql.js';
 
 export const COORDINADOR_ACTOS = 'Coordinador de Contratos Menores';
+export const SUBMODULO_COORDINACION_CM = 'Coordinación CM';
 export const CARGO_ANALISTA_ACTOS = 'Analista de Contratos Menores';
 
 const PERMISOS_JSON = `COALESCE(u.permisos, '{}'::jsonb)`;
@@ -33,7 +34,7 @@ export async function syncExpedientesActosPendientes() {
     UPDATE requerimientos SET
       estado = CASE WHEN estado = 'Aprobado Programación' THEN 'Programado' ELSE estado END,
       estado_actual = 'ACTOS_PREPARATORIOS',
-      sub_modulo_actual = 'Actos Preparatorios',
+      sub_modulo_actual = '${SUBMODULO_COORDINACION_CM}',
       responsable_actual = CASE
         WHEN responsable_actual IS NULL OR TRIM(responsable_actual) = '' OR responsable_actual ILIKE '%Programador%'
         THEN $1
@@ -99,7 +100,7 @@ export async function listUsuariosPerfilActos(perfil, submoduloCode = '') {
 }
 
 const SUBMODULO_LABELS = {
-  ACTOS_PREPARATORIOS: 'Actos Preparatorios',
+  ACTOS_PREPARATORIOS: SUBMODULO_COORDINACION_CM,
   INVITACIONES: 'Invitaciones',
   CCP: 'CCP',
   CUADRO_COMPARATIVO: 'Cuadro Comparativo',
@@ -235,7 +236,7 @@ function pushObservacion(payload, entry) {
 }
 
 function resolveEstadoMovimientoObservacion(destinoSubmodulo, destinoEtapa) {
-  if (!destinoSubmodulo && !destinoEtapa) return 'Observado — Actos Preparatorios';
+  if (!destinoSubmodulo && !destinoEtapa) return `Observado — ${SUBMODULO_COORDINACION_CM}`;
   return resolveEstadoFromDestino(destinoSubmodulo, destinoEtapa);
 }
 
@@ -243,7 +244,7 @@ export async function asignarAnalistaActos(requerimientoId, { analista, usuario,
   await syncExpedientesActosPendientes();
   const loaded = await loadReqPayload(requerimientoId);
   if (!loaded) throw new Error('Requerimiento no encontrado');
-  if (!expedienteEnActos(loaded.row)) throw new Error('El expediente no está en Actos Preparatorios');
+  if (!expedienteEnActos(loaded.row)) throw new Error(`El expediente no está en ${SUBMODULO_COORDINACION_CM}`);
 
   const code = String(submodulo_code || 'ACTOS_PREPARATORIOS').toUpperCase();
   const subLabel = submodulo_label || submoduloLabelFromCode(code);
@@ -254,7 +255,7 @@ export async function asignarAnalistaActos(requerimientoId, { analista, usuario,
       UPDATE requerimientos SET
         estado = CASE WHEN estado = 'Aprobado Programación' THEN 'Programado' ELSE estado END,
         estado_actual = 'ACTOS_PREPARATORIOS',
-        sub_modulo_actual = 'Actos Preparatorios',
+        sub_modulo_actual = '${SUBMODULO_COORDINACION_CM}',
         updated_at = NOW()
       WHERE id = $1
     `, [requerimientoId]);
@@ -305,7 +306,7 @@ export async function observarActos(requerimientoId, body) {
     motivo,
     gerente: usuario || COORDINADOR_ACTOS,
     origen: 'ACTOS PREPARATORIOS',
-    origen_submodulo: origen_submodulo || 'Actos Preparatorios',
+    origen_submodulo: origen_submodulo || SUBMODULO_COORDINACION_CM,
     destino_submodulo: destino_submodulo || '',
     destino_etapa: destino_etapa || '',
     destino_persona: destino_persona || '',
@@ -339,7 +340,7 @@ export async function derivarActos(requerimientoId, body) {
       motivo,
       gerente: usuario || COORDINADOR_ACTOS,
       origen: 'ACTOS PREPARATORIOS',
-      origen_submodulo: origen_submodulo || 'Actos Preparatorios',
+      origen_submodulo: origen_submodulo || SUBMODULO_COORDINACION_CM,
       destino_submodulo: destino_submodulo || '',
       destino_etapa: destino_etapa || '',
       destino_persona: destino_persona || '',
@@ -366,7 +367,7 @@ export async function aprobarActosInvitaciones(requerimientoId, { responsableDes
   const loaded = await loadReqPayload(requerimientoId);
   if (!loaded) throw new Error('Requerimiento no encontrado');
   if (!expedienteEnActos(loaded.row) && String(loaded.row.estado_actual || '').toUpperCase() !== 'ACTOS_PREPARATORIOS') {
-    throw new Error('El expediente no está en Actos Preparatorios');
+    throw new Error(`El expediente no está en ${SUBMODULO_COORDINACION_CM}`);
   }
 
   if (!Array.isArray(loaded.payload.historial_actos)) loaded.payload.historial_actos = [];
@@ -376,14 +377,20 @@ export async function aprobarActosInvitaciones(requerimientoId, { responsableDes
     responsable_destino: responsableDestino,
     fecha: new Date().toISOString(),
   });
+  if (!Array.isArray(loaded.payload.historial_invitaciones)) loaded.payload.historial_invitaciones = [];
+  loaded.payload.historial_invitaciones.push({
+    tipo: 'ingreso_invitaciones',
+    usuario: usuario || '',
+    fecha: new Date().toISOString(),
+  });
   await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
   return registrarMovimiento({
     requerimientoId,
     estadoNuevo: 'En Invitaciones',
-    usuario: usuario || 'Analista Actos Preparatorios',
+    usuario: usuario || CARGO_ANALISTA_ACTOS,
     accion: 'aprobado',
-    observacion: 'Aprobado en Actos Preparatorios — derivado a Invitaciones',
+    observacion: `Aprobado en ${SUBMODULO_COORDINACION_CM} — derivado a Invitaciones`,
     responsable: responsableDestino || ETAPAS.INVITACIONES.responsable,
   });
 }

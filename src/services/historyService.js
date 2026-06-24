@@ -1,4 +1,5 @@
 // Normalización del historial de movimientos (historialMovimientos)
+import { normalizeLegacyActosLabel } from '../utils/observacionDestino.js';
 
 function fmtDateTime(iso) {
   if (!iso) return '—';
@@ -16,11 +17,11 @@ export function normalizeMovimientos(raw) {
     fecha: m.fecha,
     accion: String(m.accion || '').toUpperCase(),
     modulo: m.modulo || 'SGC',
-    subModulo: m.subModulo || m.sub_modulo || '—',
+    subModulo: normalizeLegacyActosLabel(m.subModulo || m.sub_modulo || '—'),
     etapa: m.etapa || '',
     usuario: m.usuario || '—',
     responsable: m.responsable || m.usuario || '—',
-    observacion: m.observacion || '',
+    observacion: normalizeLegacyActosLabel(m.observacion || ''),
     fechaTexto: fmtDateTime(m.fecha),
   }));
 }

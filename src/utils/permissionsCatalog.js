@@ -16,10 +16,11 @@ export const MODULOS = [
     submodulos: [
       { id: 'DEC', label: 'DEC', route: 'dec/dec' },
       { id: 'PROGRAMACION', label: 'Programación', route: 'dec/programacion' },
-      { id: 'ACTOS_PREPARATORIOS', label: 'Actos Preparatorios', route: 'dec/actos' },
+      { id: 'ACTOS_PREPARATORIOS', label: 'Coordinación CM', route: 'dec/actos' },
       { id: 'INVITACIONES', label: 'Invitaciones', route: 'dec/invitaciones' },
-      { id: 'CONSULTAS', label: 'Consultas', route: 'dec/consultas' },
-      { id: 'COTIZACIONES', label: 'Cotizaciones', route: 'dec/cotizaciones' },
+      { id: 'CONSULTAS_OBSERVACIONES', label: 'Consultas y Observaciones', route: 'contrataciones/consultas-observaciones' },
+      { id: 'RECEPCION_COTIZACIONES', label: 'Recepción de Cotizaciones', route: 'contrataciones/recepcion-cotizaciones' },
+      { id: 'VALIDACIONES', label: 'Validaciones', route: 'contrataciones/validaciones' },
       { id: 'CUADRO_COMPARATIVO', label: 'Cuadro Comparativo', route: 'dec/cuadro' },
       { id: 'CCP', label: 'CCP', route: 'dec/ccp' },
     ],
@@ -58,6 +59,35 @@ export const MODULOS = [
 
 export const ROUTE_TO_SUBMODULO = {};
 MODULOS.forEach((m) => m.submodulos.forEach((s) => { if (s.route) ROUTE_TO_SUBMODULO[s.route] = s.id; }));
+ROUTE_TO_SUBMODULO['dec/consultas'] = 'CONSULTAS_OBSERVACIONES';
+ROUTE_TO_SUBMODULO['dec/cotizaciones'] = 'RECEPCION_COTIZACIONES';
+
+/** Rutas legacy → ruta canónica (compatibilidad). */
+export const LEGACY_ROUTE_REDIRECTS = {
+  'dec/consultas': 'contrataciones/consultas-observaciones',
+  'dec/cotizaciones': 'contrataciones/recepcion-cotizaciones',
+};
+
+export function resolveCanonicalRoute(route) {
+  return LEGACY_ROUTE_REDIRECTS[route] || route;
+}
+
+/** IDs legacy en permisos guardados → ID canónico actual. */
+export const SUBMODULO_ID_ALIASES = {
+  CONSULTAS: 'CONSULTAS_OBSERVACIONES',
+  COTIZACIONES: 'RECEPCION_COTIZACIONES',
+};
+
+/** Actividades asignables en los nuevos submódulos de Contrataciones. */
+export const CONTRATACIONES_NUEVOS_SUBMODULOS = [
+  'CONSULTAS_OBSERVACIONES',
+  'RECEPCION_COTIZACIONES',
+  'VALIDACIONES',
+];
+
+export const CONTRATACIONES_NUEVOS_ACTIVIDADES = [
+  'VER', 'CREAR', 'EDITAR', 'ELIMINAR', 'DERIVAR', 'APROBAR', 'OBSERVAR',
+];
 
 export function emptyPermisos() {
   return { modulos: [], submodulos: [], actividades: [], actividadesPorSubmodulo: {} };
@@ -124,8 +154,14 @@ export function normalizePermisos(raw, rol, options = {}) {
   if (raw.actividadesPorSubmodulo && typeof raw.actividadesPorSubmodulo === 'object') {
     base.actividadesPorSubmodulo = {};
     Object.entries(raw.actividadesPorSubmodulo).forEach(([subId, acts]) => {
-      if (Array.isArray(acts)) base.actividadesPorSubmodulo[String(subId)] = acts.map(String);
+      const canonical = SUBMODULO_ID_ALIASES[subId] || subId;
+      const prev = base.actividadesPorSubmodulo[canonical] || [];
+      const merged = [...new Set([...prev, ...(Array.isArray(acts) ? acts.map(String) : [])])];
+      base.actividadesPorSubmodulo[String(canonical)] = merged;
     });
+  }
+  if (Array.isArray(base.submodulos)) {
+    base.submodulos = [...new Set(base.submodulos.map((id) => SUBMODULO_ID_ALIASES[id] || id))];
   }
   syncFlatActividades(base);
   if (!options.explicit && !base.modulos.length && !base.submodulos.length && rol) return permisosFromRol(rol);

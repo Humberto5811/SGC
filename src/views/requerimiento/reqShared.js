@@ -82,7 +82,7 @@ export function historialHtml(observaciones) {
     } else if (origen.includes('PROGRAM')) {
       colorClass = 'text-warning';
       bgClass = 'bg-warning-subtle border-warning';
-    } else if (origen.includes('ACTOS') || String(o.origen_submodulo || '').includes('Actos')) {
+    } else if (origen.includes('ACTOS') || origen.includes('COORDIN') || /coordinaci/i.test(String(o.origen_submodulo || '')) || /actos prep/i.test(String(o.origen_submodulo || ''))) {
       colorClass = 'text-info';
       bgClass = 'bg-info-subtle border-info';
     } else if (origen.includes('INVITAC')) {

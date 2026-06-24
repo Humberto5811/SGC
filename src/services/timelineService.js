@@ -1,5 +1,6 @@
 // Renderizado del timeline vertical (modal y futuro dashboard)
 import { fmtDateTime, diasLabel, calcDiasEnEstado, esc } from '../utils/trazabilidad.js';
+import { normalizeLegacyActosLabel } from '../utils/observacionDestino.js';
 import { movimientosToTimelineEvents } from './historyService.js';
 
 function accionDotClass(accion) {
@@ -31,7 +32,7 @@ export function movimientosTimelineHtml(movimientos, escFn = esc) {
           <div class="small mt-1"><i class="bi bi-person"></i> ${escFn(m.usuario)}</div>
           <div class="small"><i class="bi bi-clock"></i> ${escFn(fmtDateTime(m.fecha))}</div>
           ${isCurrent ? '<div class="small text-success fw-semibold">Etapa vigente</div>' : ''}
-          ${m.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(m.observacion)}</div>` : ''}
+          ${m.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(m.observacion))}</div>` : ''}
         </div>
       </div>
       ${idx < list.length - 1 ? '<div class="traza-connector">↓</div>' : ''}`;
@@ -45,7 +46,7 @@ export function timelineHtml(historial, escFn = esc) {
   }
   const list = historial.slice().reverse();
   return list.map((h, idx) => {
-    const label = h.estadoTexto || h.estado || '—';
+    const label = normalizeLegacyActosLabel(h.estadoTexto || h.estado || '—');
     const isCurrent = h.esActual || idx === 0;
     const duracion = h.dias != null ? h.dias : calcDiasEnEstado(h.fechaIngreso);
     const tipo = h.tipoEvento || 'etapa';
@@ -60,7 +61,7 @@ export function timelineHtml(historial, escFn = esc) {
           <div class="small text-muted mt-1">${escFn(h.usuario || '—')}</div>
           <div class="small">${escFn(fmtDateTime(h.fechaIngreso))}</div>
           ${isCurrent ? `<div class="small text-success">Etapa vigente · ${escFn(diasLabel(duracion))}</div>` : ''}
-          ${h.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(h.observacion)}</div>` : ''}
+          ${h.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(h.observacion))}</div>` : ''}
         </div>
       </div>
       ${idx < list.length - 1 ? '<div class="traza-connector">↓</div>' : ''}`;
