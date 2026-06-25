@@ -56,6 +56,24 @@ function readFileAsMeta(file) {
   return { nombre: file.name, tipo: file.type, tamano: file.size, fecha_registro: new Date().toISOString() };
 }
 
+function readFileWithContent(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      resolve({
+        nombre: file.name,
+        mime_type: file.type || '',
+        tamano: file.size,
+        fecha_registro: new Date().toISOString(),
+        contenido_base64: dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl,
+      });
+    };
+    reader.onerror = () => reject(reader.error || new Error('No se pudo leer el archivo'));
+    reader.readAsDataURL(file);
+  });
+}
+
 const STEP_ORDER = ['general', 'docs', 'items', 'invitaciones'];
 const STEP_LABELS = {
   general: 'Datos generales',
@@ -389,13 +407,19 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     });
   }
 
-  function addDocToResumen(docName, archivo = '', fecha = new Date().toISOString()) {
+  function addDocToResumen(docName, archivo = '', fecha = new Date().toISOString(), extra = {}) {
     if (state.docsResumen.some((d) => d.documento === docName)) {
       const row = state.docsResumen.find((d) => d.documento === docName);
       if (archivo) row.archivo = archivo;
       if (fecha) row.fecha_registro = fecha;
+      if (extra.contenido_base64) row.contenido_base64 = extra.contenido_base64;
+      if (extra.mime_type) row.mime_type = extra.mime_type;
     } else {
-      state.docsResumen.push({ documento: docName, archivo, fecha_registro: fecha });
+      state.docsResumen.push({
+        documento: docName, archivo, fecha_registro: fecha,
+        contenido_base64: extra.contenido_base64 || null,
+        mime_type: extra.mime_type || null,
+      });
     }
     renderDocsResumen();
   }
@@ -403,11 +427,15 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
   function attachDocFile(docName) {
     const input = document.createElement('input');
     input.type = 'file';
-    input.onchange = () => {
+    input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const meta = readFileAsMeta(file);
-      addDocToResumen(docName, meta.nombre, meta.fecha_registro);
+      try {
+        const meta = await readFileWithContent(file);
+        addDocToResumen(docName, meta.nombre, meta.fecha_registro, meta);
+      } catch (err) {
+        alert(err.message || 'No se pudo adjuntar el archivo');
+      }
     };
     input.click();
   }

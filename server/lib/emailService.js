@@ -1,16 +1,20 @@
 // Servicio de correo — notificaciones Portal de Proveedores (SMTP configurable)
 import dotenv from 'dotenv';
+import { buildInvitacionUrl, PORTAL_PUBLIC_BASE } from './proveedorPortal.js';
 
 dotenv.config();
 
 const SMTP_ENABLED = String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true';
 
 export function getPortalBaseUrl() {
-  return String(process.env.PORTAL_BASE_URL || 'http://localhost:5173/#/portal-proveedores').replace(/\/$/, '');
+  return String(process.env.PORTAL_BASE_URL || 'http://localhost:5173/#/proveedor/login').replace(/\/$/, '');
 }
 
-export function buildInvitacionEmailContent({ proveedor, solicitud, credenciales }) {
-  const portalUrl = getPortalBaseUrl();
+export { PORTAL_PUBLIC_BASE, buildInvitacionUrl };
+
+export function buildInvitacionEmailContent({ proveedor, solicitud, credenciales, urlInvitacion, token }) {
+  const portalLoginUrl = getPortalBaseUrl();
+  const urlToken = urlInvitacion || (token ? buildInvitacionUrl(token) : portalLoginUrl);
   return {
     subject: `[SGC] Invitación a cotizar — ${solicitud.codigo || ''}`,
     text: [
@@ -21,17 +25,24 @@ export function buildInvitacionEmailContent({ proveedor, solicitud, credenciales
       `Consultas: ${formatRange(solicitud.consultas_inicio, solicitud.consultas_fin)}`,
       `Cotizaciones: ${formatRange(solicitud.cotizaciones_inicio, solicitud.cotizaciones_fin)}`,
       '',
-      'Acceda al Portal de Proveedores SGC (no responda este correo con documentos):',
-      portalUrl,
+      'Acceso directo a la invitación (preparado para futuro envío SMTP):',
+      urlToken,
       '',
-      `Usuario: ${credenciales.usuario}`,
+      'Portal de Proveedores:',
+      portalLoginUrl,
+      '',
+      `Usuario portal: ${credenciales.usuario}`,
       `Contraseña temporal: ${credenciales.clave}`,
       '',
       'Debe cambiar su contraseña en el primer ingreso.',
+      '',
+      '[SMTP no habilitado — correo simulado en consola del servidor]',
     ].join('\n'),
     html: `<p>Convocatoria <strong>${solicitud.codigo || ''}</strong></p>
-<p><a href="${portalUrl}">${portalUrl}</a></p>
+<p>Enlace de invitación: <a href="${urlToken}">${urlToken}</a></p>
+<p>Portal: <a href="${portalLoginUrl}">${portalLoginUrl}</a></p>
 <p>Usuario: <strong>${credenciales.usuario}</strong><br>Clave temporal: <strong>${credenciales.clave}</strong></p>`,
+    meta: { urlInvitacion: urlToken, token, smtpReady: true, smtpSent: false },
   };
 }
 
@@ -50,7 +61,6 @@ export async function sendMail({ to, subject, text, html }) {
     return { success: true, simulated: true, messageId: `sim-${Date.now()}` };
   }
 
-  // Integración SMTP real (nodemailer) pendiente de credenciales en .env
   console.warn('[email] SMTP_ENABLED=true pero transporte no configurado; simulando envío.');
   console.log('[email:simulado]', JSON.stringify(payload, null, 2));
   return { success: true, simulated: true, messageId: `sim-${Date.now()}` };
@@ -59,7 +69,8 @@ export async function sendMail({ to, subject, text, html }) {
 export async function enviarInvitacionProveedorEmail(opts) {
   const content = buildInvitacionEmailContent(opts);
   const correos = opts.correos || opts.proveedor?.emails || [];
-  return sendMail({ to: correos, ...content });
+  const result = await sendMail({ to: correos, ...content });
+  return { ...result, ...content.meta };
 }
 
 export async function enviarNotificacionAmpliacionPlazo({ solicitud, proveedores, motivo, nuevaFecha }) {

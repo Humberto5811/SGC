@@ -1,7 +1,8 @@
-// Portal de Proveedores — autenticación e interacción
+// Portal de Proveedores — autenticación e interacción (separado del SGC interno)
 import bcrypt from 'bcrypt';
 import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
+import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 
 function clientIp(req) {
   return String(req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '').split(',')[0].trim();
@@ -11,14 +12,7 @@ export async function portalLogin(ruc, password, req) {
   const rucNorm = String(ruc || '').replace(/\D/g, '').slice(0, 11);
   if (!rucNorm || !password) throw new Error('RUC y contraseña requeridos');
 
-  const { rows } = await query(`
-    SELECT p.*, pa.password_hash, pa.debe_cambiar_password, pa.clave_temporal_expira
-    FROM proveedores p
-    JOIN proveedor_acceso pa ON pa.proveedor_id = p.id
-    WHERE p.ruc = $1 AND p.activo = TRUE
-  `, [rucNorm]);
-
-  const row = rows[0];
+  const row = await getPortalAccountByRuc(rucNorm);
   if (!row?.password_hash) throw new Error('Credenciales inválidas');
 
   const ok = await bcrypt.compare(password, row.password_hash);
@@ -26,12 +20,15 @@ export async function portalLogin(ruc, password, req) {
 
   const ip = clientIp(req);
   await query(`
+    UPDATE proveedor_portal SET updated_at = NOW() WHERE proveedor_id = $1
+  `, [row.proveedor_id]);
+  await query(`
     UPDATE proveedor_acceso SET ultimo_acceso = NOW(), ultimo_ip = $2, updated_at = NOW()
     WHERE proveedor_id = $1
-  `, [row.id, ip]);
+  `, [row.proveedor_id, ip]);
 
   await registrarTrazaPortal({
-    proveedor_id: row.id,
+    proveedor_id: row.proveedor_id,
     evento: 'PORTAL_ACCESO',
     detalle: `Ingreso portal RUC ${rucNorm}`,
     usuario: rucNorm,
@@ -39,18 +36,22 @@ export async function portalLogin(ruc, password, req) {
   });
 
   return {
-    id: row.id,
+    id: row.proveedor_id,
+    portal_id: row.id,
     ruc: row.ruc,
     razon_social: row.razon_social,
     telefono: row.telefono,
+    correo: row.correo,
     emails: row.emails,
-    debeCambiarPassword: row.debe_cambiar_password !== false,
+    usuarioPortal: row.usuario_portal,
+    debeCambiarPassword: row.primer_ingreso !== false,
+    primerIngreso: row.primer_ingreso !== false,
   };
 }
 
 export async function portalChangePassword(proveedorId, { actual, nueva }) {
   if (!nueva || String(nueva).length < 6) throw new Error('La nueva contraseña debe tener al menos 6 caracteres');
-  const { rows } = await query('SELECT * FROM proveedor_acceso WHERE proveedor_id = $1', [proveedorId]);
+  const { rows } = await query('SELECT * FROM proveedor_portal WHERE proveedor_id = $1', [proveedorId]);
   if (!rows.length) throw new Error('Acceso no encontrado');
   const acc = rows[0];
   if (acc.password_hash) {
@@ -58,12 +59,28 @@ export async function portalChangePassword(proveedorId, { actual, nueva }) {
     if (!ok) throw new Error('Contraseña actual incorrecta');
   }
   const hash = await bcrypt.hash(nueva, 10);
+  await marcarPasswordCambiada(proveedorId, hash);
   await query(`
     UPDATE proveedor_acceso SET password_hash = $2, debe_cambiar_password = FALSE,
       clave_temporal = NULL, clave_temporal_expira = NULL, updated_at = NOW()
     WHERE proveedor_id = $1
   `, [proveedorId, hash]);
   return { success: true };
+}
+
+export async function resolverInvitacionToken(token) {
+  const inv = await getInvitacionByToken(token);
+  if (!inv) throw new Error('Enlace de invitación inválido o expirado');
+  return {
+    token,
+    ruc: inv.ruc,
+    razon_social: inv.razon_social,
+    solicitud_codigo: inv.solicitud_codigo,
+    solicitud_id: inv.solicitud_id,
+    estado_invitacion: inv.estado_invitacion || inv.estado,
+    url_invitacion: inv.url_invitacion,
+    login_url: '#/proveedor/login',
+  };
 }
 
 async function getProveedorFromHeader(proveedorId) {
@@ -92,7 +109,8 @@ export async function listMisInvitaciones(proveedorId) {
   const { rows } = await query(`
     SELECT ip.*, sc.codigo, sc.objeto, sc.denominacion, sc.estado AS solicitud_estado,
       sc.consultas_inicio, sc.consultas_fin, sc.cotizaciones_inicio, sc.cotizaciones_fin,
-      sc.docs_solicitados, sc.requisitos_tecnicos, sc.lugar_entrega
+      sc.docs_solicitados, sc.requisitos_tecnicos, sc.lugar_entrega,
+      ip.url_invitacion, ip.token_acceso, ip.estado_invitacion, ip.fecha_ultimo_envio
     FROM invitacion_proveedores ip
     JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
     WHERE ip.proveedor_id = $1 AND ip.estado IN ('ENVIADA', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
@@ -105,14 +123,14 @@ export async function listMisInvitaciones(proveedorId) {
 }
 
 export async function getDocumentosConvocatoria(proveedorId, solicitudId) {
-  const { rows } = await query(`
-    SELECT sc.docs_convocatoria, sc.codigo, sc.objeto
-    FROM invitacion_proveedores ip
-    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
-    WHERE ip.proveedor_id = $1 AND ip.solicitud_id = $2
-  `, [proveedorId, solicitudId]);
-  if (!rows.length) throw new Error('Sin acceso a esta convocatoria');
-  return rows[0];
+  const { getSolicitudDetalleProveedor } = await import('./portalDocumentos.js');
+  const det = await getSolicitudDetalleProveedor(proveedorId, solicitudId);
+  return {
+    codigo: det.solicitud.codigo,
+    objeto: det.solicitud.objeto,
+    docs_convocatoria: det.solicitud.docs_solicitados,
+    documentos: det.documentos,
+  };
 }
 
 export async function registrarConsulta(proveedorId, body, req) {
@@ -238,6 +256,83 @@ export async function presentarCotizacion(proveedorId, body, req) {
   });
 
   return rows[0];
+}
+
+/** Guarda borrador sin presentar cotización final */
+export async function guardarBorradorCotizacion(proveedorId, body, req) {
+  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos } = body || {};
+  if (!solicitud_id) throw new Error('Solicitud requerida');
+
+  const { rows: inv } = await query(`
+    SELECT ip.*, sc.cotizaciones_fin, sc.estado AS solicitud_estado
+    FROM invitacion_proveedores ip
+    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    WHERE ip.proveedor_id = $1 AND ip.solicitud_id = $2
+  `, [proveedorId, solicitud_id]);
+  if (!inv.length) throw new Error('Sin acceso');
+  if (convocatoriaCerrada(inv[0])) throw new Error('Convocatoria cerrada');
+
+  const { rows } = await query(`
+    INSERT INTO cotizaciones_proveedor (
+      solicitud_id, proveedor_id, requerimiento_id, estado, propuesta_tecnica, propuesta_economica,
+      anexos, certificados
+    ) VALUES ($1, $2, $3, 'BORRADOR', $4::jsonb, $5::jsonb, $6::jsonb, '[]'::jsonb)
+    ON CONFLICT (solicitud_id, proveedor_id) DO UPDATE SET
+      propuesta_tecnica = EXCLUDED.propuesta_tecnica,
+      propuesta_economica = EXCLUDED.propuesta_economica,
+      anexos = EXCLUDED.anexos,
+      updated_at = NOW()
+    RETURNING *
+  `, [
+    solicitud_id, proveedorId, inv[0].requerimiento_id,
+    JSON.stringify(propuesta_tecnica || {}), JSON.stringify(propuesta_economica || {}),
+    JSON.stringify(anexos || []),
+  ]);
+
+  return rows[0];
+}
+
+export async function listMisCotizaciones(proveedorId) {
+  const { rows } = await query(`
+    SELECT cot.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      ip.estado AS estado_invitacion
+    FROM cotizaciones_proveedor cot
+    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    LEFT JOIN invitacion_proveedores ip ON ip.solicitud_id = cot.solicitud_id AND ip.proveedor_id = cot.proveedor_id
+    WHERE cot.proveedor_id = $1
+    ORDER BY cot.fecha_presentacion DESC NULLS LAST, cot.created_at DESC
+  `, [proveedorId]);
+  return rows;
+}
+
+export async function getEstadoParticipacion(proveedorId) {
+  const { rows: invitaciones } = await query(`
+    SELECT ip.estado, ip.estado_invitacion, ip.fecha_envio, ip.fecha_ultimo_envio,
+      sc.id AS solicitud_id, sc.codigo, sc.denominacion, sc.cotizaciones_fin,
+      cot.estado AS cotizacion_estado, cot.validacion_estado, cot.fecha_presentacion,
+      cot.created_at AS cotizacion_created_at
+    FROM invitacion_proveedores ip
+    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    LEFT JOIN cotizaciones_proveedor cot ON cot.solicitud_id = sc.id AND cot.proveedor_id = ip.proveedor_id
+    WHERE ip.proveedor_id = $1
+    ORDER BY ip.updated_at DESC
+  `, [proveedorId]);
+
+  const { rows: stats } = await query(`
+    SELECT
+      COUNT(*) FILTER (WHERE ip.estado IN ('ENVIADA','ABIERTA','PARTICIPANDO'))::int AS invitaciones_activas,
+      COUNT(*)::int AS total_invitaciones,
+      (SELECT COUNT(*)::int FROM consultas_proveedor c WHERE c.proveedor_id = $1) AS consultas_realizadas,
+      (SELECT COUNT(*)::int FROM consultas_proveedor c WHERE c.proveedor_id = $1 AND c.estado = 'RESPONDIDA') AS consultas_respondidas,
+      (SELECT COUNT(*)::int FROM cotizaciones_proveedor cot WHERE cot.proveedor_id = $1) AS cotizaciones_enviadas
+    FROM invitacion_proveedores ip
+    WHERE ip.proveedor_id = $1
+  `, [proveedorId]);
+
+  return {
+    resumen: stats[0] || {},
+    invitaciones,
+  };
 }
 
 // --- Bandejas analista CM ---

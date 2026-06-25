@@ -1,4 +1,4 @@
-﻿import { initRouter, getCurrentRoute } from './router.js';
+﻿import { initRouter, getCurrentRoute, isProveedorRoute } from './router.js';
 import { storageService } from './services/storageService.js';
 import { authService } from './services/authService.js';
 import { permissionsService } from './services/permissionsService.js';
@@ -13,8 +13,73 @@ import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } fr
 
 const appEl = document.getElementById('app');
 
+async function renderProveedorApp(route) {
+  let content = '';
+  const tokenMatch = route.match(/^proveedor\/invitacion\/(.+)$/);
+  try {
+    if (tokenMatch) {
+      const mod = await import('./views/proveedor/loginProveedorView.js');
+      content = mod.renderInvitacionTokenView(tokenMatch[1]);
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initInvitacionTokenView(tokenMatch[1]), 50);
+      return;
+    }
+    if (route === 'proveedor/login') {
+      const mod = await import('./views/proveedor/loginProveedorView.js');
+      content = mod.renderLoginProveedorView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initLoginProveedorView(), 50);
+      return;
+    }
+    if (route === 'proveedor/cambio-password') {
+      const mod = await import('./views/proveedor/cambioPasswordProveedorView.js');
+      content = mod.renderCambioPasswordProveedorView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initCambioPasswordProveedorView(), 50);
+      return;
+    }
+    if (route === 'proveedor/mis-invitaciones') {
+      const mod = await import('./views/proveedor/misInvitacionesView.js');
+      content = mod.renderMisInvitacionesView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initMisInvitacionesView(), 50);
+      return;
+    }
+    if (route === 'proveedor/mis-consultas') {
+      const mod = await import('./views/proveedor/misConsultasView.js');
+      content = mod.renderMisConsultasView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initMisConsultasView(), 50);
+      return;
+    }
+    if (route === 'proveedor/mis-cotizaciones') {
+      const mod = await import('./views/proveedor/misCotizacionesView.js');
+      content = mod.renderMisCotizacionesView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initMisCotizacionesView(), 50);
+      return;
+    }
+    if (route === 'proveedor/estado-participacion') {
+      const mod = await import('./views/proveedor/estadoParticipacionView.js');
+      content = mod.renderEstadoParticipacionView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initEstadoParticipacionView(), 50);
+      return;
+    }
+    window.location.hash = '#/proveedor/login';
+  } catch (e) {
+    appEl.innerHTML = `<div class="alert alert-danger m-4">${e.message}</div>`;
+  }
+}
+
 async function renderApp() {
   const currentRoute = getCurrentRoute();
+
+  if (isProveedorRoute(currentRoute)) {
+    await renderProveedorApp(currentRoute);
+    return;
+  }
+
   const currentUser = authService.getCurrentUser();
   const isLoginRoute = currentRoute === 'login';
   const isCambioPasswordRoute = currentRoute === 'cambio-password';

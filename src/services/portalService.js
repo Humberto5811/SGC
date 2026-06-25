@@ -41,11 +41,48 @@ export const portalService = {
   async changePassword(actual, nueva) {
     return portalRequest('/cambiar-password', { method: 'POST', body: JSON.stringify({ actual, nueva }) });
   },
+  async getInvitacionByToken(token) {
+    return portalRequest(`/invitacion/${encodeURIComponent(token)}`);
+  },
   async listMisInvitaciones() {
     return portalRequest('/mis-invitaciones');
   },
   async getDocumentos(solicitudId) {
     return portalRequest(`/solicitud/${solicitudId}/documentos`);
+  },
+  async getSolicitudDetalle(solicitudId) {
+    return portalRequest(`/solicitud/${solicitudId}/detalle`);
+  },
+  async getCotizacionWorkspace(solicitudId) {
+    return portalRequest(`/solicitud/${solicitudId}/cotizacion-workspace`);
+  },
+  async fetchDocumentoBlob(solicitudId, docRef, accion = 'ver') {
+    const res = await fetch(
+      `${BASE}/solicitud/${solicitudId}/documento/${encodeURIComponent(docRef)}/${accion}`,
+      { headers: { ...portalHeaders() } },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      try {
+        const err = JSON.parse(text);
+        throw new Error(err.error || `Error ${res.status}`);
+      } catch (e) {
+        if (e.message && !e.message.startsWith('Unexpected')) throw e;
+        throw new Error(text || `Error ${res.status}`);
+      }
+    }
+    return res.blob();
+  },
+  async downloadDocumento(solicitudId, docRef, filename) {
+    const blob = await this.fetchDocumentoBlob(solicitudId, docRef, 'descargar');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'documento.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   },
   async listAbsoluciones(solicitudId) {
     return portalRequest(`/solicitud/${solicitudId}/absoluciones`);
@@ -53,6 +90,12 @@ export const portalService = {
   async listConsultas(solicitudId) {
     const q = solicitudId ? `?solicitud_id=${solicitudId}` : '';
     return portalRequest(`/consultas${q}`);
+  },
+  async listMisCotizaciones() {
+    return portalRequest('/cotizaciones');
+  },
+  async getEstadoParticipacion() {
+    return portalRequest('/estado-participacion');
   },
   async crearConsulta(body) {
     return portalRequest('/consultas', { method: 'POST', body: JSON.stringify(body) });
@@ -62,6 +105,9 @@ export const portalService = {
   },
   async presentarCotizacion(body) {
     return portalRequest('/cotizaciones', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async guardarBorradorCotizacion(body) {
+    return portalRequest('/cotizaciones/borrador', { method: 'POST', body: JSON.stringify(body) });
   },
 };
 

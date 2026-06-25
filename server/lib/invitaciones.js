@@ -8,6 +8,7 @@ import {
 } from './trazabilidad.js';
 import { enviarInvitacionProveedorEmail } from './emailService.js';
 import { listarBandejaInvitaciones, SUBMODULO_INVITACIONES } from './invitacionesBandeja.js';
+import { prepararInvitacionPortal } from './proveedorPortal.js';
 
 export { listarBandejaInvitaciones, SUBMODULO_INVITACIONES };
 
@@ -323,8 +324,8 @@ export async function upsertProveedor(data = {}) {
   return rows[0];
 }
 
-function generarClaveTemporal() {
-  return crypto.randomBytes(4).toString('hex').toUpperCase();
+function generarClaveTemporal(ruc) {
+  return String(ruc || '').replace(/\D/g, '').slice(0, 11);
 }
 
 export async function agregarProveedoresInvitacion(requerimientoId, proveedores = [], solicitudId = null) {
@@ -377,20 +378,16 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
 
   const enviados = [];
   for (const inv of invRows) {
-    const clave = generarClaveTemporal();
-    const hash = await bcrypt.hash(clave, 10);
+    const clave = generarClaveTemporal(inv.ruc);
     const correos = (Array.isArray(inv.correos) && inv.correos.length) ? inv.correos : inv.proveedor_emails || [];
 
-    await query(`
-      INSERT INTO proveedor_acceso (proveedor_id, password_hash, debe_cambiar_password, clave_temporal, clave_temporal_expira)
-      VALUES ($1, $2, TRUE, $3, NOW() + INTERVAL '30 days')
-      ON CONFLICT (proveedor_id) DO UPDATE SET
-        password_hash = EXCLUDED.password_hash,
-        debe_cambiar_password = TRUE,
-        clave_temporal = EXCLUDED.clave_temporal,
-        clave_temporal_expira = EXCLUDED.clave_temporal_expira,
-        updated_at = NOW()
-    `, [inv.proveedor_id, hash, clave]);
+    const portalPrep = await prepararInvitacionPortal(inv.id, {
+      id: inv.proveedor_id,
+      ruc: inv.ruc,
+      razon_social: inv.razon_social,
+      telefono: inv.telefono,
+      emails: correos,
+    });
 
     await query(`
       UPDATE invitacion_proveedores SET
@@ -407,7 +404,15 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       inv.ruc,
       clave,
       solicitud?.id || null,
-      JSON.stringify([{ tipo: 'envio', fecha: new Date().toISOString(), usuario, correos }]),
+      JSON.stringify([{
+        tipo: 'envio',
+        fecha: new Date().toISOString(),
+        usuario,
+        correos,
+        token: portalPrep.token,
+        url: portalPrep.url,
+        smtp_pendiente: true,
+      }]),
     ]);
 
     await enviarInvitacionProveedorEmail({
@@ -415,6 +420,8 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       solicitud: solicitud || { codigo: '', objeto: '' },
       correos,
       credenciales: { usuario: inv.ruc, clave },
+      urlInvitacion: portalPrep.url,
+      token: portalPrep.token,
     });
 
     await registrarTrazaPortal({
@@ -427,7 +434,7 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       ip,
     });
 
-    enviados.push({ ruc: inv.ruc, correos });
+    enviados.push({ ruc: inv.ruc, correos, url: portalPrep.url, token: portalPrep.token });
   }
 
   if (solicitud && solicitud.estado === 'BORRADOR') {

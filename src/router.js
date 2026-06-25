@@ -124,10 +124,23 @@ const routes = {
   'mantenimiento/entidad': { render: renderEntidadView, init: initEntidadView }
 };
 
+function getProveedorSessionLocal() {
+  try { return JSON.parse(localStorage.getItem('portalProveedor') || 'null'); } catch (_) { return null; }
+}
+
+function isProveedorRoute(route) {
+  return String(route || '').startsWith('proveedor/');
+}
+
+function isProveedorPublicRoute(route) {
+  return route === 'proveedor/login' || route.startsWith('proveedor/invitacion/');
+}
+
 function parseHash() {
   const hash = location.hash.replace(/^#\/?/, '');
-  // Si el hash está vacío, ir a dashboard (si hay usuario) o login
   if (!hash) {
+    const prov = getProveedorSessionLocal();
+    if (prov?.id) return 'proveedor/mis-invitaciones';
     const currentUser = authService.getCurrentUser();
     if (!currentUser) return 'login';
     if (currentUser.debeCambiarPassword) return 'cambio-password';
@@ -141,6 +154,15 @@ function getCurrentRoute() {
 }
 
 function canAccessRoute(route, action = 'VER') {
+  if (isProveedorRoute(route)) {
+    if (isProveedorPublicRoute(route)) return true;
+    const prov = getProveedorSessionLocal();
+    if (!prov?.id) return route === 'proveedor/login';
+    if ((prov.debeCambiarPassword || prov.primerIngreso) && route !== 'proveedor/cambio-password') {
+      return route === 'proveedor/cambio-password';
+    }
+    return route.startsWith('proveedor/');
+  }
   const currentUser = authService.getCurrentUser();
   if (route === 'portal-proveedores') return true;
   if (!currentUser) {
@@ -157,25 +179,37 @@ function canAccessRoute(route, action = 'VER') {
   return userService.hasPermission(currentUser, route, action);
 }
 
+function redirectOnDenied(route) {
+  if (isProveedorRoute(route)) {
+    const prov = getProveedorSessionLocal();
+    if (prov?.debeCambiarPassword || prov?.primerIngreso) {
+      location.hash = '#/proveedor/cambio-password';
+    } else {
+      location.hash = '#/proveedor/login';
+    }
+    return;
+  }
+  const currentUser = authService.getCurrentUser();
+  if (currentUser?.debeCambiarPassword) {
+    location.hash = '#/cambio-password';
+    return;
+  }
+  sessionStorage.setItem('sgc_access_denied', 'No tiene permisos para acceder a este módulo.');
+  location.hash = currentUser ? '#/dashboard' : '#/login';
+}
+
 function initRouter(onRouteChange) {
-  // Manejar cambio de hash
   window.addEventListener('hashchange', () => {
     const route = getCurrentRoute();
-    
-    // Verificar acceso
-  if (!canAccessRoute(route)) {
-      const currentUser = authService.getCurrentUser();
-      if (currentUser?.debeCambiarPassword) {
-        location.hash = '#/cambio-password';
-        return;
-      }
-      sessionStorage.setItem('sgc_access_denied', 'No tiene permisos para acceder a este módulo.');
-      location.hash = currentUser ? '#/dashboard' : '#/login';
+    if (!canAccessRoute(route)) {
+      redirectOnDenied(route);
       return;
     }
     
     const routeConfig = routes[route];
     if (routeConfig) {
+      onRouteChange();
+    } else if (isProveedorRoute(route)) {
       onRouteChange();
     } else {
       // Ruta no encontrada, ir a dashboard
@@ -195,16 +229,12 @@ function initRouter(onRouteChange) {
   // Verificar acceso a la ruta inicial
   const route = getCurrentRoute();
   if (!canAccessRoute(route)) {
-    const currentUser = authService.getCurrentUser();
-    if (currentUser?.debeCambiarPassword) {
-      location.hash = '#/cambio-password';
-    } else {
-      sessionStorage.setItem('sgc_access_denied', 'No tiene permisos para acceder a este módulo.');
-      location.hash = currentUser ? '#/dashboard' : '#/login';
-    }
+    redirectOnDenied(route);
   } else {
     const routeConfig = routes[route];
     if (routeConfig) {
+      onRouteChange();
+    } else if (isProveedorRoute(route)) {
       onRouteChange();
     } else {
       const currentUser = authService.getCurrentUser();
@@ -219,4 +249,4 @@ function getRouteConfig(route) {
 }
 
 // Exportar funciones
-export { initRouter, getCurrentRoute, canAccessRoute, routes, getRouteConfig };
+export { initRouter, getCurrentRoute, canAccessRoute, routes, getRouteConfig, isProveedorRoute, isProveedorPublicRoute };
