@@ -14,9 +14,11 @@ import { renderFormatoLicitacionesView, initFormatoLicitacionesView } from './gl
 import { renderFormatoConcursoView, initFormatoConcursoView } from './glosasRequerimientos/formatoConcursoView.js';
 import { renderLogotiposView, initLogotiposView } from './institucional/logotiposView.js';
 import { renderEntidadView, initEntidadView } from './institucional/entidadView.js';
+import { renderProveedoresMaestroView, initProveedoresMaestroView } from './registroDatos/proveedoresMaestroView.js';
 
 const subRoutes = {
   'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
+  'mantenimiento/proveedores': { render: renderProveedoresMaestroView, init: initProveedoresMaestroView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
   'mantenimiento/pedidos-sigamef': { render: renderPedidosSigamefView, init: initPedidosSigamefView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },

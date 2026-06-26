@@ -28,6 +28,7 @@ export const ROUTE_ROLES = {
   'mantenimiento/configuracion': ['admin'],
   'mantenimiento/metas': ['admin'],
   'mantenimiento/usuarios': ['admin'],
+  'mantenimiento/proveedores': ['admin'],
   'mantenimiento/ordenes': ['admin'],
   'mantenimiento/siaf': ['admin'],
   'mantenimiento/fichanet': ['admin'],

@@ -22,6 +22,7 @@ import {
   COORDINADOR_ACTOS,
 } from '../lib/actosPreparatorios.js';
 import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
+import { listarBandejaDEC } from '../lib/decBandeja.js';
 import {
   REQUERIMIENTO_BANDEJA_FROM,
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
@@ -81,8 +82,7 @@ router.get('/dec', async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '200', 10)));
-    const estados = ['Aprobado', 'Aprobado DEC', 'Observado DEC', 'Observado Programación'];
-    const result = await listarRequerimientosPorEstados(estados, page, pageSize, req.query);
+    const result = await listarBandejaDEC(page, pageSize, req.query);
     res.json(result);
   } catch (err) { next(err); }
 });

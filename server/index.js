@@ -22,6 +22,7 @@ import pedidosSigamefRouter from './routes/pedidosSigamef.js';
 import adjuntosRouter from './routes/adjuntos.js';
 import programacionRouter from './routes/programacion.js';
 import usuariosRouter from './routes/usuarios.js';
+import proveedoresMaestroRouter from './routes/proveedoresMaestro.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
 import { inicializarTrazabilidad, registrarMovimiento, inferAccion } from './lib/trazabilidad.js';
 import { trazaFromObservacionEntry } from './lib/observacionDestino.js';
@@ -278,6 +279,7 @@ app.use('/api/fichanet', fichanetRouter);
 app.use('/api/pedidos-sigamef', pedidosSigamefRouter);
 app.use('/api/programacion', programacionRouter);
 app.use('/api/usuarios', usuariosRouter);
+app.use('/api/proveedores-maestro', proveedoresMaestroRouter);
 
 // Endpoints adicionales de glosas
 app.get('/api/entregas', async (_req, res, next) => {

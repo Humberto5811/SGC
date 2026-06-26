@@ -1,4 +1,4 @@
-// Invitaciones — bandeja maestra + pestaña solicitudes
+// Invitaciones — bandeja maestra + pestaña solicitudes (diseño alineado a Programación)
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -7,7 +7,6 @@ import {
   renderSummaryCardsHtml, updateSummaryCards, renderActionMenuCell, bindActionMenus,
   bindBandejaToolbar, bandejaTableStyles,
 } from '../../utils/trazabilidad.js';
-import { estadoModernBadge } from '../../utils/bandejaUi.js';
 import { invitacionesMenuItems, invitacionesHiddenActions } from '../../utils/bandejaActions.js';
 import { actosBandejaStyles, renderActosRowCells, actosBandejaHeaders } from '../../utils/actosModals.js';
 import { showSolicitudCotizacionModal, showInvitarProveedoresModal } from '../../utils/invitacionesModals.js';
@@ -25,31 +24,49 @@ let allRows = [];
 let selectedIds = new Set();
 let listFilters = {};
 let currentTab = 'bandeja';
+let solPage = 1;
+let solTotalPages = 1;
+
+function solicitudEstadoBadge(s) {
+  const label = s.estado_invitacion || s.estado || '—';
+  const cls = String(label).includes('Enviada') ? 'bg-primary' : (label === 'Enviado' ? 'bg-success' : 'bg-secondary');
+  return `<span class="badge ${cls}">${esc(label)}</span>`;
+}
 
 export function renderInvitacionesView() {
   return `
     <div class="container-fluid actos-bandeja-page inv-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}
+        .inv-bandeja-page { overflow: visible; padding-bottom: 2rem; }
+        .inv-bandeja-wrap .table-responsive { overflow-x: auto; }
+      </style>
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <div>
           <h3 class="mb-1"><i class="bi bi-envelope"></i> Invitaciones</h3>
           <p class="text-muted mb-0">Bandeja maestra — expedientes en Invitaciones con trazabilidad completa.</p>
         </div>
-        <div class="d-flex gap-2 flex-wrap align-items-center">
+        <div class="d-flex gap-2 flex-wrap align-items-center" id="invToolbar">
           <button id="invBtnSC" class="btn btn-sm btn-primary" disabled><i class="bi bi-file-earmark-plus"></i> Crear Solicitud de Cotización</button>
           <button id="invBtnInvitar" class="btn btn-sm btn-success" disabled><i class="bi bi-send"></i> INVITAR</button>
           <span id="invSeleccionados" class="badge bg-secondary align-self-center">0 seleccionados</span>
-          <button id="invReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
         </div>
       </div>
+      <hr/>
       <ul class="nav nav-tabs mb-3" id="invTabs">
-        <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">Bandeja</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-tab="solicitudes">Invitaciones (Solicitudes)</a></li>
+        <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">📋 Bandeja</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-tab="solicitudes">✉️ Invitaciones (Solicitudes)</a></li>
       </ul>
       <div id="invTrazaSummaryWrap">${renderSummaryCardsHtml('invTrazaSummary')}</div>
-      <div id="invFilterWrap">${renderFilterBarHtml('inv')}</div>
+      <div id="invFilterWrap">${renderFilterBarHtml('inv', { hideExecutive: true })}</div>
       <div id="invContent"><div class="text-muted">Cargando…</div></div>
     </div>`;
+}
+
+function setInvTabChrome(tab) {
+  const showBandeja = tab === 'bandeja';
+  document.getElementById('invTrazaSummaryWrap').style.display = showBandeja ? '' : 'none';
+  document.getElementById('invFilterWrap').style.display = showBandeja ? '' : 'none';
+  document.getElementById('invToolbar').style.display = showBandeja ? '' : 'none';
 }
 
 function invitacionesBandejaHeaders() {
@@ -82,6 +99,7 @@ function updateSelectionUi() {
 
 async function loadBandeja() {
   currentTab = 'bandeja';
+  setInvTabChrome('bandeja');
   const cont = document.getElementById('invContent');
   if (!cont) return;
   try {
@@ -132,10 +150,7 @@ function switchToSolicitudesTab() {
   document.querySelectorAll('#invTabs .nav-link').forEach((l) => {
     l.classList.toggle('active', l.dataset.tab === 'solicitudes');
   });
-  const fw = document.getElementById('invFilterWrap');
-  const sw = document.getElementById('invTrazaSummaryWrap');
-  if (fw) fw.style.display = 'none';
-  if (sw) sw.style.display = 'none';
+  solPage = 1;
   loadSolicitudesTab();
 }
 
@@ -178,14 +193,26 @@ async function handleSolicitudAction(act, s) {
   }
 }
 
-async function loadSolicitudesTab() {
+function renderSolPagination() {
+  if (solTotalPages <= 1) return '';
+  let pages = '';
+  for (let i = 1; i <= Math.min(solTotalPages, 7); i += 1) {
+    pages += `<li class="page-item ${i === solPage ? 'active' : ''}"><a class="page-link inv-sol-page" href="#" data-p="${i}">${i}</a></li>`;
+  }
+  return `<nav><ul class="pagination pagination-sm justify-content-center mb-0">${pages}</ul></nav>`;
+}
+
+async function loadSolicitudesTab(page = solPage) {
   currentTab = 'solicitudes';
+  solPage = page;
+  setInvTabChrome('solicitudes');
   const cont = document.getElementById('invContent');
   if (!cont) return;
   try {
     cont.innerHTML = '<div class="text-muted">Cargando solicitudes…</div>';
-    const resp = await contratacionesService.listSolicitudesCotizacion({ pageSize: 100 });
+    const resp = await contratacionesService.listSolicitudesCotizacion({ page: solPage, pageSize: 50 });
     const rows = resp.data || [];
+    solTotalPages = resp.totalPages || 1;
     if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay solicitudes de cotización registradas.</div>';
       return;
@@ -208,7 +235,7 @@ async function loadSolicitudesTab() {
             <tr data-sol-id="${s.id}">
               <td><strong>${esc(s.codigo)}</strong></td>
               <td>${esc(s.descripcion_contratacion || s.denominacion || s.objeto || '—')}</td>
-              <td>${estadoModernBadge(s.estado_invitacion || s.estado)}</td>
+              <td>${solicitudEstadoBadge(s)}</td>
               <td class="small">${fmtDt(s.fecha_publicacion)}</td>
               <td class="small">${fmtDt(s.fecha_culminacion || s.cotizaciones_fin)}</td>
               <td class="text-center">${s.cantidad_proveedores ?? s.invitados ?? 0}</td>
@@ -217,7 +244,15 @@ async function loadSolicitudesTab() {
             </tr>`).join('')}</tbody>
         </table>
         </div>
+        <div class="d-flex justify-content-between align-items-center mt-2 flex-wrap gap-2">
+          <small class="text-muted">${resp.total || rows.length} solicitud(es) — página ${solPage} de ${solTotalPages}</small>
+          <div id="invSolPag">${renderSolPagination()}</div>
+        </div>
       </div>`;
+
+    cont.querySelectorAll('.inv-sol-page').forEach((a) => {
+      a.onclick = (e) => { e.preventDefault(); loadSolicitudesTab(parseInt(a.dataset.p, 10)); };
+    });
 
     bindActionMenus(cont, {
       detalle: (id) => handleSolicitudAction('detalle', rows.find((r) => String(r.id) === String(id))),
@@ -286,8 +321,9 @@ async function handleCrearSC(ids) {
   const rows = allRows.filter((r) => ids.includes(r.id));
   const result = await showSolicitudCotizacionModal(ids, rows);
   if (!result?.saved) return;
-  await loadBandeja();
+  loadCurrentTab();
   switchToSolicitudesTab();
+  window.dispatchEvent(new CustomEvent('sgc:invitaciones-updated'));
 }
 
 async function handleInvitar() {
@@ -300,19 +336,27 @@ async function handleInvitar() {
     return;
   }
   await showInvitarProveedoresModal(solicitudId);
-  loadBandeja();
-  if (currentTab === 'solicitudes') loadSolicitudesTab();
+  loadCurrentTab();
+  window.dispatchEvent(new CustomEvent('sgc:invitaciones-updated'));
 }
 
 export function initInvitacionesView() {
+  document.getElementById('invVistaEjecutiva')?.remove();
+
   bindBandejaToolbar({
     prefix: 'inv',
     onFilter: () => { listFilters = readFilterParams('inv'); loadCurrentTab(); },
     onClear: () => { listFilters = {}; loadCurrentTab(); },
-    onExecutiveToggle: () => loadCurrentTab(),
   });
 
-  document.getElementById('invReload')?.addEventListener('click', () => loadCurrentTab());
+  window.addEventListener('sgc:invitaciones-updated', () => loadCurrentTab());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') loadCurrentTab();
+  });
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && document.querySelector('.inv-bandeja-page')) loadCurrentTab();
+  }, 45000);
+
   document.getElementById('invBtnSC')?.addEventListener('click', () => handleCrearSC([...selectedIds]));
   document.getElementById('invBtnInvitar')?.addEventListener('click', () => handleInvitar());
 
@@ -321,8 +365,6 @@ export function initInvitacionesView() {
       e.preventDefault();
       document.querySelectorAll('#invTabs .nav-link').forEach((l) => l.classList.remove('active'));
       link.classList.add('active');
-      document.getElementById('invFilterWrap').style.display = link.dataset.tab === 'solicitudes' ? 'none' : '';
-      document.getElementById('invTrazaSummaryWrap').style.display = link.dataset.tab === 'solicitudes' ? 'none' : '';
       loadCurrentTab();
     });
   });

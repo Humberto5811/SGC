@@ -55,6 +55,7 @@ import { renderFormatoConcursoView, initFormatoConcursoView } from './views/glos
 // Mantenimiento - Institucional
 import { renderLogotiposView, initLogotiposView } from './views/institucional/logotiposView.js';
 import { renderEntidadView, initEntidadView } from './views/institucional/entidadView.js';
+import { renderProveedoresMaestroView, initProveedoresMaestroView } from './views/registroDatos/proveedoresMaestroView.js';
 
 const defaultRoute = 'login';
 
@@ -103,6 +104,7 @@ const routes = {
   'mantenimiento': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'admin/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
+  'mantenimiento/proveedores': { render: renderProveedoresMaestroView, init: initProveedoresMaestroView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
   'mantenimiento/pedidos-sigamef': { render: renderPedidosSigamefView, init: initPedidosSigamefView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },

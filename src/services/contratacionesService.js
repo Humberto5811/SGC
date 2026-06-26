@@ -91,6 +91,9 @@ export const contratacionesService = {
   async enviarCorreosSolicitud(solicitudId, invitacionIds) {
     return api.post(`/contrataciones/invitaciones/solicitudes/${solicitudId}/enviar-correos`, { invitacion_ids: invitacionIds });
   },
+  async getHistorialProveedor(proveedorId) {
+    return api.get(`/contrataciones/invitaciones/proveedores/${proveedorId}/historial`);
+  },
   async eliminarProveedorSolicitud(solicitudId, invitacionId) {
     return api.del(`/contrataciones/invitaciones/solicitudes/${solicitudId}/proveedores/${invitacionId}`);
   },

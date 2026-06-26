@@ -219,6 +219,7 @@ else if (currentRoute === 'mantenimiento/locacion') {
 }
 else if (currentRoute === 'mantenimiento' || 
          currentRoute === 'mantenimiento/usuarios' ||
+         currentRoute === 'mantenimiento/proveedores' ||
          currentRoute === 'mantenimiento/catalogo' ||
          currentRoute === 'mantenimiento/pedidos-sigamef' ||
          currentRoute === 'mantenimiento/configuracion' ||

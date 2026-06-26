@@ -1,4 +1,4 @@
-// Bandeja maestra de Programación — trazabilidad de todos los expedientes que pasaron por Programación
+// Bandeja maestra DEC — trazabilidad histórica (no ocultar expedientes tras avanzar etapa)
 import { query } from '../db.js';
 import {
   enrichRequerimientoRow,
@@ -10,34 +10,34 @@ import {
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
 } from './bandejaRequerimientoSql.js';
 
-const ESTADOS_BANDEJA_PROGRAMACION = `(
-  'Aprobado DEC', 'Observado Programación', 'En Programación',
-  'Aprobado Programación', 'Programado', 'En Invitaciones'
+const ESTADOS_BANDEJA_DEC = `(
+  'Aprobado', 'Aprobado DEC', 'Observado DEC', 'Observado Programación',
+  'En Programación', 'Aprobado Programación', 'Programado', 'En Invitaciones'
 )`;
 
-/** SQL: expedientes cuyo flujo incluye Programación (bandeja maestra de seguimiento). */
-export const WHERE_BANDEJA_PROGRAMACION = `
+/** Expedientes que pasaron por DEC o etapas posteriores — bandeja histórica. */
+export const WHERE_BANDEJA_DEC = `
   (
-    r.estado IN ${ESTADOS_BANDEJA_PROGRAMACION}
+    r.estado IN ${ESTADOS_BANDEJA_DEC}
     OR r.estado ILIKE 'Sol.Cot. Enviada%'
-    OR jsonb_array_length(COALESCE((COALESCE(r.payload, '{}')::jsonb -> 'historial_programacion'), '[]'::jsonb)) > 0
+    OR jsonb_array_length(COALESCE((COALESCE(r.payload, '{}')::jsonb -> 'historial_dec'), '[]'::jsonb)) > 0
     OR EXISTS (
       SELECT 1 FROM jsonb_array_elements(COALESCE(r.historial_estados, '[]'::jsonb)) h
-      WHERE UPPER(COALESCE(h->>'etapa', h->>'estado', '')) = 'PROGRAMACION'
+      WHERE UPPER(COALESCE(h->>'etapa', h->>'estado', '')) IN ('DEC', 'PROGRAMACION', 'ACTOS_PREPARATORIOS', 'INVITACIONES')
     )
     OR EXISTS (
       SELECT 1 FROM jsonb_array_elements(COALESCE(r.historial_movimientos, '[]'::jsonb)) m
-      WHERE UPPER(COALESCE(m->>'etapa', '')) = 'PROGRAMACION'
+      WHERE UPPER(COALESCE(m->>'etapa', '')) IN ('DEC', 'PROGRAMACION', 'ACTOS_PREPARATORIOS', 'INVITACIONES')
     )
   )
 `;
 
-export async function listarBandejaProgramacion(page, pageSize, queryParams = {}) {
+export async function listarBandejaDEC(page, pageSize, queryParams = {}) {
   const offset = (page - 1) * pageSize;
   const { whereExtra, params: filterParams } = buildListFilters(queryParams);
   const params = [...filterParams];
 
-  let where = `WHERE ${WHERE_BANDEJA_PROGRAMACION}`;
+  let where = `WHERE ${WHERE_BANDEJA_DEC}`;
   if (whereExtra) where += ` AND ${whereExtra}`;
 
   const countRes = await query(`SELECT COUNT(*)::int AS total ${REQUERIMIENTO_BANDEJA_FROM} ${where}`, params);

@@ -26,7 +26,7 @@ export const CARGO_ANALISTA_ACTOS = 'Analista de Contratos Menores';
 
 const PERMISOS_JSON = `COALESCE(u.permisos, '{}'::jsonb)`;
 
-const ESTADOS_EN_ACTOS = "('Programado', 'Aprobado Programación')";
+const ESTADOS_EN_ACTOS = "('Programado', 'Aprobado Programación', 'En Invitaciones')";
 
 /** Normaliza expedientes aprobados en Programación que aún no tienen etapa Actos en BD. */
 export async function syncExpedientesActosPendientes() {
@@ -175,6 +175,7 @@ export async function listarBandejaActos(page, pageSize, queryParams = {}, optio
   let where = `WHERE (
     r.estado_actual IN ${ETAPAS_BANDEJA_CM}
     OR r.estado IN ${ESTADOS_EN_ACTOS}
+    OR r.estado ILIKE 'Sol.Cot. Enviada%'
     OR (
       COALESCE(r.payload, '{}')::jsonb -> 'historial_actos' IS NOT NULL
       AND jsonb_typeof(COALESCE(r.payload, '{}')::jsonb -> 'historial_actos') = 'array'

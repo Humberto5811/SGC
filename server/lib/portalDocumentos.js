@@ -126,11 +126,22 @@ export function buildDocumentosPorItem(item, adjuntosMap) {
 
   (item.documentos || []).forEach((d, i) => {
     const nombre = d.nombre || d.archivo || d.documento;
-    if (!isPdfFile(nombre, d.mime_type) && !d.adjunto_id) return;
+    if (!isPdfFile(nombre, d.mime_type) && !d.adjunto_id && !d.contenido_base64) return;
     const match = d.adjunto_id
       ? adjuntosReq.find((a) => a.id === d.adjunto_id)
       : matchAdjuntoPorNombre(adjuntosReq, nombre);
     if (match && !isPdfFile(match.nombre_archivo, match.mime_type)) return;
+    if (d.contenido_base64) {
+      pushDoc(docs, seen, {
+        ref: `item-${reqId}-${item.item_index ?? 0}-${i}`,
+        nombre: nombre || `Documento ${i + 1}`,
+        mime_type: d.mime_type || guessMime(nombre),
+        fuente: d.fuente || 'Anexo ítem',
+        embedded: true,
+        disponible: true,
+      });
+      return;
+    }
     if (!match && !d.adjunto_id) return;
     pushDoc(docs, seen, {
       ref: match ? `adj-${match.id}` : `item-${reqId}-${item.item_index}-${i}`,
@@ -140,6 +151,24 @@ export function buildDocumentosPorItem(item, adjuntosMap) {
       fuente: d.fuente || 'Anexo requerimiento',
       disponible: !!(match?.id || d.adjunto_id),
     });
+  });
+
+  const anexos = item.documentos_anexos && typeof item.documentos_anexos === 'object'
+    ? item.documentos_anexos
+    : {};
+  Object.entries(anexos).forEach(([tipo, d], i) => {
+    if (!d) return;
+    const nombre = d.nombre || d.archivo || tipo;
+    if (d.contenido_base64) {
+      pushDoc(docs, seen, {
+        ref: `anexo-${reqId}-${item.item_index ?? 0}-${i}`,
+        nombre,
+        mime_type: d.mime_type || guessMime(nombre),
+        fuente: `Anexo SC — ${tipo}`,
+        embedded: true,
+        disponible: true,
+      });
+    }
   });
 
   return docs;
@@ -226,6 +255,11 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
     WHERE solicitud_id = $1 AND proveedor_id = $2
   `, [solicitudId, proveedorId]);
 
+  const { rows: provRows } = await query(`
+    SELECT id, ruc, razon_social, direccion, telefono, correo, persona_contacto, rubro, emails
+    FROM proveedores WHERE id = $1
+  `, [proveedorId]);
+
   return {
     solicitud: {
       id: acceso.id,
@@ -242,6 +276,7 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
     },
     items: itemsConDocs,
     cotizacion_existente: cotRows[0] || null,
+    proveedor: provRows[0] || null,
     convocatoria_cerrada: acceso.cotizaciones_fin
       ? (new Date() > new Date(acceso.cotizaciones_fin) || String(acceso.estado).toUpperCase() === 'CERRADA')
       : false,
@@ -280,6 +315,35 @@ export async function resolverDocumentoPortal(proveedorId, solicitudId, docRef) 
     return {
       nombre_archivo: nombre,
       mime_type: row.mime_type || guessMime(nombre),
+      contenido_base64: row.contenido_base64,
+    };
+  }
+
+  const itemMatch = ref.match(/^(item|anexo)-(\d+)-(\d+)-(\d+)$/);
+  if (itemMatch) {
+    const items = parseJson(acceso.detalle_items);
+    const reqId = parseInt(itemMatch[2], 10);
+    const itemIdx = parseInt(itemMatch[3], 10);
+    const docIdx = parseInt(itemMatch[4], 10);
+    const item = items.find((it) => it.requerimiento_id === reqId && (it.item_index ?? 0) === itemIdx)
+      || items.find((it) => it.requerimiento_id === reqId);
+    if (!item) throw new Error('Ítem no encontrado');
+    if (ref.startsWith('anexo-')) {
+      const anexos = Object.values(item.documentos_anexos || {});
+      const row = anexos[docIdx];
+      if (!row?.contenido_base64) throw new Error('Documento no disponible');
+      return {
+        nombre_archivo: row.nombre || row.archivo || 'documento',
+        mime_type: row.mime_type || guessMime(row.nombre),
+        contenido_base64: row.contenido_base64,
+      };
+    }
+    const docs = item.documentos || [];
+    const row = docs[docIdx];
+    if (!row?.contenido_base64) throw new Error('Documento no disponible');
+    return {
+      nombre_archivo: row.nombre || row.documento || 'documento',
+      mime_type: row.mime_type || guessMime(row.nombre),
       contenido_base64: row.contenido_base64,
     };
   }

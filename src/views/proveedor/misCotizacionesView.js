@@ -7,6 +7,10 @@ import { renderDocumentoLista, bindDocumentoActions, attachSolicitudId } from '.
 import { downloadAnexo05A, downloadAnexo05B, triggerFileInput, money as moneyPdf, TEXTO_AUTORIZACION_CORREO, TEXTO_LEY_27444 } from '../../utils/proveedorPdfCotizacion.js';
 
 const CANJE_OPTS = ['Sí', 'No', 'Parcial'];
+const RUBRO_OPTS = [
+  'Medicamentos', 'Reactivos', 'Dispositivos Médicos', 'Equipos', 'Laboratorio',
+  'Servicios', 'Consultoría', 'Locadores', 'Software', 'Mobiliario', 'Otros',
+];
 const STEP_LABELS = ['Información técnica', 'Documentos técnicos', 'Resumen y envío'];
 
 let workspace = null;
@@ -115,14 +119,16 @@ function initFormFromWorkspace(ws) {
 
   const prevDatos = prevEco.datos_proveedor || prevAnexos.datos_proveedor || {};
   const prov = getProveedorSession();
+  const master = workspace?.proveedor || {};
   formState.datos = {
-    razon_social: prevDatos.razon_social || prov?.razon_social || '',
-    ruc: prevDatos.ruc || prov?.ruc || '',
-    domicilio_fiscal: prevDatos.domicilio_fiscal || '',
+    razon_social: prevDatos.razon_social || prov?.razon_social || master.razon_social || '',
+    ruc: prevDatos.ruc || prov?.ruc || master.ruc || '',
+    domicilio_fiscal: prevDatos.domicilio_fiscal || master.direccion || '',
     representante_legal: prevDatos.representante_legal || '',
-    persona_contacto: prevDatos.persona_contacto || '',
-    celular: prevDatos.celular || prov?.telefono || '',
-    correo: prevDatos.correo || prov?.correo || (prov?.emails?.[0] || ''),
+    persona_contacto: prevDatos.persona_contacto || master.persona_contacto || '',
+    celular: prevDatos.celular || prov?.telefono || master.telefono || '',
+    correo: prevDatos.correo || prov?.correo || master.correo || (prov?.emails?.[0] || ''),
+    rubro: prevDatos.rubro || master.rubro || '',
     validez_oferta: prevDatos.validez_oferta || '',
     firma_representante: prevDatos.firma_representante || '',
   };
@@ -273,6 +279,11 @@ function renderStep1() {
             <input class="form-control form-control-sm prov-dato" data-k="celular" value="${esc(formState.datos.celular)}"></div>
           <div class="col-md-4"><label class="form-label mb-0">Correo electrónico</label>
             <input class="form-control form-control-sm prov-dato" data-k="correo" value="${esc(formState.datos.correo)}"></div>
+          <div class="col-md-4"><label class="form-label mb-0">Rubro</label>
+            <select class="form-select form-select-sm prov-dato" data-k="rubro">
+              <option value="">— Seleccione —</option>
+              ${RUBRO_OPTS.map((r) => `<option value="${esc(r)}" ${formState.datos.rubro === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+            </select></div>
           <div class="col-md-4"><label class="form-label mb-0">Validez de la oferta</label>
             <input class="form-control form-control-sm prov-dato" data-k="validez_oferta" value="${esc(formState.datos.validez_oferta)}"></div>
           <div class="col-md-12"><label class="form-label mb-0">Firma del Representante legal</label>
@@ -469,9 +480,9 @@ function validateStep1() {
     if (!p?.unitario || p.unitario <= 0) errors.push(`Ítem ${idx + 1}: ingrese precio unitario en Anexo 05-B`);
   });
   const datosReq = {
-    razon_social: 'Razón Social', ruc: 'RUC', domicilio_fiscal: 'Domicilio fiscal',
-    representante_legal: 'Representante Legal', persona_contacto: 'Persona de contacto',
-    celular: 'Celular', correo: 'Correo electrónico', validez_oferta: 'Validez de la oferta',
+    razon_social: 'Razón Social', ruc: 'RUC', domicilio_fiscal: 'Dirección Fiscal',
+    persona_contacto: 'Persona de contacto', celular: 'Celular', correo: 'Correo electrónico', rubro: 'Rubro',
+    representante_legal: 'Representante Legal', validez_oferta: 'Validez de la oferta',
   };
   Object.entries(datosReq).forEach(([k, lbl]) => {
     if (!String(formState.datos[k] ?? '').trim()) errors.push(`Anexo 05-B: falta ${lbl}`);

@@ -58,10 +58,20 @@ export const MENU_STRUCTURE = [
     roles: ['admin'],
     submenu: [
       {
+        label: 'Administración',
+        icon: 'bi-gear',
+        submenu: [
+          { path: 'mantenimiento/entidad', label: 'Entidad', icon: 'bi-info-circle', submoduloId: 'ENTIDAD' },
+          { path: 'mantenimiento/logotipos', label: 'Logotipo', icon: 'bi-image', submoduloId: 'LOGOTIPOS' },
+          { path: 'mantenimiento/configuracion', label: 'Configuración por Entidad', icon: 'bi-gear', submoduloId: 'CONFIGURACION' },
+        ],
+      },
+      { path: 'mantenimiento/proveedores', label: 'Maestro de Proveedores', icon: 'bi-building-check', submoduloId: 'MAESTRO_PROVEEDORES' },
+      { path: 'mantenimiento/usuarios', label: 'Usuarios', icon: 'bi-people', submoduloId: 'USUARIOS' },
+      {
         label: '📝 Registro de Datos',
         icon: 'bi-database',
         submenu: [
-          { path: 'mantenimiento/usuarios', label: 'Usuarios y Permisos', icon: 'bi-people', submoduloId: 'USUARIOS' },
           { path: 'mantenimiento/catalogo', label: 'Catálogo SIGAMEF', icon: 'bi-book', submoduloId: 'CATALOGO_SIGAMEF' },
           { path: 'mantenimiento/pedidos-sigamef', label: 'Pedidos SIGAMEF', icon: 'bi-card-list', submoduloId: 'PEDIDOS_SIGAMEF' },
           { path: 'mantenimiento/configuracion', label: 'Configuración Documentaria', icon: 'bi-gear', submoduloId: 'CONFIGURACION' },

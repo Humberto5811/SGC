@@ -76,6 +76,7 @@ export function mapEstadoToUbicacion(estado) {
   if (/actos prep|coordinaci[oó]n cm/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (/observado actos|observado coordin/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (/invitaci/i.test(e)) return 'INVITACIONES';
+  if (/sol\.?\s*cot\.?\s*enviada/i.test(e)) return 'INVITACIONES';
   if (/cotizaci/i.test(e)) return 'RECEPCION_COTIZACIONES';
   if (/cuadro comp/i.test(e)) return 'CUADRO_COMPARATIVO';
   if (/\bccp\b/i.test(e) || /en ccp/i.test(e)) return 'CCP';
@@ -334,6 +335,26 @@ function collectRawEvents(row) {
       observacion: 'Aprobación en Programación',
       accion: 'aprobado',
       tipoEvento: 'etapa',
+    });
+  });
+
+  (payload.historial_invitaciones || []).forEach((h) => {
+    const obsMap = {
+      ingreso_invitaciones: 'Expediente ingresó a Invitaciones',
+      solicitud_creada: h.codigo ? `Solicitud de Cotización ${h.codigo} creada` : 'Solicitud de Cotización creada',
+      convocatoria_enviada: h.estado || (h.contador ? `Sol.Cot. Enviada (${h.contador})` : 'Convocatoria enviada a proveedores'),
+      correo_enviado: h.detalle || 'Correo de invitación enviado',
+      observacion: h.observacion || 'Observación en Invitaciones',
+    };
+    push({
+      fecha: h.fecha,
+      etapa: 'INVITACIONES',
+      usuario: h.usuario || ETAPAS.INVITACIONES.responsable,
+      observacion: obsMap[h.tipo] || h.observacion || 'Movimiento en Invitaciones',
+      accion: h.tipo === 'convocatoria_enviada' ? 'invitacion_enviada'
+        : h.tipo === 'correo_enviado' ? 'correo_enviado'
+          : h.tipo === 'observacion' ? 'observado' : 'actualizado',
+      tipoEvento: h.tipo === 'observacion' ? 'observacion' : 'etapa',
     });
   });
 

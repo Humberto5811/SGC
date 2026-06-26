@@ -207,7 +207,9 @@ export function updateSummaryCards(rows, containerId = 'trazaSummary') {
   });
 }
 
-export function renderFilterBarHtml(prefix = 'req') {
+export function renderFilterBarHtml(prefix = 'req', opts = {}) {
+  const execBtn = opts.hideExecutive ? '' : `
+          <button type="button" class="btn btn-sm btn-outline-dark flex-grow-1" id="${prefix}VistaEjecutiva" title="Vista compacta"><i class="bi bi-layout-text-window"></i> Vista Ejecutiva</button>`;
   return `
     <div class="sgc-search-bar mb-3">
       <div class="row g-2 align-items-end">
@@ -240,8 +242,7 @@ export function renderFilterBarHtml(prefix = 'req') {
         </div>
         <div class="col-lg-2 col-md-12 d-flex gap-2 flex-wrap">
           <button type="button" class="btn btn-sm btn-primary flex-grow-1" id="${prefix}FiltroBtn"><i class="bi bi-funnel"></i> Filtrar</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary flex-grow-1" id="${prefix}FiltroLimpiar"><i class="bi bi-x-lg"></i> Limpiar</button>
-          <button type="button" class="btn btn-sm btn-outline-dark flex-grow-1" id="${prefix}VistaEjecutiva" title="Vista compacta"><i class="bi bi-layout-text-window"></i> Vista Ejecutiva</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary flex-grow-1" id="${prefix}FiltroLimpiar"><i class="bi bi-x-lg"></i> Limpiar</button>${execBtn}
         </div>
       </div>
     </div>`;

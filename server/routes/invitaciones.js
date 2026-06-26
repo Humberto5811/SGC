@@ -22,6 +22,7 @@ import {
   listarProveedoresSolicitud,
   enviarCorreosSolicitud,
   eliminarInvitacionProveedor,
+  getHistorialProveedorInvitaciones,
 } from '../lib/invitaciones.js';
 
 const router = express.Router();
@@ -173,8 +174,27 @@ router.post('/solicitudes', async (req, res, next) => {
 
 router.get('/proveedores', async (req, res, next) => {
   try {
-    const data = await buscarProveedores(req.query.search || req.query.q || '', req.query.limit);
+    const data = await buscarProveedores(
+      req.query.search || req.query.q || '',
+      req.query.limit,
+      {
+        ruc: req.query.ruc,
+        razon_social: req.query.razon_social,
+        correo: req.query.correo,
+        telefono: req.query.telefono,
+        rubro: req.query.rubro,
+        estado: req.query.estado,
+      },
+    );
     res.json({ data });
+  } catch (err) { next(err); }
+});
+
+router.get('/proveedores/:proveedorId/historial', async (req, res, next) => {
+  try {
+    const data = await getHistorialProveedorInvitaciones(req.params.proveedorId);
+    if (!data) return res.status(404).json({ error: 'Proveedor no encontrado' });
+    res.json(data);
   } catch (err) { next(err); }
 });
 

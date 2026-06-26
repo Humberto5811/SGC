@@ -12,6 +12,16 @@ import { prepararInvitacionPortal } from './proveedorPortal.js';
 
 export { listarBandejaInvitaciones, SUBMODULO_INVITACIONES };
 
+const ESTADOS_INVITACION_ENVIADA = ['ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA'];
+
+function esEstadoInvitacionEnviada(estado) {
+  return ESTADOS_INVITACION_ENVIADA.includes(String(estado || '').toUpperCase());
+}
+
+function sqlInvitacionPendiente(alias = 'ip') {
+  return `UPPER(COALESCE(${alias}.estado, 'PENDIENTE')) NOT IN ('${ESTADOS_INVITACION_ENVIADA.join("','")}')`;
+}
+
 const DOCS_SOLICITADOS_OPTS = [
   'Declaración de compromiso de canje',
   'Anexo A',
@@ -153,7 +163,13 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
           descripcion: it.nombre_item || it.descripcion || r.denominacion || '',
           cantidad: it.cantidad || it.cant || 1,
           item_index: idx,
-          documentos: [],
+          documentos: Object.entries(it.documentos_anexos || {}).map(([tipo, d]) => ({
+            documento: tipo,
+            nombre: d?.nombre || d?.archivo || tipo,
+            mime_type: d?.mime_type,
+            contenido_base64: d?.contenido_base64 || '',
+            fuente: `Anexo SC — ${tipo}`,
+          })),
         });
       });
     } else {
@@ -244,6 +260,12 @@ export async function crearSolicitudCotizacion(body = {}, usuario = '') {
       [solicitud.id, reqId],
     );
     await ensureInvitacionesEtapa(reqId, usuario);
+    await appendHistorialInvitacion(reqId, {
+      tipo: 'solicitud_creada',
+      usuario,
+      codigo,
+      solicitud_id: solicitud.id,
+    });
     await registrarTrazaPortal({
       solicitud_id: solicitud.id,
       requerimiento_id: reqId,
@@ -270,6 +292,15 @@ function validarCronograma(body) {
   if (cf && tf && cf > tf) throw new Error(msg);
 }
 
+async function appendHistorialInvitacion(requerimientoId, entry) {
+  const { rows } = await query('SELECT payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+  if (!rows.length) return;
+  let payload = parsePayload(rows[0]);
+  if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
+  payload.historial_invitaciones.push({ ...entry, fecha: entry.fecha || new Date().toISOString() });
+  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+}
+
 async function ensureInvitacionesEtapa(requerimientoId, usuario) {
   const { rows } = await query('SELECT id, estado, estado_actual, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) return;
@@ -291,37 +322,25 @@ async function ensureInvitacionesEtapa(requerimientoId, usuario) {
   });
 }
 
-export async function buscarProveedores(search = '', limit = 50) {
-  const params = [];
-  let where = 'WHERE activo = TRUE';
-  if (String(search || '').trim()) {
-    params.push(`%${String(search).trim()}%`);
-    where += ` AND (ruc ILIKE $${params.length} OR razon_social ILIKE $${params.length})`;
-  }
-  params.push(Math.min(limit, 100));
-  const { rows } = await query(
-    `SELECT id, ruc, razon_social, telefono, emails, rnp_estado FROM proveedores ${where}
-     ORDER BY razon_social ASC LIMIT $${params.length}`,
-    params,
-  );
-  return rows;
+import {
+  buscarProveedoresMaestro,
+  upsertProveedorLegacy,
+} from './proveedoresMaestro.js';
+
+export async function buscarProveedores(search = '', limit = 50, filters = {}) {
+  return buscarProveedoresMaestro({
+    search,
+    ruc: filters.ruc,
+    razon_social: filters.razon_social,
+    correo: filters.correo,
+    telefono: filters.telefono,
+    rubro: filters.rubro,
+    estado: filters.estado || 'Activo',
+  }, limit);
 }
 
-export async function upsertProveedor(data = {}) {
-  const ruc = String(data.ruc || '').replace(/\D/g, '').slice(0, 11);
-  if (ruc.length < 8) throw new Error('RUC inválido');
-  const emails = Array.isArray(data.emails) ? data.emails : (data.correo ? [data.correo] : []);
-  const { rows } = await query(`
-    INSERT INTO proveedores (ruc, razon_social, telefono, emails, rnp_estado)
-    VALUES ($1, $2, $3, $4::jsonb, $5)
-    ON CONFLICT (ruc) DO UPDATE SET
-      razon_social = EXCLUDED.razon_social,
-      telefono = EXCLUDED.telefono,
-      emails = EXCLUDED.emails,
-      updated_at = NOW()
-    RETURNING *
-  `, [ruc, data.razon_social || `Proveedor ${ruc}`, data.telefono || '', JSON.stringify(emails), data.rnp_estado || 'VIGENTE']);
-  return rows[0];
+export async function upsertProveedor(data = {}, opts = {}) {
+  return upsertProveedorLegacy(data, opts);
 }
 
 function generarClaveTemporal(ruc) {
@@ -333,13 +352,16 @@ export async function agregarProveedoresInvitacion(requerimientoId, proveedores 
   for (const p of proveedores) {
     const prov = p.id ? (await query('SELECT * FROM proveedores WHERE id = $1', [p.id])).rows[0] : await upsertProveedor(p);
     if (!prov) continue;
-    const correos = Array.isArray(p.correos) ? p.correos : (Array.isArray(prov.emails) ? prov.emails : []);
+    const correos = (Array.isArray(p.correos) && p.correos.length)
+      ? p.correos
+      : (p.correo ? [p.correo] : (prov.correo ? [prov.correo] : (Array.isArray(prov.emails) ? prov.emails : [])));
     const { rows } = await query(`
       INSERT INTO invitacion_proveedores (solicitud_id, requerimiento_id, proveedor_id, correos, estado)
       VALUES ($1, $2, $3, $4::jsonb, 'PENDIENTE')
       ON CONFLICT (requerimiento_id, proveedor_id) DO UPDATE SET
         solicitud_id = COALESCE(EXCLUDED.solicitud_id, invitacion_proveedores.solicitud_id),
         correos = EXCLUDED.correos,
+        estado = CASE WHEN ${sqlInvitacionPendiente('invitacion_proveedores')} THEN 'PENDIENTE' ELSE invitacion_proveedores.estado END,
         updated_at = NOW()
       RETURNING *
     `, [solicitudId, requerimientoId, prov.id, JSON.stringify(correos)]);
@@ -360,7 +382,7 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
     SELECT ip.*, p.ruc, p.razon_social, p.emails AS proveedor_emails
     FROM invitacion_proveedores ip
     JOIN proveedores p ON p.id = ip.proveedor_id
-    WHERE ip.requerimiento_id = $1 AND ip.estado = 'PENDIENTE' ${idFilter}
+    WHERE ip.requerimiento_id = $1 AND ${sqlInvitacionPendiente('ip')} ${idFilter}
   `, params);
 
   if (!invRows.length) throw new Error('No hay proveedores pendientes de invitación');
@@ -434,14 +456,120 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       ip,
     });
 
+    await query(`
+      UPDATE proveedores SET
+        cantidad_invitaciones = COALESCE(cantidad_invitaciones, 0) + 1,
+        ultima_invitacion = NOW(),
+        ultima_participacion = NOW(),
+        historial = historial || $2::jsonb,
+        updated_at = NOW()
+      WHERE id = $1
+    `, [
+      inv.proveedor_id,
+      JSON.stringify([{
+        usuario: usuario || 'Sistema',
+        accion: 'Invitación enviada',
+        detalle: solicitud?.codigo ? `Convocatoria ${solicitud.codigo}` : 'Invitación enviada',
+        fecha: new Date().toISOString().slice(0, 10),
+        hora: new Date().toTimeString().slice(0, 8),
+      }]),
+    ]);
+
     enviados.push({ ruc: inv.ruc, correos, url: portalPrep.url, token: portalPrep.token });
   }
 
-  if (solicitud && solicitud.estado === 'BORRADOR') {
-    await query(`UPDATE solicitudes_cotizacion SET estado = 'PUBLICADA', fecha_publicacion = NOW() WHERE id = $1`, [solicitud.id]);
+  if (solicitud) {
+    const { rows: updSol } = await query(`
+      UPDATE solicitudes_cotizacion SET
+        contador_envios = COALESCE(contador_envios, 0) + 1,
+        estado = CASE WHEN estado = 'BORRADOR' THEN 'PUBLICADA' ELSE estado END,
+        fecha_publicacion = COALESCE(fecha_publicacion, NOW()),
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING contador_envios, codigo
+    `, [solicitud.id]);
+    const contador = updSol[0]?.contador_envios || 1;
+    const codigo = updSol[0]?.codigo || solicitud.codigo;
+    const estadoNuevo = `Sol.Cot. Enviada (${contador})`;
+
+    const { rows: reqRows } = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    if (reqRows.length) {
+      let payload = parsePayload(reqRows[0]);
+      if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
+      payload.historial_invitaciones.push({
+        tipo: 'convocatoria_enviada',
+        usuario: usuario || SUBMODULO_INVITACIONES,
+        fecha: new Date().toISOString(),
+        contador,
+        codigo,
+        estado: estadoNuevo,
+        proveedores: enviados.length,
+        ip: ip || '',
+      });
+      await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+    }
+
+    await registrarMovimiento({
+      requerimientoId,
+      estadoNuevo,
+      usuario: usuario || SUBMODULO_INVITACIONES,
+      accion: 'invitacion_enviada',
+      observacion: `${estadoNuevo} — ${codigo} (${enviados.length} proveedor${enviados.length === 1 ? '' : 'es'})`,
+      responsable: SUBMODULO_INVITACIONES,
+    });
+
+    await registrarTrazaPortal({
+      solicitud_id: solicitud.id,
+      requerimiento_id: requerimientoId,
+      evento: 'CONVOCATORIA_ENVIADA',
+      detalle: `${estadoNuevo} — ${codigo}`,
+      usuario: usuario || SUBMODULO_INVITACIONES,
+      ip: ip || '',
+    });
   }
 
-  return { enviados, total: enviados.length };
+  return {
+    enviados,
+    total: enviados.length,
+    contador_envios: solicitud ? (await query('SELECT contador_envios FROM solicitudes_cotizacion WHERE id = $1', [solicitud.id])).rows[0]?.contador_envios : 0,
+    mensaje: solicitud ? 'Solicitud de Cotización enviada correctamente.' : '',
+  };
+}
+
+export async function getHistorialProveedorInvitaciones(proveedorId) {
+  const { rows: prov } = await query(`
+    SELECT id, ruc, razon_social, cantidad_invitaciones, cantidad_cotizaciones,
+      ultima_invitacion, ultima_cotizacion, ultima_participacion, historial
+    FROM proveedores WHERE id = $1
+  `, [proveedorId]);
+  if (!prov.length) return null;
+  const { rows: invs } = await query(`
+    SELECT ip.*, sc.codigo AS convocatoria
+    FROM invitacion_proveedores ip
+    LEFT JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    WHERE ip.proveedor_id = $1
+    ORDER BY ip.fecha_envio DESC NULLS LAST, ip.id DESC
+    LIMIT 50
+  `, [proveedorId]);
+  const { rows: cots } = await query(`
+    SELECT cp.*, sc.codigo AS convocatoria
+    FROM cotizaciones_proveedor cp
+    JOIN solicitudes_cotizacion sc ON sc.id = cp.solicitud_id
+    WHERE cp.proveedor_id = $1 AND cp.estado = 'COTIZACION_PRESENTADA'
+    ORDER BY cp.fecha_presentacion DESC NULLS LAST
+    LIMIT 20
+  `, [proveedorId]);
+  return {
+    proveedor: prov[0],
+    invitaciones: invs,
+    cotizaciones: cots,
+    resumen: {
+      cantidad_invitaciones: prov[0].cantidad_invitaciones || 0,
+      cantidad_cotizaciones: prov[0].cantidad_cotizaciones || cots.length,
+      ultima_invitacion: prov[0].ultima_invitacion,
+      ultima_cotizacion: prov[0].ultima_cotizacion || cots[0]?.fecha_presentacion,
+    },
+  };
 }
 
 export async function getSolicitudDetalle(solicitudId) {
@@ -556,7 +684,9 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
       COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
       sc.cotizaciones_fin AS fecha_culminacion,
       (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_id,
+      COALESCE(sc.contador_envios, 0)::int AS contador_envios,
       CASE
+        WHEN COALESCE(sc.contador_envios, 0) > 0 THEN 'Sol.Cot. Enviada (' || sc.contador_envios || ')'
         WHEN COALESCE(inv_stats.proveedores, 0) = 0 THEN 'Sin invitar'
         WHEN COALESCE(inv_stats.enviados, 0) >= COALESCE(inv_stats.proveedores, 0) AND inv_stats.proveedores > 0 THEN 'Enviado'
         WHEN COALESCE(inv_stats.enviados, 0) > 0 THEN 'Parcial'
@@ -573,7 +703,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
       WHERE cp.solicitud_id = sc.id AND cp.estado = 'COTIZACION_PRESENTADA'
     ) cot_stats ON TRUE
     ${where}
-    ORDER BY sc.id DESC
+    ORDER BY sc.anio ASC, sc.correlativo ASC, sc.id ASC
     LIMIT $${params.length - 1} OFFSET $${params.length}
   `, params);
 
@@ -639,49 +769,87 @@ export async function agregarProveedorSolicitud(solicitudId, proveedorData) {
   if (!requerimientoId) throw new Error('La solicitud no tiene requerimientos asociados');
   const correos = String(proveedorData.correo || proveedorData.correos || '')
     .split(';').map((e) => e.trim()).filter(Boolean);
-  const results = await agregarProveedoresInvitacion(requerimientoId, [{
-    ruc: proveedorData.ruc,
-    razon_social: proveedorData.proveedor || proveedorData.razon_social,
-    telefono: proveedorData.telefono,
-    correos,
-  }], solicitudId);
+  const provId = proveedorData.proveedor_id || proveedorData.id;
+  const entry = provId
+    ? { id: provId, correos: correos.length ? correos : undefined }
+    : {
+      ruc: proveedorData.ruc,
+      razon_social: proveedorData.proveedor || proveedorData.razon_social,
+      telefono: proveedorData.telefono,
+      correo: correos[0] || '',
+      correos,
+      persona_contacto: proveedorData.persona_contacto || '',
+      rubro: proveedorData.rubro || '',
+    };
+  const results = await agregarProveedoresInvitacion(requerimientoId, [entry], solicitudId);
   return results[0];
 }
 
 export async function listarProveedoresSolicitud(solicitudId) {
   const { rows } = await query(`
-    SELECT ip.*, p.ruc, p.razon_social, p.telefono, p.emails AS proveedor_emails
+    SELECT ip.id AS invitacion_id, ip.solicitud_id, ip.requerimiento_id, ip.proveedor_id,
+      ip.estado, ip.correos, ip.fecha_envio,
+      p.ruc, p.razon_social, p.telefono, p.correo, p.persona_contacto, p.rubro,
+      p.emails AS proveedor_emails, p.cantidad_invitaciones, p.cantidad_cotizaciones,
+      p.ultima_invitacion, p.ultima_cotizacion
     FROM invitacion_proveedores ip
     JOIN proveedores p ON p.id = ip.proveedor_id
     WHERE ip.solicitud_id = $1
+       OR (
+         ip.solicitud_id IS NULL
+         AND ip.requerimiento_id IN (
+           SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = $1
+         )
+       )
     ORDER BY ip.id ASC
   `, [solicitudId]);
   return rows.map((r) => ({
     ...r,
-    estado_envio: ['ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA'].includes(String(r.estado || '').toUpperCase())
-      ? 'Enviado' : 'Pendiente',
-    correo_display: (Array.isArray(r.correos) && r.correos.length ? r.correos : r.proveedor_emails || []).join('; '),
+    id: r.invitacion_id,
+    proveedor_id: r.proveedor_id,
+    estado_envio: esEstadoInvitacionEnviada(r.estado) ? 'Enviado' : 'Pendiente',
+    correo_display: (Array.isArray(r.correos) && r.correos.length ? r.correos : (r.correo ? [r.correo] : r.proveedor_emails || [])).join('; '),
+    persona_contacto: r.persona_contacto || '',
+    cantidad_invitaciones_proveedor: r.cantidad_invitaciones ?? 0,
+    cantidad_cotizaciones_proveedor: r.cantidad_cotizaciones ?? 0,
+    fecha_invitacion: r.fecha_envio,
   }));
 }
 
 export async function enviarCorreosSolicitud(solicitudId, invitacionIds = [], { usuario, ip } = {}) {
   const requerimientoId = await getPrimaryRequerimientoId(solicitudId);
   if (!requerimientoId) throw new Error('Sin requerimiento asociado');
+  const ids = (invitacionIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
   const params = [solicitudId];
   let idFilter = '';
-  if (invitacionIds?.length) {
-    const ph = invitacionIds.map((_, i) => `$${params.length + i + 1}`).join(', ');
-    params.push(...invitacionIds.map(Number));
+  if (ids.length) {
+    const ph = ids.map((_, i) => `$${params.length + i + 1}`).join(', ');
+    params.push(...ids);
     idFilter = ` AND ip.id IN (${ph})`;
   }
+  const perteneceSolicitud = `(
+    ip.solicitud_id = $1
+    OR (
+      ip.solicitud_id IS NULL
+      AND ip.requerimiento_id IN (
+        SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = $1
+      )
+    )
+  )`;
   const { rows: pending } = await query(`
     SELECT ip.id FROM invitacion_proveedores ip
-    WHERE ip.solicitud_id = $1 AND ip.estado = 'PENDIENTE' ${idFilter}
+    WHERE ${perteneceSolicitud} AND ${sqlInvitacionPendiente('ip')} ${idFilter}
   `, params);
   if (!pending.length) throw new Error('No hay proveedores pendientes seleccionados');
+  const pendingIds = pending.map((p) => p.id);
+  await query(
+    `UPDATE invitacion_proveedores SET solicitud_id = $1, updated_at = NOW()
+     WHERE id = ANY($2::int[]) AND solicitud_id IS NULL`,
+    [solicitudId, pendingIds],
+  );
   const result = await enviarInvitaciones(requerimientoId, {
     solicitud_id: solicitudId,
-    invitacion_ids: pending.map((p) => p.id),
+    invitacion_ids: pendingIds,
     usuario,
     ip,
   });
@@ -690,7 +858,7 @@ export async function enviarCorreosSolicitud(solicitudId, invitacionIds = [], { 
 
 export async function eliminarInvitacionProveedor(invitacionId) {
   const { rows } = await query(
-    `DELETE FROM invitacion_proveedores WHERE id = $1 AND estado = 'PENDIENTE' RETURNING id`,
+    `DELETE FROM invitacion_proveedores ip WHERE ip.id = $1 AND ${sqlInvitacionPendiente('ip')} RETURNING ip.id`,
     [invitacionId],
   );
   if (!rows.length) throw new Error('No se puede eliminar: invitación no encontrada o ya enviada');

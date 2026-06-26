@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
+import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
 
 function clientIp(req) {
   return String(req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '').split(',')[0].trim();
@@ -226,6 +227,12 @@ export async function presentarCotizacion(proveedorId, body, req) {
   if (!inv.length) throw new Error('Sin acceso');
   if (convocatoriaCerrada(inv[0])) throw new Error('Plazo vencido — no se aceptan cotizaciones');
 
+  const prevCot = (await query(
+    'SELECT estado FROM cotizaciones_proveedor WHERE solicitud_id = $1 AND proveedor_id = $2',
+    [solicitud_id, proveedorId],
+  )).rows[0];
+  const yaPresentada = String(prevCot?.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA';
+
   const { rows } = await query(`
     INSERT INTO cotizaciones_proveedor (
       solicitud_id, proveedor_id, requerimiento_id, estado, propuesta_tecnica, propuesta_economica,
@@ -254,6 +261,21 @@ export async function presentarCotizacion(proveedorId, body, req) {
     evento: 'COTIZACION_PRESENTADA', detalle: 'Cotización presentada en portal',
     usuario: req.portalProveedor?.ruc, ip: clientIp(req),
   });
+
+  const datosProveedor = propuesta_economica?.datos_proveedor || propuesta_economica?.datos || {};
+  if (Object.keys(datosProveedor).length) {
+    await sincronizarProveedorDesdePortal(proveedorId, datosProveedor, req.portalProveedor?.ruc);
+    if (!yaPresentada) {
+      await query(`
+        UPDATE proveedores SET
+          cantidad_cotizaciones = COALESCE(cantidad_cotizaciones, 0) + 1,
+          ultima_cotizacion = NOW(),
+          ultima_participacion = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+      `, [proveedorId]);
+    }
+  }
 
   return rows[0];
 }

@@ -1,5 +1,13 @@
 // Modales — Solicitud de Cotización (wizard) e invitaciones a proveedores
 import { contratacionesService } from '../services/contratacionesService.js';
+import { requerimientosService } from '../services/requerimientosService.js';
+import { makeModalDraggable } from './proveedorShared.js';
+import { openSelectorProveedoresModal, showHistorialProveedorModal } from './invitacionesProveedorSelector.js';
+import { adjuntosService } from '../services/adjuntosService.js';
+import {
+  renderAdjuntosTable, bindAdjuntosTable, renderDocumentosTable, bindDocumentosTable,
+  openBase64Document, isPdfLike,
+} from './documentViewer.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -33,6 +41,7 @@ function openModal(html) {
   document.body.appendChild(el);
   const modal = window.bootstrap?.Modal ? new window.bootstrap.Modal(el, { backdrop: 'static' }) : null;
   modal?.show();
+  makeModalDraggable(el);
   return { el, modal, close: () => { modal?.hide(); setTimeout(() => el.remove(), 250); } };
 }
 
@@ -119,6 +128,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       ? sol.lugares_entrega_item
       : (itemsResp.data || []).map((it) => ({ ...it, region: '', provincia: '', distrito: '', lugar_rapido: '' })),
     proveedores: [],
+    proveedoresBusqueda: [],
   };
 
   if (editId) {
@@ -157,6 +167,10 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       .sc-items-table, .sc-lugares-table { font-size: .8125rem; }
       .sc-mail-icon-pend { color: #dc3545; }
       .sc-mail-icon-env { color: #0d6efd; }
+      .sc-btn-inst { background: #0d6efd !important; color: #fff !important; border-color: #0d6efd !important; }
+      .sc-btn-inst i, .sc-btn-inst .bi { color: #fff !important; }
+      .sc-btn-inst:hover { background: #0b5ed7 !important; color: #fff !important; }
+      #scWizardModal .modal-header { cursor: move; }
     </style>
     <ul class="nav sc-step-tabs mb-3">${stepsHtml}</ul>
 
@@ -211,10 +225,10 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
                   <td><input type="checkbox" class="form-check-input sc-doc-check" id="scDoc${i}" value="${esc(d)}"></td>
                   <td><label class="small mb-0" for="scDoc${i}">${esc(d)}</label></td>
                   <td class="sc-doc-adj-cell small text-muted">—</td>
-                  <td><button type="button" class="btn btn-link btn-sm p-0 text-primary sc-doc-adj" data-doc="${esc(d)}">+ Adjuntar</button></td>
+                  <td><button type="button" class="btn btn-sm sc-btn-inst sc-doc-adj" data-doc="${esc(d)}"><i class="bi bi-paperclip"></i> Adjuntar</button></td>
                 </tr>`).join('')}</tbody>
             </table>
-            <button type="button" class="btn btn-sm btn-outline-primary" id="scAddOtroDoc"><i class="bi bi-plus"></i> Agregar otro documento</button>
+            <button type="button" class="btn btn-sm sc-btn-inst" id="scAddOtroDoc"><i class="bi bi-plus"></i> Agregar otro documento</button>
             <h6 class="border-bottom pb-1 mt-3 mb-2">Documentos Seleccionados (<span id="scDocsCount">0</span>)</h6>
             <table class="table table-sm table-bordered sc-sel-table mb-0">
               <thead class="table-light"><tr><th>Documento</th><th>Archivo adjunto</th><th>Fecha registro</th><th>Acciones</th></tr></thead>
@@ -275,25 +289,27 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     </div>
 
     <div data-sc-pane="invitaciones" class="d-none">
-      <h6 class="fw-bold">Invitaciones a proveedores</h6>
-      <div class="row g-2 mb-2">
-        <div class="col-md-3"><input class="form-control form-control-sm" id="scProvNombre" placeholder="Proveedor"></div>
-        <div class="col-md-2"><input class="form-control form-control-sm" id="scProvRuc" placeholder="RUC"></div>
-        <div class="col-md-2"><input class="form-control form-control-sm" id="scProvTel" placeholder="Teléfono"></div>
-        <div class="col-md-3"><input class="form-control form-control-sm" id="scProvCorreo" placeholder="Correos (;)"></div>
-        <div class="col-md-2"><button type="button" class="btn btn-sm btn-primary w-100" id="scProvGuardar">Guardar</button></div>
+      <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+        <div>
+          <h6 class="fw-bold mb-1">Invitar proveedores</h6>
+          <p class="small text-muted mb-0">Utilice el Maestro de Proveedores — selector inteligente con búsqueda en tiempo real.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="scProvBuscarBtn"><i class="bi bi-search"></i> Buscar Proveedor</button>
       </div>
-      <div class="d-flex justify-content-between mb-2">
+      <div class="d-flex justify-content-between mb-2 flex-wrap gap-2">
+        <h6 class="fw-bold mb-0">Proveedores invitados</h6>
         <button type="button" class="btn btn-sm btn-success" id="scEnviarCorreo" disabled><i class="bi bi-envelope"></i> ENVIAR CORREO</button>
       </div>
-      <table class="table table-sm table-bordered">
-        <thead class="table-light"><tr>
-          <th style="width:30px;"><input type="checkbox" id="scProvSelectAll"></th>
-          <th>Proveedor</th><th>RUC</th><th>Teléfono</th><th>Correo</th>
-          <th>Estado envío</th><th>Fecha envío</th><th></th><th></th>
-        </tr></thead>
-        <tbody id="scProvBody"></tbody>
-      </table>
+      <div class="table-responsive" style="max-height:360px;overflow-y:auto;">
+        <table class="table table-sm table-bordered mb-0">
+          <thead class="table-light sticky-top"><tr>
+            <th style="width:30px;"><input type="checkbox" id="scProvSelectAll"></th>
+            <th>Proveedor</th><th>RUC</th><th>Correo</th><th>Teléfono</th><th>Contacto</th><th>Rubro</th>
+            <th>Estado</th><th>Fecha Invitación</th><th class="text-center">N° Inv.</th><th>Acciones</th>
+          </tr></thead>
+          <tbody id="scProvBody"></tbody>
+        </table>
+      </div>
     </div>`;
 
   const footer = `
@@ -305,7 +321,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     <div class="modal fade" id="scWizardModal" tabindex="-1">
       <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
-          <div class="modal-header"><h5 class="modal-title">Solicitud de Cotización</h5>
+          <div class="modal-header prov-draggable-header bg-light"><h5 class="modal-title">Solicitud de Cotización</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
           <div class="modal-body">${body}</div>
           <div class="modal-footer" id="scModalFooter">${footer}</div>
@@ -371,7 +387,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     tb.innerHTML = state.docsResumen.map((d, i) => `
       <tr><td>${esc(d.documento)}</td><td>${esc(d.archivo || '—')}</td>
       <td class="small">${esc(fmtRegistro(d.fecha_registro))}</td>
-      <td><button type="button" class="btn btn-link btn-sm text-danger p-0 sc-doc-del" data-i="${i}" title="Eliminar"><i class="bi bi-trash"></i></button></td></tr>`).join('')
+      <td><button type="button" class="btn btn-sm sc-btn-inst sc-doc-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button></td></tr>`).join('')
       || '<tr><td colspan="4" class="text-muted small">Sin documentos seleccionados</td></tr>';
     tb.querySelectorAll('.sc-doc-del').forEach((btn) => {
       btn.onclick = () => {
@@ -393,7 +409,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       <tr><td>${esc(d.requisito)}</td>
       <td class="text-center">${d.obligatorio !== false ? '<i class="bi bi-check-circle-fill text-success"></i>' : '—'}</td>
       <td class="small">${d.archivo ? `<i class="bi bi-paperclip"></i> ${esc(d.archivo)}` : '—'}</td>
-      <td><button type="button" class="btn btn-link btn-sm text-danger p-0 sc-req-del" data-i="${i}"><i class="bi bi-trash"></i></button></td></tr>`).join('')
+      <td><button type="button" class="btn btn-sm sc-btn-inst sc-req-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button></td></tr>`).join('')
       || '<tr><td colspan="4" class="text-muted small">Sin requisitos seleccionados</td></tr>';
     tb.querySelectorAll('.sc-req-del').forEach((btn) => {
       btn.onclick = () => {
@@ -451,10 +467,8 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         <td>${esc(it.codigo_sigamef || '—')}</td><td>${esc(it.descripcion || '—')}</td>
         <td class="text-center">${esc(it.cantidad ?? 1)}</td>
         <td class="small text-nowrap">
-          <button type="button" class="btn btn-link btn-sm p-0 sc-item-ped" data-i="${i}">Ver pedidos</button>
-          <button type="button" class="btn btn-link btn-sm p-0 sc-item-docs" data-i="${i}">Ver documentos</button>
-          <button type="button" class="btn btn-link btn-sm p-0 sc-item-add" data-i="${i}">Agregar documento</button>
-          <button type="button" class="btn btn-link btn-sm p-0 text-danger sc-item-del" data-i="${i}">Eliminar documento</button>
+          <button type="button" class="btn btn-sm sc-btn-inst me-1 sc-item-req" data-i="${i}"><i class="bi bi-eye"></i> VER REQUERIMIENTO</button>
+          <button type="button" class="btn btn-sm sc-btn-inst sc-item-docs" data-i="${i}"><i class="bi bi-folder2-open"></i> DOCUMENTOS</button>
         </td>
       </tr>`).join('');
     lb.innerHTML = state.lugares.map((it, i) => `
@@ -473,6 +487,16 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       tr.querySelector('.sc-loc-prov').oninput = (e) => { state.lugares[i].provincia = e.target.value; };
       tr.querySelector('.sc-loc-dist').oninput = (e) => { state.lugares[i].distrito = e.target.value; };
     });
+    bindItemActions();
+  }
+
+  function bindItemActions() {
+    el.querySelector('#scItemsBody')?.querySelectorAll('.sc-item-req').forEach((btn) => {
+      btn.onclick = () => showItemRequerimientoModal(state.items[parseInt(btn.dataset.i, 10)]);
+    });
+    el.querySelector('#scItemsBody')?.querySelectorAll('.sc-item-docs').forEach((btn) => {
+      btn.onclick = () => showItemDocumentosModal(state.items[parseInt(btn.dataset.i, 10)], state);
+    });
   }
 
   async function renderProveedores() {
@@ -483,23 +507,38 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     if (!tb) return;
     tb.innerHTML = state.proveedores.map((p) => {
       const enviado = p.estado_envio === 'Enviado';
-      const icon = enviado
-        ? '<i class="bi bi-envelope-check sc-mail-icon-env"></i>'
-        : '<i class="bi bi-envelope sc-mail-icon-pend"></i>';
       return `<tr>
-        <td><input type="checkbox" class="sc-prov-sel" data-id="${p.id}" ${enviado ? 'disabled' : ''}></td>
-        <td>${esc(p.razon_social)}</td><td>${esc(p.ruc)}</td><td>${esc(p.telefono || '')}</td>
-        <td class="small">${esc(p.correo_display || '')}</td>
+        <td><input type="checkbox" class="sc-prov-sel" data-invitacion-id="${p.invitacion_id ?? p.id}" ${enviado ? 'disabled' : ''}></td>
+        <td>${esc(p.razon_social)}</td><td>${esc(p.ruc)}</td>
+        <td class="small">${esc(p.correo_display || '')}</td><td>${esc(p.telefono || '')}</td>
+        <td class="small">${esc(p.persona_contacto || '')}</td><td>${esc(p.rubro || '')}</td>
         <td><span class="badge bg-${enviado ? 'primary' : 'secondary'}">${esc(p.estado_envio)}</span></td>
-        <td class="small">${p.fecha_envio ? esc(String(p.fecha_envio).slice(0, 16).replace('T', ' ')) : '—'}</td>
-        <td class="text-center">${icon}</td>
-        <td>${enviado ? '' : `<button type="button" class="btn btn-link btn-sm text-danger sc-prov-del" data-id="${p.id}">Eliminar</button>`}</td>
+        <td class="small">${p.fecha_invitacion || p.fecha_envio ? esc(String(p.fecha_invitacion || p.fecha_envio).slice(0, 16).replace('T', ' ')) : '—'}</td>
+        <td class="text-center">${p.cantidad_invitaciones_proveedor ?? 0}</td>
+        <td class="text-nowrap">
+          ${enviado ? '' : `<button type="button" class="btn btn-sm btn-outline-danger sc-prov-del" data-invitacion-id="${p.invitacion_id ?? p.id}">Eliminar</button>`}
+          ${enviado ? `<button type="button" class="btn btn-sm btn-outline-primary sc-prov-mail" data-invitacion-id="${p.invitacion_id ?? p.id}"><i class="bi bi-envelope"></i></button>` : ''}
+          <button type="button" class="btn btn-sm btn-outline-secondary sc-prov-hist" data-pid="${p.proveedor_id}" data-name="${esc(p.razon_social)}"><i class="bi bi-clock-history"></i></button>
+        </td>
       </tr>`;
-    }).join('') || '<tr><td colspan="9" class="text-muted small">Sin proveedores registrados</td></tr>';
+    }).join('') || '<tr><td colspan="11" class="text-muted small text-center">Sin proveedores — use Buscar Proveedor</td></tr>';
     tb.querySelectorAll('.sc-prov-del').forEach((btn) => {
       btn.onclick = async () => {
-        await contratacionesService.eliminarProveedorSolicitud(state.solicitudId, btn.dataset.id);
+        await contratacionesService.eliminarProveedorSolicitud(state.solicitudId, btn.dataset.invitacionId);
         await renderProveedores();
+      };
+    });
+    tb.querySelectorAll('.sc-prov-hist').forEach((btn) => {
+      btn.onclick = () => showHistorialProveedorModal(btn.dataset.pid, btn.dataset.name);
+    });
+    tb.querySelectorAll('.sc-prov-mail').forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          const resp = await contratacionesService.enviarCorreosSolicitud(state.solicitudId, [parseInt(btn.dataset.invitacionId, 10)]);
+          alert(resp?.mensaje || 'Solicitud de Cotización enviada correctamente.');
+          await renderProveedores();
+          window.dispatchEvent(new CustomEvent('sgc:invitaciones-updated', { detail: { solicitudId: state.solicitudId } }));
+        } catch (err) { alert(err.message); }
       };
     });
     el.querySelector('#scEnviarCorreo').disabled = !tb.querySelector('.sc-prov-sel:not(:disabled)');
@@ -653,29 +692,23 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       } catch (err) { alert(err.message); }
     });
 
-    el.querySelector('#scProvGuardar')?.addEventListener('click', async () => {
-      try {
-        await contratacionesService.agregarProveedorSolicitud(state.solicitudId, {
-          proveedor: el.querySelector('#scProvNombre').value,
-          ruc: el.querySelector('#scProvRuc').value,
-          telefono: el.querySelector('#scProvTel').value,
-          correo: el.querySelector('#scProvCorreo').value,
-        });
-        el.querySelector('#scProvNombre').value = '';
-        el.querySelector('#scProvRuc').value = '';
-        el.querySelector('#scProvTel').value = '';
-        el.querySelector('#scProvCorreo').value = '';
-        await renderProveedores();
-      } catch (err) { alert(err.message); }
+    el.querySelector('#scProvBuscarBtn')?.addEventListener('click', () => {
+      openSelectorProveedoresModal({
+        solicitudId: state.solicitudId,
+        onAdded: () => renderProveedores(),
+      });
     });
 
     el.querySelector('#scEnviarCorreo')?.addEventListener('click', async () => {
-      const ids = [...el.querySelectorAll('.sc-prov-sel:checked')].map((c) => parseInt(c.dataset.id, 10));
+      const ids = [...el.querySelectorAll('.sc-prov-sel:checked')]
+        .map((c) => parseInt(c.dataset.invitacionId, 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
       if (!ids.length) { alert('Seleccione proveedores pendientes'); return; }
       try {
-        await contratacionesService.enviarCorreosSolicitud(state.solicitudId, ids);
-        alert('Correos enviados.');
+        const resp = await contratacionesService.enviarCorreosSolicitud(state.solicitudId, ids);
+        alert(resp?.mensaje || 'Solicitud de Cotización enviada correctamente.');
         await renderProveedores();
+        window.dispatchEvent(new CustomEvent('sgc:invitaciones-updated', { detail: { solicitudId: state.solicitudId } }));
       } catch (err) { alert(err.message); }
     });
 
@@ -702,6 +735,189 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
 
 export async function showInvitarProveedoresModal(solicitudId) {
   return showSolicitudCotizacionModal([], [], { solicitudId, initialTab: 'invitaciones' });
+}
+
+async function showItemRequerimientoModal(item) {
+  if (!item?.requerimiento_id) { alert('Sin requerimiento asociado'); return; }
+  let req = null;
+  let adjuntos = [];
+  try {
+    req = await requerimientosService.getById(item.requerimiento_id);
+    const adjResp = await adjuntosService.getAdjuntos(item.requerimiento_id);
+    adjuntos = adjResp?.adjuntos || adjResp?.data || [];
+  } catch (_) {}
+  const payload = (() => { try { return JSON.parse(req?.payload || '{}'); } catch (_) { return {}; } })();
+  const items = payload.items || payload.servicioItems || payload.locadorItems || [];
+  const pdfAdj = adjuntos.find((a) => isPdfLike(a.mime_type, a.nombre_archivo));
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="modal fade" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+      <div class="modal-header prov-draggable-header"><h5 class="modal-title">Requerimiento ${esc(item.requerimiento_codigo || item.requerimiento_id)}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <ul class="nav nav-tabs mb-3">
+          <li class="nav-item"><a class="nav-link active" href="#" data-it="req">Requerimiento</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-it="ped">Pedidos</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-it="adj">Documentos Adicionales</a></li>
+        </ul>
+        <div id="itPaneReq">
+          <div class="row g-2 mb-2">
+            <div class="col-md-8"><p class="mb-1"><strong>Denominación:</strong> ${esc(req?.denominacion || item.descripcion)}</p>
+              <p class="mb-1"><strong>Área:</strong> ${esc(req?.area || '—')}</p>
+              <p class="mb-0"><strong>Estado:</strong> ${esc(req?.estado_actual || req?.estado || '—')}</p></div>
+            <div class="col-md-4"><p class="mb-0"><strong>CMN:</strong> ${esc(req?.cmn || '—')}</p></div>
+          </div>
+          <div id="itReqPdfWrap" style="min-height:55vh;border:1px solid #dee2e6;border-radius:6px;overflow:hidden;">
+            ${pdfAdj ? `<iframe id="itReqPdfFrame" title="PDF Requerimiento" style="width:100%;height:55vh;border:0;"></iframe>`
+              : `<div class="p-4 text-center text-muted"><p>No hay PDF del requerimiento adjunto.</p>
+                <p class="small">Los documentos adicionales están en la pestaña correspondiente.</p></div>`}
+          </div>
+        </div>
+        <div id="itPanePed" class="d-none"><table class="table table-sm table-bordered"><thead><tr>
+          <th>Pedido</th><th>Código</th><th>Descripción</th><th>Cant.</th></tr></thead><tbody>
+          ${items.map((p) => `<tr><td>${esc(p.pedido_sigamef || item.pedido_sigamef || '—')}</td>
+            <td>${esc(p.item_bien || p.codigo_sigamef || item.codigo_sigamef || '—')}</td>
+            <td>${esc(p.nombre_item || p.descripcion || item.descripcion || '—')}</td>
+            <td>${esc(p.cantidad ?? item.cantidad ?? 1)}</td></tr>`).join('')
+            || `<tr><td>${esc(item.pedido_sigamef || '—')}</td><td>${esc(item.codigo_sigamef || '—')}</td><td>${esc(item.descripcion || '—')}</td><td>${esc(item.cantidad ?? 1)}</td></tr>`}
+        </tbody></table></div>
+        <div id="itPaneAdj" class="d-none"><div id="itAdjTable">${renderAdjuntosTable(adjuntos)}</div></div>
+      </div>
+    </div></div></div>`;
+  document.body.appendChild(wrap);
+  const mEl = wrap.firstElementChild;
+  makeModalDraggable(mEl);
+  bindAdjuntosTable(wrap);
+  if (pdfAdj) {
+    apiGetAdjuntoPdf(pdfAdj.id, pdfAdj.mime_type).then((b64) => {
+      const frame = wrap.querySelector('#itReqPdfFrame');
+      if (frame && b64) frame.src = `data:${pdfAdj.mime_type || 'application/pdf'};base64,${b64}`;
+    }).catch(() => {});
+  }
+  const panes = { req: 'itPaneReq', ped: 'itPanePed', adj: 'itPaneAdj' };
+  wrap.querySelectorAll('[data-it]').forEach((tab) => {
+    tab.onclick = (e) => {
+      e.preventDefault();
+      wrap.querySelectorAll('.nav-link').forEach((l) => l.classList.remove('active'));
+      tab.classList.add('active');
+      Object.entries(panes).forEach(([k, id]) => wrap.querySelector(`#${id}`)?.classList.toggle('d-none', tab.dataset.it !== k));
+    };
+  });
+  const m = window.bootstrap.Modal.getOrCreateInstance(mEl);
+  mEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+  m.show();
+}
+
+async function apiGetAdjuntoPdf(id, mime) {
+  const { api } = await import('../services/apiService.js');
+  const data = await api.get(`/adjuntos/descargar/${id}`);
+  return data?.contenido_base64 || null;
+}
+
+function showItemDocumentosModal(item, wizardState) {
+  if (!item) return;
+  if (!item.documentos_anexos) item.documentos_anexos = {};
+  const docsSolicitados = (wizardState?.docsResumen || []).map((d) => ({
+    documento: d.documento,
+    archivo: d.archivo || '',
+    mime_type: d.mime_type || 'application/pdf',
+    fecha_registro: d.fecha_registro,
+    version: d.version || '1.0',
+    tamano: d.tamano,
+    contenido_base64: d.contenido_base64 || '',
+    tipo_doc: 'Solicitado',
+  }));
+  Object.entries(item.documentos_anexos || {}).forEach(([tipo, doc]) => {
+    if (!doc) return;
+    docsSolicitados.push({
+      documento: tipo,
+      archivo: doc.nombre || doc.archivo || tipo,
+      mime_type: doc.mime_type || 'application/pdf',
+      fecha_registro: doc.fecha_registro,
+      version: '1.0',
+      tamano: doc.tamano,
+      contenido_base64: doc.contenido_base64 || '',
+      tipo_doc: 'Anexo ítem',
+    });
+  });
+  const reqTecnicos = (wizardState?.reqResumen || []).map((r) => ({
+    requisito: r.requisito,
+    obligatorio: r.obligatorio !== false,
+    archivo: r.archivo || (r.contenido_base64 ? 'Adjunto' : ''),
+    estado: r.archivo || r.contenido_base64 ? 'Cargado' : 'Requerido',
+    contenido_base64: r.contenido_base64 || '',
+    mime_type: r.mime_type || '',
+  }));
+  const wrap = document.createElement('div');
+  const renderSolTab = () => {
+    const host = wrap.querySelector('#idDocSolicitados');
+    if (host) {
+      host.innerHTML = renderDocumentosTable(docsSolicitados, { editableOtros: true });
+      bindDocumentosTable(host, docsSolicitados, { onChange: renderSolTab });
+    }
+  };
+  const renderTecTab = () => {
+    const host = wrap.querySelector('#idDocTecnicos');
+    if (!host) return;
+    if (!reqTecnicos.length) {
+      host.innerHTML = '<p class="text-muted small mb-0">No se registraron requisitos técnicos en la Solicitud de Cotización.</p>';
+      return;
+    }
+    host.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered mb-0">
+          <thead class="table-light"><tr>
+            <th>Requisito técnico</th><th class="text-center">Requerido</th><th>Documento adjunto</th><th>Estado</th><th>Acciones</th>
+          </tr></thead>
+          <tbody>${reqTecnicos.map((r, i) => `
+            <tr>
+              <td>${esc(r.requisito)}</td>
+              <td class="text-center">${r.obligatorio ? 'Sí' : 'No'}</td>
+              <td class="small">${esc(r.archivo || '—')}</td>
+              <td><span class="badge bg-${r.estado === 'Cargado' ? 'success' : 'secondary'}">${esc(r.estado)}</span></td>
+              <td>${r.contenido_base64 ? `<button type="button" class="btn btn-sm btn-outline-primary sgc-tec-ver" data-i="${i}">Ver</button>` : '—'}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    host.querySelectorAll('.sgc-tec-ver').forEach((btn) => {
+      btn.onclick = () => {
+        const r = reqTecnicos[parseInt(btn.dataset.i, 10)];
+        if (r?.contenido_base64) openBase64Document({ nombre: r.archivo || r.requisito, mime_type: r.mime_type, contenido_base64: r.contenido_base64 });
+      };
+    });
+  };
+  wrap.innerHTML = `
+    <div class="modal fade" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+      <div class="modal-header prov-draggable-header"><h5 class="modal-title">Documentos — ${esc(item.requerimiento_codigo || 'Ítem')}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <ul class="nav nav-tabs mb-3">
+          <li class="nav-item"><a class="nav-link active" href="#" data-idt="sol">Documentos solicitados</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-idt="tec">Documentos técnicos</a></li>
+        </ul>
+        <div id="idPaneSol"><div id="idDocSolicitados"></div>
+          <p class="text-muted small mt-2 mb-0">Los documentos del catálogo se cargan automáticamente. Solo <strong>Otros documentos</strong> permite agregar, modificar o eliminar.</p>
+        </div>
+        <div id="idPaneTec" class="d-none"><div id="idDocTecnicos"></div></div>
+      </div>
+    </div></div></div>`;
+  document.body.appendChild(wrap);
+  const mEl = wrap.firstElementChild;
+  makeModalDraggable(mEl);
+  renderSolTab();
+  renderTecTab();
+  const panes = { sol: 'idPaneSol', tec: 'idPaneTec' };
+  wrap.querySelectorAll('[data-idt]').forEach((tab) => {
+    tab.onclick = (e) => {
+      e.preventDefault();
+      wrap.querySelectorAll('.nav-link').forEach((l) => l.classList.remove('active'));
+      tab.classList.add('active');
+      Object.entries(panes).forEach(([k, id]) => wrap.querySelector(`#${id}`)?.classList.toggle('d-none', tab.dataset.idt !== k));
+    };
+  });
+  const m = window.bootstrap.Modal.getOrCreateInstance(mEl);
+  mEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+  m.show();
 }
 
 export { toDatetimeLocalValue };
