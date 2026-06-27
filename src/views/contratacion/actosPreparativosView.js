@@ -13,6 +13,7 @@ import {
 } from '../../utils/trazabilidad.js';
 import { actosMenuItems, actosHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import {
   isCoordinadorActos, isExpedientePoolCoordinador, isExpedienteAsignadoAMi,
@@ -158,6 +159,30 @@ async function loadActosList() {
         const req = rows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
       },
+      obs: (id) => handleBandejaObservaciones(id, rows, {
+        submoduloLabel: 'Coordinación CM',
+        puedeObservar: () => true,
+        onObservar: async (reqId, data) => {
+          await contratacionesService.observarActos(reqId, data.motivo, data.usuario, {
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+            origen_submodulo: 'Coordinación CM',
+          });
+        },
+        onSubsanar: async (reqId, data) => {
+          await requerimientosService.subsanarConDestino(reqId, {
+            respuesta: data.texto,
+            usuario: data.usuario,
+            origen_submodulo: data.origen_submodulo || 'Coordinación CM',
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+          });
+        },
+        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onReload: () => loadActosList(),
+      }),
       deriveAnalyst: (id) => derivarAnalistaActos(id),
     });
     bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });

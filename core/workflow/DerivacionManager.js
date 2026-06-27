@@ -1,13 +1,20 @@
 /**
- * DerivacionManager — registro de derivaciones entre módulos.
+ * DerivacionManager — derivaciones asociadas al REQUERIMIENTO.
  */
-import { ESTADOS } from '../common/ConstantesEstados.js';
-import { generarId, ahoraISO, formatearFechaHora, requerido } from '../common/Utils.js';
+import { ESTADOS_REQUERIMIENTO } from '../common/ConstantesEstados.js';
+import {
+  generarId,
+  ahoraISO,
+  formatearFechaHora,
+  resolverRequerimientoId,
+  resolverCodigoRequerimiento,
+  resolverIdLegacy,
+} from '../common/Utils.js';
 
 const COLECCION = 'derivaciones';
 
-function claveExpediente(expedienteId) {
-  return String(requerido(expedienteId, 'expedienteId'));
+function claveRequerimiento(idOrPayload) {
+  return resolverRequerimientoId(typeof idOrPayload === 'object' ? idOrPayload : { requerimientoId: idOrPayload });
 }
 
 export class DerivacionManager {
@@ -17,47 +24,53 @@ export class DerivacionManager {
   }
 
   async derivar(payload = {}) {
-    const expedienteId = claveExpediente(payload.expedienteId);
+    const requerimientoId = claveRequerimiento(payload);
+    const codigoRequerimiento = resolverCodigoRequerimiento(payload, requerimientoId);
     const ts = ahoraISO();
     const { fecha, hora } = formatearFechaHora(ts);
     const usuario = payload.usuario || this.ctx.obtenerUsuario()?.nombre || 'Sistema';
 
     const reg = {
       id: generarId('der'),
-      expedienteId,
-      origen: requerido(payload.origen, 'origen'),
-      destino: requerido(payload.destino, 'destino'),
+      requerimientoId,
+      codigoRequerimiento,
+      origen: payload.origen,
+      destino: payload.destino,
       usuario,
       fecha,
       hora,
       timestamp: ts,
-      estado: payload.estado || ESTADOS.DERIVADO,
+      estado: payload.estado || ESTADOS_REQUERIMIENTO.DEC,
       comentario: payload.comentario || payload.observacion || '',
       recibida: false,
       fechaRecepcion: null,
       metadata: payload.metadata || {},
     };
 
-    await this.store.append(COLECCION, expedienteId, reg);
+    if (!reg.origen) throw new Error('origen es obligatorio');
+    if (!reg.destino) throw new Error('destino es obligatorio');
+
+    await this.store.append(COLECCION, requerimientoId, reg);
     return reg;
   }
 
-  async obtenerDerivaciones(expedienteId) {
-    return this.listarPorExpediente(expedienteId);
+  async obtenerDerivaciones(requerimientoId) {
+    return this.listarPorRequerimiento(requerimientoId);
   }
 
-  async listarPorExpediente(expedienteId) {
-    const lista = await this.store.getLista(COLECCION, claveExpediente(expedienteId));
+  async listarPorRequerimiento(requerimientoId) {
+    const lista = await this.store.getLista(COLECCION, claveRequerimiento(requerimientoId));
     return lista.slice().sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
   }
 
-  async listarPendientes(expedienteId) {
-    const lista = await this.listarPorExpediente(expedienteId);
+  async listarPendientes(requerimientoId) {
+    const lista = await this.listarPorRequerimiento(requerimientoId);
     return lista.filter((d) => !d.recibida);
   }
 
-  async registrarRecepcion(expedienteId, derivacionId, opts = {}) {
-    const lista = await this.listarPorExpediente(expedienteId);
+  async registrarRecepcion(requerimientoId, derivacionId, opts = {}) {
+    const id = claveRequerimiento(requerimientoId);
+    const lista = await this.listarPorRequerimiento(id);
     const idx = lista.findIndex((d) => d.id === derivacionId);
     if (idx < 0) throw new Error('Derivación no encontrada');
 
@@ -66,12 +79,16 @@ export class DerivacionManager {
       recibida: true,
       fechaRecepcion: ahoraISO(),
       usuarioRecepcion: opts.usuario || this.ctx.obtenerUsuario()?.nombre || 'Sistema',
-      estado: opts.estado || ESTADOS.EN_PROCESO,
+      estado: opts.estado || ESTADOS_REQUERIMIENTO.REGISTRADO,
     };
 
-    const storeKey = `${COLECCION}:${claveExpediente(expedienteId)}`;
-    await this.store.set(COLECCION, storeKey, lista);
+    await this.store.set(COLECCION, `${COLECCION}:${id}`, lista);
     return lista[idx];
+  }
+
+  /** @deprecated alias legacy */
+  async obtenerDerivacionesPorExpediente(expedienteId) {
+    return this.obtenerDerivaciones(resolverIdLegacy(expedienteId));
   }
 }
 

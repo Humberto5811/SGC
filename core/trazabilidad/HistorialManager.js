@@ -1,12 +1,20 @@
 /**
- * HistorialManager — bitácora de cambios del expediente.
+ * HistorialManager — historial del REQUERIMIENTO a lo largo del flujo SGC.
  */
-import { generarId, ahoraISO, formatearFechaHora, requerido } from '../common/Utils.js';
+import { MODULOS_FLUJO } from '../common/ConstantesEventos.js';
+import {
+  generarId,
+  ahoraISO,
+  formatearFechaHora,
+  resolverRequerimientoId,
+  resolverCodigoRequerimiento,
+  resolverIdLegacy,
+} from '../common/Utils.js';
 
 const COLECCION = 'historial';
 
-function claveExpediente(expedienteId) {
-  return String(requerido(expedienteId, 'expedienteId'));
+function claveRequerimiento(idOrPayload) {
+  return resolverRequerimientoId(typeof idOrPayload === 'object' ? idOrPayload : { requerimientoId: idOrPayload });
 }
 
 export class HistorialManager {
@@ -16,14 +24,16 @@ export class HistorialManager {
   }
 
   async registrarCambio(payload = {}) {
-    const expedienteId = claveExpediente(payload.expedienteId);
+    const requerimientoId = claveRequerimiento(payload);
+    const codigoRequerimiento = resolverCodigoRequerimiento(payload, requerimientoId);
     const ts = ahoraISO();
     const { fecha, hora } = formatearFechaHora(ts);
     const usuario = payload.usuario || this.ctx.obtenerUsuario()?.nombre || 'Sistema';
 
     const cambio = {
       id: generarId('hist'),
-      expedienteId,
+      requerimientoId,
+      codigoRequerimiento,
       usuario,
       cambio: payload.cambio || payload.descripcion || '',
       fecha,
@@ -37,18 +47,38 @@ export class HistorialManager {
       metadata: payload.metadata || {},
     };
 
-    await this.store.append(COLECCION, expedienteId, cambio);
+    await this.store.append(COLECCION, requerimientoId, cambio);
     return cambio;
   }
 
-  async obtenerHistorial(expedienteId) {
-    const cambios = await this.listarCambios(expedienteId);
-    return { expedienteId: claveExpediente(expedienteId), cambios, total: cambios.length };
+  async obtenerHistorial(requerimientoId) {
+    const id = claveRequerimiento(requerimientoId);
+    const cambios = await this.listarCambios(id);
+    return {
+      requerimientoId: id,
+      modulosFlujo: MODULOS_FLUJO.slice(),
+      cambios,
+      total: cambios.length,
+    };
   }
 
-  async listarCambios(expedienteId) {
-    const lista = await this.store.getLista(COLECCION, claveExpediente(expedienteId));
+  async listarCambios(requerimientoId) {
+    const lista = await this.store.getLista(COLECCION, claveRequerimiento(requerimientoId));
     return lista.slice().sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+  }
+
+  /** Resumen por módulo del flujo (Registro → DEC → … → Ejecución). */
+  async obtenerResumenPorModulo(requerimientoId) {
+    const cambios = await this.listarCambios(requerimientoId);
+    return MODULOS_FLUJO.map((modulo) => ({
+      modulo,
+      cambios: cambios.filter((c) => c.modulo === modulo),
+    }));
+  }
+
+  /** @deprecated alias legacy */
+  async obtenerHistorialPorExpediente(expedienteId) {
+    return this.obtenerHistorial(resolverIdLegacy(expedienteId));
   }
 }
 

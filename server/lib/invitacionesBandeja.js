@@ -1,4 +1,4 @@
-// Bandeja maestra Invitaciones — trazabilidad completa (no ocultar expedientes derivados)
+// Bandeja maestra Invitaciones — nunca ocultar requerimientos que pasaron por Invitaciones
 import { query } from '../db.js';
 import {
   enrichRequerimientoRow,
@@ -12,22 +12,28 @@ import {
 
 export const SUBMODULO_INVITACIONES = 'Invitaciones';
 
+const ETAPAS_INVITACIONES_FLUJO = `(
+  'INVITACIONES', 'RECEPCION_COTIZACIONES', 'VALIDACION_USUARIO',
+  'CUADRO_COMPARATIVO', 'CCP', 'EJECUCION', 'FINALIZADO'
+)`;
+
+/** Bandeja histórica Invitaciones — incluye SC creada y etapas posteriores. */
 export const WHERE_BANDEJA_INVITACIONES = `
   (
-    r.estado_actual = 'INVITACIONES'
-    OR r.estado IN ('En Invitaciones')
-    OR (
-      r.estado_actual IN ('INVITACIONES', 'RECEPCION_COTIZACIONES', 'VALIDACION_USUARIO', 'CUADRO_COMPARATIVO', 'CCP', 'EJECUCION')
-      AND (
-        jsonb_array_length(COALESCE((COALESCE(r.payload, '{}')::jsonb -> 'historial_invitaciones'), '[]'::jsonb)) > 0
-        OR EXISTS (SELECT 1 FROM invitacion_proveedores ip WHERE ip.requerimiento_id = r.id)
-      )
-    )
+    r.estado_actual IN ${ETAPAS_INVITACIONES_FLUJO}
+    OR r.estado IN ('En Invitaciones', 'En Cotizaciones', 'En Cuadro Comparativo', 'En CCP', 'En Ejecución')
+    OR r.estado ILIKE 'Sol.Cot. Enviada%'
+    OR jsonb_array_length(COALESCE((COALESCE(r.payload, '{}')::jsonb -> 'historial_invitaciones'), '[]'::jsonb)) > 0
+    OR EXISTS (SELECT 1 FROM solicitud_requerimientos sr WHERE sr.requerimiento_id = r.id)
+    OR EXISTS (SELECT 1 FROM invitacion_proveedores ip WHERE ip.requerimiento_id = r.id)
     OR EXISTS (
       SELECT 1 FROM jsonb_array_elements(COALESCE(r.historial_movimientos, '[]'::jsonb)) m
-      WHERE UPPER(COALESCE(m->>'etapa', '')) = 'INVITACIONES'
+      WHERE UPPER(COALESCE(m->>'etapa', '')) IN ${ETAPAS_INVITACIONES_FLUJO}
     )
-    OR EXISTS (SELECT 1 FROM solicitud_requerimientos sr WHERE sr.requerimiento_id = r.id)
+    OR EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(r.historial_estados, '[]'::jsonb)) h
+      WHERE UPPER(COALESCE(h->>'etapa', h->>'estado', '')) IN ${ETAPAS_INVITACIONES_FLUJO}
+    )
   )
 `;
 

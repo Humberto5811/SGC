@@ -1,24 +1,19 @@
 /**
- * WorkflowManager — estructura del flujo de estados (fase 1: sin integración).
+ * WorkflowManager — flujo de estados del REQUERIMIENTO únicamente.
  */
-import { ESTADOS } from '../common/ConstantesEstados.js';
-import { requerido } from '../common/Utils.js';
+import { ESTADOS, FLUJO_REQUERIMIENTO } from '../common/ConstantesEstados.js';
+import { resolverRequerimientoId, resolverCodigoRequerimiento, requerido } from '../common/Utils.js';
 import { crearEstadoManager } from './EstadoManager.js';
 
-/** Mapa provisional de transiciones — se ampliará en fase de migración. */
-const TRANSICIONES = Object.freeze({
-  [ESTADOS.BORRADOR]: [ESTADOS.PENDIENTE, ESTADOS.EN_PROCESO, ESTADOS.ANULADO],
-  [ESTADOS.PENDIENTE]: [ESTADOS.EN_PROCESO, ESTADOS.DERIVADO, ESTADOS.OBSERVADO, ESTADOS.ANULADO],
-  [ESTADOS.EN_PROCESO]: [ESTADOS.DERIVADO, ESTADOS.OBSERVADO, ESTADOS.APROBADO, ESTADOS.RECHAZADO],
-  [ESTADOS.DERIVADO]: [ESTADOS.EN_PROCESO, ESTADOS.OBSERVADO, ESTADOS.APROBADO],
-  [ESTADOS.OBSERVADO]: [ESTADOS.RESPONDIDO, ESTADOS.EN_PROCESO, ESTADOS.RECHAZADO],
-  [ESTADOS.RESPONDIDO]: [ESTADOS.EN_PROCESO, ESTADOS.DERIVADO, ESTADOS.APROBADO],
-  [ESTADOS.APROBADO]: [ESTADOS.FINALIZADO, ESTADOS.CERRADO, ESTADOS.DERIVADO],
-  [ESTADOS.RECHAZADO]: [ESTADOS.CERRADO, ESTADOS.ANULADO],
-  [ESTADOS.FINALIZADO]: [ESTADOS.CERRADO],
-  [ESTADOS.CERRADO]: [],
-  [ESTADOS.ANULADO]: [],
-});
+const TRANSICIONES = Object.freeze(
+  FLUJO_REQUERIMIENTO.reduce((acc, estado, idx) => {
+    const siguientes = [];
+    if (idx < FLUJO_REQUERIMIENTO.length - 1) siguientes.push(FLUJO_REQUERIMIENTO[idx + 1]);
+    if (idx > 0) siguientes.push(FLUJO_REQUERIMIENTO[idx - 1]);
+    acc[estado] = [...new Set(siguientes)];
+    return acc;
+  }, {}),
+);
 
 const TRANSICIONES_INVERSAS = Object.freeze(
   Object.entries(TRANSICIONES).reduce((acc, [origen, destinos]) => {
@@ -46,7 +41,8 @@ export class WorkflowManager {
   obtenerEstadoAnterior(estadoActual) {
     const n = this.estadoManager.normalizar(estadoActual);
     if (!n) return null;
-    return TRANSICIONES_INVERSAS[n] || null;
+    const idx = FLUJO_REQUERIMIENTO.indexOf(n);
+    return idx > 0 ? FLUJO_REQUERIMIENTO[idx - 1] : TRANSICIONES_INVERSAS[n] || null;
   }
 
   validarTransicion(estadoActual, estadoNuevo) {
@@ -61,10 +57,12 @@ export class WorkflowManager {
   }
 
   async registrarMovimiento(payload = {}) {
-    requerido(payload.expedienteId, 'expedienteId');
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
     if (this.timeline) {
       return this.timeline.registrarEvento({
         ...payload,
+        requerimientoId: resolverRequerimientoId(payload),
+        codigoRequerimiento: resolverCodigoRequerimiento(payload),
         estadoAnterior: payload.estadoAnterior,
         estadoNuevo: payload.estadoNuevo,
       });
@@ -77,9 +75,11 @@ export class WorkflowManager {
     if (!validacion.valido && !payload.omitirValidacion) {
       throw new Error(validacion.motivo);
     }
+    const requerimientoId = resolverRequerimientoId(payload);
     if (this.historial) {
       await this.historial.registrarCambio({
-        expedienteId: payload.expedienteId,
+        requerimientoId,
+        codigoRequerimiento: resolverCodigoRequerimiento(payload, requerimientoId),
         cambio: `Estado: ${payload.estadoAnterior} → ${payload.estadoNuevo}`,
         modulo: payload.modulo,
         submodulo: payload.submodulo,
@@ -89,6 +89,10 @@ export class WorkflowManager {
       });
     }
     return this.registrarMovimiento(payload);
+  }
+
+  obtenerFlujoLineal() {
+    return FLUJO_REQUERIMIENTO.slice();
   }
 }
 

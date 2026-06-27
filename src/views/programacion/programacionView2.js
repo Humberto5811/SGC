@@ -16,6 +16,7 @@ import { estadoModernBadge } from '../../utils/bandejaUi.js';
 import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
 import { fetchBandejaProgramacion } from '../../utils/bandejaRequerimientos.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
@@ -201,6 +202,30 @@ async function loadBandeja() {
         const req = allRows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
       },
+      obs: (id) => handleBandejaObservaciones(id, allRows, {
+        submoduloLabel: 'Programación',
+        puedeObservar: (r) => ['Aprobado DEC', 'En Programación'].includes(String(r.estado || '')) || /observ/i.test(String(r.estado || '')),
+        onObservar: async (reqId, data) => {
+          await contratacionesService.observarProgramacion(reqId, data.motivo, data.usuario, {
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+            origen_submodulo: 'Programación',
+          });
+        },
+        onSubsanar: async (reqId, data) => {
+          await requerimientosService.subsanarConDestino(reqId, {
+            respuesta: data.texto,
+            usuario: data.usuario,
+            origen_submodulo: data.origen_submodulo || 'Programación',
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+          });
+        },
+        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onReload: () => loadBandeja(),
+      }),
     });
     bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
     updateConsolidarBtn();

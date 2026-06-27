@@ -172,8 +172,14 @@ export async function fetchBandejaEvaluacion(filters = {}) {
 }
 
 export async function fetchBandejaDEC(filters = {}) {
-  const rows = await fetchAllRequerimientosBandeja(filters);
-  return rows.filter(requerimientoVisibleEnDEC);
+  try {
+    const { contratacionesService } = await import('../services/contratacionesService.js');
+    const resp = await contratacionesService.listDEC({ pageSize: 500, ...filters });
+    return sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
+  } catch (_) {
+    const rows = await fetchAllRequerimientosBandeja(filters);
+    return rows.filter(requerimientoVisibleEnDEC);
+  }
 }
 
 export async function fetchBandejaProgramacion(filters = {}) {
@@ -181,7 +187,6 @@ export async function fetchBandejaProgramacion(filters = {}) {
     const { contratacionesService } = await import('../services/contratacionesService.js');
     const resp = await contratacionesService.listProgramacion({ pageSize: 500, ...filters });
     let list = sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
-    list = list.filter(requerimientoVisibleEnProgramacion);
     return list;
   } catch (_) {
     const rows = await fetchAllRequerimientosBandeja(filters);

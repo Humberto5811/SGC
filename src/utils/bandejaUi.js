@@ -70,27 +70,6 @@ export function bandejaGlobalStyles() {
     .badge-dias-mod { font-size: 0.72rem; font-weight: 600; min-width: 3.2rem; }
     .bandeja-actions-btn { padding: 2px 8px; line-height: 1; font-size: 1.1rem; border: 1px solid #dee2e6; }
     .text-orange { color: #fd7e14 !important; }
-    .sgc-detail-panel {
-      position: fixed; top: 0; right: 0; width: min(90vw, 100%); max-width: 100%; height: 100vh;
-      background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); z-index: 1100;
-      display: flex; flex-direction: column; transform: translateX(100%);
-      transition: transform .25s ease;
-    }
-    .sgc-detail-panel.open { transform: translateX(0); }
-    .sgc-detail-panel #sgcPanelBody { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
-    .sgc-detail-panel #sgcPanelTabs {
-      overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
-      border-bottom: 1px solid #dee2e6; scrollbar-width: thin;
-    }
-    .sgc-detail-panel #sgcPanelTabs .nav-item { flex-shrink: 0; }
-    .sgc-detail-panel #sgcPanelTabs .nav-link {
-      font-size: 0.78rem; padding: 0.45rem 0.7rem; white-space: nowrap;
-    }
-    .sgc-detail-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1095;
-      opacity: 0; pointer-events: none; transition: opacity .2s;
-    }
-    .sgc-detail-backdrop.open { opacity: 1; pointer-events: auto; }
     @media (max-width: 768px) {
       .sgc-bandeja-wrap .req-list-table { min-width: 640px; }
     }
@@ -143,7 +122,7 @@ export function getSigamefRaw(r) {
 
 export function countObservacionesPendientes(req) {
   const obs = todasObservaciones(req);
-  return obs.filter((o) => !o.subsanacion).length;
+  return obs.filter((o) => !o.subsanacion && !o.respuesta).length;
 }
 
 export function getResponsableRol(row) {

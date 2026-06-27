@@ -1,6 +1,7 @@
 /**
  * Utilidades compartidas del SGC Core — sin dependencias de módulos de negocio.
  */
+import { crearPlantillaContextoRequerimiento } from './ConstantesJerarquia.js';
 
 let _seq = 0;
 
@@ -32,6 +33,38 @@ export function formatearFechaHora(iso) {
 export function requerido(valor, nombre) {
   if (valor == null || valor === '') throw new Error(`${nombre} es obligatorio`);
   return valor;
+}
+
+/**
+ * Resuelve el identificador principal del requerimiento.
+ * Compatibilidad: acepta expedienteId como alias legacy (fase 1).
+ */
+export function resolverRequerimientoId(payload = {}) {
+  if (payload.requerimientoId != null && payload.requerimientoId !== '') {
+    return String(payload.requerimientoId);
+  }
+  if (payload.expedienteId != null && payload.expedienteId !== '') {
+    return String(payload.expedienteId);
+  }
+  if (typeof payload === 'string' || typeof payload === 'number') {
+    return String(payload);
+  }
+  if (payload.id != null && payload.id !== '') {
+    return String(payload.id);
+  }
+  throw new Error('requerimientoId es obligatorio');
+}
+
+/** Resuelve código visible del requerimiento (ej. REQ-2026-001). */
+export function resolverCodigoRequerimiento(payload = {}, requerimientoId = null) {
+  const id = requerimientoId || resolverRequerimientoId(payload);
+  return String(payload.codigoRequerimiento || payload.codigo || id);
+}
+
+/** Alias legacy: expedienteId → requerimientoId (compatibilidad fase 1). */
+export function resolverIdLegacy(idOrPayload) {
+  if (typeof idOrPayload === 'object') return resolverRequerimientoId(idOrPayload);
+  return String(requerido(idOrPayload, 'requerimientoId'));
 }
 
 export function crearStoreEnMemoria() {
@@ -66,16 +99,14 @@ export function crearStoreEnMemoria() {
   };
 }
 
-/**
- * Adaptador de persistencia inyectable.
- * En fase 2 se reemplazará por adaptador PostgreSQL sin cambiar managers.
- */
 export function crearContextoCore(opts = {}) {
   return {
     store: opts.store || crearStoreEnMemoria(),
     obtenerUsuario: opts.obtenerUsuario || (() => ({ id: null, nombre: 'Sistema' })),
     obtenerIp: opts.obtenerIp || (() => ''),
     obtenerNavegador: opts.obtenerNavegador || (() => ''),
+    /** Plantilla multientidad — sin implementación operativa. */
+    crearContextoRequerimiento: (requerimientoId) => crearPlantillaContextoRequerimiento(requerimientoId),
   };
 }
 
@@ -85,6 +116,9 @@ export default {
   parseFecha,
   formatearFechaHora,
   requerido,
+  resolverRequerimientoId,
+  resolverCodigoRequerimiento,
+  resolverIdLegacy,
   crearStoreEnMemoria,
   crearContextoCore,
 };

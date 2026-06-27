@@ -347,6 +347,9 @@ export function actosBandejaStyles() {
       white-space: normal; overflow: visible; text-overflow: unset; display: block; line-height: 1.35;
     }
     .actos-bandeja-wrap .actos-col-paq { min-width: 100px; }
+    .actos-bandeja-wrap .actos-col-sc { min-width: 130px; white-space: nowrap; }
+    .inv-bandeja-wrap .actos-col-area { min-width: 90px; max-width: 120px; }
+    .inv-bandeja-wrap .actos-col-inv-count { min-width: 88px; max-width: 100px; }
     .actos-bandeja-wrap .actos-col-pedido { min-width: 110px; white-space: normal; }
     .actos-bandeja-wrap .actos-col-sigamef { min-width: 110px; white-space: normal; }
     .inv-bandeja-page { overflow: visible; padding-bottom: 2.5rem; }
@@ -374,7 +377,7 @@ function getResponsableRolDisplay(r) {
 }
 
 export function renderActosRowCells(r, opts = {}) {
-  const { escFn = esc } = opts;
+  const { escFn = esc, includeScColumn = false, narrowArea = false } = opts;
   const sigamef = (() => {
     try {
       const p = JSON.parse(r.payload || '{}');
@@ -408,15 +411,21 @@ export function renderActosRowCells(r, opts = {}) {
     r.estado,
   );
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '—';
+  const scCode = r.codigo_solicitud || r.codigoSolicitud || '';
+  const scCell = includeScColumn
+    ? `<td class="actos-col-sc small"><strong>${scCode ? escFn(scCode) : '<span class="text-muted">—</span>'}</strong></td>`
+    : '';
+  const areaClass = narrowArea ? ' actos-col-area' : '';
 
   return `
     <td class="text-center"><button type="button" class="btn btn-link btn-sm p-0 req-traza text-secondary" data-id="${r.id}" onclick="event.stopPropagation()"><i class="bi bi-clock-history"></i></button></td>
     <td><strong>${escFn(r.codigo || ('#' + r.id))}</strong></td>
+    ${scCell}
     <td class="actos-col-paq">${paqBadge}</td>
     <td class="actos-col-pedido small">${escFn(pedidos)}</td>
     <td class="actos-col-sigamef small">${escFn(sigamef || '—')}</td>
     <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
-    <td>${escFn(r.area || '—')}</td>
+    <td class="${areaClass.trim()}">${escFn(r.area || '—')}</td>
     <td>${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>
@@ -424,11 +433,15 @@ export function renderActosRowCells(r, opts = {}) {
 }
 
 export function actosBandejaHeaders(opts = {}) {
-  const { includeAcc = true } = opts;
+  const { includeAcc = true, includeScColumn = false } = opts;
   const accCol = includeAcc ? '<th class="req-col-acc"></th>' : '';
+  const scCol = includeScColumn
+    ? '<th class="actos-col-sc" style="min-width:130px;">Solicitud de Cotización</th>'
+    : '';
   return `
     <th class="req-col-timeline" title="Timeline">🕒</th>
     <th>N° Requerimiento</th>
+    ${scCol}
     <th>Paquete</th>
     <th>Pedido SIGAMEF</th>
     <th>Código SIGAMEF</th>

@@ -29,6 +29,7 @@ export function registroHiddenActions(r, esc) {
     <button type="button" class="req-open" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
     <button type="button" class="req-print" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="req-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(e)}"></button>
+    <button type="button" class="req-obs-menu" data-act-trigger="obs" data-id="${r.id}"></button>
     ${observado ? `<button type="button" class="req-observado" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
     <button type="button" class="req-approve" data-act-trigger="approve" data-id="${r.id}" ${puedeAprobar ? '' : 'disabled'}></button>
     ${aprobado ? `<button type="button" class="req-ver-obs" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
@@ -60,6 +61,7 @@ export function evalHiddenActions(r, esc) {
     <button type="button" class="eval-edit" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
     <button type="button" class="eval-print" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="eval-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}"></button>
+    <button type="button" class="eval-obs-menu" data-act-trigger="obs" data-id="${r.id}"></button>
     <button type="button" class="eval-observar" data-act-trigger="obs" data-id="${r.id}" ${(enTramite || observado || aprobado) ? '' : 'disabled'}></button>
     <button type="button" class="eval-approve" data-act-trigger="approve" data-id="${r.id}" ${aprobado || !enTramite ? 'disabled' : ''}></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
@@ -83,6 +85,7 @@ export function decHiddenActions(r) {
   return `
     <button type="button" class="dec-ver" data-act-trigger="download" data-id="${r.id}" data-perm-act="VER"></button>
     <button type="button" class="dec-attach" data-act-trigger="attach" data-id="${r.id}" data-perm-act="VER"></button>
+    <button type="button" class="dec-obs-menu" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
     <button type="button" class="dec-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
     <button type="button" class="dec-aprobar" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;

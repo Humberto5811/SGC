@@ -1,4 +1,6 @@
-// Panel lateral de detalle de expediente (pestañas)
+/**
+ * Panel de detalle reutilizable — expansión vertical (ancho completo del módulo).
+ */
 import { trazabilidadService } from '../services/trazabilidadService.js';
 import { adjuntosService } from '../services/adjuntosService.js';
 import { renderTimeline, timelineModalStyles } from '../services/timelineService.js';
@@ -11,31 +13,35 @@ import { todasObservaciones, historialHtml } from '../views/requerimiento/reqSha
 let panelEl = null;
 let backdropEl = null;
 
-const PANEL_STYLES = `
-  .sgc-detail-panel {
-    position: fixed; top: 0; right: 0; width: min(90vw, 100%); max-width: 100%; height: 100vh;
-    background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); z-index: 1100;
-    display: flex; flex-direction: column; transform: translateX(0);
-    transition: transform .25s ease;
+export const PANEL_STYLES = `
+  .sgc-detail-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1095;
+    opacity: 0; pointer-events: none; transition: opacity .2s;
   }
-  .sgc-detail-panel:not(.open) { transform: translateX(100%); }
-  .sgc-detail-panel.open { transform: translateX(0); }
+  .sgc-detail-backdrop.open { opacity: 1; pointer-events: auto; }
+  .sgc-detail-panel {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: 100%; max-width: 100%; height: min(88vh, calc(100vh - 96px));
+    background: #fff; box-shadow: 0 -6px 28px rgba(0,0,0,.18); z-index: 1100;
+    display: flex; flex-direction: column;
+    transform: translateY(100%); transition: transform .25s ease;
+    overflow: hidden;
+  }
+  .sgc-detail-panel.open { transform: translateY(0); }
   .sgc-detail-panel #sgcPanelBody {
     flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; min-height: 0;
+    -webkit-overflow-scrolling: touch;
   }
   .sgc-detail-panel #sgcPanelTabs {
-    overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
+    flex-shrink: 0; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
     border-bottom: 1px solid #dee2e6; scrollbar-width: thin;
   }
   .sgc-detail-panel #sgcPanelTabs .nav-item { flex-shrink: 0; }
   .sgc-detail-panel #sgcPanelTabs .nav-link {
     font-size: 0.78rem; padding: 0.45rem 0.7rem; white-space: nowrap;
   }
-  .sgc-detail-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1095;
-    opacity: 0; pointer-events: none; transition: opacity .2s;
-  }
-  .sgc-detail-backdrop.open { opacity: 1; pointer-events: auto; }
+  .sgc-detail-panel .traza-modal-scroll,
+  .sgc-detail-panel .traza-timeline-wrap { overflow-x: hidden; max-width: 100%; }
 `;
 
 function ensurePanelStyles() {
@@ -56,7 +62,7 @@ function ensurePanel() {
   panelEl.className = 'sgc-detail-panel';
   panelEl.innerHTML = `
     <style>${timelineModalStyles()}</style>
-    <div class="border-bottom px-3 py-2 d-flex justify-content-between align-items-center bg-light">
+    <div class="border-bottom px-3 py-2 d-flex justify-content-between align-items-center bg-light flex-shrink-0">
       <h6 class="mb-0 fw-bold" id="sgcPanelTitle">Detalle</h6>
       <button type="button" class="btn btn-sm btn-outline-secondary" id="sgcPanelClose"><i class="bi bi-x-lg"></i></button>
     </div>
@@ -67,7 +73,7 @@ function ensurePanel() {
       <li class="nav-item"><button class="nav-link small" data-tab="adj">Adjuntos</button></li>
       <li class="nav-item"><button class="nav-link small" data-tab="hist">Historial</button></li>
     </ul>
-    <div class="flex-grow-1 overflow-auto p-3" id="sgcPanelBody"><div class="text-muted small">Cargando…</div></div>
+    <div class="flex-grow-1 p-3" id="sgcPanelBody"><div class="text-muted small">Cargando…</div></div>
   `;
   document.body.appendChild(backdropEl);
   document.body.appendChild(panelEl);
@@ -140,7 +146,7 @@ async function renderPanelTab(req, tab) {
           <tr><td class="text-muted" style="width:42%;">Código SIGAMEF</td><td>${esc(getSigamefRaw(row) || '—')}</td></tr>
           <tr><td class="text-muted">Nombre del ítem</td><td>${esc(nombreItem || '—')}</td></tr>
           <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row.estadoActual || row.estado_actual, row.estadoActualTexto || row.sub_modulo_actual, row.estado)}</td></tr>
-          <tr><td class="text-muted">Responsable</td><td>${esc(row.responsableActual)}<br/><small class="text-muted">${esc(getResponsableRol(row))}</small></td></tr>
+          <tr><td class="text-muted">Responsable</td><td>${esc(row.responsableActual || row.responsable_actual)}<br/><small class="text-muted">${esc(getResponsableRol(row))}</small></td></tr>
           <tr><td class="text-muted">Días en etapa</td><td>${diasBadgeHtml(row)}</td></tr>
           <tr><td class="text-muted">Área usuaria</td><td>${esc(row.area || '—')}</td></tr>
           <tr><td class="text-muted">Centro</td><td>${esc(row.responsable || row.centro_nombre || '—')}</td></tr>

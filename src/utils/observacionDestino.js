@@ -76,6 +76,10 @@ export function observacionPendienteParaSubmodulo(pending, submoduloLabel) {
   const mod = String(submoduloLabel || '').toLowerCase();
   if (!dest || !mod) return false;
   if (dest === mod || dest.includes(mod) || mod.includes(dest)) return true;
+  if (mod.includes('registro') && (dest.includes('registro') || dest.includes('requerimiento'))) return true;
+  if (mod.includes('evalu') && dest.includes('evalu')) return true;
+  if (mod.includes('dec') && dest.includes('dec')) return true;
+  if (mod.includes('invit') && dest.includes('invit')) return true;
   if (mod.includes('program') && dest.includes('program')) return true;
   if ((mod.includes('actos') || mod.includes('coordin')) && (dest.includes('actos') || dest.includes('coordin'))) return true;
   return false;

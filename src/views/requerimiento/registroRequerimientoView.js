@@ -35,6 +35,7 @@ import {
 } from '../../utils/trazabilidad.js';
 import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
@@ -313,6 +314,25 @@ async function loadList() {
         const req = rows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, /aprobad/i.test(String(req.estado || ''))) });
       },
+      obs: (id) => handleBandejaObservaciones(id, rows, {
+        submoduloLabel: 'Registro de Requerimiento',
+        puedeObservar: (r) => !/aprobad/i.test(String(r.estado || '')) && !/tr[aá]mite/i.test(String(r.estado || '')),
+        onSubsanar: async (reqId, data) => {
+          const req = rows.find((x) => String(x.id) === String(reqId));
+          if (!req) return;
+          await addSubsanacion(req, data.texto, data.usuario, {
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+            origen_submodulo: data.origen_submodulo,
+          });
+        },
+        onAdjuntos: (rid) => {
+          const req = rows.find((x) => String(x.id) === String(rid));
+          manageAdjuntos(rid, req && /aprobad/i.test(String(req.estado || '')));
+        },
+        onReload: () => loadList(),
+      }),
       approve: (id) => solicitarAprobacion(id),
     });
     bindRowDetailPanel(cont, rows, {

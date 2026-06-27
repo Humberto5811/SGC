@@ -13,6 +13,7 @@ import {
 } from '../../utils/trazabilidad.js';
 import { decMenuItems, decHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 function esc(s) {
@@ -70,6 +71,22 @@ async function loadDecList() {
         const req = rows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
       },
+      obs: (id) => handleBandejaObservaciones(id, rows, {
+        submoduloLabel: 'DEC',
+        puedeObservar: (r) => !isEstadoObservado(r.estado),
+        onObservar: async (reqId, data) => {
+          const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
+          await contratacionesService.observarDEC(reqId, data.motivo, getUserDisplayName(user), {
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+            origen_submodulo: data.origen_submodulo || 'DEC',
+          });
+        },
+        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onReload: () => loadDecList(),
+        defaultDestinoObservacion: 'Registro de Requerimiento',
+      }),
     });
     bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
     cont.querySelectorAll('.dec-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));

@@ -1,7 +1,16 @@
 /**
- * EstadoManager — catálogo y utilidades de estados del Core.
+ * EstadoManager — catálogo de estados del REQUERIMIENTO (workflow).
  */
-import { ESTADOS, ESTADOS_LIST, ESTADOS_TERMINALES, esEstadoValido, normalizarEstado } from '../common/ConstantesEstados.js';
+import {
+  ESTADOS,
+  ESTADOS_REQUERIMIENTO,
+  ESTADOS_LIST,
+  ESTADOS_TERMINALES,
+  ESTADOS_OBSERVACION,
+  FLUJO_REQUERIMIENTO,
+  esEstadoValido,
+  normalizarEstado,
+} from '../common/ConstantesEstados.js';
 
 export class EstadoManager {
   obtenerCatalogo() {
@@ -9,7 +18,15 @@ export class EstadoManager {
   }
 
   obtenerConstantes() {
-    return { ...ESTADOS };
+    return { ...ESTADOS_REQUERIMIENTO };
+  }
+
+  obtenerEstadosObservacion() {
+    return { ...ESTADOS_OBSERVACION };
+  }
+
+  obtenerFlujoLineal() {
+    return FLUJO_REQUERIMIENTO.slice();
   }
 
   esValido(estado) {

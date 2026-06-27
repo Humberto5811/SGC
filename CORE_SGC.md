@@ -1,259 +1,209 @@
 # SGC Core — Núcleo de Trazabilidad y Workflow
 
-Documentación del directorio `/core` (fase 1). Este núcleo **no reemplaza** la lógica operativa actual; prepara la arquitectura para migrar todos los módulos en la fase 2.
+Documentación del directorio `/core`. **Fase 2A:** reestructuración arquitectónica — el **Requerimiento** es la entidad principal; el **Expediente** es contenedor documental.
 
-## Arquitectura
+> Este núcleo **no reemplaza** la lógica operativa actual (rutas, pantallas, APIs, BD). Prepara la migración module-by-module en fases posteriores.
+
+## Modelo conceptual
+
+```
+REQUERIMIENTO  (entidad principal — identidad constante durante todo el flujo)
+        │
+        ├────────────── Workflow        (estados del requerimiento)
+        │
+        ├────────────── Timeline        (trazabilidad por requerimientoId)
+        │
+        ├────────────── Historial       (Registro → DEC → … → Ejecución)
+        │
+        ├────────────── Observaciones   (asociadas al requerimientoId)
+        │
+        ├────────────── Auditoría       (requerimientoId como entidad principal)
+        │
+        └────────────── Expediente      (contenedor documental)
+                            │
+                            ├── Adjuntos
+                            ├── Pedidos
+                            ├── Informes
+                            ├── Cotizaciones
+                            ├── Contratos
+                            ├── CCP
+                            ├── Órdenes
+                            └── Documentos versionados
+```
+
+### Jerarquía futura (interfaces preparadas, sin implementación)
+
+```
+REQUERIMIENTO → PAQUETE → SOLICITUD DE COTIZACIÓN → PROCESO DE CONTRATACIÓN → CCP → ORDEN DE COMPRA
+```
+
+Campos multientidad reservados: `entidad`, `sede`, `area`, `dependencia`, `programaPresupuestal`.
+
+## Arquitectura de directorios
 
 ```
 core/
-├── common/              Constantes y utilidades compartidas
-│   ├── ConstantesEstados.js
-│   ├── ConstantesEventos.js
-│   └── Utils.js
-├── trazabilidad/        Timeline, historial, observaciones, adjuntos, auditoría
+├── common/
+│   ├── ConstantesEstados.js      Estados del requerimiento + observación + legacy
+│   ├── ConstantesEventos.js      Entidades, módulos del flujo, tipos documentales
+│   ├── ConstantesJerarquia.js    Interfaces futuras (paquete, SC, CCP, OC)
+│   └── Utils.js                  Store, resolvers requerimientoId / compat legacy
+├── requerimiento/
+│   └── RequerimientoManager.js   Centro del Core
+├── expediente/
+│   └── ExpedienteManager.js      Solo documentación + adaptador legacy
+├── trazabilidad/
 │   ├── TimelineManager.js
 │   ├── HistorialManager.js
 │   ├── ObservacionManager.js
 │   ├── AdjuntoManager.js
 │   └── AuditoriaManager.js
-├── workflow/            Estados, transiciones y derivaciones
+├── workflow/
 │   ├── EstadoManager.js
 │   ├── WorkflowManager.js
 │   └── DerivacionManager.js
-├── expediente/          Fachada unificada del expediente
-│   └── ExpedienteManager.js
-└── index.js             Exportaciones y factory `crearCoreSGC()`
+└── index.js                      crearCoreSGC()
 ```
 
-### Principios de diseño
+## Entidades
 
-| Principio | Descripción |
-|-----------|-------------|
-| **Sin acoplamiento** | Ningún manager importa Registro, DEC, Programación ni rutas Express. |
-| **Inyección de dependencias** | Todos reciben un `contexto` con `store`, `obtenerUsuario`, `obtenerIp`, `obtenerNavegador`. |
-| **Store intercambiable** | Por defecto usa memoria (`crearStoreEnMemoria`). En fase 2 se inyectará adaptador PostgreSQL. |
-| **Constantes centralizadas** | Estados, acciones y tipos provienen de `common/` — no usar strings sueltos. |
+| Concepto | Rol | Identificadores |
+|----------|-----|-----------------|
+| **Requerimiento** | Entidad principal del flujo | `requerimientoId`, `codigoRequerimiento` |
+| **Expediente** | Carpeta documental del requerimiento | `expedienteId` (vinculado a `requerimientoId`) |
 
-## Managers y responsabilidades
+## Estados del workflow (Requerimiento)
+
+`BORRADOR` → `REGISTRADO` → `DEC` → `PROGRAMACIÓN` → `COORDINACIÓN CM` → `INVITACIONES` → `CONSULTAS` → `VALIDACIÓN` → `CUADRO COMPARATIVO` → `CCP` → `EJECUCIÓN` → `FINALIZADO`
+
+Usar siempre `ESTADOS` / `ESTADOS_REQUERIMIENTO` de `ConstantesEstados.js`. **Nunca** estados del expediente.
+
+Estados de observación (separados): `OBSERVADO`, `RESPONDIDO`, `CERRADO` (`ESTADOS_OBSERVACION`).
+
+## Managers
+
+### RequerimientoManager (centro del Core)
+
+| Método | Descripción |
+|--------|-------------|
+| `registrarRequerimiento(payload)` | Alta del requerimiento en store del Core |
+| `obtenerRequerimiento(requerimientoId)` | Vista consolidada: timeline, historial, obs, adjuntos, expediente |
+| `obtenerEstadoActual / Responsable / Modulo` | Vigencia del requerimiento |
+| `actualizarEstado(requerimientoId, estado, opts)` | Workflow + historial + timeline |
+| `vincularExpediente(requerimientoId, expedienteId)` | Asocia contenedor documental |
+| `obtenerContextoMultientidad(requerimientoId)` | Plantilla futura (sin lógica operativa) |
+
+### ExpedienteManager (documental + compatibilidad)
+
+| Método documental | Descripción |
+|-------------------|-------------|
+| `crearExpediente(requerimientoId, opts)` | Crea contenedor y lo vincula al requerimiento |
+| `agregarDocumento(expedienteId, doc)` | Registra documento en el expediente |
+| `consultarDocumentos(expedienteId, filtros)` | Lista documentos |
+| `versionarDocumento(expedienteId, docId, opts)` | Nueva versión |
+| `organizarCarpetas(expedienteId, estructura)` | Árbol de carpetas |
+| `adjuntarArchivo(expedienteId, archivo)` | Delega en AdjuntoManager (nivel expediente) |
+| `obtenerExpedienteDocumental(expedienteId)` | Solo documentos y adjuntos |
+
+| Métodos `@deprecated` (compat fase 1) | Comportamiento |
+|---------------------------------------|----------------|
+| `obtenerExpediente(expedienteId)` | Delega en `RequerimientoManager` si está configurado |
+| `obtenerTimeline / Historial / Observaciones / Estado` | Alias → requerimiento (expedienteId = requerimientoId legacy) |
 
 ### TimelineManager
 
-Administra el timeline único del expediente.
-
-| Método | Descripción |
-|--------|-------------|
-| `registrarEvento(payload)` | Registra evento con expediente, usuario, fecha/hora, módulo, acción, estados, observación, IP y adjuntos. |
-| `obtenerTimeline(expedienteId)` | Devuelve `{ eventos, total }`. |
-| `listarEventos(expedienteId)` | Lista ordenada cronológicamente. |
-| `obtenerUltimoEvento(expedienteId)` | Último evento o `null`. |
-| `filtrarEventos(expedienteId, criterios)` | Filtra por módulo, acción, estado, rango de fechas, etc. |
+Trabaja con `requerimientoId` y `codigoRequerimiento`. Acepta `expedienteId` como alias legacy en payloads.
 
 ### HistorialManager
 
-Registro detallado de cambios de valores.
-
-| Método | Descripción |
-|--------|-------------|
-| `registrarCambio(payload)` | Usuario, cambio, fecha/hora, módulo, valor anterior/nuevo. |
-| `obtenerHistorial(expedienteId)` | Devuelve `{ cambios, total }`. |
-| `listarCambios(expedienteId)` | Lista completa. |
+Historial del **requerimiento** siguiendo `MODULOS_FLUJO`: Registro, DEC, Programación, Coordinación CM, Invitaciones, Portal Proveedores, Validación, Cuadro Comparativo, CCP, Ejecución.
 
 ### ObservacionManager
 
-Implementación única de observaciones.
+Todas las observaciones ligadas a `requerimientoId`. Registra módulo/usuario origen y destino, estado, respuesta, fecha y hora.
 
-| Método | Descripción |
-|--------|-------------|
-| `crearObservacion(payload)` | Origen/destino, módulos, estado, fechas. |
-| `responderObservacion(expedienteId, id, respuesta)` | Registra respuesta y fecha. |
-| `cerrarObservacion(expedienteId, id)` | Marca observación cerrada. |
-| `obtenerPendientes(expedienteId)` | Sin respuesta y no cerradas. |
-| `listarObservaciones(expedienteId)` | Todas las observaciones. |
-| `contarPendientes(expedienteId)` | Contador de pendientes. |
+### AdjuntoManager — dos niveles
 
-### AdjuntoManager
+1. **Nivel requerimiento:** `listarAdjuntosPorRequerimiento(requerimientoId)` — índice global.
+2. **Nivel expediente:** `listarAdjuntos(EXPEDIENTE, expedienteId)` — archivo dentro del contenedor.
 
-Administración centralizada de archivos.
-
-| Método | Descripción |
-|--------|-------------|
-| `agregarAdjunto(payload)` | Asocia a expediente, observación, SC, proveedor, validación o contrato. |
-| `eliminarAdjunto(tipoEntidad, entidadId, adjuntoId)` | Elimina del store. |
-| `listarAdjuntos(tipoEntidad, entidadId)` | Lista adjuntos de la entidad. |
-| `descargarAdjunto(...)` | Retorna metadatos y contenido (base64 o referencia). |
-| `contarAdjuntos(...)` | Total de adjuntos. |
-
-Tipos soportados: `DOCUMENTO`, `PDF`, `EXCEL`, `IMAGEN`, `WORD`, `OTROS`.
-
-### EstadoManager
-
-Catálogo único: `BORRADOR`, `PENDIENTE`, `EN PROCESO`, `DERIVADO`, `OBSERVADO`, `RESPONDIDO`, `APROBADO`, `RECHAZADO`, `FINALIZADO`, `CERRADO`, `ANULADO`.
-
-| Método | Descripción |
-|--------|-------------|
-| `obtenerCatalogo()` | Lista de estados válidos. |
-| `esValido(estado)` | Valida contra catálogo. |
-| `normalizar(estado)` | Normaliza texto a constante. |
-| `esTerminal(estado)` | Indica si es estado final. |
+Todo adjunto registra `requerimientoId`, `codigoRequerimiento` y opcionalmente `expedienteId`.
 
 ### WorkflowManager
 
-Estructura de flujo (transiciones provisionales; se ampliará en migración).
-
-| Método | Descripción |
-|--------|-------------|
-| `obtenerSiguienteEstado(estadoActual)` | Estados destino permitidos. |
-| `obtenerEstadoAnterior(estadoActual)` | Estado origen típico. |
-| `validarTransicion(actual, nuevo)` | `{ valido, motivo }`. |
-| `registrarMovimiento(payload)` | Delega en TimelineManager si está configurado. |
-| `registrarCambioEstado(payload)` | Valida, registra en historial y timeline. |
-
-### DerivacionManager
-
-| Método | Descripción |
-|--------|-------------|
-| `derivar(payload)` | Origen, destino, usuario, fecha/hora, estado, comentario. |
-| `obtenerDerivaciones(expedienteId)` | Todas las derivaciones. |
-| `listarPendientes(expedienteId)` | Sin recepción confirmada. |
-| `registrarRecepcion(expedienteId, derivacionId)` | Marca recibida. |
+Administra **únicamente** estados del requerimiento. Transiciones lineales según `FLUJO_REQUERIMIENTO`.
 
 ### AuditoriaManager
 
-Registro automático de operaciones del sistema.
+Entidad principal: `requerimientoId`. El `expedienteId` aparece solo como dato relacionado.
 
-| Método | Descripción |
-|--------|-------------|
-| `registrar(payload)` | Usuario, IP, navegador, fecha/hora, acción, módulo, submódulo, tipo (`INSERT`, `UPDATE`, `DELETE`, `LOGIN`, `LOGOUT`). |
-| `listar(filtros)` | Consulta con filtros opcionales. |
+## Compatibilidad legacy
 
-### ExpedienteManager
+En fase 1 varios consumidores usaban `expedienteId` como identificador principal. El Core mantiene:
 
-Fachada que agrega la vista completa del expediente.
+- `resolverRequerimientoId(payload)` — acepta `requerimientoId` o `expedienteId`.
+- `ExpedienteManager.obtenerExpediente()` — adaptador hacia `RequerimientoManager`.
+- `ESTADOS_LEGACY` — catálogo fase 1 exportado sin eliminar.
 
-| Método | Descripción |
-|--------|-------------|
-| `obtenerExpediente(expedienteId)` | Snapshot + timeline + historial + observaciones + adjuntos. |
-| `obtenerEstadoActual(expedienteId)` | Estado vigente. |
-| `obtenerResponsableActual(expedienteId)` | Responsable vigente. |
-| `obtenerModuloActual(expedienteId)` | Módulo vigente. |
-| `obtenerTimeline / obtenerHistorial / listarObservaciones / listarAdjuntos` | Delegación a managers especializados. |
-| `actualizarVigencia(expedienteId, datos)` | Actualiza snapshot (uso interno en fase 2). |
+**No se modificaron** rutas Express, pantallas Vite, ni tablas PostgreSQL.
 
-## Cómo reutilizar el Core
-
-### Instanciación recomendada
+## Uso recomendado
 
 ```javascript
-import { crearCoreSGC, ESTADOS, ACCIONES, ENTIDADES_ADJUNTABLES } from './core/index.js';
+import { crearCoreSGC, ESTADOS, ACCIONES } from './core/index.js';
 
 const core = crearCoreSGC({
   obtenerUsuario: () => ({ id: 1, nombre: 'jperez' }),
-  obtenerIp: () => '192.168.1.10',
-  obtenerNavegador: () => 'Mozilla/5.0',
 });
 
-const expedienteId = 'REQ-2026-001';
-```
+const requerimientoId = '42';
+const codigoRequerimiento = 'REQ-2026-001';
 
-### Ejemplo: registrar evento en timeline
+await core.requerimiento.registrarRequerimiento({
+  requerimientoId,
+  codigoRequerimiento,
+  estadoActual: ESTADOS.BORRADOR,
+});
 
-```javascript
+const exp = await core.expediente.crearExpediente(requerimientoId, {
+  codigoRequerimiento,
+});
+
 await core.timeline.registrarEvento({
-  expedienteId,
+  requerimientoId,
+  codigoRequerimiento,
   modulo: 'Registro',
-  submodulo: 'Requerimiento',
   accion: ACCIONES.CREADO,
   estadoAnterior: ESTADOS.BORRADOR,
-  estadoNuevo: ESTADOS.PENDIENTE,
-  observacion: 'Requerimiento registrado',
-  adjuntosRelacionados: [],
-});
-```
-
-### Ejemplo: observación y respuesta
-
-```javascript
-const obs = await core.observaciones.crearObservacion({
-  expedienteId,
-  usuarioOrigen: 'evaluador1',
-  usuarioDestino: 'registrador1',
-  moduloOrigen: 'Evaluación',
-  moduloDestino: 'Registro',
-  motivo: 'Falta documento de sustento',
+  estadoNuevo: ESTADOS.REGISTRADO,
 });
 
-await core.observaciones.responderObservacion(
-  expedienteId,
-  obs.id,
-  'Documento adjuntado en subsanación',
-);
-```
-
-### Ejemplo: adjunto asociado a expediente
-
-```javascript
 await core.adjuntos.agregarAdjunto({
-  tipoEntidad: ENTIDADES_ADJUNTABLES.EXPEDIENTE,
-  entidadId: expedienteId,
+  requerimientoId,
+  codigoRequerimiento,
+  expedienteId: exp.id,
   nombre: 'sustento.pdf',
   mimeType: 'application/pdf',
-  referencia: '/storage/expedientes/sustento.pdf',
 });
+
+const req = await core.requerimiento.obtenerRequerimiento(requerimientoId);
 ```
 
-### Ejemplo: validar transición de workflow
+### Compatibilidad con código que aún usa expedienteId
 
 ```javascript
-const { valido, motivo } = core.workflow.validarTransicion(
-  ESTADOS.PENDIENTE,
-  ESTADOS.EN_PROCESO,
-);
-
-if (valido) {
-  await core.workflow.registrarCambioEstado({
-    expedienteId,
-    estadoAnterior: ESTADOS.PENDIENTE,
-    estadoNuevo: ESTADOS.EN_PROCESO,
-    modulo: 'Evaluación',
-  });
-}
+// Sigue funcionando — expedienteId se interpreta como requerimientoId
+await core.expediente.obtenerExpediente('42');
+await core.timeline.registrarEvento({ expedienteId: '42', modulo: 'DEC', accion: ACCIONES.DERIVADO });
 ```
-
-### Ejemplo: vista consolidada del expediente
-
-```javascript
-const expediente = await core.expediente.obtenerExpediente(expedienteId);
-console.log(expediente.timeline.total, expediente.observaciones.length);
-```
-
-### Adaptador PostgreSQL (fase 2)
-
-Implementar un objeto con la misma interfaz que `crearStoreEnMemoria()`:
-
-```javascript
-const storePg = {
-  async get(coleccion, id) { /* SELECT ... */ },
-  async set(coleccion, id, valor) { /* UPSERT ... */ },
-  async append(coleccion, claveLista, item) { /* INSERT en lista JSONB ... */ },
-  async getLista(coleccion, claveLista) { /* ... */ },
-};
-
-const core = crearCoreSGC({ store: storePg });
-```
-
-Los managers no requieren cambios.
-
-## Compatibilidad con el sistema actual
-
-- **No se modificaron** rutas, pantallas ni flujos existentes en esta fase.
-- El código legacy en `server/lib/trazabilidad.js`, `server/lib/movimientos.js` y `src/utils/trazabilidad.js` sigue operativo.
-- La migración module-by-module usará `crearCoreSGC()` con store PostgreSQL y reemplazará llamadas legacy de forma incremental.
 
 ## Verificación
 
-```bash
-node --check core/index.js
-node --check core/**/*.js   # PowerShell: Get-ChildItem core -Recurse -Filter *.js | % { node --check $_.FullName }
+```powershell
+Get-ChildItem core -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
+node -e "import('./core/index.js').then(m => console.log('OK', Object.keys(m.crearCoreSGC()).join(', ')))"
 ```
 
-Todos los archivos deben pasar `node --check` sin errores de sintaxis.
+## Próxima fase
+
+Migración module-by-module (Registro, DEC, Programación, etc.) usando `RequerimientoManager` como punto de entrada y adaptador PostgreSQL para el `store`.

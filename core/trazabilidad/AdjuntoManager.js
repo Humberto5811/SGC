@@ -1,10 +1,17 @@
 /**
- * AdjuntoManager — administración centralizada de adjuntos.
+ * AdjuntoManager — relación Requerimiento → Expediente → Documentos.
  */
 import { ENTIDADES_ADJUNTABLES, TIPOS_ADJUNTO } from '../common/ConstantesEventos.js';
-import { generarId, ahoraISO, requerido } from '../common/Utils.js';
+import {
+  generarId,
+  ahoraISO,
+  requerido,
+  resolverRequerimientoId,
+  resolverCodigoRequerimiento,
+} from '../common/Utils.js';
 
 const COLECCION = 'adjuntos';
+const COLECCION_INDICE_REQ = 'adjuntos_por_requerimiento';
 
 function inferirTipo(mimeType = '', nombre = '') {
   const m = String(mimeType).toLowerCase();
@@ -28,12 +35,21 @@ export class AdjuntoManager {
   }
 
   async agregarAdjunto(payload = {}) {
+    const requerimientoId = resolverRequerimientoId(payload);
+    const codigoRequerimiento = resolverCodigoRequerimiento(payload, requerimientoId);
+    const expedienteId = payload.expedienteId ? String(payload.expedienteId) : null;
     const tipoEntidad = payload.tipoEntidad || ENTIDADES_ADJUNTABLES.EXPEDIENTE;
-    const entidadId = requerido(payload.entidadId, 'entidadId');
+    const entidadId = requerido(
+      payload.entidadId || expedienteId || requerimientoId,
+      'entidadId',
+    );
     const ts = ahoraISO();
 
     const adj = {
       id: generarId('adj'),
+      requerimientoId,
+      codigoRequerimiento,
+      expedienteId,
       tipoEntidad,
       entidadId: String(entidadId),
       nombre: payload.nombre || payload.nombreArchivo || 'archivo',
@@ -48,21 +64,39 @@ export class AdjuntoManager {
     };
 
     await this.store.append(COLECCION, claveEntidad(tipoEntidad, entidadId), adj);
+    await this.store.append(COLECCION_INDICE_REQ, requerimientoId, adj);
     return adj;
   }
 
-  async eliminarAdjunto(tipoEntidad, entidadId, adjuntoId) {
+  async eliminarAdjunto(tipoEntidad, entidadId, adjuntoId, requerimientoId = null) {
     const key = claveEntidad(tipoEntidad, entidadId);
     const lista = await this.store.getLista(COLECCION, key);
+    const adj = lista.find((a) => a.id === adjuntoId);
+    if (!adj) throw new Error('Adjunto no encontrado');
+
     const filtrada = lista.filter((a) => a.id !== adjuntoId);
-    if (filtrada.length === lista.length) throw new Error('Adjunto no encontrado');
-    const storeKey = `${COLECCION}:${claveEntidad(tipoEntidad, entidadId)}`;
-    await this.store.set(COLECCION, storeKey, filtrada);
+    await this.store.set(COLECCION, `${COLECCION}:${key}`, filtrada);
+
+    const reqId = requerimientoId || adj.requerimientoId;
+    if (reqId) {
+      const indice = await this.store.getLista(COLECCION_INDICE_REQ, reqId);
+      await this.store.set(
+        COLECCION_INDICE_REQ,
+        `${COLECCION_INDICE_REQ}:${reqId}`,
+        indice.filter((a) => a.id !== adjuntoId),
+      );
+    }
     return { success: true, id: adjuntoId };
   }
 
+  /** Nivel 2: adjuntos del contenedor documental (expediente). */
   async listarAdjuntos(tipoEntidad, entidadId) {
     return this.store.getLista(COLECCION, claveEntidad(tipoEntidad, entidadId));
+  }
+
+  /** Nivel 1: todos los adjuntos del requerimiento (incluye expediente y entidades relacionadas). */
+  async listarAdjuntosPorRequerimiento(requerimientoId) {
+    return this.store.getLista(COLECCION_INDICE_REQ, resolverRequerimientoId({ requerimientoId }));
   }
 
   async descargarAdjunto(tipoEntidad, entidadId, adjuntoId) {
@@ -74,6 +108,11 @@ export class AdjuntoManager {
 
   async contarAdjuntos(tipoEntidad, entidadId) {
     const lista = await this.listarAdjuntos(tipoEntidad, entidadId);
+    return lista.length;
+  }
+
+  async contarAdjuntosPorRequerimiento(requerimientoId) {
+    const lista = await this.listarAdjuntosPorRequerimiento(requerimientoId);
     return lista.length;
   }
 }

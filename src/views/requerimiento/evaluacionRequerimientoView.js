@@ -12,6 +12,7 @@ import {
 import { fetchBandejaEvaluacion } from '../../utils/bandejaRequerimientos.js';
 import { evalMenuItems, evalHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
+import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 function esc(s) {
@@ -69,6 +70,23 @@ async function loadEvaluacionList() {
         const req = rows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, /aprobad/i.test(String(req.estado || ''))) });
       },
+      obs: (id) => handleBandejaObservaciones(id, rows, {
+        submoduloLabel: 'Evaluación de Requerimiento',
+        puedeObservar: (r) => /tr[aá]mite/i.test(String(r.estado || '')) && !/aprobad/i.test(String(r.estado || '')),
+        onObservar: async (reqId, data) => {
+          const req = rows.find((x) => String(x.id) === String(reqId));
+          if (!req) return;
+          await addObservacion(req, data.motivo, data.usuario, {
+            destino_submodulo: data.destino_submodulo,
+            destino_etapa: data.destino_etapa,
+            destino_persona: data.destino_persona,
+            origen_submodulo: data.origen_submodulo,
+          });
+        },
+        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onReload: () => loadEvaluacionList(),
+        defaultDestinoObservacion: 'Registro de Requerimiento',
+      }),
     });
     bindRowDetailPanel(cont, rows, {
       onAdjuntos: (id) => {

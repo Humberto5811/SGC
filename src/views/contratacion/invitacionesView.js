@@ -72,9 +72,9 @@ function setInvTabChrome(tab) {
 function invitacionesBandejaHeaders() {
   return `
     <th style="width:35px;"><input type="checkbox" id="invSelectAll" title="Seleccionar todos"></th>
-    ${actosBandejaHeaders({ includeAcc: false })}
-    <th class="text-center" style="min-width:72px;">Invitado</th>
-    <th class="text-center" style="min-width:120px;">N° Invitaciones Realizadas</th>
+    ${actosBandejaHeaders({ includeAcc: false, includeScColumn: true })}
+    <th class="text-center actos-col-inv-count" style="min-width:72px;">Invitado</th>
+    <th class="text-center actos-col-inv-count" style="min-width:100px;">N° Invitaciones</th>
     <th class="req-col-acc"></th>`;
 }
 
@@ -120,7 +120,7 @@ async function loadBandeja() {
     const tbody = rows.map((r) => `
       <tr data-req-id="${r.id}">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="inv-select" data-id="${r.id}"></td>
-        ${renderActosRowCells(r, { escFn: esc })}
+        ${renderActosRowCells(r, { escFn: esc, includeScColumn: true, narrowArea: true })}
         ${renderInvExtraCells(r)}
         ${renderActionMenuCell(r.id, invitacionesMenuItems(r), invitacionesHiddenActions(r))}
       </tr>`).join('');
@@ -299,22 +299,24 @@ function bindBandejaEvents(cont) {
 }
 
 async function handleObservacion(id) {
+  const { handleBandejaObservaciones } = await import('../../components/modalObservaciones.js');
   const userName = getUserDisplayName(authService.getCurrentUser());
-  const data = await showObservacionDirigidaModal({
-    titulo: 'Observación — Invitaciones',
-    origenSubmodulo: 'Invitaciones',
+  await handleBandejaObservaciones(id, allRows, {
+    submoduloLabel: 'Invitaciones',
+    puedeObservar: () => true,
+    onObservar: async (reqId, data) => {
+      await contratacionesService.observarInvitaciones(reqId, {
+        motivo: data.motivo,
+        usuario: data.usuario || userName,
+        destino_submodulo: data.destino_submodulo,
+        destino_etapa: data.destino_etapa,
+        destino_persona: data.destino_persona,
+        origen_submodulo: 'Invitaciones',
+      });
+    },
+    onAdjuntos: (rid) => manageAdjuntos(rid, true),
+    onReload: () => loadBandeja(),
   });
-  if (!data?.motivo) return;
-  await contratacionesService.observarInvitaciones(id, {
-    motivo: data.motivo,
-    usuario: userName,
-    destino_submodulo: data.destino_submodulo,
-    destino_etapa: data.destino_etapa,
-    destino_persona: data.destino_persona,
-    origen_submodulo: 'Invitaciones',
-  });
-  alert('Observación registrada.');
-  loadBandeja();
 }
 
 async function handleCrearSC(ids) {
