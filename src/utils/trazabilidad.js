@@ -109,7 +109,7 @@ export function mapEstadoToEtapa(estado) {
 export function resolveEstadoNegocioFromRow(row) {
   const estado = String(row?.estado || '').trim();
   const etapaActual = String(row?.estado_actual || row?.estadoActual || '').toUpperCase();
-  if (etapaActual === 'PROGRAMACION' && /tr[aá]mite|observ/i.test(estado) && !/programaci/i.test(estado)) {
+  if (etapaActual === 'PROGRAMACION' && /tr[aá]mite/i.test(estado) && !/programaci|observ/i.test(estado)) {
     return 'En Programación';
   }
   if (etapaActual === 'EVALUACION' && /programaci/i.test(estado)) {
@@ -121,19 +121,12 @@ export function resolveEstadoNegocioFromRow(row) {
   return estado;
 }
 
-/** Ubicación efectiva del expediente combinando estado de negocio y trazabilidad. */
+/** Ubicación efectiva del expediente — prioriza `estado_actual` en BD. */
 export function resolveUbicacionExpediente(row) {
-  const estadoNegocio = resolveEstadoNegocioFromRow(row);
-  const fromEstado = mapEstadoToUbicacion(estadoNegocio);
   const fromDb = String(row?.estado_actual || row?.estadoActual || '').toUpperCase();
-  if (!fromDb) return fromEstado;
-  if (fromDb === fromEstado) return fromDb;
-  const stages = ['REGISTRADO', 'EVALUACION', 'DEC', 'PROGRAMACION', 'ACTOS_PREPARATORIOS', 'FINALIZADO'];
-  const iEst = stages.indexOf(fromEstado);
-  const iDb = stages.indexOf(fromDb);
-  if (iDb >= 0 && iEst >= 0 && iDb > iEst) return fromDb;
-  if (/tr[aá]mite/i.test(String(row?.estado || '')) && fromDb === 'PROGRAMACION') return 'PROGRAMACION';
-  return fromEstado;
+  if (fromDb) return fromDb;
+  const estadoNegocio = resolveEstadoNegocioFromRow(row);
+  return mapEstadoToUbicacion(estadoNegocio);
 }
 
 export function isEstadoObservado(estado) {
@@ -329,11 +322,10 @@ export function calcMontoTotal(r) {
 export function enrichReqRow(r) {
   const monto_total = calcMontoTotal(r);
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? calcDiasEnEstado(r.fecha_estado_actual || r.fechaEstadoActual);
-  const estadoNegocio = resolveEstadoNegocioFromRow(r);
   const ubicacion = resolveUbicacionExpediente(r);
-  const estadoActualTexto = /^En /i.test(estadoNegocio)
-    ? estadoNegocio
-    : getEstadoActualTexto(ubicacion);
+  const subModulo = r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[ubicacion] || getEstadoActualTexto(ubicacion);
+  const estadoNegocio = String(r?.estado || '').trim() || resolveEstadoNegocioFromRow(r);
+  const estadoActualTexto = subModulo || r.estado_actual_texto || r.estadoActualTexto || getEstadoActualTexto(ubicacion);
   return {
     ...r,
     estado: estadoNegocio,
@@ -343,7 +335,7 @@ export function enrichReqRow(r) {
     estado_actual: ubicacion,
     estadoActualTexto,
     estado_actual_texto: estadoActualTexto,
-    subModuloActual: r.sub_modulo_actual || r.subModuloActual,
+    subModuloActual: subModulo || r.subModuloActual,
     responsableActual: r.responsable_actual || r.responsableActual || r.responsable || '—',
   };
 }

@@ -11,14 +11,15 @@ import {
 } from './bandejaRequerimientoSql.js';
 
 const ESTADOS_BANDEJA_PROGRAMACION = `(
-  'Aprobado DEC', 'Observado Programación', 'En Programación',
-  'Aprobado Programación', 'Programado', 'En Invitaciones'
+  'Aprobado DEC', 'Observado DEC', 'Observado Programación', 'En Programación',
+  'En tramite de aprobación', 'Aprobado Programación', 'Programado', 'En Invitaciones'
 )`;
 
 /** SQL: expedientes cuyo flujo incluye Programación (bandeja maestra de seguimiento). */
 export const WHERE_BANDEJA_PROGRAMACION = `
   (
-    r.estado IN ${ESTADOS_BANDEJA_PROGRAMACION}
+    r.estado_actual = 'PROGRAMACION'
+    OR r.estado IN ${ESTADOS_BANDEJA_PROGRAMACION}
     OR r.estado ILIKE 'Sol.Cot. Enviada%'
     OR jsonb_array_length(COALESCE((COALESCE(r.payload, '{}')::jsonb -> 'historial_programacion'), '[]'::jsonb)) > 0
     OR EXISTS (

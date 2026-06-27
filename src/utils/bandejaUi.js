@@ -30,8 +30,11 @@ export const ESTADO_BADGE_STYLES = {
 
 export function bandejaGlobalStyles() {
   return `
-    .sgc-bandeja-wrap .table-responsive { overflow-x: auto; }
+    .sgc-bandeja-wrap .table-responsive { overflow-x: auto; overflow-y: visible; }
     .sgc-bandeja-wrap .req-list-table { table-layout: fixed; width: 100%; min-width: 720px; }
+    .sgc-bandeja-wrap .req-col-acc { position: static; overflow: visible; }
+    .sgc-bandeja-wrap .req-col-acc .dropdown { position: static; }
+    .sgc-bandeja-wrap .req-col-acc .dropdown-menu { z-index: 1080; max-height: 70vh; overflow-y: auto; }
     .sgc-bandeja-wrap .req-list-table th,
     .sgc-bandeja-wrap .req-list-table td {
       font-family: 'Segoe UI', system-ui, sans-serif; font-size: 0.8125rem;
@@ -54,7 +57,7 @@ export function bandejaGlobalStyles() {
     .req-col-estado { width: 130px; }
     .req-col-resp { width: 130px; }
     .req-col-dias { width: 72px; text-align: center; }
-    .req-col-acc { width: 48px; text-align: center; }
+    .req-col-acc { width: 56px; text-align: center; position: static; overflow: visible; }
     .req-desc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
     .req-meta-chips { margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; }
     .req-meta-chips .chip { font-size: 0.68rem; padding: 1px 6px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
@@ -68,12 +71,13 @@ export function bandejaGlobalStyles() {
     .bandeja-actions-btn { padding: 2px 8px; line-height: 1; font-size: 1.1rem; border: 1px solid #dee2e6; }
     .text-orange { color: #fd7e14 !important; }
     .sgc-detail-panel {
-      position: fixed; top: 0; right: 0; width: min(480px, 94vw); height: 100vh;
-      background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); z-index: 1060;
+      position: fixed; top: 0; right: 0; width: min(90vw, 100%); max-width: 100%; height: 100vh;
+      background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); z-index: 1100;
       display: flex; flex-direction: column; transform: translateX(100%);
       transition: transform .25s ease;
     }
     .sgc-detail-panel.open { transform: translateX(0); }
+    .sgc-detail-panel #sgcPanelBody { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
     .sgc-detail-panel #sgcPanelTabs {
       overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
       border-bottom: 1px solid #dee2e6; scrollbar-width: thin;
@@ -83,7 +87,7 @@ export function bandejaGlobalStyles() {
       font-size: 0.78rem; padding: 0.45rem 0.7rem; white-space: nowrap;
     }
     .sgc-detail-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1055;
+      position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1095;
       opacity: 0; pointer-events: none; transition: opacity .2s;
     }
     .sgc-detail-backdrop.open { opacity: 1; pointer-events: auto; }
@@ -376,7 +380,7 @@ export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '')
     <td class="req-col-acc" onclick="event.stopPropagation()">
       <div class="dropdown">
         <button class="btn btn-sm bandeja-actions-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Acciones">⋮</button>
-        <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+        <ul class="dropdown-menu dropdown-menu-end shadow-sm" data-bs-popper="static">
           ${items.map((m) => `
             <li><button type="button" class="dropdown-item bandeja-menu-act py-1" data-act="${esc(m.act)}" data-id="${id}" ${m.disabled ? 'disabled' : ''}>
               <i class="bi ${m.icon || 'bi-dot'} me-2"></i>${esc(m.label)}

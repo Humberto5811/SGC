@@ -11,6 +11,14 @@ function accionDotClass(accion) {
   return 'traza-event-etapa';
 }
 
+function formatMovimientoLabel(m) {
+  const accion = String(m?.accion || '').toUpperCase();
+  const sub = String(m?.subModulo || m?.sub_modulo || '').trim();
+  if (accion === 'SUBSANADO' && sub) return `Subsanado ${sub}`;
+  if (accion && sub) return `${accion} ${sub}`;
+  return accion || sub || '—';
+}
+
 /** Timeline desde historialMovimientos (formato bitácora). */
 export function movimientosTimelineHtml(movimientos, escFn = esc) {
   const list = movimientosToTimelineEvents(movimientos).slice().reverse();
@@ -23,11 +31,12 @@ export function movimientosTimelineHtml(movimientos, escFn = esc) {
     const accionBadgeCls = m.accion === 'OBSERVADO'
       ? 'badge bg-danger text-white'
       : 'badge bg-secondary text-white';
+    const label = formatMovimientoLabel(m);
     return `
       <div class="traza-timeline-item ${isCurrent ? 'traza-timeline-current' : ''} ${cls}">
         <div class="traza-dot"></div>
         <div class="traza-content mb-2 pb-2">
-          <div class="fw-bold"><span class="${accionBadgeCls} me-1">${escFn(m.accion)}</span> ${escFn(m.subModulo)}</div>
+          <div class="fw-bold"><span class="${accionBadgeCls} me-1">${escFn(label)}</span></div>
           <div class="small text-muted">${escFn(m.modulo)}</div>
           <div class="small mt-1"><i class="bi bi-person"></i> ${escFn(m.usuario)}</div>
           <div class="small"><i class="bi bi-clock"></i> ${escFn(fmtDateTime(m.fecha))}</div>
@@ -78,8 +87,9 @@ export function renderTimeline(data, escFn = esc) {
 export function timelineModalStyles() {
   return `
     .traza-modal-scroll {
-      max-height: min(65vh, 520px);
+      max-height: min(75vh, 640px);
       overflow-y: auto;
+      overflow-x: hidden;
       padding-right: 12px;
     }
     .traza-timeline-wrap { padding-left: 8px; }

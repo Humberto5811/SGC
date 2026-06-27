@@ -139,13 +139,19 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
+    const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'EVALUACION').toUpperCase();
+    const estadoNuevo = destino_submodulo || destino_etapa
+      ? resolveEstadoFromDestino(destino_submodulo, destino_etapa)
+      : 'Observado DEC';
+    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+
     const updated = await registrarMovimiento({
       requerimientoId,
-      estadoNuevo: 'Observado DEC',
+      estadoNuevo,
       usuario: usuario || 'DEC',
       accion: 'observado',
       observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-      responsable: destino_persona || ETAPAS.EVALUACION.responsable,
+      responsable,
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });

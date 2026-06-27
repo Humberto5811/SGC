@@ -177,14 +177,6 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
         break;
       }
     }
-    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-    payload.historial_evaluacion.push({
-      tipo: 'subsanacion',
-      respuesta,
-      usuario: usuario || '',
-      fecha: new Date().toISOString(),
-      destino_submodulo: destino_submodulo || '',
-    });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
     const updated = await registrarSubsanacionDerivacion({

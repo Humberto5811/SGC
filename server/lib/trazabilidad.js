@@ -93,7 +93,7 @@ export function mapEstadoToEtapa(estado) {
 export function resolveEstadoNegocioFromRow(row) {
   const estado = String(row?.estado || '').trim();
   const etapaActual = String(row?.estado_actual || '').toUpperCase();
-  if (etapaActual === 'PROGRAMACION' && /tr[aá]mite|observ/i.test(estado) && !/programaci/i.test(estado)) {
+  if (etapaActual === 'PROGRAMACION' && /tr[aá]mite/i.test(estado) && !/programaci|observ/i.test(estado)) {
     return 'En Programación';
   }
   if (etapaActual === 'EVALUACION' && /programaci/i.test(estado)) {
@@ -105,19 +105,12 @@ export function resolveEstadoNegocioFromRow(row) {
   return estado;
 }
 
-/** Ubicación efectiva del expediente combinando estado de negocio y trazabilidad. */
+/** Ubicación efectiva del expediente — prioriza `estado_actual` en BD como fuente única. */
 export function resolveUbicacionExpediente(row) {
-  const estadoNegocio = resolveEstadoNegocioFromRow(row);
-  const fromEstado = mapEstadoToUbicacion(estadoNegocio);
   const fromDb = String(row?.estado_actual || '').toUpperCase();
-  if (!fromDb) return fromEstado;
-  if (fromDb === fromEstado) return fromDb;
-  const stages = ['REGISTRADO', 'EVALUACION', 'DEC', 'PROGRAMACION', 'ACTOS_PREPARATORIOS', 'FINALIZADO'];
-  const iEst = stages.indexOf(fromEstado);
-  const iDb = stages.indexOf(fromDb);
-  if (iDb >= 0 && iEst >= 0 && iDb > iEst) return fromDb;
-  if (/tr[aá]mite/i.test(String(row?.estado || '')) && fromDb === 'PROGRAMACION') return 'PROGRAMACION';
-  return fromEstado;
+  if (fromDb) return fromDb;
+  const estadoNegocio = resolveEstadoNegocioFromRow(row);
+  return mapEstadoToUbicacion(estadoNegocio);
 }
 
 export function getEstadoActualTexto(ubicacionCode) {
@@ -248,6 +241,7 @@ function collectRawEvents(row) {
   });
 
   (payload.historial_evaluacion || []).forEach((h) => {
+    if (h.tipo === 'subsanacion') return;
     const obs = h.motivo || h.respuesta || h.observacion || (
       h.tipo === 'aprobacion' ? 'Aprobado en evaluación — derivado a DEC'
         : h.tipo === 'derivacion' ? (h.observacion || 'Solicitud de aprobación enviada a evaluación')
@@ -501,15 +495,13 @@ export function enrichRequerimientoRow(row) {
   if (!row) return row;
   const historial = reconstruirHistorialCompleto(row);
   const ultimo = historial[historial.length - 1];
-  const estadoNegocio = resolveEstadoNegocioFromRow(row);
   const ubicacion = resolveUbicacionExpediente(row);
   const subMeta = getSubModuloMeta(ubicacion);
-  const fechaEstado = ultimo?.fechaIngreso || row.fecha_estado_actual || row.created_at || row.updated_at;
+  const estadoNegocio = String(row?.estado || '').trim() || resolveEstadoNegocioFromRow(row);
+  const fechaEstado = row.fecha_estado_actual || ultimo?.fechaIngreso || row.created_at || row.updated_at;
   const meta = ETAPAS[ubicacion] || {};
   const dias = calcDiasEnEstado(fechaEstado);
-  const estadoTexto = /^En /i.test(estadoNegocio)
-    ? estadoNegocio
-    : getEstadoActualTexto(ubicacion);
+  const estadoTexto = row.sub_modulo_actual || subMeta.subModulo || getEstadoActualTexto(ubicacion);
   let movimientos = parseMovimientos(row.historial_movimientos);
   if (!movimientos.length && historial.length) {
     movimientos = movimientosFromHistorialEstados(historial);
@@ -616,17 +608,16 @@ export async function registrarMovimiento({
   const ultimoEvt = historialCompleto[historialCompleto.length - 1];
   const fechaEstado = ultimoEvt?.fechaIngreso || now;
   await query(
-    `UPDATE requerimientos SET historial_estados = $2::jsonb, historial_movimientos = $3::jsonb, fecha_estado_actual = $4, sub_modulo_actual = $5 WHERE id = $1`,
+    `UPDATE requerimientos SET historial_estados = $2::jsonb, fecha_estado_actual = $3, sub_modulo_actual = $4 WHERE id = $1`,
     [
       requerimientoId,
       JSON.stringify(historialCompleto),
-      JSON.stringify(movimientosFromHistorialEstados(historialCompleto)),
       fechaEstado,
       getSubModuloMeta(etapaNueva).subModulo,
     ],
   );
 
-  return enrichRequerimientoRow(fresh);
+  return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
 }
 
 /** Registra subsanación en origen y derivación al submódulo destino seleccionado. */
@@ -715,17 +706,16 @@ export async function registrarSubsanacionDerivacion({
   const historialCompleto = reconstruirHistorialCompleto(fresh);
   const ultimoEvt = historialCompleto[historialCompleto.length - 1];
   await query(
-    `UPDATE requerimientos SET historial_estados = $2::jsonb, historial_movimientos = $3::jsonb, fecha_estado_actual = $4, sub_modulo_actual = $5 WHERE id = $1`,
+    `UPDATE requerimientos SET historial_estados = $2::jsonb, fecha_estado_actual = $3, sub_modulo_actual = $4 WHERE id = $1`,
     [
       requerimientoId,
       JSON.stringify(historialCompleto),
-      JSON.stringify(movimientosFromHistorialEstados(historialCompleto)),
       ultimoEvt?.fechaIngreso || t2,
       subMetaDest.subModulo,
     ],
   );
 
-  return enrichRequerimientoRow(fresh);
+  return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
 }
 
 export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistema') {

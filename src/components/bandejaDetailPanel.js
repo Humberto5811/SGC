@@ -2,7 +2,7 @@
 import { trazabilidadService } from '../services/trazabilidadService.js';
 import { adjuntosService } from '../services/adjuntosService.js';
 import { renderTimeline, timelineModalStyles } from '../services/timelineService.js';
-import { enrichReqRow, fmtDateTime, esc } from '../utils/trazabilidad.js';
+import { fmtDateTime, esc } from '../utils/trazabilidad.js';
 import {
   estadoModernBadge, diasBadgeHtml, getNombreItemRaw, getSigamefRaw, getResponsableRol,
 } from '../utils/bandejaUi.js';
@@ -13,12 +13,16 @@ let backdropEl = null;
 
 const PANEL_STYLES = `
   .sgc-detail-panel {
-    position: fixed; top: 0; right: 0; width: min(480px, 94vw); height: 100vh;
+    position: fixed; top: 0; right: 0; width: min(90vw, 100%); max-width: 100%; height: 100vh;
     background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); z-index: 1100;
-    display: flex; flex-direction: column; transform: translateX(100%);
+    display: flex; flex-direction: column; transform: translateX(0);
     transition: transform .25s ease;
   }
+  .sgc-detail-panel:not(.open) { transform: translateX(100%); }
   .sgc-detail-panel.open { transform: translateX(0); }
+  .sgc-detail-panel #sgcPanelBody {
+    flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; min-height: 0;
+  }
   .sgc-detail-panel #sgcPanelTabs {
     overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
     border-bottom: 1px solid #dee2e6; scrollbar-width: thin;
@@ -116,10 +120,18 @@ export async function openDetailPanel(req, opts = {}) {
   await renderPanelTab(req, panelEl._activeTab);
 }
 
+function formatMovimientoLabel(m) {
+  const accion = String(m?.accion || '').toUpperCase();
+  const sub = String(m?.subModulo || m?.sub_modulo || '').trim();
+  if (accion === 'SUBSANADO' && sub) return `Subsanado ${sub}`;
+  if (accion && sub) return `${accion} · ${sub}`;
+  return accion || sub || '—';
+}
+
 async function renderPanelTab(req, tab) {
   const body = panelEl.querySelector('#sgcPanelBody');
   if (tab === 'info') {
-    const row = enrichReqRow(req);
+    const row = req;
     const nombreItem = getNombreItemRaw(row);
     body.innerHTML = `
       <div class="small">
@@ -127,7 +139,7 @@ async function renderPanelTab(req, tab) {
         <table class="table table-sm table-borderless mb-0">
           <tr><td class="text-muted" style="width:42%;">Código SIGAMEF</td><td>${esc(getSigamefRaw(row) || '—')}</td></tr>
           <tr><td class="text-muted">Nombre del ítem</td><td>${esc(nombreItem || '—')}</td></tr>
-          <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado)}</td></tr>
+          <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row.estadoActual || row.estado_actual, row.estadoActualTexto || row.sub_modulo_actual, row.estado)}</td></tr>
           <tr><td class="text-muted">Responsable</td><td>${esc(row.responsableActual)}<br/><small class="text-muted">${esc(getResponsableRol(row))}</small></td></tr>
           <tr><td class="text-muted">Días en etapa</td><td>${diasBadgeHtml(row)}</td></tr>
           <tr><td class="text-muted">Área usuaria</td><td>${esc(row.area || '—')}</td></tr>
@@ -185,12 +197,12 @@ async function renderPanelTab(req, tab) {
         body.innerHTML = '<p class="text-muted small">Sin movimientos.</p>';
         return;
       }
-      body.innerHTML = `<div class="list-group list-group-flush small">${[...movs].reverse().map((m) => `
+      body.innerHTML = `<div class="traza-modal-scroll"><div class="list-group list-group-flush small">${[...movs].reverse().map((m) => `
         <div class="list-group-item px-0 py-2 border-bottom">
-          <div class="fw-semibold">${esc(m.accion)} · ${esc(m.subModulo || '')}</div>
+          <div class="fw-semibold">${esc(formatMovimientoLabel(m))}</div>
           <div class="text-muted">${esc(fmtDateTime(m.fecha))} · ${esc(m.usuario || m.responsable || '—')}</div>
           ${m.observacion ? `<div class="mt-1">${esc(m.observacion)}</div>` : ''}
-        </div>`).join('')}</div>`;
+        </div>`).join('')}</div></div>`;
     } catch (e) {
       body.innerHTML = `<div class="alert alert-danger small">${esc(e.message)}</div>`;
     }
