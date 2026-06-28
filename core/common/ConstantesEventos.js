@@ -1,6 +1,14 @@
 /**
- * Catálogo de acciones, entidades y eventos del SGC Core — Fase 2A.
+ * Catálogo de acciones, entidades y eventos del SGC Core — Fase 2A + estabilización trazabilidad.
  */
+export {
+  CATEGORIAS_EVENTO,
+  EVENTOS_FUNCIONALES,
+  EVENTOS_FUNCIONALES_LIST,
+  obtenerEvento,
+  obtenerEventoDerivacion,
+  listarEventosPorCategoria,
+} from './CatalogoEventos.js';
 
 /** Entidad principal del Core. */
 export const ENTIDAD_PRINCIPAL = Object.freeze({
@@ -79,9 +87,16 @@ export const TIPOS_EVENTO_TIMELINE = Object.freeze({
   DERIVACION: 'DERIVACION',
   AUDITORIA: 'AUDITORIA',
   ADJUNTO: 'ADJUNTO',
+  RECEPCION: 'RECEPCION',
+  APROBACION: 'APROBACION',
+  DOCUMENTO: 'DOCUMENTO',
+  INVITACION: 'INVITACION',
+  VALIDACION: 'VALIDACION',
+  CONTRATO: 'CONTRATO',
+  LIQUIDACION: 'LIQUIDACION',
 });
 
-/** Módulos del flujo del requerimiento (orden del historial). */
+/** Módulos del flujo principal (línea base). Observaciones generan ramas temporales al módulo origen. */
 export const MODULOS_FLUJO = Object.freeze([
   'Registro',
   'DEC',
@@ -93,6 +108,12 @@ export const MODULOS_FLUJO = Object.freeze([
   'Cuadro Comparativo',
   'CCP',
   'Ejecución',
+]);
+
+/** Módulos preparados para etapas futuras (Contrato, Liquidación). */
+export const MODULOS_FUTUROS = Object.freeze([
+  'Contrato',
+  'Liquidación',
 ]);
 
 export default {

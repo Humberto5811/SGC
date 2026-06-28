@@ -1,5 +1,5 @@
 /**
- * Panel de detalle reutilizable — expansión vertical (ancho completo del módulo).
+ * Panel de detalle compartido — drawer lateral derecho (~40% ancho, scroll único).
  */
 import { trazabilidadService } from '../services/trazabilidadService.js';
 import { adjuntosService } from '../services/adjuntosService.js';
@@ -15,21 +15,22 @@ let backdropEl = null;
 
 export const PANEL_STYLES = `
   .sgc-detail-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1095;
+    position: fixed; inset: 0; background: rgba(0,0,0,.28); z-index: 1095;
     opacity: 0; pointer-events: none; transition: opacity .2s;
   }
   .sgc-detail-backdrop.open { opacity: 1; pointer-events: auto; }
   .sgc-detail-panel {
-    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
-    width: 100%; max-width: 100%; height: min(88vh, calc(100vh - 96px));
-    background: #fff; box-shadow: 0 -6px 28px rgba(0,0,0,.18); z-index: 1100;
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 40%; max-width: 45%; min-width: 300px;
+    height: 100vh; height: 100dvh;
+    background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); z-index: 1100;
     display: flex; flex-direction: column;
-    transform: translateY(100%); transition: transform .25s ease;
+    transform: translateX(100%); transition: transform .25s ease;
     overflow: hidden;
   }
-  .sgc-detail-panel.open { transform: translateY(0); }
+  .sgc-detail-panel.open { transform: translateX(0); }
   .sgc-detail-panel #sgcPanelBody {
-    flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; min-height: 0;
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
   }
   .sgc-detail-panel #sgcPanelTabs {
@@ -40,16 +41,26 @@ export const PANEL_STYLES = `
   .sgc-detail-panel #sgcPanelTabs .nav-link {
     font-size: 0.78rem; padding: 0.45rem 0.7rem; white-space: nowrap;
   }
+  /* Un solo scroll: el contenido interno no limita altura */
   .sgc-detail-panel .traza-modal-scroll,
-  .sgc-detail-panel .traza-timeline-wrap { overflow-x: hidden; max-width: 100%; }
+  .sgc-detail-panel .traza-timeline-wrap {
+    max-height: none !important;
+    overflow: visible !important;
+    max-width: 100%;
+  }
+  @media (max-width: 768px) {
+    .sgc-detail-panel { width: 92%; max-width: 92%; }
+  }
 `;
 
 function ensurePanelStyles() {
-  if (document.getElementById('sgc-detail-panel-styles')) return;
-  const st = document.createElement('style');
-  st.id = 'sgc-detail-panel-styles';
+  let st = document.getElementById('sgc-detail-panel-styles');
+  if (!st) {
+    st = document.createElement('style');
+    st.id = 'sgc-detail-panel-styles';
+    document.head.appendChild(st);
+  }
   st.textContent = PANEL_STYLES;
-  document.head.appendChild(st);
 }
 
 function ensurePanel() {
@@ -66,14 +77,14 @@ function ensurePanel() {
       <h6 class="mb-0 fw-bold" id="sgcPanelTitle">Detalle</h6>
       <button type="button" class="btn btn-sm btn-outline-secondary" id="sgcPanelClose"><i class="bi bi-x-lg"></i></button>
     </div>
-    <ul class="nav nav-tabs px-2 pt-2 flex-nowrap" id="sgcPanelTabs" role="tablist">
+    <ul class="nav nav-tabs px-2 pt-2 flex-nowrap flex-shrink-0" id="sgcPanelTabs" role="tablist">
       <li class="nav-item"><button class="nav-link active small" data-tab="info">General</button></li>
       <li class="nav-item"><button class="nav-link small" data-tab="traza">Trazabilidad</button></li>
       <li class="nav-item"><button class="nav-link small" data-tab="obs">Observaciones</button></li>
       <li class="nav-item"><button class="nav-link small" data-tab="adj">Adjuntos</button></li>
       <li class="nav-item"><button class="nav-link small" data-tab="hist">Historial</button></li>
     </ul>
-    <div class="flex-grow-1 p-3" id="sgcPanelBody"><div class="text-muted small">Cargando…</div></div>
+    <div class="p-3" id="sgcPanelBody"><div class="text-muted small">Cargando…</div></div>
   `;
   document.body.appendChild(backdropEl);
   document.body.appendChild(panelEl);
@@ -111,6 +122,7 @@ export function closeBandejaDropdowns() {
 export async function openDetailPanel(req, opts = {}) {
   closeBandejaDropdowns();
   ensurePanel();
+  ensurePanelStyles();
   panelEl._req = req;
   panelEl._activeTab = opts.tab || 'info';
   panelEl._onAdjuntos = opts.onAdjuntos;
@@ -123,19 +135,28 @@ export async function openDetailPanel(req, opts = {}) {
   document.querySelectorAll('.sgc-bandeja-wrap tbody tr.row-selected').forEach((tr) => tr.classList.remove('row-selected'));
   const tr = document.querySelector(`.sgc-bandeja-wrap tbody tr[data-req-id="${req.id}"]`);
   tr?.classList.add('row-selected');
+  const body = panelEl.querySelector('#sgcPanelBody');
+  if (body) body.scrollTop = 0;
   await renderPanelTab(req, panelEl._activeTab);
 }
 
 function formatMovimientoLabel(m) {
   const accion = String(m?.accion || '').toUpperCase();
   const sub = String(m?.subModulo || m?.sub_modulo || '').trim();
-  if (accion === 'SUBSANADO' && sub) return `Subsanado ${sub}`;
+  if (accion === 'RECIBIDO_OBSERVACION') return `Recibido observación · ${sub}`;
+  if (accion === 'RECIBIDO_SUBSANACION') return `Recibido subsanación · ${sub}`;
+  if (accion === 'RECIBIDO') return `Recibido · ${sub}`;
+  if (accion === 'SUBSANADO' && sub) return `Subsanado · ${sub}`;
+  if (accion === 'OBSERVADO' && sub) return `Observado · ${sub}`;
+  if (accion === 'APROBADO' && sub) return `Aprobado · ${sub}`;
+  if (accion === 'DERIVADO' && sub) return `Derivado · ${sub}`;
   if (accion && sub) return `${accion} · ${sub}`;
   return accion || sub || '—';
 }
 
 async function renderPanelTab(req, tab) {
   const body = panelEl.querySelector('#sgcPanelBody');
+  body.scrollTop = 0;
   if (tab === 'info') {
     const row = req;
     const nombreItem = getNombreItemRaw(row);
@@ -161,7 +182,7 @@ async function renderPanelTab(req, tab) {
     body.innerHTML = '<div class="text-muted small">Cargando trazabilidad…</div>';
     try {
       const data = await trazabilidadService.get(req.id);
-      body.innerHTML = `<div class="traza-timeline-wrap traza-modal-scroll">${renderTimeline(data)}</div>`;
+      body.innerHTML = `<div class="traza-timeline-wrap">${renderTimeline(data)}</div>`;
     } catch (e) {
       body.innerHTML = `<div class="alert alert-danger small">${esc(e.message)}</div>`;
     }
@@ -203,12 +224,18 @@ async function renderPanelTab(req, tab) {
         body.innerHTML = '<p class="text-muted small">Sin movimientos.</p>';
         return;
       }
-      body.innerHTML = `<div class="traza-modal-scroll"><div class="list-group list-group-flush small">${[...movs].reverse().map((m) => `
+      body.innerHTML = `<div class="list-group list-group-flush small">${[...movs].reverse().map((m) => {
+        const destino = m.subModuloDestino || m.sub_modulo_destino;
+        const origen = m.subModuloOrigen || m.sub_modulo_origen;
+        return `
         <div class="list-group-item px-0 py-2 border-bottom">
           <div class="fw-semibold">${esc(formatMovimientoLabel(m))}</div>
           <div class="text-muted">${esc(fmtDateTime(m.fecha))} · ${esc(m.usuario || m.responsable || '—')}</div>
+          ${origen && destino ? `<div class="small text-muted">${esc(origen)} → ${esc(destino)}</div>` : ''}
+          ${destino && !origen ? `<div class="small text-muted">Destino: ${esc(destino)}</div>` : ''}
           ${m.observacion ? `<div class="mt-1">${esc(m.observacion)}</div>` : ''}
-        </div>`).join('')}</div></div>`;
+        </div>`;
+      }).join('')}</div>`;
     } catch (e) {
       body.innerHTML = `<div class="alert alert-danger small">${esc(e.message)}</div>`;
     }

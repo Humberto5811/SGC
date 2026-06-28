@@ -1,7 +1,8 @@
 /**
- * HistorialManager — historial del REQUERIMIENTO a lo largo del flujo SGC.
+ * HistorialManager — bitácora completa de acciones del REQUERIMIENTO.
  */
 import { MODULOS_FLUJO } from '../common/ConstantesEventos.js';
+import { obtenerEvento } from '../common/CatalogoEventos.js';
 import {
   generarId,
   ahoraISO,
@@ -23,32 +24,58 @@ export class HistorialManager {
     this.store = contexto.store;
   }
 
-  async registrarCambio(payload = {}) {
+  /**
+   * Registro completo de una acción (esquema estabilizado).
+   * Campos: fecha, hora, usuario, módulo, evento, descripción, estados, observación, adjuntos.
+   */
+  async registrarAccion(payload = {}) {
     const requerimientoId = claveRequerimiento(payload);
     const codigoRequerimiento = resolverCodigoRequerimiento(payload, requerimientoId);
-    const ts = ahoraISO();
+    const ts = payload.timestamp || ahoraISO();
     const { fecha, hora } = formatearFechaHora(ts);
     const usuario = payload.usuario || this.ctx.obtenerUsuario()?.nombre || 'Sistema';
 
-    const cambio = {
+    let eventoLabel = payload.evento || payload.eventoLabel || '';
+    if (!eventoLabel && payload.eventoCodigo) {
+      const def = obtenerEvento(payload.eventoCodigo);
+      eventoLabel = def?.label || payload.eventoCodigo;
+    }
+
+    const registro = {
       id: generarId('hist'),
       requerimientoId,
       codigoRequerimiento,
       usuario,
-      cambio: payload.cambio || payload.descripcion || '',
       fecha,
       hora,
       timestamp: ts,
       modulo: payload.modulo || '',
       submodulo: payload.submodulo || '',
-      valorAnterior: payload.valorAnterior ?? payload.valor_anterior ?? null,
-      valorNuevo: payload.valorNuevo ?? payload.valor_nuevo ?? null,
+      evento: eventoLabel,
+      eventoCodigo: payload.eventoCodigo || null,
+      descripcion: payload.descripcion || payload.cambio || payload.observacion || eventoLabel || '',
+      cambio: payload.cambio || payload.descripcion || eventoLabel || '',
+      estadoAnterior: payload.estadoAnterior ?? payload.valorAnterior ?? payload.estado_anterior ?? null,
+      estadoNuevo: payload.estadoNuevo ?? payload.valorNuevo ?? payload.estado_nuevo ?? null,
+      valorAnterior: payload.valorAnterior ?? payload.estadoAnterior ?? null,
+      valorNuevo: payload.valorNuevo ?? payload.estadoNuevo ?? null,
+      observacion: payload.observacion || '',
+      adjuntosRelacionados: payload.adjuntosRelacionados || payload.adjuntos || [],
       campo: payload.campo || '',
       metadata: payload.metadata || {},
     };
 
-    await this.store.append(COLECCION, requerimientoId, cambio);
-    return cambio;
+    await this.store.append(COLECCION, requerimientoId, registro);
+    return registro;
+  }
+
+  /** Alias legacy — delega en registrarAccion. */
+  async registrarCambio(payload = {}) {
+    return this.registrarAccion({
+      ...payload,
+      eventoCodigo: payload.eventoCodigo || (payload.campo === 'estado' ? 'CAMBIO_ESTADO' : null),
+      descripcion: payload.cambio || payload.descripcion || `Cambio: ${payload.campo || 'general'}`,
+    });
   }
 
   async obtenerHistorial(requerimientoId) {
@@ -67,7 +94,6 @@ export class HistorialManager {
     return lista.slice().sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
   }
 
-  /** Resumen por módulo del flujo (Registro → DEC → … → Ejecución). */
   async obtenerResumenPorModulo(requerimientoId) {
     const cambios = await this.listarCambios(requerimientoId);
     return MODULOS_FLUJO.map((modulo) => ({

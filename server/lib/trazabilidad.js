@@ -11,6 +11,7 @@ import {
   normalizeAccion,
   SUBMODULOS,
 } from './movimientos.js';
+import { appendEventosPorAccion } from './registroEventos.js';
 
 export { SUBMODULOS, normalizeAccion, getSubModuloMeta };
 
@@ -537,6 +538,9 @@ export async function registrarMovimiento({
   accion,
   observacion = '',
   responsable = null,
+  etapaEjecutor = null,
+  etapaDestino = null,
+  etapaDestinoEvento = null,
 }) {
   const { rows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) throw new Error('Requerimiento no encontrado');
@@ -545,6 +549,9 @@ export async function registrarMovimiento({
   const etapaNueva = mapEstadoToEtapa(estadoNuevo);
   const etapaAnterior = row.estado_actual || mapEstadoToEtapa(row.estado);
   const accionFinal = inferAccion(row.estado, estadoNuevo, accion);
+  const ejecutor = String(etapaEjecutor || etapaAnterior).toUpperCase();
+  const destinoExplicito = etapaDestino ? String(etapaDestino).toUpperCase() : null;
+  const destino = destinoExplicito || (etapaNueva !== ejecutor ? etapaNueva : null);
 
   let historial = parseHistorial(row.historial_estados);
   if (!historial.length) historial = initHistorialFromRow(row, usuario);
@@ -571,19 +578,21 @@ export async function registrarMovimiento({
     }
   }
 
-  const responsableActual = responsable || ETAPAS[etapaNueva]?.responsable || usuario || row.responsable_actual || '';
+  const responsableActual = responsable || ETAPAS[etapaNueva]?.responsable || ETAPAS[ejecutor]?.responsable || usuario || row.responsable_actual || '';
   const subMeta = getSubModuloMeta(etapaNueva);
 
   let movimientos = parseMovimientos(row.historial_movimientos);
   if (cambioEtapa || cambioEstado || observacion) {
-    movimientos = appendMovimiento(movimientos, buildMovimientoEntry({
-      fecha: now,
+    movimientos = appendEventosPorAccion(movimientos, {
       accion: accionFinal,
-      etapa: etapaNueva,
+      etapaEjecutor: ejecutor,
+      etapaDestino: destino,
+      etapaDestinoEvento: etapaDestinoEvento ? String(etapaDestinoEvento).toUpperCase() : null,
       usuario,
       responsable: responsableActual,
       observacion,
-    }));
+      now,
+    });
   }
 
   await query(`
@@ -639,25 +648,18 @@ export async function registrarSubsanacionDerivacion({
   const estadoNuevo = resolveEstadoFromDestino(destinoSubmodulo, etapaDestino);
   const responsableDestino = resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, etapaDestino);
   const subMetaDest = getSubModuloMeta(etapaDestino);
-  const t2 = new Date(Date.now() + 1).toISOString();
 
   let movimientos = parseMovimientos(row.historial_movimientos);
-  movimientos = appendMovimiento(movimientos, buildMovimientoEntry({
-    fecha: now,
+  movimientos = appendEventosPorAccion(movimientos, {
     accion: 'subsanado',
-    etapa: etapaOrigen,
-    usuario,
-    responsable: usuario,
-    observacion: textoSubsanacion,
-  }));
-  movimientos = appendMovimiento(movimientos, buildMovimientoEntry({
-    fecha: t2,
-    accion: 'derivado',
-    etapa: etapaDestino,
+    etapaEjecutor: etapaOrigen,
+    etapaDestino: etapaDestino !== etapaOrigen ? etapaDestino : null,
+    etapaDestinoEvento: etapaDestino,
     usuario,
     responsable: responsableDestino,
-    observacion: `Derivado a ${subMetaDest.subModulo} tras subsanación`,
-  }));
+    observacion: textoSubsanacion,
+    now,
+  });
 
   let historial = parseHistorial(row.historial_estados);
   if (!historial.length) historial = initHistorialFromRow(row, usuario);
@@ -669,12 +671,13 @@ export async function registrarSubsanacionDerivacion({
     observacion: textoSubsanacion,
     accion: 'subsanado',
   }));
+  const t2 = new Date(Date.now() + 2).toISOString();
   historial.push(buildHistorialEntry({
     etapa: etapaDestino,
     usuario,
     fechaIngreso: t2,
-    observacion: `Derivado a ${subMetaDest.subModulo}`,
-    accion: 'derivado',
+    observacion: `Subsanación recibida en ${subMetaDest.subModulo}`,
+    accion: 'subsanado',
   }));
 
   await query(`

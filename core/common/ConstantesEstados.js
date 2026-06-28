@@ -29,11 +29,46 @@ export const ESTADOS_TERMINALES = Object.freeze([
   ESTADOS_REQUERIMIENTO.FINALIZADO,
 ]);
 
-/** Estados propios de observaciones (no son estados del requerimiento). */
-export const ESTADOS_OBSERVACION = Object.freeze({
+/** Ciclo completo de una observación (no confundir con estado del requerimiento). */
+export const CICLO_OBSERVACION = Object.freeze({
+  EMITIDA: 'EMITIDA',
+  RECIBIDA: 'RECIBIDA',
+  EN_ATENCION: 'EN ATENCIÓN',
+  SUBSANADA: 'SUBSANADA',
+  RECIBIDA_EMISOR: 'RECIBIDA POR EL EMISOR',
+  CERRADA: 'CERRADA',
+});
+
+/** Alias — usar CICLO_OBSERVACION en código nuevo. */
+export const ESTADOS_OBSERVACION = CICLO_OBSERVACION;
+
+/** Compatibilidad imports legacy fase 1. */
+export const ESTADOS_OBSERVACION_LEGACY = Object.freeze({
   OBSERVADO: 'OBSERVADO',
   RESPONDIDO: 'RESPONDIDO',
   CERRADO: 'CERRADO',
+});
+
+/** Estados operativos por módulo (workflow interno, no estado global del requerimiento). */
+export const ESTADOS_MODULO = Object.freeze({
+  RECIBIDO: 'RECIBIDO',
+  EN_PROCESO: 'EN PROCESO',
+  OBSERVADO: 'OBSERVADO',
+  SUBSANADO: 'SUBSANADO',
+  APROBADO: 'APROBADO',
+  DERIVADO: 'DERIVADO',
+  RECHAZADO: 'RECHAZADO',
+  DEVUELTO: 'DEVUELTO',
+  ARCHIVADO: 'ARCHIVADO',
+});
+
+export const TRANSICIONES_CICLO_OBSERVACION = Object.freeze({
+  [CICLO_OBSERVACION.EMITIDA]: [CICLO_OBSERVACION.RECIBIDA],
+  [CICLO_OBSERVACION.RECIBIDA]: [CICLO_OBSERVACION.EN_ATENCION],
+  [CICLO_OBSERVACION.EN_ATENCION]: [CICLO_OBSERVACION.SUBSANADA],
+  [CICLO_OBSERVACION.SUBSANADA]: [CICLO_OBSERVACION.RECIBIDA_EMISOR],
+  [CICLO_OBSERVACION.RECIBIDA_EMISOR]: [CICLO_OBSERVACION.CERRADA],
+  [CICLO_OBSERVACION.CERRADA]: [],
 });
 
 /** Catálogo legacy fase 1 — conservado para compatibilidad de imports. */

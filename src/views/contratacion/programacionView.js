@@ -80,6 +80,8 @@ async function loadProgramacionList() {
           if (Array.isArray(items) && items.length) descrip = items.map(it => esc(it.nombre_item || '')).join(', ');
         } catch (_) {}
         const esAprobadoDec = r.estado === 'Aprobado DEC';
+        const enProgramacion = r.estado === 'En Programación';
+        const puedeAprobar = esAprobadoDec || enProgramacion;
         return '<tr><td>' + esc(r.codigo || ('#' + r.id)) + '</td>' +
           '<td><span class="badge bg-secondary text-uppercase" style="font-size:0.65rem;">' + esc(r.tipo) + '</span></td>' +
           '<td class="small">' + (descrip || '<span class="text-muted small">—</span>') + '</td>' +
@@ -91,7 +93,7 @@ async function loadProgramacionList() {
           '<button class="btn btn-xs btn-outline-primary prog-ver" data-id="' + r.id + '" title="Ver documento" style="' + style + '"><i class="bi bi-eye" style="font-size:11px;"></i></button> ' +
           '<button class="btn btn-xs btn-outline-info prog-attach" data-id="' + r.id + '" title="Adjuntos" style="' + style + '"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-info adjunto-count-' + r.id + '" style="font-size:9px;padding:1px 4px;">0</span></button> ' +
           '<button class="btn btn-xs btn-outline-danger prog-observar" data-id="' + r.id + '" title="Observar" style="' + style + '"><i class="bi bi-chat-left-dots" style="font-size:11px;"></i></button> ' +
-          '<button class="btn btn-xs btn-success prog-aprobar" data-id="' + r.id + '" title="Aprobar" style="' + style + '"' + (esAprobadoDec ? '' : ' disabled') + '><i class="bi bi-check-circle" style="font-size:11px;"></i> Aprobar</button>' +
+          '<button class="btn btn-xs btn-success prog-aprobar" data-id="' + r.id + '" title="Aprobar" style="' + style + '"' + (puedeAprobar ? '' : ' disabled') + '><i class="bi bi-check-circle" style="font-size:11px;"></i> Aprobar</button>' +
           '</td></tr>';
       }).join(''),
       '</tbody></table></div>'

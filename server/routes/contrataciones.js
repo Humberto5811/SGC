@@ -107,6 +107,8 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
       accion: 'aprobado',
       observacion: 'Aprobado por DEC — derivado a Programación',
       responsable: ETAPAS.PROGRAMACION.responsable,
+      etapaEjecutor: 'DEC',
+      etapaDestino: 'PROGRAMACION',
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
@@ -139,11 +141,11 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'EVALUACION').toUpperCase();
+    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
     const estadoNuevo = destino_submodulo || destino_etapa
       ? resolveEstadoFromDestino(destino_submodulo, destino_etapa)
       : 'Observado DEC';
-    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
 
     const updated = await registrarMovimiento({
       requerimientoId,
@@ -152,6 +154,8 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
       accion: 'observado',
       observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
       responsable,
+      etapaEjecutor: 'DEC',
+      etapaDestinoEvento: etapaDestObs,
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
@@ -171,8 +175,10 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
     const { usuario } = req.body || {};
-    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1 AND estado = $2',
-      [requerimientoId, 'Aprobado DEC']);
+    const reqCheck = await query(
+      `SELECT id, payload FROM requerimientos WHERE id = $1 AND estado IN ('Aprobado DEC', 'En Programación')`,
+      [requerimientoId],
+    );
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado o estado inválido' });
 
     let payload = {};
@@ -188,6 +194,8 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
       accion: 'aprobado',
       observacion: 'Aprobado en Programación — derivado a Coordinación CM',
       responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
+      etapaEjecutor: 'PROGRAMACION',
+      etapaDestino: 'ACTOS_PREPARATORIOS',
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
@@ -216,11 +224,11 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'PROGRAMACION').toUpperCase();
+    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
     const estadoNuevo = destino_submodulo || destino_etapa
       ? resolveEstadoFromDestino(destino_submodulo, destino_etapa)
       : 'Observado Programación';
-    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
 
     const updated = await registrarMovimiento({
       requerimientoId,
@@ -229,6 +237,8 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
       accion: 'observado',
       observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
       responsable,
+      etapaEjecutor: 'PROGRAMACION',
+      etapaDestinoEvento: etapaDestObs,
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });

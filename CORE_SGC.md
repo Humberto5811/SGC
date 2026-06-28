@@ -44,7 +44,8 @@ Campos multientidad reservados: `entidad`, `sede`, `area`, `dependencia`, `progr
 ```
 core/
 ├── common/
-│   ├── ConstantesEstados.js      Estados del requerimiento + observación + legacy
+│   ├── CatalogoEventos.js        Catálogo único EVENTOS_FUNCIONALES
+│   ├── ConstantesEstados.js      Estados del requerimiento + ciclo observación + módulo
 │   ├── ConstantesEventos.js      Entidades, módulos del flujo, tipos documentales
 │   ├── ConstantesJerarquia.js    Interfaces futuras (paquete, SC, CCP, OC)
 │   └── Utils.js                  Store, resolvers requerimientoId / compat legacy
@@ -53,9 +54,10 @@ core/
 ├── expediente/
 │   └── ExpedienteManager.js      Solo documentación + adaptador legacy
 ├── trazabilidad/
-│   ├── TimelineManager.js
-│   ├── HistorialManager.js
-│   ├── ObservacionManager.js
+│   ├── TimelineManager.js        Eventos funcionales cronológicos
+│   ├── HistorialManager.js       Bitácora completa (fecha, usuario, módulo, evento…)
+│   ├── ObservacionManager.js     Ciclo Emitida → … → Cerrada
+│   ├── TrazabilidadOrchestrator.js  Secuencias derivación/recepción y ramas observación
 │   ├── AdjuntoManager.js
 │   └── AuditoriaManager.js
 ├── workflow/
@@ -78,7 +80,32 @@ core/
 
 Usar siempre `ESTADOS` / `ESTADOS_REQUERIMIENTO` de `ConstantesEstados.js`. **Nunca** estados del expediente.
 
-Estados de observación (separados): `OBSERVADO`, `RESPONDIDO`, `CERRADO` (`ESTADOS_OBSERVACION`).
+Estados de observación (ciclo completo, separados del estado del requerimiento):
+
+`EMITIDA` → `RECIBIDA` → `EN ATENCIÓN` → `SUBSANADA` → `RECIBIDA POR EL EMISOR` → `CERRADA`
+
+Usar `CICLO_OBSERVACION` / `ESTADOS_OBSERVACION` en `ConstantesEstados.js`. No confundir con el binario legacy `OBSERVADO` / `RESPONDIDO` / `CERRADO` (`ESTADOS_OBSERVACION_LEGACY`).
+
+Estados operativos por módulo (`ESTADOS_MODULO`): `RECIBIDO`, `EN PROCESO`, `OBSERVADO`, `SUBSANADO`, `APROBADO`, `DERIVADO`, etc.
+
+## Catálogo de eventos funcionales
+
+Archivo: `core/common/CatalogoEventos.js` — catálogo único reutilizable (`EVENTOS_FUNCIONALES`).
+
+| Categoría | Ejemplos |
+|-----------|----------|
+| Recepción | `REQUERIMIENTO_RECIBIDO`, `EXPEDIENTE_RECIBIDO`, `OBSERVACION_RECIBIDA`, `SUBSANACION_RECIBIDA` |
+| Derivación | `DERIVADO_A_DEC`, `DERIVADO_A_PROGRAMACION`, … `DERIVADO_A_EJECUCION` |
+| Observaciones | `OBSERVACION_REGISTRADA`, `OBSERVACION_ENVIADA`, `OBSERVACION_ATENDIDA`, `OBSERVACION_CERRADA` |
+| Subsanaciones | `SUBSANACION_INICIADA`, `SUBSANACION_REGISTRADA`, `SUBSANACION_ENVIADA`, `SUBSANACION_ACEPTADA` |
+| Aprobaciones | `APROBADO`, `RECHAZADO`, `DEVUELTO`, `ARCHIVADO` |
+| Documentos | `DOCUMENTO_AGREGADO`, `DOCUMENTO_ELIMINADO`, `DOCUMENTO_ACTUALIZADO` |
+| Invitaciones | `SOLICITUD_COTIZACION_CREADA`, `INVITACION_ENVIADA`, `COTIZACION_RECIBIDA` |
+| Validación (futuro) | `VALIDACION_REGISTRADA`, `VALIDACION_APROBADA`, `VALIDACION_OBSERVADA` |
+
+Helpers: `obtenerEvento(codigo)`, `obtenerEventoDerivacion(moduloDestino)`, `listarEventosPorCategoria(categoria)`.
+
+El Timeline registra **eventos funcionales**, no solo cambios de estado global del requerimiento.
 
 ## Managers
 
@@ -112,15 +139,49 @@ Estados de observación (separados): `OBSERVADO`, `RESPONDIDO`, `CERRADO` (`ESTA
 
 ### TimelineManager
 
-Trabaja con `requerimientoId` y `codigoRequerimiento`. Acepta `expedienteId` como alias legacy en payloads.
+Trabaja con `requerimientoId` y `codigoRequerimiento`. Registra **eventos funcionales** del catálogo, no solo cambios de estado.
+
+| Método | Descripción |
+|--------|-------------|
+| `registrarEvento(payload)` | Registro genérico (compat fase 1) |
+| `registrarEventoFuncional(codigoEvento, payload)` | Desde `EVENTOS_FUNCIONALES` |
+| `obtenerTimelineCronologico(requerimientoId)` | Vista cronológica para render |
+| `filtrarEventos(requerimientoId, criterios)` | Filtro por módulo, tipo, rango de fechas |
 
 ### HistorialManager
 
-Historial del **requerimiento** siguiendo `MODULOS_FLUJO`: Registro, DEC, Programación, Coordinación CM, Invitaciones, Portal Proveedores, Validación, Cuadro Comparativo, CCP, Ejecución.
+Bitácora del **requerimiento** con esquema: fecha, hora, usuario, módulo, evento, descripción, estado anterior/nuevo, observación, adjuntos.
+
+| Método | Descripción |
+|--------|-------------|
+| `registrarAccion(payload)` | Registro completo estabilizado |
+| `registrarCambio(payload)` | Alias legacy → `registrarAccion` |
+
+Sigue `MODULOS_FLUJO`: Registro, DEC, Programación, Coordinación CM, Invitaciones, Portal Proveedores, Validación, Cuadro Comparativo, CCP, Ejecución.
 
 ### ObservacionManager
 
-Todas las observaciones ligadas a `requerimientoId`. Registra módulo/usuario origen y destino, estado, respuesta, fecha y hora.
+Ciclo completo por observación (`CICLO_OBSERVACION`). Integrado con Timeline e Historial vía factory.
+
+| Método | Descripción |
+|--------|-------------|
+| `crearObservacion(payload)` | Estado inicial EMITIDA + eventos registrada/enviada |
+| `marcarRecibida(requerimientoId, obsId)` | RECIBIDA |
+| `marcarEnAtencion(requerimientoId, obsId)` | EN ATENCIÓN |
+| `registrarSubsanacion(requerimientoId, obsId, respuesta)` | SUBSANADA + eventos subsanación |
+| `marcarRecibidaPorEmisor(requerimientoId, obsId)` | RECIBIDA POR EL EMISOR |
+| `cerrarObservacion(requerimientoId, obsId)` | CERRADA |
+
+### TrazabilidadOrchestrator
+
+Coordina secuencias compuestas sin tocar APIs ni pantallas.
+
+| Método | Descripción |
+|--------|-------------|
+| `registrarDerivacionConRecepcion(payload)` | Derivación + recepción en módulo destino |
+| `registrarObservacionConRecepcion(payload)` | Observación emitida → recibida en destino |
+| `registrarSubsanacionConRecepcion(...)` | Subsanación → recepción por emisor |
+| `obtenerRecorridoModulos(requerimientoId)` | Línea base + ramas por observación |
 
 ### AdjuntoManager — dos niveles
 
@@ -131,7 +192,19 @@ Todo adjunto registra `requerimientoId`, `codigoRequerimiento` y opcionalmente `
 
 ### WorkflowManager
 
-Administra **únicamente** estados del requerimiento. Transiciones lineales según `FLUJO_REQUERIMIENTO`.
+Administra estados del requerimiento y **registro automático por módulo** en Timeline + Historial.
+
+| Método | Descripción |
+|--------|-------------|
+| `registrarRecibido(payload)` | Módulo recibe requerimiento |
+| `registrarEnProceso(payload)` | En proceso |
+| `registrarObservado(payload)` | Observación emitida (si aplica) |
+| `registrarSubsanado(payload)` | Subsanación (si aplica) |
+| `registrarAprobado(payload)` | Aprobación |
+| `registrarDerivado(payload)` | Derivación + recepción opcional en destino |
+| `registrarCambioEstado(payload)` | Cambio de estado global (compat) |
+
+Transiciones lineales según `FLUJO_REQUERIMIENTO`.
 
 ### AuditoriaManager
 

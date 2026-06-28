@@ -6,16 +6,23 @@ import { movimientosToTimelineEvents } from './historyService.js';
 function accionDotClass(accion) {
   const a = String(accion || '').toUpperCase();
   if (a === 'OBSERVADO') return 'traza-event-obs';
-  if (a === 'SUBSANADO' || a === 'REENVIADO') return 'traza-event-sub';
-  if (a === 'APROBADO' || a === 'FINALIZADO') return 'traza-event-ok';
+  if (a === 'RECIBIDO_OBSERVACION') return 'traza-event-obs';
+  if (a === 'SUBSANADO' || a === 'RECIBIDO_SUBSANACION' || a === 'REENVIADO') return 'traza-event-sub';
+  if (a === 'APROBADO' || a === 'FINALIZADO' || a === 'RECIBIDO') return 'traza-event-ok';
   return 'traza-event-etapa';
 }
 
 function formatMovimientoLabel(m) {
   const accion = String(m?.accion || '').toUpperCase();
   const sub = String(m?.subModulo || m?.sub_modulo || '').trim();
-  if (accion === 'SUBSANADO' && sub) return `Subsanado ${sub}`;
-  if (accion && sub) return `${accion} ${sub}`;
+  if (accion === 'RECIBIDO_OBSERVACION') return `Recibido observación · ${sub}`;
+  if (accion === 'RECIBIDO_SUBSANACION') return `Recibido subsanación · ${sub}`;
+  if (accion === 'RECIBIDO') return `Recibido · ${sub}`;
+  if (accion === 'SUBSANADO' && sub) return `Subsanado · ${sub}`;
+  if (accion === 'OBSERVADO' && sub) return `Observado · ${sub}`;
+  if (accion === 'APROBADO' && sub) return `Aprobado · ${sub}`;
+  if (accion === 'DERIVADO' && sub) return `Derivado · ${sub}`;
+  if (accion && sub) return `${accion} · ${sub}`;
   return accion || sub || '—';
 }
 

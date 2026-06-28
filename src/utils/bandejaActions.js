@@ -96,6 +96,7 @@ export function progMenuItems(r) {
   const esAprobadoDec = r.estado === 'Aprobado DEC';
   const enProgramacion = r.estado === 'En Programación';
   const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
+  const puedeAprobar = esAprobadoDec || enProgramacion;
   const pending = getObservacionPendiente(r);
   const pendProg = observacionPendienteParaSubmodulo(pending, 'Programación');
   const obsLabel = pendProg ? 'Responder observación' : 'Observaciones';
@@ -104,7 +105,7 @@ export function progMenuItems(r) {
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
     { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !obsEnabled },
-    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !esAprobadoDec },
+    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
@@ -116,6 +117,7 @@ export function progHiddenActions(r) {
   const esAprobadoDec = r.estado === 'Aprobado DEC';
   const enProgramacion = r.estado === 'En Programación';
   const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
+  const puedeAprobar = esAprobadoDec || enProgramacion;
   const pending = getObservacionPendiente(r);
   const pendProg = observacionPendienteParaSubmodulo(pending, 'Programación');
   const obsEnabled = puedeGestionar || esObservado || pendProg;
@@ -124,7 +126,7 @@ export function progHiddenActions(r) {
     <button type="button" class="prog-ver" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="prog-attach" data-act-trigger="attach" data-id="${r.id}"></button>
     <button type="button" class="prog-observar" data-act-trigger="obs" data-id="${r.id}" ${obsEnabled ? '' : 'disabled'}></button>
-    <button type="button" class="prog-aprobar" data-act-trigger="approve" data-id="${r.id}" ${esAprobadoDec ? '' : 'disabled'}></button>
+    <button type="button" class="prog-aprobar" data-act-trigger="approve" data-id="${r.id}" ${puedeAprobar ? '' : 'disabled'}></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
 }
 

@@ -1,7 +1,8 @@
 /**
- * WorkflowManager — flujo de estados del REQUERIMIENTO únicamente.
+ * WorkflowManager — flujo de estados del REQUERIMIENTO + registro automático de eventos por módulo.
  */
-import { ESTADOS, FLUJO_REQUERIMIENTO } from '../common/ConstantesEstados.js';
+import { ESTADOS, ESTADOS_MODULO, FLUJO_REQUERIMIENTO } from '../common/ConstantesEstados.js';
+import { obtenerEventoDerivacion } from '../common/CatalogoEventos.js';
 import { resolverRequerimientoId, resolverCodigoRequerimiento, requerido } from '../common/Utils.js';
 import { crearEstadoManager } from './EstadoManager.js';
 
@@ -23,6 +24,15 @@ const TRANSICIONES_INVERSAS = Object.freeze(
     return acc;
   }, {}),
 );
+
+function basePayload(payload) {
+  const requerimientoId = resolverRequerimientoId(payload);
+  return {
+    ...payload,
+    requerimientoId,
+    codigoRequerimiento: resolverCodigoRequerimiento(payload, requerimientoId),
+  };
+}
 
 export class WorkflowManager {
   constructor(contexto, deps = {}) {
@@ -56,13 +66,105 @@ export class WorkflowManager {
     };
   }
 
+  async _registrarEventoModulo(codigoEvento, payload = {}) {
+    const p = basePayload(payload);
+    if (this.timeline?.registrarEventoFuncional) {
+      await this.timeline.registrarEventoFuncional(codigoEvento, {
+        ...p,
+        modulo: p.modulo || p.submodulo,
+        estadoModulo: p.estadoModulo,
+      });
+    } else if (this.timeline) {
+      await this.timeline.registrarEvento({ ...p, eventoCodigo: codigoEvento });
+    }
+    if (this.historial?.registrarAccion) {
+      await this.historial.registrarAccion({
+        ...p,
+        eventoCodigo: codigoEvento,
+        estadoAnterior: p.estadoAnterior,
+        estadoNuevo: p.estadoNuevo || p.estadoModulo,
+      });
+    }
+    return p;
+  }
+
+  /** Módulo recibe el requerimiento. */
+  async registrarRecibido(payload = {}) {
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
+    return this._registrarEventoModulo('REQUERIMIENTO_RECIBIDO', {
+      ...payload,
+      estadoModulo: ESTADOS_MODULO.RECIBIDO,
+    });
+  }
+
+  /** Módulo inicia procesamiento. */
+  async registrarEnProceso(payload = {}) {
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
+    return this._registrarEventoModulo('EN_PROCESO', {
+      ...payload,
+      estadoModulo: ESTADOS_MODULO.EN_PROCESO,
+    });
+  }
+
+  /** Módulo emite observación (si corresponde). */
+  async registrarObservado(payload = {}) {
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
+    return this._registrarEventoModulo('OBSERVACION_REGISTRADA', {
+      ...payload,
+      estadoModulo: ESTADOS_MODULO.OBSERVADO,
+    });
+  }
+
+  /** Módulo registra subsanación (si corresponde). */
+  async registrarSubsanado(payload = {}) {
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
+    return this._registrarEventoModulo('SUBSANACION_REGISTRADA', {
+      ...payload,
+      estadoModulo: ESTADOS_MODULO.SUBSANADO,
+    });
+  }
+
+  /** Módulo aprueba. */
+  async registrarAprobado(payload = {}) {
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
+    return this._registrarEventoModulo('APROBADO', {
+      ...payload,
+      estadoModulo: ESTADOS_MODULO.APROBADO,
+    });
+  }
+
+  /** Módulo deriva al siguiente — registra evento de derivación + recepción en destino (opcional). */
+  async registrarDerivado(payload = {}) {
+    requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
+    const p = basePayload(payload);
+    const destino = p.moduloDestino || p.destino || p.submodulo;
+    const def = obtenerEventoDerivacion(destino);
+    const codigo = def?.codigo || 'DERIVADO';
+
+    await this._registrarEventoModulo(codigo, {
+      ...p,
+      moduloDestino: destino,
+      estadoModulo: ESTADOS_MODULO.DERIVADO,
+      descripcion: p.descripcion || def?.label || `Derivado a ${destino || 'siguiente módulo'}`,
+    });
+
+    if (p.registrarRecepcionDestino !== false && destino) {
+      await this._registrarEventoModulo('REQUERIMIENTO_RECIBIDO', {
+        ...p,
+        modulo: destino,
+        moduloOrigen: p.modulo || p.moduloOrigen,
+        moduloDestino: destino,
+        estadoModulo: ESTADOS_MODULO.RECIBIDO,
+      });
+    }
+    return p;
+  }
+
   async registrarMovimiento(payload = {}) {
     requerido(payload.requerimientoId ?? payload.expedienteId, 'requerimientoId');
     if (this.timeline) {
       return this.timeline.registrarEvento({
-        ...payload,
-        requerimientoId: resolverRequerimientoId(payload),
-        codigoRequerimiento: resolverCodigoRequerimiento(payload),
+        ...basePayload(payload),
         estadoAnterior: payload.estadoAnterior,
         estadoNuevo: payload.estadoNuevo,
       });
@@ -75,17 +177,16 @@ export class WorkflowManager {
     if (!validacion.valido && !payload.omitirValidacion) {
       throw new Error(validacion.motivo);
     }
-    const requerimientoId = resolverRequerimientoId(payload);
+    const p = basePayload(payload);
     if (this.historial) {
-      await this.historial.registrarCambio({
-        requerimientoId,
-        codigoRequerimiento: resolverCodigoRequerimiento(payload, requerimientoId),
+      await this.historial.registrarAccion({
+        ...p,
+        eventoCodigo: 'CAMBIO_ESTADO',
+        descripcion: `Estado: ${payload.estadoAnterior} → ${payload.estadoNuevo}`,
         cambio: `Estado: ${payload.estadoAnterior} → ${payload.estadoNuevo}`,
-        modulo: payload.modulo,
-        submodulo: payload.submodulo,
+        campo: 'estado',
         valorAnterior: payload.estadoAnterior,
         valorNuevo: payload.estadoNuevo,
-        campo: 'estado',
       });
     }
     return this.registrarMovimiento(payload);
@@ -93,6 +194,10 @@ export class WorkflowManager {
 
   obtenerFlujoLineal() {
     return FLUJO_REQUERIMIENTO.slice();
+  }
+
+  obtenerEstadosModulo() {
+    return { ...ESTADOS_MODULO };
   }
 }
 

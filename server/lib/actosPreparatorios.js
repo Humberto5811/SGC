@@ -289,6 +289,7 @@ export async function asignarAnalistaActos(requerimientoId, { analista, usuario,
     accion: 'asignacion',
     observacion: `Asignado a ${analista} — ${subLabel}`,
     responsable: analista,
+    etapaEjecutor: 'ACTOS_PREPARATORIOS',
   });
 }
 
@@ -314,9 +315,9 @@ export async function observarActos(requerimientoId, body) {
   });
   await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
-  const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'ACTOS_PREPARATORIOS').toUpperCase();
+  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
   const estadoNuevo = resolveEstadoMovimientoObservacion(destino_submodulo, destino_etapa);
-  const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+  const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
 
   return registrarMovimiento({
     requerimientoId,
@@ -325,6 +326,8 @@ export async function observarActos(requerimientoId, body) {
     accion: 'observado',
     observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
     responsable,
+    etapaEjecutor: 'ACTOS_PREPARATORIOS',
+    etapaDestinoEvento: etapaDestObs,
   });
 }
 
@@ -360,6 +363,8 @@ export async function derivarActos(requerimientoId, body) {
     accion: 'derivado',
     observacion: motivo ? formatObservacionTraza(motivo, { destino_persona, destino_submodulo }) : `Derivado a ${destino_submodulo || etapaDest}`,
     responsable,
+    etapaEjecutor: 'ACTOS_PREPARATORIOS',
+    etapaDestino: etapaDest,
   });
 }
 
@@ -393,5 +398,7 @@ export async function aprobarActosInvitaciones(requerimientoId, { responsableDes
     accion: 'aprobado',
     observacion: `Aprobado en ${SUBMODULO_COORDINACION_CM} — derivado a Invitaciones`,
     responsable: responsableDestino || ETAPAS.INVITACIONES.responsable,
+    etapaEjecutor: 'ACTOS_PREPARATORIOS',
+    etapaDestino: 'INVITACIONES',
   });
 }

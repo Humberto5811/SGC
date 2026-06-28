@@ -18,6 +18,8 @@ export function normalizeMovimientos(raw) {
     accion: String(m.accion || '').toUpperCase(),
     modulo: m.modulo || 'SGC',
     subModulo: normalizeLegacyActosLabel(m.subModulo || m.sub_modulo || '—'),
+    subModuloOrigen: normalizeLegacyActosLabel(m.subModuloOrigen || m.sub_modulo_origen || ''),
+    subModuloDestino: normalizeLegacyActosLabel(m.subModuloDestino || m.sub_modulo_destino || ''),
     etapa: m.etapa || '',
     usuario: m.usuario || '—',
     responsable: m.responsable || m.usuario || '—',

@@ -105,6 +105,8 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
       accion: 'derivado',
       observacion: 'Solicitud de aprobación enviada a evaluación',
       responsable: ETAPAS.EVALUACION.responsable,
+      etapaEjecutor: 'REGISTRADO',
+      etapaDestino: 'EVALUACION',
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
@@ -139,7 +141,9 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
       usuario: usuario || 'Gerente',
       accion: 'observado',
       observacion: motivo,
-      responsable: ETAPAS.EVALUACION.responsable,
+      responsable: ETAPAS.REGISTRADO.responsable,
+      etapaEjecutor: 'EVALUACION',
+      etapaDestinoEvento: 'REGISTRADO',
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
@@ -219,6 +223,8 @@ router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
       accion: 'aprobado',
       observacion: 'Aprobado en evaluación — derivado a DEC',
       responsable: ETAPAS.DEC.responsable,
+      etapaEjecutor: 'EVALUACION',
+      etapaDestino: 'DEC',
     });
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });

@@ -337,6 +337,8 @@ router.put('/paquetes/:id/aprobar', async (req, res, next) => {
         accion: 'aprobado',
         observacion: `Paquete ${id} aprobado — consolidación programada`,
         responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
+        etapaEjecutor: 'PROGRAMACION',
+        etapaDestino: 'ACTOS_PREPARATORIOS',
       });
     }
 

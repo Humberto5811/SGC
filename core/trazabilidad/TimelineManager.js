@@ -1,7 +1,8 @@
 /**
- * TimelineManager — trazabilidad del REQUERIMIENTO (entidad principal).
+ * TimelineManager — eventos funcionales cronológicos del REQUERIMIENTO.
  */
 import { TIPOS_EVENTO_TIMELINE } from '../common/ConstantesEventos.js';
+import { obtenerEvento } from '../common/CatalogoEventos.js';
 import {
   generarId,
   ahoraISO,
@@ -17,43 +18,70 @@ function claveRequerimiento(idOrPayload) {
   return resolverRequerimientoId(typeof idOrPayload === 'object' ? idOrPayload : { requerimientoId: idOrPayload });
 }
 
+function construirEventoBase(payload, ctx) {
+  const requerimientoId = claveRequerimiento(payload);
+  const codigoRequerimiento = resolverCodigoRequerimiento(payload, requerimientoId);
+  const ts = payload.timestamp || ahoraISO();
+  const { fecha, hora } = formatearFechaHora(ts);
+  const usuario = payload.usuario || ctx.obtenerUsuario()?.nombre || 'Sistema';
+  return { requerimientoId, codigoRequerimiento, ts, fecha, hora, usuario };
+}
+
 export class TimelineManager {
   constructor(contexto) {
     this.ctx = contexto;
     this.store = contexto.store;
   }
 
+  /** Registro genérico — compatibilidad fase 1. */
   async registrarEvento(payload = {}) {
-    const requerimientoId = claveRequerimiento(payload);
-    const codigoRequerimiento = resolverCodigoRequerimiento(payload, requerimientoId);
-    const ts = ahoraISO();
-    const { fecha, hora } = formatearFechaHora(ts);
-    const usuario = payload.usuario || this.ctx.obtenerUsuario()?.nombre || 'Sistema';
-
+    const base = construirEventoBase(payload, this.ctx);
     const evento = {
       id: generarId('tl'),
-      requerimientoId,
-      codigoRequerimiento,
-      /** @deprecated compat fase 1 — usar requerimientoId */
+      requerimientoId: base.requerimientoId,
+      codigoRequerimiento: base.codigoRequerimiento,
       expedienteId: payload.expedienteId || null,
-      usuario,
-      fecha,
-      hora,
-      timestamp: ts,
+      usuario: base.usuario,
+      fecha: base.fecha,
+      hora: base.hora,
+      timestamp: base.ts,
       modulo: payload.modulo || '',
       submodulo: payload.submodulo || '',
+      moduloOrigen: payload.moduloOrigen || payload.modulo_origen || null,
+      moduloDestino: payload.moduloDestino || payload.modulo_destino || null,
       accion: payload.accion || '',
+      eventoCodigo: payload.eventoCodigo || payload.codigoEvento || null,
+      eventoLabel: payload.eventoLabel || payload.descripcion || payload.accion || '',
+      descripcion: payload.descripcion || payload.observacion || '',
       estadoAnterior: payload.estadoAnterior ?? payload.estado_anterior ?? null,
       estadoNuevo: payload.estadoNuevo ?? payload.estado_nuevo ?? null,
       observacion: payload.observacion || '',
       ip: payload.ip || this.ctx.obtenerIp() || '',
       adjuntosRelacionados: payload.adjuntosRelacionados || payload.adjuntos || [],
       tipoEvento: payload.tipoEvento || TIPOS_EVENTO_TIMELINE.ETAPA,
+      esEventoFuncional: !!payload.esEventoFuncional,
       metadata: payload.metadata || {},
     };
-
-    await this.store.append(COLECCION, requerimientoId, evento);
+    await this.store.append(COLECCION, base.requerimientoId, evento);
     return evento;
+  }
+
+  /**
+   * Registro desde catálogo EVENTOS_FUNCIONALES.
+   * @param {string} codigoEvento — clave del catálogo (ej. OBSERVACION_REGISTRADA)
+   */
+  async registrarEventoFuncional(codigoEvento, payload = {}) {
+    const def = obtenerEvento(codigoEvento);
+    if (!def) throw new Error(`Evento funcional desconocido: ${codigoEvento}`);
+    return this.registrarEvento({
+      ...payload,
+      eventoCodigo: def.codigo,
+      eventoLabel: payload.eventoLabel || def.label,
+      descripcion: payload.descripcion || def.label,
+      accion: payload.accion || def.codigo,
+      tipoEvento: payload.tipoEvento || def.tipoEvento,
+      esEventoFuncional: true,
+    });
   }
 
   async obtenerTimeline(requerimientoId) {
@@ -81,6 +109,8 @@ export class TimelineManager {
       if (criterios.modulo && e.modulo !== criterios.modulo) return false;
       if (criterios.submodulo && e.submodulo !== criterios.submodulo) return false;
       if (criterios.accion && e.accion !== criterios.accion) return false;
+      if (criterios.eventoCodigo && e.eventoCodigo !== criterios.eventoCodigo) return false;
+      if (criterios.tipoEvento && e.tipoEvento !== criterios.tipoEvento) return false;
       if (criterios.codigoRequerimiento && e.codigoRequerimiento !== criterios.codigoRequerimiento) return false;
       if (criterios.desde && String(e.timestamp) < String(criterios.desde)) return false;
       if (criterios.hasta && String(e.timestamp) > String(criterios.hasta)) return false;
@@ -88,7 +118,25 @@ export class TimelineManager {
     });
   }
 
-  /** @deprecated alias legacy — expedienteId = requerimientoId en fase 1 */
+  /** Vista cronológica agrupada por fecha/hora (para render futuro). */
+  async obtenerTimelineCronologico(requerimientoId) {
+    const { eventos, ...rest } = await this.obtenerTimeline(requerimientoId);
+    const linea = eventos.map((e) => ({
+      id: e.id,
+      fecha: e.fecha,
+      hora: e.hora,
+      timestamp: e.timestamp,
+      modulo: e.modulo,
+      evento: e.eventoLabel || e.accion,
+      descripcion: e.descripcion || e.observacion,
+      usuario: e.usuario,
+      tipoEvento: e.tipoEvento,
+      eventoCodigo: e.eventoCodigo,
+    }));
+    return { ...rest, linea, eventos };
+  }
+
+  /** @deprecated alias legacy */
   async obtenerTimelinePorExpediente(expedienteId) {
     return this.obtenerTimeline(resolverIdLegacy(expedienteId));
   }

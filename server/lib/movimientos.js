@@ -29,17 +29,23 @@ export function getSubModuloMeta(etapaCode) {
 }
 
 export function normalizeAccion(accion) {
-  const a = String(accion || 'ACTUALIZADO').toLowerCase();
+  const a = String(accion || 'ACTUALIZADO').toLowerCase().replace(/\s+/g, '_');
   if (a === 'creacion' || a === 'creado') return 'CREADO';
   if (a === 'editado' || a === 'actualizado') return 'EDITADO';
   if (a === 'aprobado') return 'APROBADO';
   if (a === 'rechazado') return 'RECHAZADO';
   if (a === 'observado') return 'OBSERVADO';
   if (a === 'subsanacion' || a === 'subsanado') return 'SUBSANADO';
+  if (a === 'recibido') return 'RECIBIDO';
+  if (a === 'recibido_observacion' || a === 'recibido_observación') return 'RECIBIDO_OBSERVACION';
+  if (a === 'recibido_subsanacion' || a === 'recibido_subsanación') return 'RECIBIDO_SUBSANACION';
+  if (a === 'cerrado') return 'CERRADO';
   if (a === 'asignacion' || a === 'asignado') return 'ASIGNADO';
   if (a === 'reasignacion' || a === 'reasignado') return 'REASIGNADO';
   if (a === 'derivado') return 'DERIVADO';
   if (a === 'reenviado') return 'REENVIADO';
+  if (a === 'invitacion_enviada') return 'INVITACION_ENVIADA';
+  if (a === 'correo_enviado') return 'CORREO_ENVIADO';
   if (a === 'firmado') return 'FIRMADO';
   if (a === 'descargado') return 'DESCARGADO';
   if (a === 'exportado') return 'EXPORTADO';
@@ -69,6 +75,8 @@ export function buildMovimientoEntry({
   usuario,
   responsable,
   observacion = '',
+  subModuloDestino = '',
+  subModuloOrigen = '',
 }) {
   const meta = getSubModuloMeta(etapa);
   movIdSeq += 1;
@@ -79,6 +87,8 @@ export function buildMovimientoEntry({
     modulo: meta.modulo,
     subModulo: meta.subModulo,
     etapa: String(etapa || 'REGISTRADO').toUpperCase(),
+    subModuloOrigen: subModuloOrigen || '',
+    subModuloDestino: subModuloDestino || '',
     usuario: usuario || 'Sistema',
     responsable: responsable || usuario || 'Sistema',
     observacion: observacion || '',

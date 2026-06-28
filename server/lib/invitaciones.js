@@ -319,6 +319,8 @@ async function ensureInvitacionesEtapa(requerimientoId, usuario) {
     accion: 'derivado',
     observacion: 'Expediente en bandeja Invitaciones',
     responsable: row.responsable_actual || ETAPAS.INVITACIONES.responsable,
+    etapaEjecutor: String(row.estado_actual || 'ACTOS_PREPARATORIOS').toUpperCase(),
+    etapaDestino: 'INVITACIONES',
   });
 }
 
@@ -516,6 +518,7 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       accion: 'invitacion_enviada',
       observacion: `${estadoNuevo} — ${codigo} (${enviados.length} proveedor${enviados.length === 1 ? '' : 'es'})`,
       responsable: SUBMODULO_INVITACIONES,
+      etapaEjecutor: 'INVITACIONES',
     });
 
     await registrarTrazaPortal({
@@ -893,9 +896,9 @@ export async function observarInvitaciones(requerimientoId, body) {
   });
   await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
-  const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'INVITACIONES').toUpperCase();
+  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
   const estadoNuevo = resolveEstadoFromDestino(destino_submodulo, destino_etapa) || 'Observado Invitaciones';
-  const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+  const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
 
   return registrarMovimiento({
     requerimientoId,
@@ -904,5 +907,7 @@ export async function observarInvitaciones(requerimientoId, body) {
     accion: 'observado',
     observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
     responsable,
+    etapaEjecutor: 'INVITACIONES',
+    etapaDestinoEvento: etapaDestObs,
   });
 }
