@@ -128,6 +128,7 @@ function renderProgramacionRowCells(r, opts = {}) {
     r.estado_actual || r.estadoActual,
     r.estadoActualTexto || r.estado_actual_texto,
     r.estado,
+    r,
   );
   const nombreItem = descripcionesBien || r.denominacion || '—';
 
@@ -204,19 +205,21 @@ async function loadBandeja() {
       },
       obs: (id) => handleBandejaObservaciones(id, allRows, {
         submoduloLabel: 'Programación',
-        puedeObservar: (r) => ['Aprobado DEC', 'En Programación'].includes(String(r.estado || '')) || /observ/i.test(String(r.estado || '')),
+        puedeObservar: (r) => {
+          const ubic = String(r.estado_actual || r.estadoActual || '').toUpperCase();
+          return ubic === 'PROGRAMACION';
+        },
         onObservar: async (reqId, data) => {
-          await contratacionesService.observarProgramacion(reqId, data.motivo, data.usuario, {
-            destino_submodulo: data.destino_submodulo,
-            destino_etapa: data.destino_etapa,
-            destino_persona: data.destino_persona,
-            origen_submodulo: 'Programación',
+          await contratacionesService.observarProgramacion(reqId, data.motivo || '', data.usuario, {
+            ...data,
+            origen_submodulo: data.origen_submodulo || 'Programación',
           });
         },
         onSubsanar: async (reqId, data) => {
           await requerimientosService.subsanarConDestino(reqId, {
             respuesta: data.texto,
             usuario: data.usuario,
+            observacion_id: data.observacion_id,
             origen_submodulo: data.origen_submodulo || 'Programación',
             destino_submodulo: data.destino_submodulo,
             destino_etapa: data.destino_etapa,

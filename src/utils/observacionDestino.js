@@ -1,4 +1,28 @@
 // Catálogo de submódulos y personas destino para observaciones / subsanaciones
+// Lógica del motor: shared/observacionesMotor.js (fuente única)
+
+export {
+  ESTADOS_OBS as ESTADOS_OBS_CLIENTE,
+  getObservacionPendiente,
+  getObservacionPendienteParaModulo,
+  getObservacionesAbiertas,
+  getObservacionEmisorPendienteCierre,
+  hayObservacionPendienteAccion,
+  labelBotonObservaciones,
+  observacionPendienteParaSubmodulo,
+  emisorDebeRevisar as emisorDebeRevisarCliente,
+  obtenerEstadoObservaciones,
+  computeMotorSnapshot,
+  requiereIndicadorObservado,
+  countObservacionesAbiertas,
+  getListaObservaciones,
+  puedeSubsanar,
+  puedeEmitirObservacionHija,
+  getObservacionPadreParaDelegacion,
+  buildArbolObservaciones,
+  getObservacionPadreId,
+  tieneDescendientesAbiertos,
+} from '../../shared/observacionesMotor.js';
 
 export const SUBMODULO_DISPLAY_LABELS = {
   'Actos Preparatorios': 'Coordinación CM',
@@ -50,39 +74,6 @@ export function getObservacionOrigenLabel(entry) {
   if (origen.includes('ACTOS')) return 'Observación Coordinación CM';
   if (origen.includes('PROGRAM')) return 'Observación Programación';
   return 'Observación Evaluación';
-}
-
-export function getObservacionPendiente(req) {
-  const obs = todasObservacionesFromReq(req);
-  for (let i = obs.length - 1; i >= 0; i -= 1) {
-    const o = obs[i];
-    if (!o.subsanacion && !o.respuesta) return o;
-  }
-  return null;
-}
-
-function todasObservacionesFromReq(req) {
-  if (!req) return [];
-  let payload = req.payload;
-  if (typeof payload === 'string') {
-    try { payload = JSON.parse(payload || '{}'); } catch (_) { payload = {}; }
-  }
-  return Array.isArray(payload?.observaciones) ? payload.observaciones : [];
-}
-
-export function observacionPendienteParaSubmodulo(pending, submoduloLabel) {
-  if (!pending) return false;
-  const dest = String(pending.destino_submodulo || pending.moduloDestino || '').toLowerCase();
-  const mod = String(submoduloLabel || '').toLowerCase();
-  if (!dest || !mod) return false;
-  if (dest === mod || dest.includes(mod) || mod.includes(dest)) return true;
-  if (mod.includes('registro') && (dest.includes('registro') || dest.includes('requerimiento'))) return true;
-  if (mod.includes('evalu') && dest.includes('evalu')) return true;
-  if (mod.includes('dec') && dest.includes('dec')) return true;
-  if (mod.includes('invit') && dest.includes('invit')) return true;
-  if (mod.includes('program') && dest.includes('program')) return true;
-  if ((mod.includes('actos') || mod.includes('coordin')) && (dest.includes('actos') || dest.includes('coordin'))) return true;
-  return false;
 }
 
 export function getRolDisplayFromRow(row) {

@@ -5,8 +5,10 @@ import { requerimientosService } from '../services/requerimientosService.js';
 import { authService } from '../services/authService.js';
 import { getUserDisplayName } from '../utils/userDisplay.js';
 import {
-  getObservacionPendiente,
-  observacionPendienteParaSubmodulo,
+  getObservacionPendienteParaModulo,
+  getObservacionEmisorPendienteCierre,
+  getObservacionPadreParaDelegacion,
+  puedeSubsanar,
   getSubmoduloByLabel,
 } from '../utils/observacionDestino.js';
 import {
@@ -24,6 +26,7 @@ function esc(s) {
 function resolveOrigenDestinoSubsanacion(pending) {
   if (!pending) return 'Evaluación de Requerimiento';
   return pending.origen_submodulo
+    || pending.moduloEmisor
     || pending.moduloOrigen
     || (String(pending.origen || '').includes('DEC') ? 'DEC' : 'Evaluación de Requerimiento');
 }
@@ -53,8 +56,10 @@ export async function openModalObservaciones(req, opts = {}) {
   if (!req) return null;
   const row = await refreshReq(req);
   const obs = todasObservaciones(row);
-  const pending = getObservacionPendiente(row);
-  const pendienteAqui = observacionPendienteParaSubmodulo(pending, opts.submoduloLabel);
+  const pending = getObservacionPendienteParaModulo(row, opts.submoduloLabel);
+  const padreDelegacion = getObservacionPadreParaDelegacion(opts.submoduloLabel, row);
+  const pendienteAqui = pending && puedeSubsanar(opts.submoduloLabel, row);
+  const pendienteCierre = getObservacionEmisorPendienteCierre(row, opts.submoduloLabel);
   const userName = getUserDisplayName(authService.getCurrentUser?.() || {});
 
   const id = 'modObsUnif_' + Date.now();
@@ -68,15 +73,24 @@ export async function openModalObservaciones(req, opts = {}) {
           </div>
           <div class="modal-body" style="max-height:75vh;overflow-y:auto;overflow-x:hidden;">
             ${historialHtml(obs)}
+            ${padreDelegacion ? `
+              <div class="alert alert-light border small py-2">
+                <i class="bi bi-diagram-2"></i> Puede crear una <strong>subobservación</strong> hacia otro módulo antes de subsanar al emisor (${esc(padreDelegacion.origen_submodulo || padreDelegacion.moduloEmisor || '—')}).
+              </div>` : ''}
             ${pendienteAqui && opts.puedeSubsanar !== false ? `
               <div class="alert alert-warning border small py-2">
-                <i class="bi bi-exclamation-triangle"></i> Tiene una observación pendiente de respuesta en <strong>${esc(opts.submoduloLabel || 'este módulo')}</strong>.
+                <i class="bi bi-exclamation-triangle"></i> Tiene una observación pendiente de subsanar hacia <strong>${esc(resolveOrigenDestinoSubsanacion(pending))}</strong>.
+              </div>` : ''}
+            ${pendienteCierre && opts.onCerrar !== false ? `
+              <div class="alert alert-info border small py-2">
+                <i class="bi bi-info-circle"></i> Subsanación recibida — puede <strong>revisar y cerrar</strong> la observación emitida.
               </div>` : ''}
           </div>
           <div class="modal-footer flex-wrap gap-2">
             ${opts.onAdjuntos ? `<button type="button" class="btn btn-outline-secondary btn-sm" id="${id}_adj"><i class="bi bi-paperclip"></i> Adjuntos</button>` : ''}
             ${pendienteAqui && opts.puedeSubsanar !== false ? `<button type="button" class="btn btn-primary btn-sm" id="${id}_subsanar"><i class="bi bi-reply"></i> Subsanar</button>` : ''}
-            ${opts.puedeObservar ? `<button type="button" class="btn btn-danger btn-sm" id="${id}_nueva"><i class="bi bi-plus-circle"></i> Nueva observación</button>` : ''}
+            ${pendienteCierre && opts.onObservar ? `<button type="button" class="btn btn-success btn-sm" id="${id}_cerrar"><i class="bi bi-check2-circle"></i> Cerrar observación</button>` : ''}
+            ${opts.onObservar !== false ? `<button type="button" class="btn btn-danger btn-sm" id="${id}_nueva"><i class="bi bi-plus-circle"></i> Nueva observación</button>` : ''}
             <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
           </div>
         </div>
@@ -109,13 +123,19 @@ export async function openModalObservaciones(req, opts = {}) {
       if (!data) { modal.show(); return; }
       try {
         if (opts.onSubsanar) {
-          await opts.onSubsanar(row.id, { ...data, usuario: userName }, row);
+          await opts.onSubsanar(row.id, {
+            ...data,
+            usuario: userName,
+            observacion_id: pending?.id,
+            destino_submodulo: resolveOrigenDestinoSubsanacion(pending),
+          }, row);
         } else {
           await requerimientosService.subsanarConDestino(row.id, {
             respuesta: data.texto,
             usuario: userName,
+            observacion_id: pending?.id,
             origen_submodulo: data.origen_submodulo || opts.submoduloLabel,
-            destino_submodulo: data.destino_submodulo,
+            destino_submodulo: resolveOrigenDestinoSubsanacion(pending),
             destino_etapa: data.destino_etapa,
             destino_persona: data.destino_persona,
           });
@@ -128,10 +148,30 @@ export async function openModalObservaciones(req, opts = {}) {
       }
     });
 
+    el.querySelector(`#${id}_cerrar`)?.addEventListener('click', async () => {
+      if (!pendienteCierre?.id || !opts.onObservar) return;
+      if (!confirm('¿Cerrar definitivamente esta observación?')) return;
+      try {
+        await opts.onObservar(row.id, {
+          accion: 'cerrar',
+          observacion_id: pendienteCierre.id,
+          usuario: userName,
+          origen_submodulo: opts.submoduloLabel,
+        }, row);
+        modal.hide();
+        opts.onReload?.();
+        resolve('cerrada');
+      } catch (e) {
+        alert('Error al cerrar: ' + e.message);
+      }
+    });
+
     el.querySelector(`#${id}_nueva`)?.addEventListener('click', async () => {
       modal.hide();
       const data = await showObservacionDirigidaModal({
-        title: `Registrar observación — ${opts.submoduloLabel || ''}`,
+        title: padreDelegacion
+          ? `Subobservación — ${opts.submoduloLabel || ''}`
+          : `Registrar observación — ${opts.submoduloLabel || ''}`,
         historyHtml: historialHtml(obs),
         origenSubmodulo: opts.submoduloLabel || '',
         defaultDestinoSubmodulo: opts.defaultDestinoObservacion || 'Registro de Requerimiento',
@@ -139,8 +179,18 @@ export async function openModalObservaciones(req, opts = {}) {
       if (!data) { modal.show(); return; }
       try {
         const sub = getSubmoduloByLabel(data.destino_submodulo);
+        const payloadObs = {
+          ...data,
+          motivo: data.motivo,
+          usuario: userName,
+          destino_etapa: sub?.code || data.destino_etapa,
+          origen_submodulo: data.origen_submodulo || opts.submoduloLabel,
+        };
+        if (padreDelegacion?.id) {
+          payloadObs.observacion_padre_id = padreDelegacion.id;
+        }
         if (opts.onObservar) {
-          await opts.onObservar(row.id, { ...data, usuario: userName, destino_etapa: sub?.code || data.destino_etapa }, row);
+          await opts.onObservar(row.id, payloadObs, row);
         }
         opts.onReload?.();
         resolve('observado');
@@ -162,10 +212,11 @@ export async function openModalObservaciones(req, opts = {}) {
 export async function handleBandejaObservaciones(id, rows, config = {}) {
   const req = (rows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
+  const puedeSubsanarMod = config.puedeSubsanar?.(req) ?? puedeSubsanar(config.submoduloLabel, req);
   await openModalObservaciones(req, {
     submoduloLabel: config.submoduloLabel,
     puedeObservar: config.puedeObservar?.(req) ?? !!config.onObservar,
-    puedeSubsanar: config.puedeSubsanar?.(req) ?? true,
+    puedeSubsanar: puedeSubsanarMod,
     onObservar: config.onObservar,
     onSubsanar: config.onSubsanar,
     onAdjuntos: config.onAdjuntos,

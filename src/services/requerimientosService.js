@@ -13,6 +13,8 @@ export const requerimientosService = {
   update: (id, body) => api.update('requerimientos', id, body),
   aprobarEvaluacion: (id, usuario = '') =>
     api.put(`/requerimientos/${id}/aprobar-evaluacion`, { usuario }),
+  observarEvaluacion: (id, body = {}) =>
+    api.put(`/requerimientos/${id}/observar`, body),
   subsanarConDestino: (id, body) =>
     api.put(`/requerimientos/${id}/subsanar`, body),
 };

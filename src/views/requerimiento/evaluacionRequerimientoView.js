@@ -74,13 +74,10 @@ async function loadEvaluacionList() {
         submoduloLabel: 'Evaluación de Requerimiento',
         puedeObservar: (r) => /tr[aá]mite/i.test(String(r.estado || '')) && !/aprobad/i.test(String(r.estado || '')),
         onObservar: async (reqId, data) => {
-          const req = rows.find((x) => String(x.id) === String(reqId));
-          if (!req) return;
-          await addObservacion(req, data.motivo, data.usuario, {
-            destino_submodulo: data.destino_submodulo,
-            destino_etapa: data.destino_etapa,
-            destino_persona: data.destino_persona,
-            origen_submodulo: data.origen_submodulo,
+          await requerimientosService.observarEvaluacion(reqId, {
+            ...data,
+            motivo: data.motivo,
+            origen_submodulo: data.origen_submodulo || 'Evaluación de Requerimiento',
           });
         },
         onAdjuntos: (rid) => manageAdjuntos(rid, true),
@@ -135,8 +132,9 @@ function editarRequerimiento(id) {
 async function observarRequerimiento(id) {
   const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
-  const aprobado = /aprobad/i.test(String(req.estado || ''));
-  if (aprobado || isEstadoObservado(req.estado)) {
+  const aprobado = /aprobad/i.test(String(req.estado || ''))
+    && String(req.estado_actual || req.estadoActual || '').toUpperCase() !== 'EVALUACION';
+  if (aprobado) {
     await verHistorialObservaciones(req, { title: 'Historial de observaciones — Evaluación' });
     return;
   }

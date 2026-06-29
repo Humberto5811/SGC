@@ -32,7 +32,9 @@ import {
   renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
   buildExportRowData, updateBandejaAdjCount,
+  observadoAlertBadge, observadoAccionHtml,
 } from '../../utils/trazabilidad.js';
+import { hayObservacionPendienteAccion } from '../../utils/observacionDestino.js';
 import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
@@ -211,17 +213,17 @@ function accionesObservacionAprobacionHtml(r) {
   const e = String(r.estado || 'Registrado');
   const base = 'btn btn-xs';
   const style = 'padding: 2px 6px; font-size: 11px;';
-  const observado = isEstadoObservado(e);
+  const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Registro de Requerimiento');
   const aprobado = /aprobad/i.test(e);
   const enTramite = /tr[aá]mite/i.test(e);
 
-  const alerta = observado ? observadoAlertBadge('Observado — subsanar observación') : '';
-  const iconoObs = observado
+  const alerta = pendienteSubsanar ? observadoAlertBadge('Observado — subsanar observación') : '';
+  const iconoObs = pendienteSubsanar
     ? observadoAccionHtml(r.id, 'Observado — ver observación y subsanar')
     : '';
 
   let btnEstado = '';
-  if (observado) {
+  if (pendienteSubsanar) {
     btnEstado = `<button class="${base} btn-outline-secondary" disabled title="Pendiente subsanación" style="${style}"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
   } else if (enTramite) {
     btnEstado = `<button class="${base} btn-outline-secondary" disabled title="En trámite de aprobación" style="${style}"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
@@ -321,6 +323,7 @@ async function loadList() {
           const req = rows.find((x) => String(x.id) === String(reqId));
           if (!req) return;
           await addSubsanacion(req, data.texto, data.usuario, {
+            observacion_id: data.observacion_id,
             destino_submodulo: data.destino_submodulo,
             destino_etapa: data.destino_etapa,
             destino_persona: data.destino_persona,

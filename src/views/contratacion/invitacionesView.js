@@ -306,12 +306,10 @@ async function handleObservacion(id) {
     puedeObservar: () => true,
     onObservar: async (reqId, data) => {
       await contratacionesService.observarInvitaciones(reqId, {
+        ...data,
         motivo: data.motivo,
         usuario: data.usuario || userName,
-        destino_submodulo: data.destino_submodulo,
-        destino_etapa: data.destino_etapa,
-        destino_persona: data.destino_persona,
-        origen_submodulo: 'Invitaciones',
+        origen_submodulo: data.origen_submodulo || 'Invitaciones',
       });
     },
     onAdjuntos: (rid) => manageAdjuntos(rid, true),

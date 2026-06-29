@@ -1,4 +1,6 @@
 // Utilidades UI de trazabilidad de expedientes (frontend)
+import { computeMotorSnapshot, requiereIndicadorObservado, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
+
 export const ETAPA_BADGES = {
   REGISTRADO: 'secondary',
   EVALUACION: 'warning',
@@ -106,17 +108,45 @@ export function mapEstadoToEtapa(estado) {
 }
 
 /** Corrige desfase entre `estado` (negocio) y `estado_actual` (trazabilidad). */
+export function getEstadoNegocioFromEtapa(etapaCode) {
+  const code = String(etapaCode || 'REGISTRADO').toUpperCase();
+  switch (code) {
+    case 'REGISTRADO': return 'Registrado';
+    case 'EVALUACION': return 'En tramite de aprobación';
+    case 'DEC': return 'Aprobado';
+    case 'PROGRAMACION': return 'En Programación';
+    case 'ACTOS_PREPARATORIOS': return 'Programado';
+    case 'INVITACIONES': return 'En Invitaciones';
+    case 'RECEPCION_COTIZACIONES': return 'En Cotizaciones';
+    case 'CUADRO_COMPARATIVO': return 'En Cuadro Comparativo';
+    case 'CCP': return 'En CCP';
+    case 'EJECUCION': return 'En Ejecución';
+    case 'FINALIZADO': return 'Finalizado';
+    default: return '';
+  }
+}
+
 export function resolveEstadoNegocioFromRow(row) {
   const estado = String(row?.estado || '').trim();
   const etapaActual = String(row?.estado_actual || row?.estadoActual || '').toUpperCase();
+  if (etapaActual && /^observ/i.test(estado)) {
+    const fromEtapa = getEstadoNegocioFromEtapa(etapaActual);
+    if (fromEtapa) return fromEtapa;
+  }
   if (etapaActual === 'PROGRAMACION' && /tr[aá]mite/i.test(estado) && !/programaci|observ/i.test(estado)) {
     return 'En Programación';
   }
   if (etapaActual === 'EVALUACION' && /programaci/i.test(estado)) {
     return 'En tramite de aprobación';
   }
-  if (etapaActual === 'DEC' && /tr[aá]mite/i.test(estado)) {
+  if (etapaActual === 'DEC' && (/tr[aá]mite/i.test(estado) || /^observ/i.test(estado))) {
     return 'Aprobado';
+  }
+  if (etapaActual === 'DEC' && estado === 'Aprobado DEC') {
+    return 'Aprobado DEC';
+  }
+  if (etapaActual === 'PROGRAMACION' && /^observ/i.test(estado)) {
+    return 'En Programación';
   }
   return estado;
 }
@@ -129,8 +159,11 @@ export function resolveUbicacionExpediente(row) {
   return mapEstadoToUbicacion(estadoNegocio);
 }
 
-export function isEstadoObservado(estado) {
-  return /observ/i.test(String(estado || '').trim());
+export function isEstadoObservado(estadoOrRow) {
+  if (estadoOrRow && typeof estadoOrRow === 'object' && ('payload' in estadoOrRow || 'obsMotor' in estadoOrRow)) {
+    return requiereIndicadorObservado(estadoOrRow);
+  }
+  return /observ/i.test(String(estadoOrRow || '').trim());
 }
 
 export function getEstadoActualTexto(ubicacionCode) {
@@ -202,7 +235,7 @@ export function computeTraceSummary(rows = []) {
     const dias = Number(r.dias_en_estado ?? r.diasEnEstado ?? calcDiasEnEstado(r.fecha_estado_actual || r.fechaEstadoActual));
     if (/finaliz/i.test(String(r.estado || ''))) finalizados += 1;
     else enProceso += 1;
-    if (isEstadoObservado(r.estado)) observados += 1;
+    if (requiereIndicadorObservado(r)) observados += 1;
     if (dias > 10) retrasados += 1;
   });
   return { total: list.length, enProceso, observados, retrasados, finalizados };
@@ -326,6 +359,7 @@ export function enrichReqRow(r) {
   const subModulo = r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[ubicacion] || getEstadoActualTexto(ubicacion);
   const estadoNegocio = String(r?.estado || '').trim() || resolveEstadoNegocioFromRow(r);
   const estadoActualTexto = subModulo || r.estado_actual_texto || r.estadoActualTexto || getEstadoActualTexto(ubicacion);
+  const obsMotor = r.obsMotor || obtenerEstadoObservaciones(r);
   return {
     ...r,
     estado: estadoNegocio,
@@ -337,6 +371,7 @@ export function enrichReqRow(r) {
     estado_actual_texto: estadoActualTexto,
     subModuloActual: subModulo || r.subModuloActual,
     responsableActual: r.responsable_actual || r.responsableActual || r.responsable || '—',
+    obsMotor,
   };
 }
 

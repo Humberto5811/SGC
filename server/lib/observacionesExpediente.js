@@ -1,4 +1,26 @@
 // Observaciones bidireccionales — estructura canónica y helpers (servidor)
+import { emitirObservacion as emitirObservacionWorkflow } from './observacionesWorkflow.js';
+
+export {
+  ESTADOS_OBS,
+  emitirObservacion,
+  registrarSubsanacionObservacion,
+  cerrarObservacion,
+  revisarObservacion,
+  marcarRecibidaPorEmisor,
+  procesarAccionObservacion,
+  getObservacionPendiente,
+  getObservacionPendienteParaModulo,
+  getObservacionesAbiertas,
+  hayObservacionPendienteAccion,
+  hayObservacionAbiertaRelacionada,
+  labelBotonObservaciones,
+  observacionPendienteParaSubmodulo,
+  autoCerrarObservacionesEmisorAlContinuar,
+  obtenerEstadoObservaciones,
+  puedeSubsanar,
+  migrateObservacion,
+} from './observacionesWorkflow.js';
 
 export const SUBMODULO_DISPLAY_LABELS = {
   'Actos Preparatorios': 'Coordinación CM',
@@ -58,9 +80,14 @@ export function buildObservacionEntry(payload, fields = {}) {
   const ronda = list.length + 1;
   const id = fields.id || `obs_${Date.now()}_${ronda}`;
   const motivo = String(fields.motivo || fields.observacion || '').trim();
+  const padreId = fields.observacion_padre_id || fields.observacionPadreId || null;
   return {
     id,
+    observacionId: id,
+    observacion_id: id,
     ronda,
+    observacionPadreId: padreId,
+    observacion_padre_id: padreId,
     tipoMovimiento: fields.tipoMovimiento || 'observacion',
     moduloOrigen: fields.origen_submodulo || fields.moduloOrigen || '',
     usuarioOrigen: fields.gerente || fields.usuarioOrigen || '',
@@ -78,32 +105,14 @@ export function buildObservacionEntry(payload, fields = {}) {
     respuesta: null,
     subsanacion: null,
     adjuntos: Array.isArray(fields.adjuntos) ? fields.adjuntos : [],
+    actuaciones: [],
+    estado: fields.estado || 'EMITIDA',
+    cerrada: false,
   };
 }
 
+/** Delega en workflow unificado. */
 export function appendObservacion(payload, fields) {
-  if (!Array.isArray(payload.observaciones)) payload.observaciones = [];
-  const entry = buildObservacionEntry(payload, fields);
-  payload.observaciones.push(entry);
-  return entry;
-}
-
-export function getObservacionPendiente(payload) {
-  const obs = Array.isArray(payload?.observaciones) ? payload.observaciones : [];
-  for (let i = obs.length - 1; i >= 0; i -= 1) {
-    const o = obs[i];
-    if (!o.subsanacion && !o.respuesta) return o;
-  }
-  return null;
-}
-
-export function observacionPendienteParaSubmodulo(pending, submoduloLabel) {
-  if (!pending) return false;
-  const dest = String(pending.destino_submodulo || pending.moduloDestino || '').toLowerCase();
-  const mod = String(submoduloLabel || '').toLowerCase();
-  if (!dest || !mod) return false;
-  if (dest === mod || dest.includes(mod) || mod.includes(dest)) return true;
-  if (mod.includes('program') && dest.includes('program')) return true;
-  if ((mod.includes('actos') || mod.includes('coordin')) && (dest.includes('actos') || dest.includes('coordin'))) return true;
-  return false;
+  const { observacion } = emitirObservacionWorkflow(payload, fields);
+  return observacion;
 }

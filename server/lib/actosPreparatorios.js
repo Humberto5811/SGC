@@ -14,6 +14,8 @@ import {
   submoduloLabelToEtapa,
 } from './observacionDestino.js';
 import { appendObservacion } from './observacionesExpediente.js';
+import { autoCerrarObservacionesEmisorAlContinuar } from './observacionesWorkflow.js';
+import { emitirObservacion, procesarAccionObservacion } from './observacionesWorkflow.js';
 import { normalizePermisos } from './permissionsCatalog.js';
 import {
   REQUERIMIENTO_BANDEJA_FROM,
@@ -233,7 +235,7 @@ async function loadReqPayload(requerimientoId) {
 }
 
 function pushObservacion(payload, entry) {
-  appendObservacion(payload, entry);
+  emitirObservacion(payload, entry);
 }
 
 function resolveEstadoMovimientoObservacion(destinoSubmodulo, destinoEtapa) {
@@ -298,11 +300,23 @@ export async function reasignarActos(requerimientoId, body) {
 }
 
 export async function observarActos(requerimientoId, body) {
-  const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = body || {};
-  if (!motivo) throw new Error('Motivo requerido');
+  const {
+    motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo,
+    accion, observacion_id, observacion_padre_id, observacionPadreId,
+  } = body || {};
 
   const loaded = await loadReqPayload(requerimientoId);
   if (!loaded) throw new Error('Requerimiento no encontrado');
+
+  const accionObs = procesarAccionObservacion(loaded.payload, {
+    accion, observacion_id, origen_submodulo: origen_submodulo || SUBMODULO_COORDINACION_CM, usuario,
+  });
+  if (accionObs) {
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
+    return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
+  }
+
+  if (!motivo) throw new Error('Motivo requerido');
 
   pushObservacion(loaded.payload, {
     motivo,
@@ -312,6 +326,7 @@ export async function observarActos(requerimientoId, body) {
     destino_submodulo: destino_submodulo || '',
     destino_etapa: destino_etapa || '',
     destino_persona: destino_persona || '',
+    observacion_padre_id: observacion_padre_id || observacionPadreId || null,
   });
   await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
@@ -389,6 +404,7 @@ export async function aprobarActosInvitaciones(requerimientoId, { responsableDes
     usuario: usuario || '',
     fecha: new Date().toISOString(),
   });
+  autoCerrarObservacionesEmisorAlContinuar(loaded.payload, SUBMODULO_COORDINACION_CM, usuario || CARGO_ANALISTA_ACTOS);
   await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
   return registrarMovimiento({

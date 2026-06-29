@@ -1,16 +1,22 @@
 // Menús contextuales ⋮ por bandeja (sin lógica de negocio — solo UI)
-import { getObservacionPendiente, observacionPendienteParaSubmodulo } from './observacionDestino.js';
+import {
+  getObservacionPendiente,
+  observacionPendienteParaSubmodulo,
+  labelBotonObservaciones,
+  hayObservacionPendienteAccion,
+  requiereIndicadorObservado,
+} from './observacionDestino.js';
 
 export function registroMenuItems(r) {
   const e = String(r.estado || '');
   const aprobado = /aprobad/i.test(e);
-  const observado = /observ/i.test(e);
   const enTramite = /tr[aá]mite/i.test(e);
-  const puedeAprobar = !aprobado && !observado && !enTramite;
+  const puedeAprobar = !aprobado && !enTramite;
+  const obsLabel = labelBotonObservaciones(r, 'Registro de Requerimiento');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
-    { act: 'obs', label: observado ? 'Observaciones / subsanar' : 'Observaciones', icon: 'bi-chat-left-dots' },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
@@ -22,15 +28,15 @@ export function registroMenuItems(r) {
 export function registroHiddenActions(r, esc) {
   const e = String(r.estado || '');
   const aprobado = /aprobad/i.test(e);
-  const observado = /observ/i.test(e);
+  const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Registro de Requerimiento');
   const enTramite = /tr[aá]mite/i.test(e);
-  const puedeAprobar = !aprobado && !observado && !enTramite;
+  const puedeAprobar = !aprobado && !enTramite;
   return `
     <button type="button" class="req-open" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
     <button type="button" class="req-print" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="req-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(e)}"></button>
     <button type="button" class="req-obs-menu" data-act-trigger="obs" data-id="${r.id}"></button>
-    ${observado ? `<button type="button" class="req-observado" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
+    ${pendienteSubsanar ? `<button type="button" class="req-observado" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
     <button type="button" class="req-approve" data-act-trigger="approve" data-id="${r.id}" ${puedeAprobar ? '' : 'disabled'}></button>
     ${aprobado ? `<button type="button" class="req-ver-obs" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
     <button type="button" class="req-traza-hidden req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
@@ -39,12 +45,13 @@ export function registroHiddenActions(r, esc) {
 
 export function evalMenuItems(r) {
   const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
-  const observado = /observ/i.test(String(r.estado || ''));
+  const tieneObsAbiertas = requiereIndicadorObservado(r);
   const aprobado = /aprobad/i.test(String(r.estado || ''));
+  const obsLabel = labelBotonObservaciones(r, 'Evaluación de Requerimiento');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
-    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots', disabled: !(enTramite || observado || aprobado) },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !(enTramite || tieneObsAbiertas || aprobado || hayObservacionPendienteAccion(r, 'Evaluación de Requerimiento')) },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: aprobado || !enTramite },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
@@ -69,13 +76,16 @@ export function evalHiddenActions(r, esc) {
 }
 
 export function decMenuItems(r) {
-  const esObservado = /observ/i.test(String(r.estado || ''));
-  const esAprobado = r.estado === 'Aprobado';
+  const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
+  const enDEC = ubicacion === 'DEC';
+  const estadoNeg = String(r.estado || '');
+  const puedeAprobarDEC = enDEC && /^Aprobado$/i.test(estadoNeg);
+  const obsLabel = labelBotonObservaciones(r, 'DEC');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
-    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots' },
-    { act: 'approve', label: 'Aprobar DEC', icon: 'bi-check-circle', disabled: !esAprobado },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
+    { act: 'approve', label: 'Aprobar DEC', icon: 'bi-check-circle', disabled: !puedeAprobarDEC },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
   ];
@@ -92,15 +102,13 @@ export function decHiddenActions(r) {
 }
 
 export function progMenuItems(r) {
-  const esObservado = /observ/i.test(String(r.estado || ''));
-  const esAprobadoDec = r.estado === 'Aprobado DEC';
-  const enProgramacion = r.estado === 'En Programación';
-  const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
-  const puedeAprobar = esAprobadoDec || enProgramacion;
-  const pending = getObservacionPendiente(r);
-  const pendProg = observacionPendienteParaSubmodulo(pending, 'Programación');
-  const obsLabel = pendProg ? 'Responder observación' : 'Observaciones';
-  const obsEnabled = puedeGestionar || esObservado || pendProg;
+  const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
+  const enProgramacion = ubicacion === 'PROGRAMACION';
+  const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
+  const puedeGestionar = enProgramacion || esAprobadoDec;
+  const puedeAprobar = enProgramacion || esAprobadoDec;
+  const obsLabel = labelBotonObservaciones(r, 'Programación');
+  const obsEnabled = enProgramacion || esAprobadoDec;
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
@@ -113,14 +121,12 @@ export function progMenuItems(r) {
 }
 
 export function progHiddenActions(r) {
-  const esObservado = /observ/i.test(String(r.estado || ''));
-  const esAprobadoDec = r.estado === 'Aprobado DEC';
-  const enProgramacion = r.estado === 'En Programación';
-  const puedeGestionar = esAprobadoDec || esObservado || enProgramacion;
-  const puedeAprobar = esAprobadoDec || enProgramacion;
-  const pending = getObservacionPendiente(r);
-  const pendProg = observacionPendienteParaSubmodulo(pending, 'Programación');
-  const obsEnabled = puedeGestionar || esObservado || pendProg;
+  const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
+  const enProgramacion = ubicacion === 'PROGRAMACION';
+  const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
+  const puedeGestionar = enProgramacion || esAprobadoDec;
+  const puedeAprobar = enProgramacion || esAprobadoDec;
+  const obsEnabled = enProgramacion || esAprobadoDec;
   return `
     <button type="button" class="prog-add-pedido" data-act-trigger="pedido" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
     <button type="button" class="prog-ver" data-act-trigger="download" data-id="${r.id}"></button>
@@ -135,7 +141,7 @@ export function actosMenuItems(r, opts = {}) {
   const esObservado = /observ/i.test(String(r.estado || ''));
   const pending = getObservacionPendiente(r);
   const pendActos = observacionPendienteParaSubmodulo(pending, 'Coordinación CM');
-  const obsLabel = pendActos ? 'Responder observación' : (esObservado ? 'Observaciones' : 'Observar');
+  const obsLabel = labelBotonObservaciones(r, 'Coordinación CM');
   const items = [
     { act: 'detail', label: 'Ver expediente', icon: 'bi-eye' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
@@ -179,9 +185,10 @@ export function actosHiddenActions(r, opts = {}) {
 }
 
 export function invitacionesMenuItems(r) {
+  const obsLabel = labelBotonObservaciones(r, 'Invitaciones');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
-    { act: 'obs', label: 'Observaciones', icon: 'bi-chat-left-dots' },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },

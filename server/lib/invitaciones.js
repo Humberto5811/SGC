@@ -878,12 +878,26 @@ async function loadReqPayload(requerimientoId) {
 
 export async function observarInvitaciones(requerimientoId, body) {
   const { appendObservacion } = await import('./observacionesExpediente.js');
+  const { procesarAccionObservacion } = await import('./observacionesWorkflow.js');
   const { formatObservacionTraza, resolveEstadoFromDestino, resolveResponsableFromDestino, submoduloLabelToEtapa } = await import('./observacionDestino.js');
-  const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = body || {};
-  if (!motivo) throw new Error('Motivo requerido');
+  const {
+    motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo,
+    accion, observacion_id, observacion_padre_id, observacionPadreId,
+  } = body || {};
 
   const loaded = await loadReqPayload(requerimientoId);
   if (!loaded) throw new Error('Requerimiento no encontrado');
+
+  const accionObs = procesarAccionObservacion(loaded.payload, {
+    accion, observacion_id, origen_submodulo: origen_submodulo || SUBMODULO_INVITACIONES, usuario,
+  });
+  if (accionObs) {
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
+    const { enrichRequerimientoRow } = await import('./trazabilidad.js');
+    return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
+  }
+
+  if (!motivo) throw new Error('Motivo requerido');
 
   appendObservacion(loaded.payload, {
     motivo,
@@ -893,6 +907,7 @@ export async function observarInvitaciones(requerimientoId, body) {
     destino_submodulo: destino_submodulo || '',
     destino_etapa: destino_etapa || '',
     destino_persona: destino_persona || '',
+    observacion_padre_id: observacion_padre_id || observacionPadreId || null,
   });
   await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 

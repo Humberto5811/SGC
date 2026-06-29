@@ -82,7 +82,7 @@ function buildFilaPaquete(paquete, req, ped, enriched) {
     fecha_estado_actual: enriched.fecha_estado_actual,
     dias_en_estado: dias,
     retrasado: dias > 10,
-    observado: isEstadoObservado(estadoNeg),
+    observado: isEstadoObservado(enriched),
   };
 }
 
@@ -145,7 +145,7 @@ export async function buildMatrizConsolidacionPaquetes() {
       if (!reqIdsVistos.has(req.id)) {
         reqIdsVistos.add(req.id);
         totalRequerimientos += 1;
-        if (isEstadoObservado(enriched.estado)) observados += 1;
+        if (isEstadoObservado(enriched)) observados += 1;
         if (enriched.retrasado || (enriched.dias_en_estado > 10)) retrasados += 1;
       }
 

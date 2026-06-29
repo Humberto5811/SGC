@@ -1,11 +1,10 @@
 // UI compartida de bandejas SGC — columnas compactas, KPI, filtros, menú ⋮, panel lateral
-import { todasObservaciones } from '../views/requerimiento/reqShared.js';
 import {
   esc, enrichReqRow, parsePayloadItems, fmtDateTime, calcDiasEnEstado, diasLabel,
-  ETAPA_LABELS, isEstadoObservado, getEstadoActualTexto, mapEstadoToUbicacion,
+  ETAPA_LABELS, getEstadoActualTexto, mapEstadoToUbicacion,
   computeTraceSummary, filterRowsClient,
 } from './trazabilidad.js';
-import { getRolDisplayFromRow } from './observacionDestino.js';
+import { getRolDisplayFromRow, countObservacionesAbiertas, requiereIndicadorObservado } from './observacionDestino.js';
 
 const executiveMode = new Map();
 
@@ -121,8 +120,7 @@ export function getSigamefRaw(r) {
 }
 
 export function countObservacionesPendientes(req) {
-  const obs = todasObservaciones(req);
-  return obs.filter((o) => !o.subsanacion && !o.respuesta).length;
+  return countObservacionesAbiertas(req);
 }
 
 export function getResponsableRol(row) {
@@ -143,16 +141,17 @@ export function buildRowTooltip(row) {
   return parts.join(' · ');
 }
 
-export function estadoModernBadge(estadoActual, estadoTexto, estadoNegocio) {
-  if (isEstadoObservado(estadoNegocio)) {
-    const st = ESTADO_BADGE_STYLES.OBSERVADO;
-    return `<span class="badge badge-estado-mod" style="background:${st.bg};color:#fff;">Observado</span>`;
-  }
+export function estadoModernBadge(estadoActual, estadoTexto, estadoNegocio, row) {
   const code = String(estadoActual || 'REGISTRADO').toUpperCase();
   const st = ESTADO_BADGE_STYLES[code] || ESTADO_BADGE_STYLES.REGISTRADO;
   const label = estadoTexto || st.label || code;
   const fg = st.fg || '#fff';
-  return `<span class="badge badge-estado-mod" style="background:${st.bg};color:${fg};">${esc(label)}</span>`;
+  const workflowBadge = `<span class="badge badge-estado-mod" style="background:${st.bg};color:${fg};">${esc(label)}</span>`;
+  const observado = row?.obsMotor?.requiereBadgeObservado ?? requiereIndicadorObservado(row || {});
+  if (observado) {
+    return `${workflowBadge}<span class="badge bg-danger ms-1" title="Observación pendiente">Observado</span>`;
+  }
+  return workflowBadge;
 }
 
 export function diasBadgeHtml(row) {
@@ -339,7 +338,7 @@ export function renderCompactRowCells(r, opts = {}) {
     return `
       <td title="${escFn(tooltip)}">${reqCell}</td>
       <td title="${escFn(descFull)}">${descCell}</td>
-      <td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado)}</td>
+      <td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row)}</td>
       <td>${respCell}</td>
       <td class="text-center">${diasBadgeHtml(row)}</td>`;
   }
@@ -348,7 +347,7 @@ export function renderCompactRowCells(r, opts = {}) {
     <td title="${escFn(tooltip)}">${reqCell}</td>
     <td><span class="badge ${tipoBadge}" style="font-size:0.65rem;">${escFn(tipoLabel)}</span></td>
     <td title="${escFn(descFull)}">${descCell}</td>
-    <td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado)}</td>
+    <td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row)}</td>
     <td>${respCell}</td>
     <td class="text-center">${diasBadgeHtml(row)}</td>`;
 }

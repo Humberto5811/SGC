@@ -12,6 +12,7 @@ import {
   SUBMODULOS,
 } from './movimientos.js';
 import { appendEventosPorAccion } from './registroEventos.js';
+import { computeMotorSnapshot, requiereIndicadorObservado, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
 
 export { SUBMODULOS, normalizeAccion, getSubModuloMeta };
 
@@ -53,8 +54,11 @@ export const ESTADO_ACTUAL_TEXTO = {
   OBSERVADO: 'Observado',
 };
 
-export function isEstadoObservado(estado) {
-  return /observ/i.test(String(estado || '').trim());
+export function isEstadoObservado(estadoOrRow) {
+  if (estadoOrRow && typeof estadoOrRow === 'object' && ('payload' in estadoOrRow || 'obsMotor' in estadoOrRow)) {
+    return requiereIndicadorObservado(estadoOrRow);
+  }
+  return /observ/i.test(String(estadoOrRow || '').trim());
 }
 
 export const TRAZA_EXTRA_SELECT = `
@@ -91,17 +95,45 @@ export function mapEstadoToEtapa(estado) {
 }
 
 /** Corrige desfase entre `estado` (negocio) y `estado_actual` (trazabilidad). */
+export function getEstadoNegocioFromEtapa(etapaCode) {
+  const code = String(etapaCode || 'REGISTRADO').toUpperCase();
+  switch (code) {
+    case 'REGISTRADO': return 'Registrado';
+    case 'EVALUACION': return 'En tramite de aprobación';
+    case 'DEC': return 'Aprobado';
+    case 'PROGRAMACION': return 'En Programación';
+    case 'ACTOS_PREPARATORIOS': return 'Programado';
+    case 'INVITACIONES': return 'En Invitaciones';
+    case 'RECEPCION_COTIZACIONES': return 'En Cotizaciones';
+    case 'CUADRO_COMPARATIVO': return 'En Cuadro Comparativo';
+    case 'CCP': return 'En CCP';
+    case 'EJECUCION': return 'En Ejecución';
+    case 'FINALIZADO': return 'Finalizado';
+    default: return '';
+  }
+}
+
 export function resolveEstadoNegocioFromRow(row) {
   const estado = String(row?.estado || '').trim();
-  const etapaActual = String(row?.estado_actual || '').toUpperCase();
+  const etapaActual = String(row?.estado_actual || row?.estadoActual || '').toUpperCase();
+  if (etapaActual && /^observ/i.test(estado)) {
+    const fromEtapa = getEstadoNegocioFromEtapa(etapaActual);
+    if (fromEtapa) return fromEtapa;
+  }
   if (etapaActual === 'PROGRAMACION' && /tr[aá]mite/i.test(estado) && !/programaci|observ/i.test(estado)) {
     return 'En Programación';
   }
   if (etapaActual === 'EVALUACION' && /programaci/i.test(estado)) {
     return 'En tramite de aprobación';
   }
-  if (etapaActual === 'DEC' && /tr[aá]mite/i.test(estado)) {
+  if (etapaActual === 'DEC' && (/tr[aá]mite/i.test(estado) || /^observ/i.test(estado))) {
     return 'Aprobado';
+  }
+  if (etapaActual === 'DEC' && estado === 'Aprobado DEC') {
+    return 'Aprobado DEC';
+  }
+  if (etapaActual === 'PROGRAMACION' && /^observ/i.test(estado)) {
+    return 'En Programación';
   }
   return estado;
 }
@@ -507,6 +539,7 @@ export function enrichRequerimientoRow(row) {
   if (!movimientos.length && historial.length) {
     movimientos = movimientosFromHistorialEstados(historial);
   }
+  const obsMotor = obtenerEstadoObservaciones(row);
   return {
     ...row,
     estado: estadoNegocio,
@@ -528,6 +561,7 @@ export function enrichRequerimientoRow(row) {
     historialEstados: historial,
     historial_movimientos: movimientos,
     historialMovimientos: movimientos,
+    obsMotor,
   };
 }
 
@@ -546,18 +580,23 @@ export async function registrarMovimiento({
   if (!rows.length) throw new Error('Requerimiento no encontrado');
   const row = rows[0];
   const now = new Date().toISOString();
-  const etapaNueva = mapEstadoToEtapa(estadoNuevo);
   const etapaAnterior = row.estado_actual || mapEstadoToEtapa(row.estado);
   const accionFinal = inferAccion(row.estado, estadoNuevo, accion);
+  const esEventoObservacion = normalizeAccion(accionFinal) === 'OBSERVADO';
+  const etapaNueva = esEventoObservacion
+    ? String(row.estado_actual || mapEstadoToEtapa(row.estado)).toUpperCase()
+    : mapEstadoToEtapa(estadoNuevo);
+  const estadoPersistido = esEventoObservacion ? row.estado : estadoNuevo;
   const ejecutor = String(etapaEjecutor || etapaAnterior).toUpperCase();
   const destinoExplicito = etapaDestino ? String(etapaDestino).toUpperCase() : null;
-  const destino = destinoExplicito || (etapaNueva !== ejecutor ? etapaNueva : null);
+  const destinoEventoObs = etapaDestinoEvento ? String(etapaDestinoEvento).toUpperCase() : null;
+  const destino = destinoEventoObs || destinoExplicito || (etapaNueva !== ejecutor ? etapaNueva : null);
 
   let historial = parseHistorial(row.historial_estados);
   if (!historial.length) historial = initHistorialFromRow(row, usuario);
 
-  const cambioEtapa = etapaNueva !== etapaAnterior;
-  const cambioEstado = String(estadoNuevo) !== String(row.estado);
+  const cambioEtapa = !esEventoObservacion && etapaNueva !== etapaAnterior;
+  const cambioEstado = !esEventoObservacion && String(estadoPersistido) !== String(row.estado);
 
   if (cambioEtapa || cambioEstado) {
     historial = closeOpenEntry(historial, now);
@@ -578,21 +617,36 @@ export async function registrarMovimiento({
     }
   }
 
-  const responsableActual = responsable || ETAPAS[etapaNueva]?.responsable || ETAPAS[ejecutor]?.responsable || usuario || row.responsable_actual || '';
-  const subMeta = getSubModuloMeta(etapaNueva);
+  const etapaResponsable = esEventoObservacion ? etapaAnterior : etapaNueva;
+  const responsableActual = esEventoObservacion
+    ? (row.responsable_actual || ETAPAS[etapaAnterior]?.responsable || usuario || '')
+    : (responsable || ETAPAS[etapaNueva]?.responsable || ETAPAS[ejecutor]?.responsable || usuario || row.responsable_actual || '');
+  const subMeta = getSubModuloMeta(etapaResponsable);
 
   let movimientos = parseMovimientos(row.historial_movimientos);
-  if (cambioEtapa || cambioEstado || observacion) {
+  if (esEventoObservacion || cambioEtapa || cambioEstado || observacion) {
     movimientos = appendEventosPorAccion(movimientos, {
       accion: accionFinal,
       etapaEjecutor: ejecutor,
       etapaDestino: destino,
-      etapaDestinoEvento: etapaDestinoEvento ? String(etapaDestinoEvento).toUpperCase() : null,
+      etapaDestinoEvento: destinoEventoObs,
       usuario,
       responsable: responsableActual,
       observacion,
       now,
     });
+  }
+
+  if (esEventoObservacion) {
+    await query(`
+      UPDATE requerimientos SET
+        historial_estados = $2::jsonb,
+        historial_movimientos = $3::jsonb,
+        updated_at = NOW()
+      WHERE id = $1
+    `, [requerimientoId, JSON.stringify(historial), JSON.stringify(movimientos)]);
+
+    return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
   }
 
   await query(`
@@ -607,7 +661,7 @@ export async function registrarMovimiento({
       updated_at = NOW()
     WHERE id = $1
   `, [
-    requerimientoId, estadoNuevo, etapaNueva, subMeta.subModulo,
+    requerimientoId, estadoPersistido, etapaNueva, subMeta.subModulo,
     responsableActual, now, JSON.stringify(historial), JSON.stringify(movimientos),
   ]);
 

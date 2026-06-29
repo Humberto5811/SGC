@@ -409,6 +409,7 @@ export function renderActosRowCells(r, opts = {}) {
     r.estado_actual || r.estadoActual,
     r.estadoActualTexto || r.estado_actual_texto,
     r.estado,
+    r,
   );
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '—';
   const scCode = r.codigo_solicitud || r.codigoSolicitud || '';

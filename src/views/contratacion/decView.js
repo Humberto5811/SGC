@@ -9,7 +9,6 @@ import {
   renderFilterBarHtml, readFilterParams,
   renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
-  isEstadoObservado,
 } from '../../utils/trazabilidad.js';
 import { decMenuItems, decHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
@@ -73,13 +72,11 @@ async function loadDecList() {
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'DEC',
-        puedeObservar: (r) => !isEstadoObservado(r.estado),
+        puedeObservar: () => true,
         onObservar: async (reqId, data) => {
           const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-          await contratacionesService.observarDEC(reqId, data.motivo, getUserDisplayName(user), {
-            destino_submodulo: data.destino_submodulo,
-            destino_etapa: data.destino_etapa,
-            destino_persona: data.destino_persona,
+          await contratacionesService.observarDEC(reqId, data.motivo || '', getUserDisplayName(user), {
+            ...data,
             origen_submodulo: data.origen_submodulo || 'DEC',
           });
         },
@@ -115,10 +112,6 @@ async function aprobarDec(id) {
 async function observarDec(id) {
   const req = (lastRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
-  if (isEstadoObservado(req.estado)) {
-    await verHistorialObservaciones(req, { title: 'Historial de observaciones — DEC' });
-    return;
-  }
   const allObs = todasObservaciones(req);
   const data = await showObservacionDirigidaModal({
     title: 'Observar requerimiento desde DEC',

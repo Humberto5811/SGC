@@ -163,17 +163,16 @@ async function loadActosList() {
         submoduloLabel: 'Coordinación CM',
         puedeObservar: () => true,
         onObservar: async (reqId, data) => {
-          await contratacionesService.observarActos(reqId, data.motivo, data.usuario, {
-            destino_submodulo: data.destino_submodulo,
-            destino_etapa: data.destino_etapa,
-            destino_persona: data.destino_persona,
-            origen_submodulo: 'Coordinación CM',
+          await contratacionesService.observarActos(reqId, data.motivo || '', data.usuario, {
+            ...data,
+            origen_submodulo: data.origen_submodulo || 'Coordinación CM',
           });
         },
         onSubsanar: async (reqId, data) => {
           await requerimientosService.subsanarConDestino(reqId, {
             respuesta: data.texto,
             usuario: data.usuario,
+            observacion_id: data.observacion_id,
             origen_submodulo: data.origen_submodulo || 'Coordinación CM',
             destino_submodulo: data.destino_submodulo,
             destino_etapa: data.destino_etapa,

@@ -62,7 +62,7 @@ export async function buildMatrizSeguimientoPedidos() {
     const ubic = resolveUbicacionExpediente(enriched);
     const estadoTexto = /^En /i.test(estadoNeg) ? estadoNeg : getEstadoActualTexto(ubic);
     const dias = enriched.dias_en_estado ?? calcDiasEnEstado(enriched.fecha_estado_actual);
-    const observado = isEstadoObservado(estadoNeg);
+    const observado = isEstadoObservado(enriched);
     const retrasado = dias > 10;
 
     if (row.paquete_id) conPaquete += 1;

@@ -13,6 +13,7 @@ import {
   estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
 } from '../../utils/trazabilidad.js';
 import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
+import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId } from '../../../shared/observacionesMotor.js';
 
 export const reqShared = { pendingOpenId: null, editingFromEvaluacion: false, onBackToEvaluacion: null };
 
@@ -43,14 +44,7 @@ export function ultimaObservacion(req) {
 }
 
 export function todasObservaciones(req) {
-  if (!req) return [];
-  let payload = req.payload;
-  if (typeof payload === 'string') {
-    payload = safeParse(payload);
-  } else if (!payload || typeof payload !== 'object') {
-    payload = safeParse(req.payload);
-  }
-  return Array.isArray(payload.observaciones) ? payload.observaciones : [];
+  return getListaObservaciones(req);
 }
 
 export async function verHistorialObservaciones(req, opts = {}) {
@@ -61,67 +55,120 @@ export async function verHistorialObservaciones(req, opts = {}) {
   });
 }
 
-// Genera HTML del historial coloreado por actor/origen.
-// DEC → verde, GERENTE → rojo, USUARIO → azul, PROGRAMACIÓN → naranja
-export function historialHtml(observaciones) {
-  if (!observaciones || !observaciones.length) {
+// Panel reconstruido únicamente desde payload.observaciones (motor, vista jerárquica).
+function renderObservacionCard(o, hilos, idx, depth = 0) {
+  const esHija = !!getObservacionPadreId(o);
+  const hiloNum = formatEtiquetaJerarquica(o, hilos, idx);
+  const tipoLabel = esHija ? 'Subobservación' : (o.subsanacion || o.respuesta ? 'Respuesta final' : 'Observación');
+  const indent = depth > 0 ? `margin-left:${Math.min(depth * 1.25, 4)}rem;` : '';
+  const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', {
+    year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  }) : '';
+  const label = getObservacionOrigenLabel(o);
+  const emisor = getSubmoduloDisplayLabel(o.origen_submodulo || o.moduloEmisor || o.moduloOrigen || '—');
+  const receptor = getSubmoduloDisplayLabel(o.destino_submodulo || o.moduloReceptor || o.moduloDestino || '—');
+  const usuario = o.gerente || o.usuarioOrigen || o.usuario || '—';
+  const origen = String(o.origen || o.moduloOrigen || '').toUpperCase();
+
+  let colorClass, bgClass;
+  if (origen.includes('DEC')) {
+    colorClass = 'text-success';
+    bgClass = 'bg-success-subtle border-success';
+  } else if (origen.includes('PROGRAM')) {
+    colorClass = 'text-warning';
+    bgClass = 'bg-warning-subtle border-warning';
+  } else if (origen.includes('ACTOS') || origen.includes('COORDIN') || /coordinaci/i.test(String(o.origen_submodulo || '')) || /actos prep/i.test(String(o.origen_submodulo || ''))) {
+    colorClass = 'text-info';
+    bgClass = 'bg-info-subtle border-info';
+  } else if (origen.includes('INVITAC')) {
+    colorClass = 'text-primary';
+    bgClass = 'bg-primary-subtle border-primary';
+  } else if (origen === 'USUARIO') {
+    colorClass = 'text-primary';
+    bgClass = 'bg-primary-subtle border-primary';
+  } else {
+    colorClass = 'text-danger';
+    bgClass = 'bg-danger-subtle border-danger';
+  }
+
+  let html = `<div class="border rounded p-2 mb-2 ${bgClass}" style="font-size:0.9em;${indent}">`;
+  html += `<div class="fw-bold ${colorClass}"><i class="bi bi-chat-left-dots"></i> ${esc(tipoLabel)} #${esc(hiloNum)}`;
+  if (o.estado && o.estado !== 'CERRADA') {
+    html += ` <span class="badge bg-secondary ms-1">${esc(o.estado)}</span>`;
+  } else if (o.cerrada || o.estado === 'CERRADA') {
+    html += ` <span class="badge bg-dark ms-1">CERRADA</span>`;
+  }
+  html += ` ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
+  html += `<div class="small text-muted mb-1"><i class="bi bi-diagram-3"></i> ${esc(emisor)} → ${esc(receptor)} · Usuario: <strong>${esc(usuario)}</strong></div>`;
+  html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || o.observacion || '')}</div>`;
+  if (o.destino_submodulo || o.destino_persona) {
+    html += `<div class="small text-muted"><i class="bi bi-arrow-right-circle"></i> Dirigida a: <strong>${esc(o.destino_persona || '—')}</strong> · ${esc(getSubmoduloDisplayLabel(o.destino_submodulo || o.moduloDestino || '—'))}</div>`;
+  }
+
+  const respuestaTexto = o.respuesta || o.subsanacion;
+  if (respuestaTexto) {
+    const fechaS = o.fecha_respuesta || o.fecha_subsana
+      ? new Date(o.fecha_respuesta || o.fecha_subsana).toLocaleDateString('es-PE', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      }) : '';
+    const respModulo = getSubmoduloDisplayLabel(o.subsanacion_origen_submodulo || o.modulo_respuesta || 'Usuario');
+    html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta (${esc(respModulo)}) ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
+    html += `<div style="white-space:pre-wrap;">${esc(respuestaTexto)}</div>`;
+    if (o.subsanacion_destino_submodulo || o.subsanacion_destino_persona) {
+      html += `<div class="small text-muted mt-1"><i class="bi bi-arrow-return-right"></i> Devuelto a: <strong>${esc(o.subsanacion_destino_persona || '—')}</strong> · ${esc(getSubmoduloDisplayLabel(o.subsanacion_destino_submodulo || '—'))}</div>`;
+    }
+  } else if (!o.cerrada && o.estado !== 'CERRADA') {
+    html += `<div class="text-muted fst-italic mt-1"><small>Sin respuesta aún — hilo abierto</small></div>`;
+  }
+
+  if (o.cerrada || o.estado === 'CERRADA') {
+    const fc = o.fecha_cierre ? new Date(o.fecha_cierre).toLocaleString('es-PE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    html += `<div class="small text-success mt-1"><i class="bi bi-check-circle"></i> Cierre${fc ? ` (${esc(fc)})` : ''}</div>`;
+  }
+
+  if (Array.isArray(o.adjuntos) && o.adjuntos.length) {
+    html += `<div class="small mt-1"><i class="bi bi-paperclip"></i> Adjuntos: ${o.adjuntos.map((a) => esc(a.nombre || a.name || a)).join(', ')}</div>`;
+  }
+
+  if (Array.isArray(o.actuaciones) && o.actuaciones.length) {
+    html += `<div class="mt-2 ps-2 border-start border-2 border-secondary">`;
+    html += `<div class="small fw-semibold text-muted mb-1">Actuaciones (${o.actuaciones.length})</div>`;
+    o.actuaciones.forEach((act) => {
+      const fAct = act.fecha ? new Date(act.fecha).toLocaleString('es-PE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      html += `<div class="small mb-1"><span class="badge bg-light text-dark border me-1">${esc(String(act.tipo || 'actuación').replace(/_/g, ' '))}</span>`;
+      html += `<strong>${esc(getSubmoduloDisplayLabel(act.modulo || '—'))}</strong>`;
+      if (act.usuario) html += ` · ${esc(act.usuario)}`;
+      if (fAct) html += ` <span class="text-muted">(${esc(fAct)})</span>`;
+      if (act.texto) html += `<div class="ms-1">${esc(act.texto)}</div>`;
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function renderArbolObservaciones(nodos, hilos, depth = 0) {
+  return nodos.map((nodo, idx) => {
+    const card = renderObservacionCard(nodo.observacion, hilos, idx, depth);
+    const hijos = nodo.hijos?.length
+      ? `<div class="obs-hijos">${renderArbolObservaciones(nodo.hijos, hilos, depth + 1)}</div>`
+      : '';
+    return card + hijos;
+  }).join('');
+}
+
+export function historialHtml(observacionesOrReq) {
+  const hilos = Array.isArray(observacionesOrReq)
+    ? observacionesOrReq.map((o) => migrateObservacion({ ...o }))
+    : obtenerEstadoObservaciones(observacionesOrReq).hilos;
+  if (!hilos.length) {
     return '<div class="text-muted fst-italic">No hay observaciones registradas.</div>';
   }
-  const items = observaciones.map((o) => {
-    const ronda = o.ronda || '?';
-    const fecha = o.fecha ? new Date(o.fecha).toLocaleDateString('es-PE', {
-      year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    }) : '';
-    const label = getObservacionOrigenLabel(o);
-    const origen = String(o.origen || o.moduloOrigen || '').toUpperCase();
-
-    let colorClass, bgClass;
-    if (origen.includes('DEC')) {
-      colorClass = 'text-success';
-      bgClass = 'bg-success-subtle border-success';
-    } else if (origen.includes('PROGRAM')) {
-      colorClass = 'text-warning';
-      bgClass = 'bg-warning-subtle border-warning';
-    } else if (origen.includes('ACTOS') || origen.includes('COORDIN') || /coordinaci/i.test(String(o.origen_submodulo || '')) || /actos prep/i.test(String(o.origen_submodulo || ''))) {
-      colorClass = 'text-info';
-      bgClass = 'bg-info-subtle border-info';
-    } else if (origen.includes('INVITAC')) {
-      colorClass = 'text-primary';
-      bgClass = 'bg-primary-subtle border-primary';
-    } else if (origen === 'USUARIO') {
-      colorClass = 'text-primary';
-      bgClass = 'bg-primary-subtle border-primary';
-    } else {
-      colorClass = 'text-danger';
-      bgClass = 'bg-danger-subtle border-danger';
-    }
-
-    let html = `<div class="border rounded p-2 mb-2 ${bgClass}" style="font-size:0.9em;">`;
-    html += `<div class="fw-bold ${colorClass}"><i class="bi bi-chat-left-dots"></i> ${esc(label)} #${ronda} ${fecha ? '<small class="text-muted">(' + esc(fecha) + ')</small>' : ''}</div>`;
-    html += `<div style="white-space:pre-wrap;" class="mb-1">${esc(o.motivo || o.observacion || '')}</div>`;
-    if (o.destino_submodulo || o.destino_persona) {
-      html += `<div class="small text-muted"><i class="bi bi-arrow-right-circle"></i> Dirigida a: <strong>${esc(o.destino_persona || '—')}</strong> · ${esc(getSubmoduloDisplayLabel(o.destino_submodulo || o.moduloDestino || '—'))}</div>`;
-    }
-
-    const respuestaTexto = o.respuesta || o.subsanacion;
-    if (respuestaTexto) {
-      const fechaS = o.fecha_respuesta || o.fecha_subsana
-        ? new Date(o.fecha_respuesta || o.fecha_subsana).toLocaleDateString('es-PE', {
-          year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-        }) : '';
-      const respModulo = getSubmoduloDisplayLabel(o.subsanacion_origen_submodulo || o.modulo_respuesta || 'Usuario');
-      html += `<div class="fw-bold text-primary mt-1"><i class="bi bi-reply"></i> Respuesta (${esc(respModulo)}) ${fechaS ? '<small class="text-muted">(' + esc(fechaS) + ')</small>' : ''}</div>`;
-      html += `<div style="white-space:pre-wrap;">${esc(respuestaTexto)}</div>`;
-      if (o.subsanacion_destino_submodulo || o.subsanacion_destino_persona) {
-        html += `<div class="small text-muted mt-1"><i class="bi bi-arrow-return-right"></i> Devuelto a: <strong>${esc(o.subsanacion_destino_persona || '—')}</strong> · ${esc(getSubmoduloDisplayLabel(o.subsanacion_destino_submodulo || '—'))}</div>`;
-      }
-    } else {
-      html += `<div class="text-muted fst-italic mt-1"><small>Sin respuesta aún</small></div>`;
-    }
-    html += `</div>`;
-    return html;
-  });
-  return `<div class="mb-3"><label class="form-label fw-bold">Historial de la conversación</label>${items.join('')}</div>`;
+  const arbol = buildArbolObservaciones(hilos);
+  const items = renderArbolObservaciones(arbol, hilos);
+  const raices = arbol.length;
+  return `<div class="mb-3"><label class="form-label fw-bold">Historial de la conversación (${raices} hilo${raices === 1 ? '' : 's'})</label>${items}</div>`;
 }
 
 // Agrega una observación (cualquier origen) con estado personalizado.
@@ -140,11 +187,17 @@ export async function addObservacionCustom(req, motivo, origen, gerente, nuevoEs
     fecha: new Date().toISOString(),
     subsanacion: null,
   });
-  await requerimientosService.update(req.id, { 
-    estado: nuevoEstado || 'Observado', 
+  const updateBody = {
     payload: JSON.stringify(payload),
     usuario_modificacion: gerente || origen || 'gerente',
-  });
+  };
+  if (nuevoEstado) updateBody.estado = nuevoEstado;
+  await requerimientosService.update(req.id, updateBody);
+}
+
+// Agrega una observación (gerente) — no altera el estado del workflow.
+export async function addObservacion(req, motivo, gerente, destino = {}) {
+  return addObservacionCustom(req, motivo, 'GERENTE', gerente, null, destino);
 }
 
 // Agrega la subsanación y deriva al submódulo destino seleccionado.
@@ -152,16 +205,12 @@ export async function addSubsanacion(req, texto, usuario, destino = {}) {
   await requerimientosService.subsanarConDestino(req.id, {
     respuesta: texto,
     usuario: usuario || 'usuario',
+    observacion_id: destino.observacion_id,
     origen_submodulo: destino.origen_submodulo || 'Registro de Requerimiento',
     destino_submodulo: destino.destino_submodulo || '',
     destino_etapa: destino.destino_etapa || '',
     destino_persona: destino.destino_persona || '',
   });
-}
-
-// Agrega una observación (gerente) → estado "Observado".
-export async function addObservacion(req, motivo, gerente, destino = {}) {
-  return addObservacionCustom(req, motivo, 'GERENTE', gerente, 'Observado', destino);
 }
 
 function buildDestinoSelectorsHtml(id, defaultSubmodulo = '') {

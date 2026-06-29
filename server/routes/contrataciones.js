@@ -11,6 +11,11 @@ import {
 import { formatObservacionTraza, resolveEstadoFromDestino, resolveResponsableFromDestino, submoduloLabelToEtapa } from '../lib/observacionDestino.js';
 import { appendObservacion } from '../lib/observacionesExpediente.js';
 import {
+  emitirObservacion,
+  procesarAccionObservacion,
+  autoCerrarObservacionesEmisorAlContinuar,
+} from '../lib/observacionesWorkflow.js';
+import {
   listarBandejaActos,
   listUsuariosPerfilActos,
   listUsuariosPorSubmodulo,
@@ -98,6 +103,7 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
     if (!Array.isArray(payload.historial_dec)) payload.historial_dec = [];
     payload.historial_dec.push({ tipo: 'aprobacion_dec', usuario: usuario || '', fecha: new Date().toISOString() });
+    autoCerrarObservacionesEmisorAlContinuar(payload, 'DEC', usuario || 'DEC');
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
     const updated = await registrarMovimiento({
@@ -118,26 +124,37 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
 router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = req.body || {};
-    if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
+    const {
+      motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo,
+      accion, observacion_id, observacion_padre_id, observacionPadreId,
+    } = req.body || {};
 
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (!Array.isArray(payload.observaciones)) payload.observaciones = [];
-    payload.observaciones.push({
-      ronda: payload.observaciones.length + 1,
+
+    const accionObs = procesarAccionObservacion(payload, {
+      accion, observacion_id, origen_submodulo: origen_submodulo || 'DEC', usuario,
+    });
+    if (accionObs) {
+      await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+      const row = (await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0];
+      return res.json({ success: true, requerimiento: enrichRequerimientoRow(row) });
+    }
+
+    if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
+
+    emitirObservacion(payload, {
       motivo,
       gerente: usuario || 'dec',
       origen: 'DEC',
       origen_submodulo: origen_submodulo || 'DEC',
-      destino_submodulo: destino_submodulo || '',
-      destino_etapa: destino_etapa || '',
+      destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
+      destino_etapa: destino_etapa || 'REGISTRADO',
       destino_persona: destino_persona || '',
-      fecha: new Date().toISOString(),
-      subsanacion: null,
+      observacion_padre_id: observacion_padre_id || observacionPadreId || null,
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
@@ -185,6 +202,7 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
     if (!Array.isArray(payload.historial_programacion)) payload.historial_programacion = [];
     payload.historial_programacion.push({ tipo: 'aprobacion_programacion', usuario: usuario || '', fecha: new Date().toISOString() });
+    autoCerrarObservacionesEmisorAlContinuar(payload, 'Programación', usuario || 'Programación');
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
     const updated = await registrarMovimiento({
@@ -205,14 +223,28 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
 router.put('/programacion/observar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = req.body || {};
-    if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
+    const {
+      motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo,
+      accion, observacion_id, observacion_padre_id, observacionPadreId,
+    } = req.body || {};
 
     const reqCheck = await query('SELECT id, payload, estado FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+
+    const accionObs = procesarAccionObservacion(payload, {
+      accion, observacion_id, origen_submodulo: origen_submodulo || 'Programación', usuario,
+    });
+    if (accionObs) {
+      await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+      const row = (await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0];
+      return res.json({ success: true, requerimiento: enrichRequerimientoRow(row) });
+    }
+
+    if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
+
     appendObservacion(payload, {
       motivo,
       gerente: usuario || 'Programación',
@@ -221,6 +253,7 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
       destino_submodulo: destino_submodulo || '',
       destino_etapa: destino_etapa || '',
       destino_persona: destino_persona || '',
+      observacion_padre_id: observacion_padre_id || observacionPadreId || null,
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
