@@ -41,6 +41,24 @@ function planAccion(tipo, context, extra = {}) {
   };
 }
 
+function attachEventEmission(engine, plan, eventEngine, emitPlanEvents) {
+  if (!eventEngine || emitPlanEvents === false) return plan;
+  const emission = eventEngine.emitDesdePlanWorkflow(plan, {
+    workflowSnapshot: engine.obtenerWorkflowSnapshot(),
+    observacionesSnapshot: null,
+    moduloOrigen: plan.moduloOrigen,
+    moduloDestino: plan.destino,
+    usuario: plan.payload?.usuario,
+  });
+  return {
+    ...plan,
+    fase: 2,
+    eventoEmitido: emission.evento || null,
+    eventEmission: emission,
+    persistir: false,
+  };
+}
+
 export class WorkflowEngine {
   /**
    * @param {Object|WorkflowContext} input - fila requerimiento o contexto
@@ -53,6 +71,15 @@ export class WorkflowEngine {
       : crearWorkflowContext(input, opts);
     this.estadoManager = deps.estadoManager || crearEstadoManager();
     this.workflowManager = deps.workflowManager || null;
+    /** @type {import('../eventEngine/EventEngine.js').EventEngine|null} */
+    this.eventEngine = deps.eventEngine || null;
+    /** Si true y hay eventEngine, emite eventos al generar planes (sin persistir motores). */
+    this.emitPlanEvents = deps.emitPlanEvents !== false && !!this.eventEngine;
+  }
+
+  _finalizarPlan(tipo, extra = {}) {
+    const plan = planAccion(tipo, this.ctx, extra);
+    return attachEventEmission(this, plan, this.eventEngine, this.emitPlanEvents);
   }
 
   /** @returns {WorkflowContext} */
@@ -164,7 +191,7 @@ export class WorkflowEngine {
     const validacion = this.validarTransicion(destino);
     if (!validacion.valido) throw new Error(validacion.motivo || 'Derivación no permitida');
     const etapaDestino = normalizarEtapa(destino) || validacion.destino;
-    return planAccion('derivar', this.ctx, {
+    return this._finalizarPlan('derivar', {
       destino: etapaToModuloLabel(etapaDestino),
       etapaDestino,
       payload,
@@ -176,7 +203,7 @@ export class WorkflowEngine {
     if (!etapaDestino) throw new Error('No hay destino de aprobación definido para la etapa actual');
     const validacion = this.validarTransicion(etapaDestino);
     if (!validacion.valido) throw new Error(validacion.motivo || 'Aprobación no permitida');
-    return planAccion('aprobar', this.ctx, {
+    return this._finalizarPlan('aprobar', {
       destino: etapaToModuloLabel(etapaDestino),
       etapaDestino,
       payload,
@@ -185,7 +212,7 @@ export class WorkflowEngine {
 
   observar(payload = {}) {
     if (!this.puedeObservar()) throw new Error('Observar no permitido en el contexto actual');
-    return planAccion('observar', this.ctx, {
+    return this._finalizarPlan('observar', {
       delegadoMotorObservaciones: true,
       payload,
     });
@@ -193,7 +220,7 @@ export class WorkflowEngine {
 
   subsanar(payload = {}) {
     if (!this.puedeSubsanar()) throw new Error('Subsanar no permitido en el contexto actual');
-    return planAccion('subsanar', this.ctx, {
+    return this._finalizarPlan('subsanar', {
       delegadoMotorObservaciones: true,
       payload,
     });
@@ -201,7 +228,7 @@ export class WorkflowEngine {
 
   cerrar(payload = {}) {
     if (!this.puedeCerrar()) throw new Error('Cerrar no permitido en el contexto actual');
-    return planAccion('cerrar', this.ctx, {
+    return this._finalizarPlan('cerrar', {
       delegadoMotorObservaciones: true,
       payload,
     });

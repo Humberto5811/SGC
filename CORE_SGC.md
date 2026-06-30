@@ -71,6 +71,13 @@ core/
 │   ├── WorkflowPermissions.js
 │   ├── WorkflowContext.js
 │   └── index.js
+├── eventEngine/                  ← Fase 2 — distribución de eventos (nuevo)
+│   ├── EventCatalog.js
+│   ├── EventContext.js
+│   ├── EventEngine.js
+│   ├── EventDispatcher.js
+│   ├── EventSubscribers.js
+│   └── index.js
 └── index.js                      crearCoreSGC()
 ```
 
@@ -319,7 +326,113 @@ if (engine.puedeAprobar()) {
 
 ### Transición hacia Event Engine (Fase 2)
 
-En Fase 2, cada acción del `WorkflowEngine` emitirá eventos canónicos consumidos por Timeline, Historial y (en paralelo) el Motor de Observaciones. El snapshot y los catálogos de esta fase serán la base sin rediseño.
+En Fase 2, cada acción del `WorkflowEngine` puede emitir eventos canónicos vía `EventEngine.emitDesdePlanWorkflow()` **sin persistir** Timeline/Historial/Observaciones. El snapshot y los catálogos de la Fase 1 son la base sin rediseño.
+
+## Event Engine (Fase 2 — distribución)
+
+Directorio: `core/eventEngine/`
+
+Segunda capa del Core. El **Workflow Engine emite**; el **Event Engine distribuye** hacia los motores suscriptores. **No escribe** directamente en Timeline, Historial, Observaciones, Auditoría, Dashboard ni KPIs en esta fase.
+
+### Arquitectura de capas
+
+```
+Requerimiento
+      │
+      ▼
+Workflow Engine        ← autoridad del flujo (Fase 1)
+      │ emit / plan
+      ▼
+Event Engine           ← distribución (Fase 2)
+      │
+      ├── Timeline       (migración Fase 3+)
+      ├── Historial
+      ├── Observaciones
+      ├── Auditoría
+      ├── Dashboard
+      └── KPIs
+      │
+      ▼
+UI / Módulos           (sin migrar en Fase 2)
+```
+
+### Responsabilidades por capa
+
+| Capa | Responsabilidad | NO hace |
+|------|-----------------|---------|
+| **Workflow Engine** | Estado, permisos, transiciones, planes de acción | Registrar Timeline/Historial directamente |
+| **Event Engine** | Validar catálogo, construir contexto, despachar eventos | Persistir en motores legacy |
+| **Motores legacy** | TimelineManager, HistorialManager, etc. | Decidir flujo (permanece hasta migración) |
+
+### Componentes
+
+| Archivo | Rol |
+|---------|-----|
+| `EventCatalog.js` | Catálogo único `EVENTOS.*` — prohibido usar strings sueltos |
+| `EventContext.js` | Contexto compartido: requerimientoId, módulos, snapshots, payload |
+| `EventSubscribers.js` | `subscribe()` / `unsubscribe()` por evento y canal |
+| `EventDispatcher.js` | Enruta a canales: TIMELINE, HISTORIAL, OBSERVACIONES, AUDITORIA, DASHBOARD, KPIS |
+| `EventEngine.js` | API: `emit()`, `emitSync()`, `emitAsync()`, `registrarEvento()` |
+
+### Event Snapshot
+
+```javascript
+{
+  evento,
+  eventoLabel,
+  categoria,
+  origen,
+  destino,
+  requerimientoId,
+  codigoRequerimiento,
+  workflow,
+  observaciones,
+  usuario,
+  fecha,
+  hora,
+  timestamp,
+  payload,
+}
+```
+
+### Uso (Fase 2 — sin alterar rutas ni pantallas)
+
+```javascript
+import { crearCoreSGC, EVENTOS_ENGINE } from './core/index.js';
+
+const core = crearCoreSGC();
+const eventEngine = core.crearEventEngine();
+
+eventEngine.subscribe(EVENTOS_ENGINE.REQUERIMIENTO_APROBADO, (ctx) => {
+  // Futuro: core.timeline.registrarEventoFuncional(...)
+  console.log('evento recibido', ctx.obtenerEventSnapshot());
+}, { canal: 'TIMELINE' });
+
+eventEngine.emitSync(EVENTOS_ENGINE.OBSERVACION_EMITIDA, {
+  requerimientoId: 42,
+  codigoRequerimiento: 'REQ-001',
+  moduloOrigen: 'DEC',
+  moduloDestino: 'Evaluación de Requerimiento',
+  usuario: 'dec',
+  payload: { motivo: '...' },
+});
+
+// Integración preparada Workflow → Event (solo emisión)
+const wf = core.crearWorkflowEngine(
+  { id: 42, estado: 'En tramite de aprobación', estado_actual: 'EVALUACION' },
+  { moduloLabel: 'Evaluación de Requerimiento' },
+);
+const plan = wf.aprobar({ usuario: 'gerente' });
+// plan.eventEmission.persistido === false
+```
+
+### Integración Workflow Engine
+
+Cuando `crearCoreSGC()` instancia el core, inyecta `eventEngine` en `crearWorkflowEngine()`. Los métodos `aprobar()`, `derivar()`, `observar()`, `subsanar()` y `cerrar()` llaman internamente a `eventEngine.emitDesdePlanWorkflow()` **solo para emitir** — no reemplazan las rutas operativas actuales.
+
+### Migración Fase 3+
+
+Los subscriptores por canal conectarán TimelineManager, HistorialManager, ObservacionManager y AuditoriaManager. Hasta entonces, el sistema operativo (Express + Vite + BD) **permanece igual**.
 
 ### AuditoriaManager
 
@@ -389,8 +502,8 @@ await core.timeline.registrarEvento({ expedienteId: '42', modulo: 'DEC', accion:
 
 ```powershell
 npm run check
-Get-ChildItem core/workflowEngine -Filter *.js | ForEach-Object { node --check $_.FullName }
-node -e "import('./core/index.js').then(m => { const c = m.crearCoreSGC(); console.log('OK', Object.keys(c).join(', ')); import('./core/workflowEngine/index.js').then(w => { const e = w.crearWorkflowEngine({ id: 1, estado: 'Aprobado', estado_actual: 'DEC' }, { moduloLabel: 'DEC' }); console.log('SNAP', e.obtenerWorkflowSnapshot().moduloActual); }); })"
+Get-ChildItem core/workflowEngine,core/eventEngine -Filter *.js | ForEach-Object { node --check $_.FullName }
+node --input-type=module -e "import { crearCoreSGC, EVENTOS_ENGINE } from './core/index.js'; const c = crearCoreSGC(); const ee = c.crearEventEngine(); const r = ee.emitSync(EVENTOS_ENGINE.REQUERIMIENTO_CREADO,{requerimientoId:1,codigoRequerimiento:'REQ-1',moduloOrigen:'Registro',usuario:'au'}); const wf = c.crearWorkflowEngine({id:1,estado:'En tramite de aprobación',estado_actual:'EVALUACION'},{moduloLabel:'Evaluación de Requerimiento'}); const p = wf.aprobar({usuario:'g'}); console.log('OK', r.evento, p.eventoEmitido, typeof c.crearEventEngine);"
 ```
 
 ## Próxima fase

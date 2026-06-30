@@ -14,6 +14,7 @@ import { crearDerivacionManager } from './workflow/DerivacionManager.js';
 import { crearRequerimientoManager } from './requerimiento/RequerimientoManager.js';
 import { crearExpedienteManager } from './expediente/ExpedienteManager.js';
 import { crearWorkflowEngine } from './workflowEngine/index.js';
+import { crearEventEngine } from './eventEngine/index.js';
 
 export {
   ESTADOS,
@@ -85,6 +86,17 @@ export {
   validarTransicionEtapa,
 } from './workflowEngine/index.js';
 
+export {
+  EventEngine,
+  crearEventEngine,
+  EventContext,
+  crearEventContext,
+  EVENTOS as EVENTOS_ENGINE,
+  CANALES as CANALES_EVENTO,
+  RUTAS_DISTRIBUCION,
+  obtenerEventoCatalogo,
+} from './eventEngine/index.js';
+
 export { RequerimientoManager, crearRequerimientoManager } from './requerimiento/RequerimientoManager.js';
 export { ExpedienteManager, crearExpedienteManager } from './expediente/ExpedienteManager.js';
 
@@ -120,8 +132,15 @@ export function crearCoreSGC(opts = {}) {
   const expediente = crearExpedienteManager(ctx, { adjuntos, requerimiento });
   requerimiento.expediente = expediente;
 
-  /** Factory auxiliar — no sustituye rutas operativas en Fase 1. */
-  const workflowEngineFactory = (row, opts) => crearWorkflowEngine(row, opts, { estadoManager: estados, workflowManager: workflow });
+  const eventEngine = crearEventEngine();
+
+  /** Factory auxiliar — no sustituye rutas operativas en Fase 1–2. */
+  const workflowEngineFactory = (row, opts) => crearWorkflowEngine(row, opts, {
+    estadoManager: estados,
+    workflowManager: workflow,
+    eventEngine,
+    emitPlanEvents: true,
+  });
 
   return {
     ctx,
@@ -136,8 +155,10 @@ export function crearCoreSGC(opts = {}) {
     workflow,
     derivaciones,
     trazabilidad,
+    eventEngine,
     workflowEngineFactory,
     crearWorkflowEngine: workflowEngineFactory,
+    crearEventEngine: () => eventEngine,
   };
 }
 
