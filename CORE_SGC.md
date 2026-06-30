@@ -466,10 +466,37 @@ Event Adapter              ← RegistroEventAdapter (3A.1)
 Event Engine               ← emit / dispatch (Fase 2)
         │
         ▼
-Managers Legacy            ← Timeline, Historial, Observaciones… (sin conectar aún)
+Managers Legacy            ← trazabilidad.js (modo paralelo Registro)
 ```
 
-### Componentes 3A.1
+### Fase 3A.2 — Registro migrado (modo paralelo)
+
+Puente servidor: `server/lib/registroMigrationFacade.js` (`ejecutarLegacy: true`).
+
+| Acción Registro | Punto de entrada | Método facade |
+|-----------------|------------------|---------------|
+| Crear | `server/index.js` → `afterCreate` | `MigrationFacade.crear()` |
+| Editar | `server/index.js` → `afterUpdate` | `MigrationFacade.editar()` |
+| Derivar (solicitar aprobación) | `requerimientosEspecial.js` → `solicitar-aprobacion` | `MigrationFacade.derivar()` |
+| Subsanar | `requerimientosEspecial.js` → `subsanar` (solo origen Registro) | `MigrationFacade.subsanar()` |
+
+Logs temporales: `[Migration]` en consola (desactivar con `SGC_MIGRATION_LOG=0`).
+
+Si el Workflow Engine rechaza una transición, **no** se ejecuta legacy y la API responde `409`.
+
+### Módulos migrados
+
+| Módulo | Estado |
+|--------|--------|
+| **Registro** | Migrado (modo paralelo) |
+| Evaluación | Pendiente |
+| DEC | Pendiente |
+| Programación | Pendiente |
+| CM | Pendiente |
+| Invitaciones | Pendiente |
+| Portal | Pendiente |
+
+### Componentes 3A.1–3A.2
 
 | Artefacto | Ubicación | Rol |
 |-----------|-----------|-----|
@@ -478,12 +505,14 @@ Managers Legacy            ← Timeline, Historial, Observaciones… (sin conect
 | `RegistroEventAdapter` | `core/eventEngine/adapters/` | Emite eventos desde planes (sin Timeline/Historial) |
 | `WorkflowContracts` | `core/interfaces/WorkflowContracts.js` | `WorkflowAction`, `WorkflowPlan`, `WorkflowResult`, etc. |
 
+| `registroMigrationFacade` | `server/lib/registroMigrationFacade.js` | Instancia facade con legacy + hooks Registro |
+
 ### Roadmap de migración
 
 ```
-3A.1  Inventario + adapters + facade + contratos     ← actual (0 cambios funcionales)
+3A.1  Inventario + adapters + facade + contratos
   ↓
-3A.2  Registro usa MigrationFacade (dual-write opcional)
+3A.2  Registro → MigrationFacade (modo paralelo)     ← actual
   ↓
 3A.3  Evaluación
   ↓
@@ -507,7 +536,7 @@ const result = facade.derivar(row, 'Evaluación de Requerimiento', { usuario: 'a
 // result.legacy === null (ejecutarLegacy: false)
 ```
 
-**Restricción 3A.1:** ningún módulo operativo importa aún `MigrationFacade`. Rutas Express y pantallas siguen usando `registrarMovimiento()` directamente.
+**Restricción 3A.1–3A.2:** Evaluación, DEC y demás módulos siguen usando legacy directo. Registro es el único módulo conectado a `MigrationFacade`.
 
 ### AuditoriaManager
 
@@ -583,4 +612,4 @@ node --input-type=module -e "import { crearCoreSGC } from './core/index.js'; con
 
 ## Próxima fase
 
-**3A.2** — Conectar Registro a `MigrationFacade` en paralelo con legacy (sin retirar `registrarMovimiento` todavía).
+**3A.3** — Conectar Evaluación a `MigrationFacade` en modo paralelo.

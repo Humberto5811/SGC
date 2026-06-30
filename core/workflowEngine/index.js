@@ -43,6 +43,7 @@ export {
 export { WorkflowContext, crearWorkflowContext } from './WorkflowContext.js';
 export { WorkflowEngine, crearWorkflowEngine } from './WorkflowEngine.js';
 export { MigrationFacade, crearMigrationFacade } from './MigrationFacade.js';
+export { migrationLog, migrationWarn, isMigrationLogEnabled } from './MigrationLogger.js';
 export { RegistroWorkflowAdapter, crearRegistroWorkflowAdapter, MODULO_REGISTRO } from './adapters/index.js';
 
 export default {

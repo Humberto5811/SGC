@@ -16,6 +16,11 @@ import {
   procesarAccionObservacion,
   autoCerrarObservacionesEmisorAlContinuar,
 } from '../lib/observacionesWorkflow.js';
+import {
+  ejecutarRegistroDerivar,
+  ejecutarRegistroSubsanar,
+  esOrigenRegistro,
+} from '../lib/registroMigrationFacade.js';
 
 const router = express.Router();
 
@@ -104,16 +109,27 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
     });
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const updated = await registrarMovimiento({
+    const updated = await ejecutarRegistroDerivar({
       requerimientoId,
-      estadoNuevo: 'En tramite de aprobación',
       usuario: usuario || 'Usuario AU',
-      accion: 'derivado',
-      observacion: 'Solicitud de aprobación enviada a evaluación',
-      responsable: ETAPAS.EVALUACION.responsable,
-      etapaEjecutor: 'REGISTRADO',
-      etapaDestino: 'EVALUACION',
+      legacyExecutor: () => registrarMovimiento({
+        requerimientoId,
+        estadoNuevo: 'En tramite de aprobación',
+        usuario: usuario || 'Usuario AU',
+        accion: 'derivado',
+        observacion: 'Solicitud de aprobación enviada a evaluación',
+        responsable: ETAPAS.EVALUACION.responsable,
+        etapaEjecutor: 'REGISTRADO',
+        etapaDestino: 'EVALUACION',
+      }),
     });
+
+    if (!updated) {
+      return res.status(409).json({
+        success: false,
+        error: 'Transición no permitida por Workflow Engine',
+      });
+    }
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }
@@ -192,30 +208,59 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
     } = req.body || {};
     if (!respuesta) return res.status(400).json({ success: false, error: 'Subsanación requerida' });
 
-    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    const reqCheck = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-
-    const { destinoSubmodulo, destinoEtapa, destinoPersona } = registrarSubsanacionObservacion(payload, {
+    const rowBefore = enrichRequerimientoRow(reqCheck.rows[0]);
+    const subsArgs = {
       observacion_id,
       respuesta,
       origen_submodulo: origen_submodulo || 'Registro de Requerimiento',
       usuario: usuario || 'Usuario AU',
-    });
+    };
 
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
-
-    const updated = await registrarSubsanacionDerivacion({
-      requerimientoId,
-      usuario: usuario || 'Usuario AU',
-      textoSubsanacion: respuesta,
-      origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
-      destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
-      destinoEtapa: destinoEtapa || destino_etapa || '',
-      destinoPersona: destinoPersona || destino_persona || '',
-    });
+    let updated;
+    if (esOrigenRegistro(origen_submodulo)) {
+      registrarSubsanacionObservacion(JSON.parse(JSON.stringify(payload)), subsArgs);
+      updated = await ejecutarRegistroSubsanar({
+        requerimientoId,
+        row: rowBefore,
+        usuario: usuario || 'Usuario AU',
+        legacyExecutor: async () => {
+          const { destinoSubmodulo, destinoEtapa, destinoPersona } = registrarSubsanacionObservacion(payload, subsArgs);
+          await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+          return registrarSubsanacionDerivacion({
+            requerimientoId,
+            usuario: usuario || 'Usuario AU',
+            textoSubsanacion: respuesta,
+            origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
+            destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
+            destinoEtapa: destinoEtapa || destino_etapa || '',
+            destinoPersona: destinoPersona || destino_persona || '',
+          });
+        },
+      });
+      if (!updated) {
+        return res.status(409).json({
+          success: false,
+          error: 'No se puede continuar con la validación del workflow.',
+        });
+      }
+    } else {
+      const { destinoSubmodulo, destinoEtapa, destinoPersona } = registrarSubsanacionObservacion(payload, subsArgs);
+      await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+      updated = await registrarSubsanacionDerivacion({
+        requerimientoId,
+        usuario: usuario || 'Usuario AU',
+        textoSubsanacion: respuesta,
+        origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
+        destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
+        destinoEtapa: destinoEtapa || destino_etapa || '',
+        destinoPersona: destinoPersona || destino_persona || '',
+      });
+    }
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }

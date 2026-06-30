@@ -94,15 +94,20 @@ export function createWorkflowAction(fields = {}) {
 
 export function createWorkflowPlan(fields = {}) {
   return Object.freeze({
-    persistir: false,
+    ...fields,
+    persistir: fields.persistir === true,
     fase: fields.fase ?? 3,
     tipo: fields.tipo || WORKFLOW_ACTION.EDITAR,
     requerimientoId: fields.requerimientoId ?? null,
     moduloOrigen: fields.moduloOrigen || '',
     destino: fields.destino || '',
     etapaDestino: fields.etapaDestino || '',
+    etapaOrigen: fields.etapaOrigen || '',
     payload: fields.payload || {},
     eventEmission: fields.eventEmission ?? null,
+    workflowSnapshot: fields.workflowSnapshot ?? null,
+    valido: fields.valido !== false,
+    motivo: fields.motivo || '',
     _contract: 'WorkflowPlan',
   });
 }
@@ -132,6 +137,7 @@ export function createWorkflowResult(fields = {}) {
     plan: fields.plan || createWorkflowPlan(),
     evento: fields.evento ?? null,
     legacy: fields.legacy ?? null,
+    advertencia: fields.advertencia || '',
     fase: fields.fase ?? 3,
     _contract: 'WorkflowResult',
   });

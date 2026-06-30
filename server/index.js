@@ -24,7 +24,7 @@ import programacionRouter from './routes/programacion.js';
 import usuariosRouter from './routes/usuarios.js';
 import proveedoresMaestroRouter from './routes/proveedoresMaestro.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
-import { inicializarTrazabilidad, registrarMovimiento, inferAccion } from './lib/trazabilidad.js';
+import { ejecutarRegistroCrear, ejecutarRegistroEditar } from './lib/registroMigrationFacade.js';
 import { trazaFromObservacionEntry } from './lib/observacionDestino.js';
 
 function extractObservacionTrazabilidad(payloadStr, estadoAnterior, estadoNuevo) {
@@ -347,31 +347,10 @@ app.use('/api/requerimientos', crudRouter({
   searchCols: ['codigo', 'denominacion', 'area', 'responsable', 'tipo'],
   orderBy: 'id DESC',
   afterCreate: async (row, body) => {
-    await inicializarTrazabilidad(row.id, body.usuario_modificacion || 'Sistema');
+    await ejecutarRegistroCrear(row.id, body.usuario_modificacion || 'Sistema');
   },
   afterUpdate: async (row, prev, body) => {
-    if (body.estado && body.estado !== prev.estado) {
-      const observacion = extractObservacionTrazabilidad(
-        body.payload != null ? body.payload : prev.payload,
-        prev.estado,
-        body.estado,
-      );
-      await registrarMovimiento({
-        requerimientoId: row.id,
-        estadoNuevo: body.estado,
-        usuario: body.usuario_modificacion || prev.usuario_modificacion || 'Sistema',
-        accion: inferAccion(prev.estado, body.estado),
-        observacion,
-      });
-    } else if (body.payload != null && String(body.payload) !== String(prev.payload || '')) {
-      await registrarMovimiento({
-        requerimientoId: row.id,
-        estadoNuevo: row.estado || prev.estado,
-        usuario: body.usuario_modificacion || prev.usuario_modificacion || 'Sistema',
-        accion: 'editado',
-        observacion: 'Actualización del expediente',
-      });
-    }
+    await ejecutarRegistroEditar({ row, prev, body, extractObservacionTrazabilidad });
   },
 }));
 

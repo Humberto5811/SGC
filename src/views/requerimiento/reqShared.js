@@ -130,20 +130,6 @@ function renderObservacionCard(o, hilos, idx, depth = 0) {
     html += `<div class="small mt-1"><i class="bi bi-paperclip"></i> Adjuntos: ${o.adjuntos.map((a) => esc(a.nombre || a.name || a)).join(', ')}</div>`;
   }
 
-  if (Array.isArray(o.actuaciones) && o.actuaciones.length) {
-    html += `<div class="mt-2 ps-2 border-start border-2 border-secondary">`;
-    html += `<div class="small fw-semibold text-muted mb-1">Actuaciones (${o.actuaciones.length})</div>`;
-    o.actuaciones.forEach((act) => {
-      const fAct = act.fecha ? new Date(act.fecha).toLocaleString('es-PE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-      html += `<div class="small mb-1"><span class="badge bg-light text-dark border me-1">${esc(String(act.tipo || 'actuación').replace(/_/g, ' '))}</span>`;
-      html += `<strong>${esc(getSubmoduloDisplayLabel(act.modulo || '—'))}</strong>`;
-      if (act.usuario) html += ` · ${esc(act.usuario)}`;
-      if (fAct) html += ` <span class="text-muted">(${esc(fAct)})</span>`;
-      if (act.texto) html += `<div class="ms-1">${esc(act.texto)}</div>`;
-      html += `</div>`;
-    });
-    html += `</div>`;
-  }
   html += `</div>`;
   return html;
 }
