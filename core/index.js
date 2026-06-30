@@ -13,6 +13,7 @@ import { crearWorkflowManager } from './workflow/WorkflowManager.js';
 import { crearDerivacionManager } from './workflow/DerivacionManager.js';
 import { crearRequerimientoManager } from './requerimiento/RequerimientoManager.js';
 import { crearExpedienteManager } from './expediente/ExpedienteManager.js';
+import { crearWorkflowEngine } from './workflowEngine/index.js';
 
 export {
   ESTADOS,
@@ -73,6 +74,17 @@ export { EstadoManager, crearEstadoManager } from './workflow/EstadoManager.js';
 export { WorkflowManager, crearWorkflowManager } from './workflow/WorkflowManager.js';
 export { DerivacionManager, crearDerivacionManager } from './workflow/DerivacionManager.js';
 
+export {
+  WorkflowEngine,
+  crearWorkflowEngine,
+  WorkflowContext,
+  crearWorkflowContext,
+  ETAPAS as ETAPAS_WORKFLOW_ENGINE,
+  FLUJO_ETAPAS,
+  ACCIONES_WORKFLOW,
+  validarTransicionEtapa,
+} from './workflowEngine/index.js';
+
 export { RequerimientoManager, crearRequerimientoManager } from './requerimiento/RequerimientoManager.js';
 export { ExpedienteManager, crearExpedienteManager } from './expediente/ExpedienteManager.js';
 
@@ -108,6 +120,9 @@ export function crearCoreSGC(opts = {}) {
   const expediente = crearExpedienteManager(ctx, { adjuntos, requerimiento });
   requerimiento.expediente = expediente;
 
+  /** Factory auxiliar — no sustituye rutas operativas en Fase 1. */
+  const workflowEngineFactory = (row, opts) => crearWorkflowEngine(row, opts, { estadoManager: estados, workflowManager: workflow });
+
   return {
     ctx,
     requerimiento,
@@ -121,6 +136,8 @@ export function crearCoreSGC(opts = {}) {
     workflow,
     derivaciones,
     trazabilidad,
+    workflowEngineFactory,
+    crearWorkflowEngine: workflowEngineFactory,
   };
 }
 

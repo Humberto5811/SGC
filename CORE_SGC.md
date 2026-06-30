@@ -64,6 +64,13 @@ core/
 │   ├── EstadoManager.js
 │   ├── WorkflowManager.js
 │   └── DerivacionManager.js
+├── workflowEngine/               ← Fase 1 — única autoridad del flujo (nuevo)
+│   ├── WorkflowEngine.js
+│   ├── WorkflowState.js
+│   ├── WorkflowTransitions.js
+│   ├── WorkflowPermissions.js
+│   ├── WorkflowContext.js
+│   └── index.js
 └── index.js                      crearCoreSGC()
 ```
 
@@ -206,6 +213,114 @@ Administra estados del requerimiento y **registro automático por módulo** en T
 
 Transiciones lineales según `FLUJO_REQUERIMIENTO`.
 
+> **Nota Fase 1:** `WorkflowManager` sigue disponible para compatibilidad con el Core documental. La autoridad del flujo operativo migra progresivamente a `WorkflowEngine` (ver capítulo siguiente).
+
+## Workflow Engine (Fase 1 — arquitectura)
+
+Directorio: `core/workflowEngine/`
+
+Única autoridad del **flujo del requerimiento**. No conoce UI, componentes, botones ni CSS. **No persiste cambios** en esta fase: los métodos de acción (`aprobar`, `derivar`, `observar`, etc.) devuelven planes (`persistir: false`) para integración futura con el Event Engine.
+
+### Responsabilidades
+
+| Componente | Rol |
+|------------|-----|
+| `WorkflowState.js` | Catálogo de etapas (`estado_actual`), estados Core y adaptadores desde fila BD |
+| `WorkflowTransitions.js` | Transiciones oficiales (lineales + por acción). **Sin observaciones** |
+| `WorkflowPermissions.js` | Matriz de permisos por módulo + reglas dinámicas vía Motor de Observaciones |
+| `WorkflowContext.js` | Contexto de decisión (`estado_actual`, `sub_modulo_actual`, historial RO) |
+| `WorkflowEngine.js` | API unificada: estado, permisos, snapshot y validación |
+
+### Arquitectura objetivo
+
+```
+Requerimiento
+      │
+      ▼
+Workflow Engine        ← Fase 1 (implementado)
+      │
+      ▼
+Event Engine           ← Fase 2 (futuro)
+      │
+      ├── Timeline
+      ├── Historial
+      └── Motor Observaciones (paralelo, no transiciones)
+      │
+      ▼
+UI / Módulos
+```
+
+### Métodos principales (`WorkflowEngine`)
+
+| Método | Descripción |
+|--------|-------------|
+| `obtenerEstado()` | Estado de negocio + etapa operativa |
+| `obtenerModuloActual()` / `obtenerModuloAnterior()` / `obtenerModuloDestino()` | Ubicación en el flujo |
+| `obtenerResponsable()` | Responsable vigente (adaptador `responsable_actual`) |
+| `puedeAprobar()` / `puedeObservar()` / `puedeSubsanar()` / `puedeCerrar()` / `puedeDerivar()` | Permisos centralizados |
+| `obtenerAccionesPermitidas()` | Lista de acciones habilitadas |
+| `obtenerWorkflowSnapshot()` | Objeto único para UI futura |
+| `validarTransicion(destino)` | Valida contra catálogo oficial |
+| `aprobar()` / `derivar()` / `observar()` / `subsanar()` / `cerrar()` | Plan de acción (sin persistir en Fase 1) |
+
+### Workflow Snapshot
+
+```javascript
+{
+  requerimientoId,
+  codigo,
+  estado,
+  etapaActual,
+  moduloActual,
+  subModuloActual,
+  moduloAnterior,
+  moduloDestino,
+  responsable,
+  accionesPermitidas,
+  workflowValido,
+  siguientePaso,
+  pasoAnterior,
+  transicionDefaultValida,
+  historialEstadosCount,
+  fase: 1,
+}
+```
+
+### Flujo oficial de etapas
+
+`Registro` → `Evaluación` → `DEC` → `Programación` → `Coordinación CM` → `Invitaciones` → `Portal Proveedores` → `Validación` → `Cuadro Comparativo` → `CCP` → `Orden de Compra` → `Ejecución` → `Liquidación` → `Archivo` → `Finalizado`
+
+Las **observaciones no son transiciones** de este catálogo; se resuelven en `shared/observacionesMotor.js`.
+
+### Uso (Fase 1 — sin cambiar rutas ni pantallas)
+
+```javascript
+import { crearWorkflowEngine } from './core/workflowEngine/index.js';
+
+const engine = crearWorkflowEngine(filaRequerimiento, {
+  moduloConsulta: 'DEC',
+  moduloLabel: 'DEC',
+});
+
+const snap = engine.obtenerWorkflowSnapshot();
+console.log(snap.accionesPermitidas, snap.moduloDestino);
+
+if (engine.puedeAprobar()) {
+  const plan = engine.aprobar({ usuario: 'dec' });
+  // plan.persistir === false en Fase 1
+}
+```
+
+### Compatibilidad
+
+- Adaptadores internos para `estado_actual`, `sub_modulo_actual`, `responsable_actual` e `historial_estados`.
+- `WorkflowManager` y rutas Express **no se eliminan** en esta fase.
+- Los módulos (Registro, Evaluación, DEC, …) **no se migran aún**; continúan con su lógica actual.
+
+### Transición hacia Event Engine (Fase 2)
+
+En Fase 2, cada acción del `WorkflowEngine` emitirá eventos canónicos consumidos por Timeline, Historial y (en paralelo) el Motor de Observaciones. El snapshot y los catálogos de esta fase serán la base sin rediseño.
+
 ### AuditoriaManager
 
 Entidad principal: `requerimientoId`. El `expedienteId` aparece solo como dato relacionado.
@@ -273,8 +388,9 @@ await core.timeline.registrarEvento({ expedienteId: '42', modulo: 'DEC', accion:
 ## Verificación
 
 ```powershell
-Get-ChildItem core -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
-node -e "import('./core/index.js').then(m => console.log('OK', Object.keys(m.crearCoreSGC()).join(', ')))"
+npm run check
+Get-ChildItem core/workflowEngine -Filter *.js | ForEach-Object { node --check $_.FullName }
+node -e "import('./core/index.js').then(m => { const c = m.crearCoreSGC(); console.log('OK', Object.keys(c).join(', ')); import('./core/workflowEngine/index.js').then(w => { const e = w.crearWorkflowEngine({ id: 1, estado: 'Aprobado', estado_actual: 'DEC' }, { moduloLabel: 'DEC' }); console.log('SNAP', e.obtenerWorkflowSnapshot().moduloActual); }); })"
 ```
 
 ## Próxima fase
