@@ -14,6 +14,8 @@ import {
   listarEventosCatalogo,
 } from './EventCatalog.js';
 
+export { RegistroEventAdapter, crearRegistroEventAdapter } from './adapters/index.js';
+
 export {
   EVENTOS,
   EVENTO_DEFINICIONES,

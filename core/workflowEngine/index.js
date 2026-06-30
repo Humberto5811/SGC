@@ -3,6 +3,7 @@
  */
 import { WorkflowEngine, crearWorkflowEngine } from './WorkflowEngine.js';
 import { WorkflowContext, crearWorkflowContext } from './WorkflowContext.js';
+import { MigrationFacade, crearMigrationFacade } from './MigrationFacade.js';
 
 export {
   ETAPAS,
@@ -39,11 +40,16 @@ export {
   obtenerPermisosBase,
 } from './WorkflowPermissions.js';
 
-export { WorkflowContext, crearWorkflowContext, WorkflowEngine, crearWorkflowEngine };
+export { WorkflowContext, crearWorkflowContext } from './WorkflowContext.js';
+export { WorkflowEngine, crearWorkflowEngine } from './WorkflowEngine.js';
+export { MigrationFacade, crearMigrationFacade } from './MigrationFacade.js';
+export { RegistroWorkflowAdapter, crearRegistroWorkflowAdapter, MODULO_REGISTRO } from './adapters/index.js';
 
 export default {
   WorkflowEngine,
   crearWorkflowEngine,
   WorkflowContext,
   crearWorkflowContext,
+  MigrationFacade,
+  crearMigrationFacade,
 };

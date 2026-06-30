@@ -13,8 +13,8 @@ import { crearWorkflowManager } from './workflow/WorkflowManager.js';
 import { crearDerivacionManager } from './workflow/DerivacionManager.js';
 import { crearRequerimientoManager } from './requerimiento/RequerimientoManager.js';
 import { crearExpedienteManager } from './expediente/ExpedienteManager.js';
-import { crearWorkflowEngine } from './workflowEngine/index.js';
 import { crearEventEngine } from './eventEngine/index.js';
+import { crearWorkflowEngine, crearMigrationFacade } from './workflowEngine/index.js';
 
 export {
   ESTADOS,
@@ -84,6 +84,11 @@ export {
   FLUJO_ETAPAS,
   ACCIONES_WORKFLOW,
   validarTransicionEtapa,
+  MigrationFacade,
+  crearMigrationFacade,
+  RegistroWorkflowAdapter,
+  crearRegistroWorkflowAdapter,
+  MODULO_REGISTRO,
 } from './workflowEngine/index.js';
 
 export {
@@ -95,7 +100,20 @@ export {
   CANALES as CANALES_EVENTO,
   RUTAS_DISTRIBUCION,
   obtenerEventoCatalogo,
+  RegistroEventAdapter,
+  crearRegistroEventAdapter,
 } from './eventEngine/index.js';
+
+export {
+  WORKFLOW_ACTION,
+  createWorkflowAction,
+  createWorkflowPlan,
+  createWorkflowTransition,
+  createWorkflowEvent,
+  createWorkflowResult,
+  createEventResult,
+  createTransitionResult,
+} from './interfaces/WorkflowContracts.js';
 
 export { RequerimientoManager, crearRequerimientoManager } from './requerimiento/RequerimientoManager.js';
 export { ExpedienteManager, crearExpedienteManager } from './expediente/ExpedienteManager.js';
@@ -134,12 +152,19 @@ export function crearCoreSGC(opts = {}) {
 
   const eventEngine = crearEventEngine();
 
-  /** Factory auxiliar — no sustituye rutas operativas en Fase 1–2. */
+  /** Factory auxiliar — no sustituye rutas operativas en Fase 1–3A.1. */
   const workflowEngineFactory = (row, opts) => crearWorkflowEngine(row, opts, {
     estadoManager: estados,
     workflowManager: workflow,
     eventEngine,
     emitPlanEvents: true,
+  });
+
+  const migrationFacade = crearMigrationFacade({
+    eventEngine,
+    createWorkflowEngine: workflowEngineFactory,
+    estadoManager: estados,
+    ejecutarLegacy: false,
   });
 
   return {
@@ -159,6 +184,8 @@ export function crearCoreSGC(opts = {}) {
     workflowEngineFactory,
     crearWorkflowEngine: workflowEngineFactory,
     crearEventEngine: () => eventEngine,
+    migrationFacade,
+    crearMigrationFacade: () => migrationFacade,
   };
 }
 

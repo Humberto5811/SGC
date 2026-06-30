@@ -64,20 +64,27 @@ core/
 │   ├── EstadoManager.js
 │   ├── WorkflowManager.js
 │   └── DerivacionManager.js
-├── workflowEngine/               ← Fase 1 — única autoridad del flujo (nuevo)
+├── workflowEngine/               ← Fase 1 — única autoridad del flujo
 │   ├── WorkflowEngine.js
 │   ├── WorkflowState.js
 │   ├── WorkflowTransitions.js
 │   ├── WorkflowPermissions.js
 │   ├── WorkflowContext.js
+│   ├── MigrationFacade.js        ← Fase 3A.1
+│   ├── adapters/
+│   │   └── RegistroWorkflowAdapter.js
 │   └── index.js
-├── eventEngine/                  ← Fase 2 — distribución de eventos (nuevo)
+├── eventEngine/                  ← Fase 2 — distribución de eventos
 │   ├── EventCatalog.js
 │   ├── EventContext.js
 │   ├── EventEngine.js
 │   ├── EventDispatcher.js
 │   ├── EventSubscribers.js
+│   ├── adapters/
+│   │   └── RegistroEventAdapter.js
 │   └── index.js
+├── interfaces/
+│   └── WorkflowContracts.js      ← Contratos comunes (Fase 3A.1)
 └── index.js                      crearCoreSGC()
 ```
 
@@ -247,7 +254,7 @@ Requerimiento
 Workflow Engine        ← Fase 1 (implementado)
       │
       ▼
-Event Engine           ← Fase 2 (futuro)
+Event Engine           ← Fase 2 (implementado)
       │
       ├── Timeline
       ├── Historial
@@ -430,9 +437,77 @@ const plan = wf.aprobar({ usuario: 'gerente' });
 
 Cuando `crearCoreSGC()` instancia el core, inyecta `eventEngine` en `crearWorkflowEngine()`. Los métodos `aprobar()`, `derivar()`, `observar()`, `subsanar()` y `cerrar()` llaman internamente a `eventEngine.emitDesdePlanWorkflow()` **solo para emitir** — no reemplazan las rutas operativas actuales.
 
-### Migración Fase 3+
+### Migración Fase 3+ (subscriptores → managers legacy)
 
 Los subscriptores por canal conectarán TimelineManager, HistorialManager, ObservacionManager y AuditoriaManager. Hasta entonces, el sistema operativo (Express + Vite + BD) **permanece igual**.
+
+## Proceso de Migración (Fase 3A.1 — preparación)
+
+Inventario completo: `docs/MIGRATION_INVENTORY_3A1.md`
+
+### Arquitectura de migración
+
+```
+Módulo (Registro, Evaluación, …)
+        │
+        ▼
+MigrationFacade            ← punto único futuro para módulos
+        │
+        ▼
+Workflow Adapter           ← RegistroWorkflowAdapter (3A.1)
+        │
+        ▼
+Workflow Engine            ← planes + permisos (Fase 1)
+        │
+        ▼
+Event Adapter              ← RegistroEventAdapter (3A.1)
+        │
+        ▼
+Event Engine               ← emit / dispatch (Fase 2)
+        │
+        ▼
+Managers Legacy            ← Timeline, Historial, Observaciones… (sin conectar aún)
+```
+
+### Componentes 3A.1
+
+| Artefacto | Ubicación | Rol |
+|-----------|-----------|-----|
+| `MigrationFacade` | `core/workflowEngine/MigrationFacade.js` | Orquesta adapter → engine → event → legacy |
+| `RegistroWorkflowAdapter` | `core/workflowEngine/adapters/` | Delega acciones Registro al Workflow Engine |
+| `RegistroEventAdapter` | `core/eventEngine/adapters/` | Emite eventos desde planes (sin Timeline/Historial) |
+| `WorkflowContracts` | `core/interfaces/WorkflowContracts.js` | `WorkflowAction`, `WorkflowPlan`, `WorkflowResult`, etc. |
+
+### Roadmap de migración
+
+```
+3A.1  Inventario + adapters + facade + contratos     ← actual (0 cambios funcionales)
+  ↓
+3A.2  Registro usa MigrationFacade (dual-write opcional)
+  ↓
+3A.3  Evaluación
+  ↓
+3B    Subscriptores Event Engine → Timeline / Historial
+  ↓
+3C    DEC, Programación, CM, Invitaciones, Portal
+```
+
+### Uso preparatorio (sin afectar rutas)
+
+```javascript
+import { crearCoreSGC } from './core/index.js';
+
+const core = crearCoreSGC();
+const facade = core.crearMigrationFacade();
+
+const row = { id: 42, codigo: 'REQ-001', estado: 'Registrado', estado_actual: 'REGISTRADO' };
+const result = facade.derivar(row, 'Evaluación de Requerimiento', { usuario: 'au' });
+// result.plan.persistir === false
+// result.evento.persistido === false
+// result.legacy === null (ejecutarLegacy: false)
+```
+
+**Restricción 3A.1:** ningún módulo operativo importa aún `MigrationFacade`. Rutas Express y pantallas siguen usando `registrarMovimiento()` directamente.
 
 ### AuditoriaManager
 
@@ -502,10 +577,10 @@ await core.timeline.registrarEvento({ expedienteId: '42', modulo: 'DEC', accion:
 
 ```powershell
 npm run check
-Get-ChildItem core/workflowEngine,core/eventEngine -Filter *.js | ForEach-Object { node --check $_.FullName }
-node --input-type=module -e "import { crearCoreSGC, EVENTOS_ENGINE } from './core/index.js'; const c = crearCoreSGC(); const ee = c.crearEventEngine(); const r = ee.emitSync(EVENTOS_ENGINE.REQUERIMIENTO_CREADO,{requerimientoId:1,codigoRequerimiento:'REQ-1',moduloOrigen:'Registro',usuario:'au'}); const wf = c.crearWorkflowEngine({id:1,estado:'En tramite de aprobación',estado_actual:'EVALUACION'},{moduloLabel:'Evaluación de Requerimiento'}); const p = wf.aprobar({usuario:'g'}); console.log('OK', r.evento, p.eventoEmitido, typeof c.crearEventEngine);"
+Get-ChildItem core/workflowEngine,core/eventEngine,core/interfaces -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
+node --input-type=module -e "import { crearCoreSGC } from './core/index.js'; const c = crearCoreSGC(); const f = c.crearMigrationFacade(); const r = f.derivar({id:1,codigo:'REQ-1',estado:'Registrado',estado_actual:'REGISTRADO'},'Evaluación de Requerimiento',{usuario:'au'}); console.log('OK', r.ok, r.plan.tipo, r.evento.evento, !!c.migrationFacade);"
 ```
 
 ## Próxima fase
 
-Migración module-by-module (Registro, DEC, Programación, etc.) usando `RequerimientoManager` como punto de entrada y adaptador PostgreSQL para el `store`.
+**3A.2** — Conectar Registro a `MigrationFacade` en paralelo con legacy (sin retirar `registrarMovimiento` todavía).
