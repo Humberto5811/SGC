@@ -127,8 +127,12 @@ export function getEstadoNegocioFromEtapa(etapaCode) {
 }
 
 export function resolveEstadoNegocioFromRow(row) {
-  const estado = String(row?.estado || '').trim();
   const etapaActual = String(row?.estado_actual || row?.estadoActual || '').toUpperCase();
+  if (etapaActual) {
+    const fromEtapa = getEstadoNegocioFromEtapa(etapaActual);
+    if (fromEtapa) return fromEtapa;
+  }
+  const estado = String(row?.estado || '').trim();
   if (etapaActual && /^observ/i.test(estado)) {
     const fromEtapa = getEstadoNegocioFromEtapa(etapaActual);
     if (fromEtapa) return fromEtapa;

@@ -312,8 +312,9 @@ async function handleObservacion(id) {
         origen_submodulo: data.origen_submodulo || 'Invitaciones',
       });
     },
-    onAdjuntos: (rid) => manageAdjuntos(rid, true),
+    onAdjuntos: (rid) => manageAdjuntos(rid, false),
     onReload: () => loadBandeja(),
+    bandejaPrefix: 'inv',
   });
 }
 

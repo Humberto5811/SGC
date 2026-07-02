@@ -68,7 +68,7 @@ async function loadDecList() {
     bindActionMenus(cont, {
       detail: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
-        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, false) });
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'DEC',
@@ -80,14 +80,15 @@ async function loadDecList() {
             origen_submodulo: data.origen_submodulo || 'DEC',
           });
         },
-        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onAdjuntos: (rid) => manageAdjuntos(rid, false),
         onReload: () => loadDecList(),
+        bandejaPrefix: 'dec',
         defaultDestinoObservacion: 'Registro de Requerimiento',
       }),
     });
-    bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
+    bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, false) });
     cont.querySelectorAll('.dec-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-    cont.querySelectorAll('.dec-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
+    cont.querySelectorAll('.dec-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, false));
     cont.querySelectorAll('.dec-aprobar').forEach((b) => b.onclick = () => aprobarDec(b.dataset.id));
     cont.querySelectorAll('.dec-observar').forEach((b) => b.onclick = () => observarDec(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));

@@ -80,8 +80,9 @@ async function loadEvaluacionList() {
             origen_submodulo: data.origen_submodulo || 'Evaluación de Requerimiento',
           });
         },
-        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onAdjuntos: (rid) => manageAdjuntos(rid, false),
         onReload: () => loadEvaluacionList(),
+        bandejaPrefix: 'eval',
         defaultDestinoObservacion: 'Registro de Requerimiento',
       }),
     });
@@ -94,7 +95,7 @@ async function loadEvaluacionList() {
     cont.querySelectorAll('.eval-edit').forEach((b) => b.onclick = () => editarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-attach').forEach((b) => b.onclick = () => {
-      manageAdjuntos(b.dataset.id, /aprobad/i.test(String(b.dataset.estado || '')));
+      manageAdjuntos(b.dataset.id, false);
     });
     cont.querySelectorAll('.eval-observar').forEach((b) => b.onclick = () => observarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-approve').forEach((b) => b.onclick = () => approveRequerimiento(b.dataset.id));

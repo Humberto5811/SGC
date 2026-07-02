@@ -13,7 +13,8 @@ import {
   estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
 } from '../../utils/trazabilidad.js';
 import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
-import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId } from '../../../shared/observacionesMotor.js';
+import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId, calcularRondaRaiz } from '../../../shared/observacionesMotor.js';
+import { renderAdjuntosPanel } from '../../utils/adjuntosModal.js';
 
 export const reqShared = { pendingOpenId: null, editingFromEvaluacion: false, onBackToEvaluacion: null };
 
@@ -162,7 +163,7 @@ export async function addObservacionCustom(req, motivo, origen, gerente, nuevoEs
   const payload = safeParse(req.payload);
   payload.observaciones = payload.observaciones || [];
   payload.observaciones.push({
-    ronda: payload.observaciones.length + 1,
+    ronda: calcularRondaRaiz(payload.observaciones || []),
     motivo,
     gerente: gerente || origen || 'sistema',
     origen: origen || 'GERENTE',
@@ -360,6 +361,7 @@ export function showSubsanacionDirigidaModal(opts = {}) {
   const id = 'modSubDir_' + Date.now();
   const hist = opts.historyHtml || '';
   const destHtml = buildDestinoSelectorsHtml(id, opts.defaultDestinoSubmodulo || 'Evaluación de Requerimiento');
+  const adjHtml = opts.requerimientoId ? `<div id="${id}_adjPanel"></div>` : '';
   const html = `
     <div class="modal fade" id="${id}" tabindex="-1">
       <div class="modal-dialog modal-lg">
@@ -370,6 +372,7 @@ export function showSubsanacionDirigidaModal(opts = {}) {
           </div>
           <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
             ${hist}
+            ${adjHtml}
             ${destHtml}
             <label class="form-label">${esc(opts.label || 'Subsanación realizada')}</label>
             <textarea id="${id}_txt" class="form-control" rows="4" placeholder="${esc(opts.placeholder || 'Describa la subsanación…')}"></textarea>
@@ -387,6 +390,11 @@ export function showSubsanacionDirigidaModal(opts = {}) {
   const el = document.getElementById(id);
   const modal = new bootstrap.Modal(el);
   const readDestino = wireDestinoSelectors(id);
+  if (opts.requerimientoId) {
+    const panel = document.getElementById(`${id}_adjPanel`);
+    if (panel) panel.id = `${id}_adjPanel`;
+    renderAdjuntosPanel(`${id}_adjPanel`, opts.requerimientoId, { readOnly: false });
+  }
   return new Promise((resolve) => {
     let resolved = false;
     document.getElementById(`${id}_ok`).onclick = () => {

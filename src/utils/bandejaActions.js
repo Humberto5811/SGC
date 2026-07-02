@@ -4,8 +4,10 @@ import {
   observacionPendienteParaSubmodulo,
   labelBotonObservaciones,
   hayObservacionPendienteAccion,
-  requiereIndicadorObservado,
+  requiereBadgeModulo,
 } from './observacionDestino.js';
+
+const MODULO_EVAL = 'Evaluación de Requerimiento';
 
 export function registroMenuItems(r) {
   const e = String(r.estado || '');
@@ -45,13 +47,16 @@ export function registroHiddenActions(r, esc) {
 
 export function evalMenuItems(r) {
   const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
-  const tieneObsAbiertas = requiereIndicadorObservado(r);
   const aprobado = /aprobad/i.test(String(r.estado || ''));
   const obsLabel = labelBotonObservaciones(r, 'Evaluación de Requerimiento');
+  const motorObs = hayObservacionPendienteAccion(r, MODULO_EVAL)
+    || requiereBadgeModulo(r, MODULO_EVAL)
+    || enTramite
+    || aprobado;
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
-    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !(enTramite || tieneObsAbiertas || aprobado || hayObservacionPendienteAccion(r, 'Evaluación de Requerimiento')) },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !motorObs },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: aprobado || !enTramite },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
@@ -62,14 +67,15 @@ export function evalMenuItems(r) {
 
 export function evalHiddenActions(r, esc) {
   const enTramite = /tr[aá]mite/i.test(String(r.estado || ''));
-  const observado = /observ/i.test(String(r.estado || ''));
   const aprobado = /aprobad/i.test(String(r.estado || ''));
+  const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Evaluación de Requerimiento');
   return `
     <button type="button" class="eval-edit" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
     <button type="button" class="eval-print" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="eval-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}"></button>
     <button type="button" class="eval-obs-menu" data-act-trigger="obs" data-id="${r.id}"></button>
-    <button type="button" class="eval-observar" data-act-trigger="obs" data-id="${r.id}" ${(enTramite || observado || aprobado) ? '' : 'disabled'}></button>
+    ${pendienteSubsanar ? `<button type="button" class="eval-observado" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
+    <button type="button" class="eval-observar" data-act-trigger="obs" data-id="${r.id}" ${(enTramite || aprobado || pendienteSubsanar || requiereBadgeModulo(r, MODULO_EVAL)) ? '' : 'disabled'}></button>
     <button type="button" class="eval-approve" data-act-trigger="approve" data-id="${r.id}" ${aprobado || !enTramite ? 'disabled' : ''}></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
     <button type="button" class="eval-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>`;
@@ -138,7 +144,6 @@ export function progHiddenActions(r) {
 
 export function actosMenuItems(r, opts = {}) {
   const { esCoordinador = false, esAsignadoAMi = false, esPoolCoordinador = false } = opts;
-  const esObservado = /observ/i.test(String(r.estado || ''));
   const pending = getObservacionPendiente(r);
   const pendActos = observacionPendienteParaSubmodulo(pending, 'Coordinación CM');
   const obsLabel = labelBotonObservaciones(r, 'Coordinación CM');

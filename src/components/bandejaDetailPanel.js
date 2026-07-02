@@ -126,6 +126,7 @@ export async function openDetailPanel(req, opts = {}) {
   panelEl._req = req;
   panelEl._activeTab = opts.tab || 'info';
   panelEl._onAdjuntos = opts.onAdjuntos;
+  panelEl._moduloLabel = opts.moduloLabel || null;
   panelEl.querySelector('#sgcPanelTitle').textContent = req.codigo || `REQ #${req.id}`;
   panelEl.querySelectorAll('#sgcPanelTabs .nav-link').forEach((t) => {
     t.classList.toggle('active', t.dataset.tab === panelEl._activeTab);
@@ -166,7 +167,7 @@ async function renderPanelTab(req, tab) {
         <table class="table table-sm table-borderless mb-0">
           <tr><td class="text-muted" style="width:42%;">Código SIGAMEF</td><td>${esc(getSigamefRaw(row) || '—')}</td></tr>
           <tr><td class="text-muted">Nombre del ítem</td><td>${esc(nombreItem || '—')}</td></tr>
-          <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row.estadoActual || row.estado_actual, row.estadoActualTexto || row.sub_modulo_actual, row.estado, row)}</td></tr>
+          <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row.estadoActual || row.estado_actual, row.estadoActualTexto || row.sub_modulo_actual, row.estado, row, panelEl._moduloLabel)}</td></tr>
           <tr><td class="text-muted">Responsable</td><td>${esc(row.responsableActual || row.responsable_actual)}<br/><small class="text-muted">${esc(getResponsableRol(row))}</small></td></tr>
           <tr><td class="text-muted">Días en etapa</td><td>${diasBadgeHtml(row)}</td></tr>
           <tr><td class="text-muted">Área usuaria</td><td>${esc(row.area || '—')}</td></tr>

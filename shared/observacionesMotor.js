@@ -48,6 +48,21 @@ export function getModuloReceptor(o) {
   return normalizeModuloKey(o?.destino_submodulo || o?.moduloDestino || o?.moduloReceptor);
 }
 
+/** Normaliza variantes legacy de estado (sin tildes, alias). */
+export function canonEstadoObservacion(estado) {
+  const plain = String(estado || '').trim().toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (!plain) return estado;
+  if (plain === 'EMITIDA') return ESTADOS_OBS.EMITIDA;
+  if (plain === 'RECIBIDA') return ESTADOS_OBS.RECIBIDA;
+  if (plain === 'EN ATENCION') return ESTADOS_OBS.EN_ATENCION;
+  if (plain === 'SUBSANADA') return ESTADOS_OBS.SUBSANADA;
+  if (plain === 'RECIBIDA POR EL EMISOR' || plain === 'RECIBIDA POR EMISOR') return ESTADOS_OBS.RECIBIDA_EMISOR;
+  if (plain === 'REVISADA') return ESTADOS_OBS.REVISADA;
+  if (plain === 'CERRADA') return ESTADOS_OBS.CERRADA;
+  return String(estado || '').trim();
+}
+
 export function migrateObservacion(o) {
   if (!o || typeof o !== 'object') return o;
   if (!Array.isArray(o.actuaciones)) o.actuaciones = [];
@@ -58,6 +73,8 @@ export function migrateObservacion(o) {
   if (!o.estado) {
     if (o.subsanacion || o.respuesta) o.estado = ESTADOS_OBS.SUBSANADA;
     else o.estado = ESTADOS_OBS.EMITIDA;
+  } else {
+    o.estado = canonEstadoObservacion(o.estado);
   }
   if (o.estado === ESTADOS_OBS.CERRADA) o.cerrada = true;
   if (!o.moduloEmisor) o.moduloEmisor = o.origen_submodulo || o.moduloOrigen || '';
@@ -88,14 +105,51 @@ export function tieneDescendientesAbiertos(hilos, parentId) {
   });
 }
 
+/** Bloquea subsanación del padre solo si algún hijo aún espera respuesta de su receptor. */
+export function tieneDescendientesPendientesReceptor(hilos, parentId) {
+  return getHijosDirectos(hilos, parentId).some((h) => {
+    if (receptorDebeActuar(h)) return true;
+    return tieneDescendientesPendientesReceptor(hilos, h.id);
+  });
+}
+
+export function bloqueaSubsanacionPorHijos(hilos, observacionId) {
+  return tieneDescendientesPendientesReceptor(hilos, observacionId);
+}
+
+/** Índice de raíz (1-based) — contador principal independiente de hijos. */
+export function getIndiceRaiz(hilos, o) {
+  const raices = getRaicesObservaciones(hilos);
+  const idx = raices.findIndex((r) => String(r.id) === String(o.id));
+  if (idx >= 0) return idx + 1;
+  let actual = o;
+  let padreId = getObservacionPadreId(actual);
+  while (padreId) {
+    const padre = hilos.find((h) => String(h.id) === String(padreId));
+    if (!padre) break;
+    const pIdx = raices.findIndex((r) => String(r.id) === String(padre.id));
+    if (pIdx >= 0) return pIdx + 1;
+    actual = padre;
+    padreId = getObservacionPadreId(actual);
+  }
+  return null;
+}
+
+/** Siguiente número de raíz (padres: 1, 2, 3…). */
+export function calcularRondaRaiz(hilos) {
+  return getRaicesObservaciones(hilos).length + 1;
+}
+
 export function formatEtiquetaJerarquica(o, hilos, idx = 0) {
   const padreId = getObservacionPadreId(o);
-  if (!padreId) return String(o.ronda || idx + 1);
+  if (!padreId) {
+    const raizIdx = getIndiceRaiz(hilos, o);
+    return String(raizIdx != null ? raizIdx : (o.ronda || idx + 1));
+  }
   const padre = hilos.find((h) => String(h.id) === String(padreId));
+  const baseShort = getIndiceRaiz(hilos, padre || o) || padre?.ronda || '?';
   const hermanos = getHijosDirectos(hilos, padreId);
   const pos = Math.max(1, hermanos.findIndex((h) => String(h.id) === String(o.id)) + 1);
-  const base = padre ? String(padre.ronda || padre.id).replace(/^obs_/, '') : padreId;
-  const baseShort = padre?.ronda || (padre ? hilos.indexOf(padre) + 1 : '?');
   return `${baseShort}.${pos}`;
 }
 
@@ -166,7 +220,7 @@ export function emisorDebeRevisar(o) {
   return [ESTADOS_OBS.SUBSANADA, ESTADOS_OBS.RECIBIDA_EMISOR, ESTADOS_OBS.REVISADA].includes(m.estado);
 }
 
-/** ¿Existe hilo abierto donde el módulo actual es receptor y puede subsanar (sin hijas abiertas)? */
+/** ¿Existe hilo abierto donde el módulo actual es receptor y puede subsanar (sin hijas pendientes de receptor)? */
 export function puedeSubsanar(moduloActual, input) {
   const mod = normalizeModuloKey(moduloActual);
   if (!mod) return false;
@@ -174,7 +228,7 @@ export function puedeSubsanar(moduloActual, input) {
   return getObservacionesAbiertas(input).some((o) => {
     if (getModuloReceptor(o) !== mod) return false;
     if (!receptorDebeActuar(o)) return false;
-    if (tieneDescendientesAbiertos(hilos, o.id)) return false;
+    if (bloqueaSubsanacionPorHijos(hilos, o.id)) return false;
     return true;
   });
 }
@@ -222,7 +276,7 @@ export function getObservacionPendienteParaModulo(input, submoduloLabel) {
     const o = abiertas[i];
     if (getModuloReceptor(o) !== mod) continue;
     if (!receptorDebeActuar(o)) continue;
-    if (tieneDescendientesAbiertos(hilos, o.id)) continue;
+    if (bloqueaSubsanacionPorHijos(hilos, o.id)) continue;
     return o;
   }
   return null;
@@ -256,6 +310,49 @@ export function getObservacionEmisorPendienteCierre(input, submoduloLabel) {
   return null;
 }
 
+/** Pendientes de acción para un módulo (receptor debe subsanar o emisor debe cerrar). */
+export function getPendientesModulo(input, submoduloLabel) {
+  const mod = normalizeModuloKey(submoduloLabel);
+  if (!mod) return [];
+  const hilos = getListaObservaciones(input);
+  const out = [];
+  getObservacionesAbiertas(input).forEach((o) => {
+    if (getModuloReceptor(o) === mod && receptorDebeActuar(o) && !bloqueaSubsanacionPorHijos(hilos, o.id)) {
+      out.push({ ...o, rol: 'receptor' });
+    } else if (getModuloEmisor(o) === mod && emisorDebeRevisar(o) && !tieneDescendientesAbiertos(hilos, o.id)) {
+      out.push({ ...o, rol: 'emisor' });
+    }
+  });
+  return out;
+}
+
+export function countPendientesModulo(input, submoduloLabel) {
+  return getPendientesModulo(input, submoduloLabel).length;
+}
+
+/** Observación abierta dirigida al módulo (receptor sin subsanación aún). */
+export function tieneObservacionAbiertaDirigidaModulo(input, submoduloLabel) {
+  const mod = normalizeModuloKey(submoduloLabel);
+  if (!mod) return false;
+  const hilos = getListaObservaciones(input);
+  return getObservacionesAbiertas(input).some((o) => {
+    if (getModuloReceptor(o) !== mod) return false;
+    if (o.subsanacion || o.respuesta) return false;
+    if (bloqueaSubsanacionPorHijos(hilos, o.id)) return false;
+    return true;
+  });
+}
+
+/** Badge rojo: pendiente de acción O observación abierta dirigida al módulo. */
+export function requiereBadgeModulo(input, submoduloLabel) {
+  if (countPendientesModulo(input, submoduloLabel) > 0) return true;
+  return tieneObservacionAbiertaDirigidaModulo(input, submoduloLabel);
+}
+
+export function puedeCerrarObservacion(moduloActual, input) {
+  return !!getObservacionEmisorPendienteCierre(input, moduloActual);
+}
+
 function ultimoMovimientoDeHilos(hilos) {
   if (!hilos.length) return null;
   let best = null;
@@ -287,7 +384,11 @@ export function obtenerEstadoObservaciones(input, moduloActual = null) {
   const modKey = moduloActual ? normalizeModuloKey(moduloActual) : null;
   const puedeSubsanarMod = modKey ? puedeSubsanar(moduloActual, input) : false;
   const puedeHijaMod = modKey ? puedeEmitirObservacionHija(moduloActual, input) : false;
+  const puedeCerrarMod = modKey ? puedeCerrarObservacion(moduloActual, input) : false;
   const padreDelegacion = modKey ? getObservacionPadreParaDelegacion(moduloActual, input) : null;
+  const pendienteModulo = modKey ? getObservacionPendienteParaModulo(input, moduloActual) : null;
+  const cierreModulo = modKey ? getObservacionEmisorPendienteCierre(input, moduloActual) : null;
+  const pendientesModulo = modKey ? getPendientesModulo(input, moduloActual) : [];
   const labelBoton = modKey ? labelBotonObservaciones(input, moduloActual) : 'Observaciones';
   const arbol = buildArbolObservaciones(hilos);
 
@@ -297,9 +398,13 @@ export function obtenerEstadoObservaciones(input, moduloActual = null) {
     abiertas,
     cerradas,
     pendientes,
-    requiereBadge: abiertas.length > 0,
-    requiereBadgeObservado: abiertas.length > 0,
+    pendientesModulo,
+    pendienteModulo,
+    cierreModulo,
+    requiereBadge: modKey ? requiereBadgeModulo(input, moduloActual) : abiertas.length > 0,
+    requiereBadgeObservado: modKey ? requiereBadgeModulo(input, moduloActual) : abiertas.length > 0,
     puedeSubsanar: puedeSubsanarMod,
+    puedeCerrar: puedeCerrarMod,
     puedeEmitirHija: puedeHijaMod,
     observacionPadreDelegacion: padreDelegacion,
     labelBoton,
@@ -308,6 +413,7 @@ export function obtenerEstadoObservaciones(input, moduloActual = null) {
     abiertasCount: abiertas.length,
     cerradasCount: cerradas.length,
     pendientesCount: pendientes.length,
+    pendientesModuloCount: pendientesModulo.length,
   };
 }
 
@@ -320,6 +426,60 @@ export function countObservacionesAbiertas(input) {
   return getObservacionesAbiertas(input).length;
 }
 
+export const ETAPA_WORKFLOW_TEXTO = Object.freeze({
+  REGISTRADO: 'Registro de Requerimiento',
+  EVALUACION: 'Evaluación de Requerimiento',
+  DEC: 'DEC',
+  PROGRAMACION: 'Programación',
+  ACTOS_PREPARATORIOS: 'Coordinación CM',
+  INVITACIONES: 'Invitaciones',
+  RECEPCION_COTIZACIONES: 'Recepción de Cotizaciones',
+  VALIDACION_USUARIO: 'Validación Usuario',
+  CUADRO_COMPARATIVO: 'Cuadro Comparativo',
+  CCP: 'CCP',
+  EJECUCION: 'Ejecución Contractual',
+  FINALIZADO: 'Finalizado',
+});
+
+function resolverTextoWorkflow(row) {
+  const etapa = String(row?.estado_actual || row?.estadoActual || 'REGISTRADO').toUpperCase();
+  const subModulo = String(row?.sub_modulo_actual || row?.subModuloActual || row?.estado_actual_texto || '').trim();
+  if (subModulo && !/observ/i.test(subModulo)) return subModulo;
+  return ETAPA_WORKFLOW_TEXTO[etapa] || subModulo || etapa;
+}
+
+/**
+ * Fuente única del estado visual — todas las bandejas deben usar esta función.
+ * Nunca deriva el workflow del texto "Observado" ni del historial/timeline.
+ */
+export function obtenerEstadoVisual(input, moduloActual = null) {
+  const row = input && typeof input === 'object' ? input : { payload: input };
+  const motor = obtenerEstadoObservaciones(row, moduloActual);
+  const etapaWorkflow = String(row?.estado_actual || row?.estadoActual || 'REGISTRADO').toUpperCase();
+  const estadoWorkflowTexto = resolverTextoWorkflow(row);
+  return {
+    motor,
+    etapaWorkflow,
+    estadoWorkflow: etapaWorkflow,
+    estadoWorkflowTexto,
+    badgeObservado: motor.requiereBadge,
+    puedeSubsanar: motor.puedeSubsanar,
+    puedeCerrar: motor.puedeCerrar,
+    puedeEmitirHija: motor.puedeEmitirHija,
+    labelBoton: motor.labelBoton,
+    pendientesCount: motor.pendientesModuloCount,
+    pendienteModulo: motor.pendienteModulo,
+    cierreModulo: motor.cierreModulo,
+  };
+}
+
+/** Regenera snapshot motor + visual tras cualquier actuación. */
+export function regenerarSnapshotObservaciones(row, moduloActual = null) {
+  const motor = obtenerEstadoObservaciones(row, moduloActual);
+  const visual = obtenerEstadoVisual({ ...row, payload: row?.payload }, moduloActual);
+  return { ...row, obsMotor: motor, obsVisual: visual };
+}
+
 /** @deprecated Usar obtenerEstadoObservaciones */
 export function computeMotorSnapshot(input, moduloActual = null) {
   return obtenerEstadoObservaciones(input, moduloActual);
@@ -328,13 +488,24 @@ export function computeMotorSnapshot(input, moduloActual = null) {
 export default {
   ESTADOS_OBS,
   ESTADOS_ABIERTOS,
+  ETAPA_WORKFLOW_TEXTO,
   obtenerEstadoObservaciones,
+  obtenerEstadoVisual,
+  regenerarSnapshotObservaciones,
+  calcularRondaRaiz,
+  getIndiceRaiz,
+  tieneObservacionAbiertaDirigidaModulo,
   puedeSubsanar,
   puedeEmitirObservacionHija,
   getObservacionPadreParaDelegacion,
   buildArbolObservaciones,
   getObservacionPadreId,
   tieneDescendientesAbiertos,
+  bloqueaSubsanacionPorHijos,
+  getPendientesModulo,
+  countPendientesModulo,
+  requiereBadgeModulo,
+  puedeCerrarObservacion,
   normalizeModuloKey,
   getModuloEmisor,
   getModuloReceptor,

@@ -157,7 +157,7 @@ async function loadActosList() {
     bindActionMenus(cont, {
       detail: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
-        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, false) });
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'Coordinación CM',
@@ -179,15 +179,16 @@ async function loadActosList() {
             destino_persona: data.destino_persona,
           });
         },
-        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onAdjuntos: (rid) => manageAdjuntos(rid, false),
         onReload: () => loadActosList(),
+        bandejaPrefix: 'actos',
       }),
       deriveAnalyst: (id) => derivarAnalistaActos(id),
     });
-    bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
+    bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, false) });
 
     cont.querySelectorAll('.actos-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-    cont.querySelectorAll('.actos-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
+    cont.querySelectorAll('.actos-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, false));
     cont.querySelectorAll('.actos-asignar').forEach((b) => b.onclick = () => asignarActos(b.dataset.id));
     cont.querySelectorAll('.actos-derivar-analista').forEach((b) => b.onclick = () => derivarAnalistaActos(b.dataset.id));
     cont.querySelectorAll('.actos-observar').forEach((b) => b.onclick = () => observarActos(b.dataset.id));
@@ -244,6 +245,7 @@ async function observarActos(id) {
       placeholder: 'Describa la subsanación o respuesta…',
       buttonText: 'Responder observación',
       buttonClass: 'btn-primary',
+      requerimientoId: req.id,
     });
     if (!data) return;
     try {

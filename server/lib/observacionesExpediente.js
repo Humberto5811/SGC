@@ -1,5 +1,6 @@
 // Observaciones bidireccionales — estructura canónica y helpers (servidor)
 import { emitirObservacion as emitirObservacionWorkflow } from './observacionesWorkflow.js';
+import { calcularRondaRaiz } from '../../shared/observacionesMotor.js';
 
 export {
   ESTADOS_OBS,
@@ -77,10 +78,10 @@ export function getObservacionOrigenLabel(entry) {
 
 export function buildObservacionEntry(payload, fields = {}) {
   const list = Array.isArray(payload.observaciones) ? payload.observaciones : [];
-  const ronda = list.length + 1;
-  const id = fields.id || `obs_${Date.now()}_${ronda}`;
-  const motivo = String(fields.motivo || fields.observacion || '').trim();
   const padreId = fields.observacion_padre_id || fields.observacionPadreId || null;
+  const ronda = padreId ? null : calcularRondaRaiz(list);
+  const id = fields.id || `obs_${Date.now()}_${padreId ? 'h' : ronda}`;
+  const motivo = String(fields.motivo || fields.observacion || '').trim();
   return {
     id,
     observacionId: id,

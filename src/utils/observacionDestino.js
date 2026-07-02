@@ -12,6 +12,8 @@ export {
   observacionPendienteParaSubmodulo,
   emisorDebeRevisar as emisorDebeRevisarCliente,
   obtenerEstadoObservaciones,
+  obtenerEstadoVisual,
+  regenerarSnapshotObservaciones,
   computeMotorSnapshot,
   requiereIndicadorObservado,
   countObservacionesAbiertas,
@@ -22,6 +24,14 @@ export {
   buildArbolObservaciones,
   getObservacionPadreId,
   tieneDescendientesAbiertos,
+  bloqueaSubsanacionPorHijos,
+  getPendientesModulo,
+  countPendientesModulo,
+  requiereBadgeModulo,
+  puedeCerrarObservacion,
+  formatEtiquetaJerarquica,
+  calcularRondaRaiz,
+  getIndiceRaiz,
 } from '../../shared/observacionesMotor.js';
 
 export const SUBMODULO_DISPLAY_LABELS = {

@@ -22,7 +22,7 @@ import { glosasBienesService } from '../../services/glosasBienesService.js';
 import { glosasServiciosService } from '../../services/glosasServiciosService.js';
 import { glosasLocadoresService } from '../../services/glosasLocadoresService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
-import { adjuntosService } from '../../services/adjuntosService.js';
+import { openAdjuntosModal, syncAdjuntosCount } from '../../utils/adjuntosModal.js';
 import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
 import { MODELO_SERVICIOS } from '../glosasRequerimientos/formatoServiciosModelo.js';
 import { MODELO_LOCADORES } from '../glosasRequerimientos/formatoLocadoresModelo.js';
@@ -236,33 +236,29 @@ function accionesObservacionAprobacionHtml(r) {
   return `${alerta}${iconoObs}${btnEstado}`;
 }
 
-// Diálogo de subsanación: muestra la observación del gerente y solicita la respuesta.
+// Diálogo legacy — redirige al modal unificado de observaciones.
 async function abrirSubsanacion(id) {
-  const req = (lastListRows || []).find((x) => String(x.id) === String(id));
-  if (!req) return;
-  const allObs = todasObservaciones(req);
-  const data = await showSubsanacionDirigidaModal({
-    title: 'Subsanar observación',
-    historyHtml: historialHtml(allObs),
-    origenSubmodulo: 'Registro de Requerimiento',
-    defaultDestinoSubmodulo: 'Evaluación de Requerimiento',
-    placeholder: 'Describa la subsanación realizada…',
-    buttonText: 'Solicitar aprobación',
-    buttonClass: 'btn-primary',
+  await handleBandejaObservaciones(id, lastListRows, {
+    submoduloLabel: 'Registro de Requerimiento',
+    puedeObservar: (r) => !/aprobad/i.test(String(r.estado || '')) && !/tr[aá]mite/i.test(String(r.estado || '')),
+    onSubsanar: async (reqId, data) => {
+      const req = lastListRows.find((x) => String(x.id) === String(reqId));
+      if (!req) return;
+      await addSubsanacion(req, data.texto, data.usuario, {
+        observacion_id: data.observacion_id,
+        destino_submodulo: data.destino_submodulo,
+        destino_etapa: data.destino_etapa,
+        destino_persona: data.destino_persona,
+        origen_submodulo: data.origen_submodulo,
+      });
+    },
+    onAdjuntos: (rid) => {
+      const req = lastListRows.find((x) => String(x.id) === String(rid));
+      openAdjuntosModal(rid, req && /aprobad/i.test(String(req.estado || '')));
+    },
+    onReload: () => loadList(),
+    bandejaPrefix: 'req',
   });
-  if (!data) return;
-  try {
-    const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    await addSubsanacion(req, data.texto, getUserDisplayName(user), {
-      destino_submodulo: data.destino_submodulo,
-      destino_etapa: data.destino_etapa,
-      destino_persona: data.destino_persona,
-      origen_submodulo: data.origen_submodulo,
-    });
-    loadList();
-  } catch (e) {
-    alert('Error al enviar la subsanación: ' + e.message);
-  }
 }
 
 // Ver historial de observaciones en modo solo lectura (para requerimientos aprobados).
@@ -332,9 +328,10 @@ async function loadList() {
         },
         onAdjuntos: (rid) => {
           const req = rows.find((x) => String(x.id) === String(rid));
-          manageAdjuntos(rid, req && /aprobad/i.test(String(req.estado || '')));
+          openAdjuntosModal(rid, req && /aprobad/i.test(String(req.estado || '')));
         },
         onReload: () => loadList(),
+        bandejaPrefix: 'req',
       }),
       approve: (id) => solicitarAprobacion(id),
     });
@@ -2549,159 +2546,11 @@ function openPrintWindow(s) {
 }
 
 // =========================================================================
-// GESTIÓN DE ADJUNTOS Y APROBACIÓN
+// GESTIÓN DE ADJUNTOS — delegado a adjuntosModal.js (implementación única)
 // =========================================================================
-async function manageAdjuntos(requerimientoId, readOnly) {
-  try {
-    const adjuntos = await adjuntosService.getAdjuntos(requerimientoId);
-    const adjuntosData = (adjuntos && adjuntos.adjuntos) || [];
-    
-    const uploadSection = readOnly ? '' : `
-              <div class="mb-3">
-                <label class="form-label">Seleccionar archivo para cargar</label>
-                <input id="inputAdjunto_${requerimientoId}" type="file" class="form-control" />
-              </div>
-              <button id="btnSubir_${requerimientoId}" class="btn btn-sm btn-success mb-3"><i class="bi bi-cloud-upload"></i> Subir archivo</button>`;
-    
-    const html = `
-      <div class="modal fade" id="modAdjuntos_${requerimientoId}" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-          <div class="modal-content">
-            <div class="modal-header">
-              <h5 class="modal-title"><i class="bi bi-paperclip"></i> ${readOnly ? 'Ver Adjuntos' : 'Gestionar Adjuntos'}</h5>
-              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-              ${uploadSection}
-              <div id="listAdjuntos_${requerimientoId}">
-                ${adjuntosData.length === 0 ? '<div class="text-muted">Sin adjuntos registrados.</div>' : ''}
-              </div>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-            </div>
-          </div>
-        </div>
-      </div>`;
-
-    let container = document.getElementById(`modAdjuntos_${requerimientoId}`);
-    if (container) {
-      container.remove();
-    }
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    container.innerHTML = html;
-
-    // Renderizar lista de adjuntos (pasar readOnly para ocultar botones de eliminar)
-    renderListaAdjuntos(requerimientoId, adjuntosData, readOnly);
-
-    // Evento de subida (solo si no es modo solo lectura)
-    if (!readOnly) {
-      const btnSubir = document.getElementById(`btnSubir_${requerimientoId}`);
-      if (btnSubir) {
-        btnSubir.onclick = async () => {
-          const input = document.getElementById(`inputAdjunto_${requerimientoId}`);
-          if (!input || !input.files || !input.files[0]) {
-            alert('Selecciona un archivo');
-            return;
-          }
-          try {
-            btnSubir.disabled = true;
-            btnSubir.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Subiendo…';
-            await adjuntosService.uploadAdjunto(requerimientoId, input.files[0]);
-            input.value = '';
-            btnSubir.disabled = false;
-            btnSubir.innerHTML = '<i class="bi bi-cloud-upload"></i> Subir archivo';
-            // Recargar lista y actualizar contador
-            const adjuntos2 = await adjuntosService.getAdjuntos(requerimientoId);
-            renderListaAdjuntos(requerimientoId, adjuntos2.adjuntos || []);
-            cargarContadorAdjuntos(requerimientoId);
-          } catch (err) {
-            alert('Error al subir: ' + err.message);
-            btnSubir.disabled = false;
-            btnSubir.innerHTML = '<i class="bi bi-cloud-upload"></i> Subir archivo';
-          }
-        };
-      }
-    }
-
-    // Mostrar modal con ID único
-    const modal = new bootstrap.Modal(document.getElementById(`modAdjuntos_${requerimientoId}`));
-    modal.show();
-    
-    // Limpiar modal al cerrarlo
-    document.getElementById(`modAdjuntos_${requerimientoId}`).addEventListener('hidden.bs.modal', function() {
-      this.remove();
-    }, { once: true });
-  } catch (err) {
-    alert('Error al cargar adjuntos: ' + err.message);
-  }
-}
-
-function renderListaAdjuntos(requerimientoId, adjuntos, readOnly) {
-  const cont = document.getElementById(`listAdjuntos_${requerimientoId}`);
-  if (!cont) return;
-
-  if (!adjuntos || adjuntos.length === 0) {
-    cont.innerHTML = '<div class="text-muted">Sin adjuntos registrados.</div>';
-    return;
-  }
-
-  const rows = adjuntos.map((a) => {
-    const deleteBtn = readOnly ? '' : `<button class="btn btn-sm btn-outline-danger adj-del" data-id="${a.id}" data-reqid="${requerimientoId}" title="Eliminar"><i class="bi bi-trash"></i></button>`;
-    return `
-    <div class="d-flex justify-content-between align-items-center p-2 border rounded mb-2">
-      <div class="flex-grow-1">
-        <span class="small fw-bold">${esc(a.nombre_archivo || '')}</span>
-        <div class="text-muted small">${a.tamaño_bytes ? (a.tamaño_bytes / 1024).toFixed(1) + ' KB' : ''}</div>
-      </div>
-      <div>
-        <button class="btn btn-sm btn-outline-secondary adj-open" data-id="${a.id}" data-name="${esc(a.nombre_archivo)}" title="Abrir/Descargar"><i class="bi bi-download"></i></button>
-        ${deleteBtn}
-      </div>
-    </div>`;
-  }).join('');
-
-  cont.innerHTML = `<div class="border-top pt-2">${rows}</div>`;
-
-  cont.querySelectorAll('.adj-open').forEach((b) => {
-    b.onclick = async () => {
-      try {
-        await adjuntosService.descargarAdjunto(b.dataset.id, b.dataset.name);
-      } catch (err) {
-        alert('Error al descargar: ' + err.message);
-      }
-    };
-  });
-
-  if (!readOnly) {
-    cont.querySelectorAll('.adj-del').forEach((b) => {
-      b.onclick = async () => {
-        if (!confirm('¿Eliminar este adjunto?')) return;
-        try {
-          await adjuntosService.eliminarAdjunto(b.dataset.id);
-          const adjuntos2 = await adjuntosService.getAdjuntos(requerimientoId);
-          renderListaAdjuntos(requerimientoId, adjuntos2.adjuntos || [], false);
-          cargarContadorAdjuntos(requerimientoId);
-        } catch (err) {
-          alert('Error al eliminar: ' + err.message);
-        }
-      };
-    });
-  }
-}
-
-// Cargar y actualizar el contador de adjuntos en el botón
+const manageAdjuntos = openAdjuntosModal;
 async function cargarContadorAdjuntos(requerimientoId) {
-  try {
-    const adjuntos = await adjuntosService.getAdjuntos(requerimientoId);
-    const count = (adjuntos && adjuntos.adjuntos && adjuntos.adjuntos.length) || 0;
-    const badge = document.querySelector(`.adjunto-count-${requerimientoId}`);
-    if (badge) badge.textContent = count;
-    updateBandejaAdjCount(requerimientoId, count);
-  } catch (err) {
-    console.error('Error cargando contador de adjuntos:', err);
-  }
+  return syncAdjuntosCount(requerimientoId);
 }
 
 async function solicitarAprobacion(requerimientoId) {

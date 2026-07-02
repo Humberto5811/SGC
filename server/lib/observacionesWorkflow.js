@@ -25,6 +25,7 @@ import {
   migrateObservacion,
   computeMotorSnapshot,
   tieneDescendientesAbiertos,
+  bloqueaSubsanacionPorHijos,
 } from '../../shared/observacionesMotor.js';
 
 export {
@@ -229,8 +230,8 @@ export function registrarSubsanacionObservacion(payload, {
     throw new Error('La observación indicada no está pendiente de subsanación en este módulo');
   }
   const hilos = getListaObservaciones(payload);
-  if (tieneDescendientesAbiertos(hilos, obs.id)) {
-    throw new Error('Debe resolver las subobservaciones abiertas antes de subsanar');
+  if (bloqueaSubsanacionPorHijos(hilos, obs.id)) {
+    throw new Error('Debe resolver las subobservaciones pendientes de subsanación antes de subsanar');
   }
 
   const texto = String(respuesta || '').trim();

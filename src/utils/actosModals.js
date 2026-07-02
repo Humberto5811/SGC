@@ -410,6 +410,7 @@ export function renderActosRowCells(r, opts = {}) {
     r.estadoActualTexto || r.estado_actual_texto,
     r.estado,
     r,
+    'Coordinación CM',
   );
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '—';
   const scCode = r.codigo_solicitud || r.codigoSolicitud || '';

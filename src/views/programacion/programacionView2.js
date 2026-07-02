@@ -129,6 +129,7 @@ function renderProgramacionRowCells(r, opts = {}) {
     r.estadoActualTexto || r.estado_actual_texto,
     r.estado,
     r,
+    'Programación',
   );
   const nombreItem = descripcionesBien || r.denominacion || '—';
 
@@ -201,7 +202,7 @@ async function loadBandeja() {
     bindActionMenus(cont, {
       detail: (id) => {
         const req = allRows.find((x) => String(x.id) === String(id));
-        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, false) });
       },
       obs: (id) => handleBandejaObservaciones(id, allRows, {
         submoduloLabel: 'Programación',
@@ -226,11 +227,12 @@ async function loadBandeja() {
             destino_persona: data.destino_persona,
           });
         },
-        onAdjuntos: (rid) => manageAdjuntos(rid, true),
+        onAdjuntos: (rid) => manageAdjuntos(rid, false),
         onReload: () => loadBandeja(),
+        bandejaPrefix: 'prog',
       }),
     });
-    bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
+    bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, false) });
     updateConsolidarBtn();
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
@@ -264,7 +266,7 @@ function bindBandejaEvents(cont) {
 
   cont.querySelectorAll('.prog-add-pedido').forEach((b) => b.onclick = () => openAsociarPedidosModal(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-  cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
+  cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, false));
   cont.querySelectorAll('.prog-aprobar').forEach((b) => b.onclick = () => aprobarProgramacion(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-observar').forEach((b) => b.onclick = () => observarProgramacion(Number(b.dataset.id)));
   allRows.forEach((r) => cargarContadorAdjuntos(r.id));
@@ -314,6 +316,7 @@ async function observarProgramacion(id) {
       placeholder: 'Describa la subsanación o respuesta…',
       buttonText: 'Responder observación',
       buttonClass: 'btn-primary',
+      requerimientoId: req.id,
     });
     if (!data) return;
     try {

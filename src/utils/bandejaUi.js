@@ -4,7 +4,17 @@ import {
   ETAPA_LABELS, getEstadoActualTexto, mapEstadoToUbicacion,
   computeTraceSummary, filterRowsClient,
 } from './trazabilidad.js';
-import { getRolDisplayFromRow, countObservacionesAbiertas, requiereIndicadorObservado } from './observacionDestino.js';
+import { getRolDisplayFromRow, countPendientesModulo } from './observacionDestino.js';
+import { renderEstadoVisualBadge, resolveModuloFromPrefix } from './observacionesUi.js';
+
+const MODULO_BANDEJA_POR_PREFIX = Object.freeze({
+  req: 'Registro de Requerimiento',
+  eval: 'Evaluación de Requerimiento',
+  dec: 'DEC',
+  prog: 'Programación',
+  actos: 'Coordinación CM',
+  inv: 'Invitaciones',
+});
 
 const executiveMode = new Map();
 
@@ -119,8 +129,13 @@ export function getSigamefRaw(r) {
   return '';
 }
 
-export function countObservacionesPendientes(req) {
-  return countObservacionesAbiertas(req);
+export function countObservacionesPendientes(req, moduloLabel = null) {
+  if (moduloLabel) return countPendientesModulo(req, moduloLabel);
+  return countPendientesModulo(req, MODULO_BANDEJA_POR_PREFIX.req);
+}
+
+function resolveModuloBandeja(prefix, opts = {}) {
+  return opts.moduloLabel || MODULO_BANDEJA_POR_PREFIX[prefix] || null;
 }
 
 export function getResponsableRol(row) {
@@ -141,17 +156,8 @@ export function buildRowTooltip(row) {
   return parts.join(' · ');
 }
 
-export function estadoModernBadge(estadoActual, estadoTexto, estadoNegocio, row) {
-  const code = String(estadoActual || 'REGISTRADO').toUpperCase();
-  const st = ESTADO_BADGE_STYLES[code] || ESTADO_BADGE_STYLES.REGISTRADO;
-  const label = estadoTexto || st.label || code;
-  const fg = st.fg || '#fff';
-  const workflowBadge = `<span class="badge badge-estado-mod" style="background:${st.bg};color:${fg};">${esc(label)}</span>`;
-  const observado = row?.obsMotor?.requiereBadgeObservado ?? requiereIndicadorObservado(row || {});
-  if (observado) {
-    return `${workflowBadge}<span class="badge bg-danger ms-1" title="Observación pendiente">Observado</span>`;
-  }
-  return workflowBadge;
+export function estadoModernBadge(estadoActual, estadoTexto, estadoNegocio, row, moduloLabel = null) {
+  return renderEstadoVisualBadge(row || {}, moduloLabel);
 }
 
 export function diasBadgeHtml(row) {
@@ -308,13 +314,14 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '') {
 
 export function renderCompactRowCells(r, opts = {}) {
   const { prefix = 'req', escFn = esc, obsCount = null, adjCount = 0 } = opts;
+  const moduloBandeja = resolveModuloBandeja(prefix, opts);
   const row = enrichReqRow(r);
   const exec = isExecutiveMode(prefix);
   const descFull = getRowDescripcionRaw(row);
   const descShort = truncateText(descFull, 60);
   const sigamef = getSigamefRaw(row);
   const tooltip = buildRowTooltip(row);
-  const obsPend = obsCount != null ? obsCount : countObservacionesPendientes(row);
+  const obsPend = obsCount != null ? obsCount : countObservacionesPendientes(row, moduloBandeja);
   const tipoBadge = row.tipo === 'servicios' ? 'bg-success' : row.tipo === 'locacion' ? 'bg-info' : 'bg-primary';
   const tipoLabel = row.tipo === 'servicios' ? 'Serv.' : row.tipo === 'locacion' ? 'Loc.' : 'Bien';
   const metaChips = `
@@ -338,7 +345,7 @@ export function renderCompactRowCells(r, opts = {}) {
     return `
       <td title="${escFn(tooltip)}">${reqCell}</td>
       <td title="${escFn(descFull)}">${descCell}</td>
-      <td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row)}</td>
+      <td class="req-col-estado-cell">${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row, moduloBandeja)}</td>
       <td>${respCell}</td>
       <td class="text-center">${diasBadgeHtml(row)}</td>`;
   }
@@ -347,7 +354,7 @@ export function renderCompactRowCells(r, opts = {}) {
     <td title="${escFn(tooltip)}">${reqCell}</td>
     <td><span class="badge ${tipoBadge}" style="font-size:0.65rem;">${escFn(tipoLabel)}</span></td>
     <td title="${escFn(descFull)}">${descCell}</td>
-    <td>${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row)}</td>
+    <td class="req-col-estado-cell">${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row, moduloBandeja)}</td>
     <td>${respCell}</td>
     <td class="text-center">${diasBadgeHtml(row)}</td>`;
 }
