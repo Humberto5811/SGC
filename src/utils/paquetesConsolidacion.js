@@ -2,12 +2,16 @@
 import * as XLSX from 'xlsx';
 import { ESTADO_BADGE_STYLES } from './bandejaUi.js';
 import { esc } from './trazabilidad.js';
+import { renderEstadoVisualHtml } from './estadoVisualPresenter.js';
 
 export { esc };
 
 const money = (n) => `S/. ${Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export function estadoPaqueteBadge(estado, estadoActual, estadoTexto) {
+export function estadoPaqueteBadge(estado, estadoActual, estadoTexto, row = null) {
+  if (row && typeof row === 'object') {
+    return renderEstadoVisualHtml(row, { moduloContext: 'Programación' });
+  }
   if (/observ/i.test(String(estado || ''))) {
     const s = ESTADO_BADGE_STYLES.OBSERVADO;
     return `<span class="badge badge-estado-mod" style="background:${s.bg};color:#fff">${esc(s.label)}</span>`;

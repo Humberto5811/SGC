@@ -21,7 +21,7 @@ import { getUserDisplayName } from '../../utils/userDisplay.js';
 import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { loadPaquetesConsolidacionTab, openPaquetePanel, highlightPedidoInPaquetesMatriz } from './paquetesConsolidacionView.js';
-import { loadPedidosConsolidacionTab } from './pedidosConsolidacionView.js';
+import { loadPedidosConsolidacionTab, invalidatePedidosMatriz, reloadPedidosConsolidacion } from './pedidosConsolidacionView.js';
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -118,7 +118,11 @@ function renderProgramacionRowCells(r, opts = {}) {
     ? `<span class="badge bg-success">${esc(r.codigo_paquete)}</span>`
     : '<span class="text-muted small">Sin paquete</span>';
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '';
-  const pedidosDisplay = pedidos ? esc(pedidos) : '<span class="text-muted small">—</span>';
+  const pedidosDisplay = pedidos
+    ? esc(pedidos)
+    : (pedCnt > 0
+      ? `<span class="badge bg-success">${pedCnt} pedido${pedCnt === 1 ? '' : 's'}</span>`
+      : '<span class="text-muted small">—</span>');
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
@@ -141,7 +145,7 @@ function renderProgramacionRowCells(r, opts = {}) {
     <td class="actos-col-sigamef small">${esc(codigosSigamef || '—')}</td>
     <td class="actos-col-desc"><span class="req-desc-text" title="${esc(nombreItem)}">${esc(nombreItem)}</span></td>
     <td>${esc(r.area || '—')}</td>
-    <td>${estadoBadgeHtml}</td>
+    <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${esc(resp)}</div><div class="req-resp-role">${esc(rol)}</div></td>
     <td class="small text-muted">${esc(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>
@@ -152,6 +156,27 @@ let currentTab = 'bandeja';
 let progListFilters = {};
 
 // ==================== LOAD ====================
+async function buildPedidosLabelMap() {
+  try {
+    const resp = await programacionService.getMatrizPedidos();
+    const map = {};
+    (resp?.filas || []).forEach((f) => {
+      const rid = f.requerimiento_id;
+      if (!rid || !f.pedido) return;
+      if (!map[rid]) map[rid] = [];
+      map[rid].push(f.pedido);
+    });
+    const out = {};
+    Object.entries(map).forEach(([rid, labels]) => {
+      out[rid] = labels.join(', ');
+      out[String(rid)] = out[rid];
+    });
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
 async function loadBandeja() {
   setTabChrome('bandeja');
   const cont = document.getElementById('progContent');
@@ -160,12 +185,17 @@ async function loadBandeja() {
     cont.innerHTML = '<div class="text-muted">Cargando…</div>';
     let rows = await fetchBandejaProgramacion(progListFilters);
     let countMap = {};
+    let pedidosLabelMap = {};
     try { countMap = await programacionService.getPedidosCount(); } catch (_) {}
+    try { pedidosLabelMap = await buildPedidosLabelMap(); } catch (_) {}
 
     pedidosCountMap = countMap || {};
 
     rows = applyBandejaFilters(rows, progListFilters);
-    rows = rows.map(enrichReqRow);
+    rows = rows.map((r) => enrichReqRow({
+      ...r,
+      pedidos_sigamef: r.pedidos_sigamef || r.pedidosSigamef || pedidosLabelMap[r.id] || pedidosLabelMap[String(r.id)] || '',
+    }));
     allRows = rows;
     updateSummaryCards(rows, 'progTrazaSummary');
 
@@ -177,10 +207,12 @@ async function loadBandeja() {
     }
 
     const tbody = rows.map((r) => {
-      const pedCnt = pedidosCountMap[r.id] || 0;
+      const pedCnt = pedidosCountMap[r.id] || pedidosCountMap[String(r.id)] || 0;
       const inPaq = !!(r.codigo_paquete);
-      const esAprobadoDec = r.estado === 'Aprobado DEC';
-      const canSelect = esAprobadoDec && !inPaq && pedCnt > 0;
+      const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
+      const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
+      const enProgramacion = ubicacion === 'PROGRAMACION';
+      const canSelect = (esAprobadoDec || enProgramacion) && !inPaq && pedCnt > 0;
       return `
         <tr data-req-id="${r.id}">
           <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
@@ -202,7 +234,7 @@ async function loadBandeja() {
     bindActionMenus(cont, {
       detail: (id) => {
         const req = allRows.find((x) => String(x.id) === String(id));
-        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, false) });
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
       },
       obs: (id) => handleBandejaObservaciones(id, allRows, {
         submoduloLabel: 'Programación',
@@ -227,12 +259,12 @@ async function loadBandeja() {
             destino_persona: data.destino_persona,
           });
         },
-        onAdjuntos: (rid) => manageAdjuntos(rid, false),
+        onAdjuntos: (rid) => manageAdjuntos(rid, true),
         onReload: () => loadBandeja(),
         bandejaPrefix: 'prog',
       }),
     });
-    bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, false) });
+    bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
     updateConsolidarBtn();
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
@@ -266,7 +298,7 @@ function bindBandejaEvents(cont) {
 
   cont.querySelectorAll('.prog-add-pedido').forEach((b) => b.onclick = () => openAsociarPedidosModal(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-  cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, false));
+  cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
   cont.querySelectorAll('.prog-aprobar').forEach((b) => b.onclick = () => aprobarProgramacion(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-observar').forEach((b) => b.onclick = () => observarProgramacion(Number(b.dataset.id)));
   allRows.forEach((r) => cargarContadorAdjuntos(r.id));
@@ -588,6 +620,8 @@ async function openAsociarPedidosModal(requerimientoId) {
         if (modal._dragCleanup) modal._dragCleanup();
         modal.remove();
         alert('✅ Pedidos asociados correctamente.');
+        invalidatePedidosMatriz();
+        if (currentTab === 'pedidos') reloadPedidosConsolidacion();
         loadBandeja();
       } catch (e) {
         alert('❌ Error al guardar: ' + e.message);

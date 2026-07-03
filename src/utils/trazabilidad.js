@@ -1,5 +1,6 @@
 // Utilidades UI de trazabilidad de expedientes (frontend)
-import { computeMotorSnapshot, requiereIndicadorObservado, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
+import { computeMotorSnapshot, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
+import { buildEstadoVisual, renderEstadoVisualHtml } from './estadoVisualPresenter.js';
 
 export const ETAPA_BADGES = {
   REGISTRADO: 'secondary',
@@ -165,7 +166,7 @@ export function resolveUbicacionExpediente(row) {
 
 export function isEstadoObservado(estadoOrRow) {
   if (estadoOrRow && typeof estadoOrRow === 'object' && ('payload' in estadoOrRow || 'obsMotor' in estadoOrRow)) {
-    return requiereIndicadorObservado(estadoOrRow);
+    return buildEstadoVisual(estadoOrRow).badgeObservado;
   }
   return /observ/i.test(String(estadoOrRow || '').trim());
 }
@@ -239,7 +240,7 @@ export function computeTraceSummary(rows = []) {
     const dias = Number(r.dias_en_estado ?? r.diasEnEstado ?? calcDiasEnEstado(r.fecha_estado_actual || r.fechaEstadoActual));
     if (/finaliz/i.test(String(r.estado || ''))) finalizados += 1;
     else enProceso += 1;
-    if (requiereIndicadorObservado(r)) observados += 1;
+    if (buildEstadoVisual(r).badgeObservado) observados += 1;
     if (dias > 10) retrasados += 1;
   });
   return { total: list.length, enProceso, observados, retrasados, finalizados };
@@ -277,7 +278,8 @@ export function diasLabel(dias) {
   return d === 1 ? '1 día' : `${d} días`;
 }
 
-export function estadoActualBadge(estadoActual, estadoTexto) {
+export function estadoActualBadge(estadoActual, estadoTexto, row = null) {
+  if (row) return renderEstadoVisualHtml(row);
   const code = String(estadoActual || '').toUpperCase();
   let cls = ETAPA_BADGES[code] || 'secondary';
   const label = estadoTexto || ESTADO_ACTUAL_TEXTO[code] || ETAPA_LABELS[code] || code || '—';
@@ -356,25 +358,43 @@ export function calcMontoTotal(r) {
   return Number(monto_total.toFixed(2));
 }
 
+function extractWorkflowSnapshot(r) {
+  const direct = r?.workflowSnapshot || r?.workflow_snapshot;
+  if (direct && typeof direct === 'object') return direct;
+  try {
+    const p = typeof r?.payload === 'string' ? JSON.parse(r.payload || '{}') : (r?.payload || {});
+    return p.workflowSnapshot || p.workflow_snapshot || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 export function enrichReqRow(r) {
   const monto_total = calcMontoTotal(r);
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? calcDiasEnEstado(r.fecha_estado_actual || r.fechaEstadoActual);
   const ubicacion = resolveUbicacionExpediente(r);
-  const subModulo = r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[ubicacion] || getEstadoActualTexto(ubicacion);
+  const workflowSnapshot = extractWorkflowSnapshot(r);
+  const snapEtapa = workflowSnapshot?.etapaActual
+    ? String(workflowSnapshot.etapaActual).toUpperCase()
+    : null;
+  const etapaWorkflow = snapEtapa || ubicacion;
+  const snapSub = workflowSnapshot?.subModuloActual || workflowSnapshot?.moduloActual || null;
+  const subModulo = snapSub || r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[etapaWorkflow] || getEstadoActualTexto(etapaWorkflow);
   const estadoNegocio = String(r?.estado || '').trim() || resolveEstadoNegocioFromRow(r);
-  const estadoActualTexto = subModulo || r.estado_actual_texto || r.estadoActualTexto || getEstadoActualTexto(ubicacion);
+  const estadoActualTexto = subModulo || r.estado_actual_texto || r.estadoActualTexto || getEstadoActualTexto(etapaWorkflow);
   const obsMotor = r.obsMotor || obtenerEstadoObservaciones(r);
   return {
     ...r,
     estado: estadoNegocio,
     monto_total,
     dias_en_estado: dias,
-    estadoActual: ubicacion,
-    estado_actual: ubicacion,
+    estadoActual: etapaWorkflow,
+    estado_actual: etapaWorkflow,
     estadoActualTexto,
     estado_actual_texto: estadoActualTexto,
     subModuloActual: subModulo || r.subModuloActual,
     responsableActual: r.responsable_actual || r.responsableActual || r.responsable || '—',
+    workflowSnapshot,
     obsMotor,
   };
 }

@@ -275,7 +275,7 @@ function bindBandejaEvents(cont) {
     },
     obs: (id) => handleObservacion(id),
     timeline: (id) => cont.querySelector(`.req-traza[data-id="${id}"]`)?.click(),
-    attach: (id) => manageAdjuntos(id, allRows.find((r) => String(r.id) === String(id))?.estado),
+    attach: (id) => manageAdjuntos(id, true),
     download: (id) => printRequerimiento(id),
     crearSc: (id) => handleCrearSC([parseInt(id, 10)]),
   });
@@ -312,7 +312,7 @@ async function handleObservacion(id) {
         origen_submodulo: data.origen_submodulo || 'Invitaciones',
       });
     },
-    onAdjuntos: (rid) => manageAdjuntos(rid, false),
+    onAdjuntos: (rid) => manageAdjuntos(rid, true),
     onReload: () => loadBandeja(),
     bandejaPrefix: 'inv',
   });

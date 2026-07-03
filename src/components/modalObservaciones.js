@@ -43,11 +43,13 @@ async function refreshReq(req) {
 
 async function finalizeObsAction(row, opts) {
   const fresh = await refreshReq(row);
+  Object.assign(row, fresh);
   if (opts.bandejaPrefix || opts.submoduloLabel) {
-    syncFilaBandejaObservaciones(fresh, {
+    const synced = syncFilaBandejaObservaciones(fresh, {
       prefix: opts.bandejaPrefix,
       moduloLabel: opts.submoduloLabel,
     });
+    Object.assign(row, synced);
   }
   opts.onReload?.();
   return fresh;

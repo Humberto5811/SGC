@@ -68,4 +68,30 @@ console.log('\n=== TEST 5: calcularRondaRaiz independiente ===');
 const p3 = { observaciones: [{ id: 'a' }, { id: 'b', observacion_padre_id: 'a' }] };
 assert(calcularRondaRaiz(p3.observaciones) === 2, 'Siguiente raíz es 2 cuando ya existe 1 raíz');
 
+console.log('\n=== TEST 6: RC3 Presenter — módulo responsable (receptor) ===');
+const { buildEstadoVisual } = await import('../src/utils/estadoVisualPresenter.js');
+const payloadDecEval = { observaciones: [] };
+emitirObservacion(payloadDecEval, { origen_submodulo: 'DEC', destino_submodulo: 'Evaluación de Requerimiento', motivo: 'Obs DEC', gerente: 'DEC' });
+const rDecObsEval = row(payloadDecEval, 'EVALUACION', 'Evaluación de Requerimiento');
+const vDecObsEval = buildEstadoVisual(rDecObsEval);
+assert(vDecObsEval.textoPrincipal === 'Evaluación', `DEC→Eval muestra Evaluación, got ${vDecObsEval.textoPrincipal}`);
+assert(vDecObsEval.badgeObservado === true, 'Badge cuando receptor debe actuar');
+assert(!/DEC/i.test(vDecObsEval.textoPrincipal), 'No muestra emisor DEC');
+
+const payloadReg = { observaciones: [] };
+emitirObservacion(payloadReg, { origen_submodulo: 'Evaluación de Requerimiento', destino_submodulo: 'Registro de Requerimiento', motivo: 'Eval→Reg', gerente: 'Eval' });
+const rEvalObsReg = row(payloadReg, 'REGISTRADO', 'Registro de Requerimiento');
+const vEvalObsReg = buildEstadoVisual(rEvalObsReg);
+assert(vEvalObsReg.textoPrincipal === 'Registro', 'Eval→Reg muestra Registro');
+assert(vEvalObsReg.badgeObservado === true, 'Badge activo para Registro receptor');
+
+const payloadSub = { observaciones: [] };
+emitirObservacion(payloadSub, { origen_submodulo: 'Programación', destino_submodulo: 'Coordinación CM', motivo: 'Prog→CM', gerente: 'Prog' });
+const obsProg = payloadSub.observaciones[0];
+registrarSubsanacionObservacion(payloadSub, { observacion_id: obsProg.id, respuesta: 'Subsanado CM', origen_submodulo: 'Coordinación CM', usuario: 'CM' });
+const rProgSub = row(payloadSub, 'PROGRAMACION', 'Programación');
+const vProgSub = buildEstadoVisual(rProgSub);
+assert(vProgSub.textoPrincipal === 'Programación', 'Tras subsanar vuelve a workflow Programación');
+assert(vProgSub.badgeObservado === false, 'Sin badge tras subsanar receptor');
+
 console.log('\n✅ Todos los tests RC pasaron.\n');

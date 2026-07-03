@@ -32,9 +32,7 @@ import {
   renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
   buildExportRowData, updateBandejaAdjCount,
-  observadoAlertBadge, observadoAccionHtml,
 } from '../../utils/trazabilidad.js';
-import { hayObservacionPendienteAccion } from '../../utils/observacionDestino.js';
 import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
@@ -208,60 +206,7 @@ function renderSelect() {
     </div>
   `;
 }
-// Botones de aprobación / observación (mismo patrón visual que Evaluación, DEC y Programación).
-function accionesObservacionAprobacionHtml(r) {
-  const e = String(r.estado || 'Registrado');
-  const base = 'btn btn-xs';
-  const style = 'padding: 2px 6px; font-size: 11px;';
-  const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Registro de Requerimiento');
-  const aprobado = /aprobad/i.test(e);
-  const enTramite = /tr[aá]mite/i.test(e);
-
-  const alerta = pendienteSubsanar ? observadoAlertBadge('Observado — subsanar observación') : '';
-  const iconoObs = pendienteSubsanar
-    ? observadoAccionHtml(r.id, 'Observado — ver observación y subsanar')
-    : '';
-
-  let btnEstado = '';
-  if (pendienteSubsanar) {
-    btnEstado = `<button class="${base} btn-outline-secondary" disabled title="Pendiente subsanación" style="${style}"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
-  } else if (enTramite) {
-    btnEstado = `<button class="${base} btn-outline-secondary" disabled title="En trámite de aprobación" style="${style}"><i class="bi bi-hourglass-split" style="font-size: 11px;"></i></button>`;
-  } else if (aprobado) {
-    btnEstado = `<button class="${base} btn-success req-ver-obs" data-id="${r.id}" title="Aprobado — ver observaciones" style="${style}"><i class="bi bi-check-circle-fill" style="font-size: 11px;"></i></button>`;
-  } else {
-    btnEstado = `<button class="${base} btn-outline-success req-approve" data-id="${r.id}" title="Solicitar aprobación" style="${style}"><i class="bi bi-send" style="font-size: 11px;"></i></button>`;
-  }
-
-  return `${alerta}${iconoObs}${btnEstado}`;
-}
-
 // Diálogo legacy — redirige al modal unificado de observaciones.
-async function abrirSubsanacion(id) {
-  await handleBandejaObservaciones(id, lastListRows, {
-    submoduloLabel: 'Registro de Requerimiento',
-    puedeObservar: (r) => !/aprobad/i.test(String(r.estado || '')) && !/tr[aá]mite/i.test(String(r.estado || '')),
-    onSubsanar: async (reqId, data) => {
-      const req = lastListRows.find((x) => String(x.id) === String(reqId));
-      if (!req) return;
-      await addSubsanacion(req, data.texto, data.usuario, {
-        observacion_id: data.observacion_id,
-        destino_submodulo: data.destino_submodulo,
-        destino_etapa: data.destino_etapa,
-        destino_persona: data.destino_persona,
-        origen_submodulo: data.origen_submodulo,
-      });
-    },
-    onAdjuntos: (rid) => {
-      const req = lastListRows.find((x) => String(x.id) === String(rid));
-      openAdjuntosModal(rid, req && /aprobad/i.test(String(req.estado || '')));
-    },
-    onReload: () => loadList(),
-    bandejaPrefix: 'req',
-  });
-}
-
-// Ver historial de observaciones en modo solo lectura (para requerimientos aprobados).
 async function verObservacionesReadOnly(id) {
   const req = (lastListRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
@@ -347,7 +292,6 @@ async function loadList() {
       manageAdjuntos(b.dataset.id, /aprobad/i.test(String(b.dataset.estado || '')));
     });
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
-    cont.querySelectorAll('.req-observado, .req-observacion-icon').forEach((b) => b.onclick = () => abrirSubsanacion(b.dataset.id));
     cont.querySelectorAll('.req-ver-obs').forEach((b) => b.onclick = () => verObservacionesReadOnly(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));

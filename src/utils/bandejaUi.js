@@ -5,7 +5,7 @@ import {
   computeTraceSummary, filterRowsClient,
 } from './trazabilidad.js';
 import { getRolDisplayFromRow, countPendientesModulo } from './observacionDestino.js';
-import { renderEstadoVisualBadge, resolveModuloFromPrefix } from './observacionesUi.js';
+import { renderEstadoVisualHtml, resolveModuloFromPrefix } from './observacionesUi.js';
 
 const MODULO_BANDEJA_POR_PREFIX = Object.freeze({
   req: 'Registro de Requerimiento',
@@ -157,7 +157,7 @@ export function buildRowTooltip(row) {
 }
 
 export function estadoModernBadge(estadoActual, estadoTexto, estadoNegocio, row, moduloLabel = null) {
-  return renderEstadoVisualBadge(row || {}, moduloLabel);
+  return renderEstadoVisualHtml(row || {}, { moduloContext: moduloLabel });
 }
 
 export function diasBadgeHtml(row) {

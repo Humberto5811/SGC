@@ -97,7 +97,6 @@ async function loadEvaluacionList() {
     cont.querySelectorAll('.eval-attach').forEach((b) => b.onclick = () => {
       manageAdjuntos(b.dataset.id, false);
     });
-    cont.querySelectorAll('.eval-observar').forEach((b) => b.onclick = () => observarRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-approve').forEach((b) => b.onclick = () => approveRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-del').forEach((b) => b.onclick = () => eliminarRequerimiento(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));

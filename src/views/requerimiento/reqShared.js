@@ -12,6 +12,7 @@ import { renderTimeline, timelineModalStyles } from '../../services/timelineServ
 import {
   estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
 } from '../../utils/trazabilidad.js';
+import { renderEstadoVisualHtml } from '../../utils/estadoVisualPresenter.js';
 import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
 import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId, calcularRondaRaiz } from '../../../shared/observacionesMotor.js';
 import { renderAdjuntosPanel } from '../../utils/adjuntosModal.js';
@@ -29,8 +30,9 @@ function safeParse(payload) {
   try { return JSON.parse(payload || '{}'); } catch (_) { return {}; }
 }
 
-// Badge de estado uniforme.
-export function estadoBadge(estado) {
+// Badge de estado uniforme — delega en EstadoVisualPresenter.
+export function estadoBadge(estado, row = null) {
+  if (row && typeof row === 'object') return renderEstadoVisualHtml(row);
   const e = String(estado || '');
   let cls = 'bg-secondary';
   if (/tr[aá]mite/i.test(e)) cls = 'bg-warning text-dark';

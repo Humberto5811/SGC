@@ -428,7 +428,7 @@ export function renderActosRowCells(r, opts = {}) {
     <td class="actos-col-sigamef small">${escFn(sigamef || '—')}</td>
     <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
     <td class="${areaClass.trim()}">${escFn(r.area || '—')}</td>
-    <td>${estadoBadgeHtml}</td>
+    <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
