@@ -1,26 +1,21 @@
 // Utilidades UI — matriz de consolidación de paquetes
 import * as XLSX from 'xlsx';
-import { ESTADO_BADGE_STYLES } from './bandejaUi.js';
 import { esc } from './trazabilidad.js';
-import { renderEstadoVisualHtml } from './estadoVisualPresenter.js';
+import { renderEstadoVisualHtml, buildPresenterRow } from './estadoVisualPresenter.js';
 
 export { esc };
 
 const money = (n) => `S/. ${Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** Estado visual — delega exclusivamente en EstadoVisualPresenter. */
 export function estadoPaqueteBadge(estado, estadoActual, estadoTexto, row = null) {
-  if (row && typeof row === 'object') {
-    return renderEstadoVisualHtml(row, { moduloContext: 'Programación' });
-  }
-  if (/observ/i.test(String(estado || ''))) {
-    const s = ESTADO_BADGE_STYLES.OBSERVADO;
-    return `<span class="badge badge-estado-mod" style="background:${s.bg};color:#fff">${esc(s.label)}</span>`;
-  }
-  const code = String(estadoActual || '').toUpperCase();
-  const s = ESTADO_BADGE_STYLES[code] || { bg: '#6c757d', label: estadoTexto || estado || '—' };
-  const fg = s.fg || '#fff';
-  const label = estadoTexto || s.label || estado;
-  return `<span class="badge badge-estado-mod" style="background:${s.bg};color:${fg}">${esc(String(label).toUpperCase())}</span>`;
+  const r = buildPresenterRow(row || {
+    estado,
+    estado_actual: estadoActual,
+    sub_modulo: estadoTexto,
+    estado_actual_texto: estadoTexto,
+  });
+  return renderEstadoVisualHtml(r, { moduloContext: 'Programación' });
 }
 
 export function responsableDosLineas(nombre, rol) {

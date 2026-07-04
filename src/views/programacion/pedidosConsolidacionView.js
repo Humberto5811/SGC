@@ -67,7 +67,7 @@ function renderTable() {
       <td class="text-end">${fmtMoney(f.monto_total)}</td>
       <td>${esc(f.centro || '—')}</td>
       <td>${esc(f.area_usuaria || '—')}</td>
-      <td title="${esc(tipDias)}">${f.requerimiento ? estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto, f.requerimiento) : estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto)}</td>
+      <td title="${esc(tipDias)}">${estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto, f.requerimiento || f)}</td>
       <td>${responsableDosLineas(f.responsable, f.sub_modulo)}</td>
       <td class="ped-col-meta" title="${esc(f.meta)}">${esc(f.meta || '—')}</td>
       <td class="ped-col-clas" title="${esc(f.clasificador)}">${esc(f.clasificador || '—')}</td>

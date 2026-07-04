@@ -405,13 +405,7 @@ export function renderActosRowCells(r, opts = {}) {
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
   const resp = r.responsable_actual || r.responsableActual || '—';
   const rol = getResponsableRolDisplay(r);
-  const estadoBadgeHtml = estadoModernBadge(
-    r.estado_actual || r.estadoActual,
-    r.estadoActualTexto || r.estado_actual_texto,
-    r.estado,
-    r,
-    'Coordinación CM',
-  );
+  const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '—';
   const scCode = r.codigo_solicitud || r.codigoSolicitud || '';
   const scCell = includeScColumn

@@ -167,7 +167,7 @@ async function renderPanelTab(req, tab) {
         <table class="table table-sm table-borderless mb-0">
           <tr><td class="text-muted" style="width:42%;">Código SIGAMEF</td><td>${esc(getSigamefRaw(row) || '—')}</td></tr>
           <tr><td class="text-muted">Nombre del ítem</td><td>${esc(nombreItem || '—')}</td></tr>
-          <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row.estadoActual || row.estado_actual, row.estadoActualTexto || row.sub_modulo_actual, row.estado, row, panelEl._moduloLabel)}</td></tr>
+          <tr><td class="text-muted">Estado</td><td>${estadoModernBadge(row, panelEl._moduloLabel)}</td></tr>
           <tr><td class="text-muted">Responsable</td><td>${esc(row.responsableActual || row.responsable_actual)}<br/><small class="text-muted">${esc(getResponsableRol(row))}</small></td></tr>
           <tr><td class="text-muted">Días en etapa</td><td>${diasBadgeHtml(row)}</td></tr>
           <tr><td class="text-muted">Área usuaria</td><td>${esc(row.area || '—')}</td></tr>

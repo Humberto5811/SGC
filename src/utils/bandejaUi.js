@@ -5,7 +5,8 @@ import {
   computeTraceSummary, filterRowsClient,
 } from './trazabilidad.js';
 import { getRolDisplayFromRow, countPendientesModulo } from './observacionDestino.js';
-import { renderEstadoVisualHtml, resolveModuloFromPrefix } from './observacionesUi.js';
+import { renderEstadoVisualHtml } from './estadoVisualPresenter.js';
+import { resolveModuloFromPrefix } from './observacionesUi.js';
 
 const MODULO_BANDEJA_POR_PREFIX = Object.freeze({
   req: 'Registro de Requerimiento',
@@ -156,7 +157,7 @@ export function buildRowTooltip(row) {
   return parts.join(' · ');
 }
 
-export function estadoModernBadge(estadoActual, estadoTexto, estadoNegocio, row, moduloLabel = null) {
+export function estadoModernBadge(row, moduloLabel = null) {
   return renderEstadoVisualHtml(row || {}, { moduloContext: moduloLabel });
 }
 
@@ -345,7 +346,7 @@ export function renderCompactRowCells(r, opts = {}) {
     return `
       <td title="${escFn(tooltip)}">${reqCell}</td>
       <td title="${escFn(descFull)}">${descCell}</td>
-      <td class="req-col-estado-cell">${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row, moduloBandeja)}</td>
+      <td class="req-col-estado-cell">${estadoModernBadge(row, moduloBandeja)}</td>
       <td>${respCell}</td>
       <td class="text-center">${diasBadgeHtml(row)}</td>`;
   }
@@ -354,7 +355,7 @@ export function renderCompactRowCells(r, opts = {}) {
     <td title="${escFn(tooltip)}">${reqCell}</td>
     <td><span class="badge ${tipoBadge}" style="font-size:0.65rem;">${escFn(tipoLabel)}</span></td>
     <td title="${escFn(descFull)}">${descCell}</td>
-    <td class="req-col-estado-cell">${estadoModernBadge(row.estadoActual, row.estadoActualTexto, row.estado, row, moduloBandeja)}</td>
+    <td class="req-col-estado-cell">${estadoModernBadge(row, moduloBandeja)}</td>
     <td>${respCell}</td>
     <td class="text-center">${diasBadgeHtml(row)}</td>`;
 }

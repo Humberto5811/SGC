@@ -1,6 +1,6 @@
 /**
- * Presenter único del estado visual — capa de presentación RC3.
- * Ningún otro módulo debe calcular texto/badge de estado por su cuenta.
+ * ÚNICA autoridad del estado visual — RC4.1.
+ * Ningún otro archivo debe interpretar estado/estado_actual/sub_modulo/workflowSnapshot para UI.
  */
 import {
   obtenerEstadoObservaciones,
@@ -9,10 +9,11 @@ import {
   bloqueaSubsanacionPorHijos,
   getListaObservaciones,
 } from '../../shared/observacionesMotor.js';
+import { enrichReqRow, ETAPA_LABELS } from './trazabilidad.js';
 import {
-  enrichReqRow, ETAPA_LABELS, resolveUbicacionExpediente,
-} from './trazabilidad.js';
-import { getSubmoduloByLabel, getSubmoduloDisplayLabel } from './observacionDestino.js';
+  getSubmoduloByLabel,
+  SUBMODULOS_DESTINO,
+} from './observacionDestino.js';
 
 const ESTADO_COLORES = Object.freeze({
   REGISTRADO: { bg: '#0d6efd', fg: '#fff' },
@@ -59,7 +60,7 @@ function resolveWorkflowEtapa(row) {
   const snap = extractWorkflowSnapshot(row);
   if (snap?.etapaActual) return String(snap.etapaActual).toUpperCase();
   const enriched = enrichReqRow(row);
-  return String(enriched.estado_actual || enriched.estadoActual || resolveUbicacionExpediente(enriched)).toUpperCase();
+  return String(enriched.estado_actual || enriched.estadoActual || 'REGISTRADO').toUpperCase();
 }
 
 function labelFromEtapa(etapa) {
@@ -67,33 +68,15 @@ function labelFromEtapa(etapa) {
   return WORKFLOW_BANDEJA_LABELS[code] || ETAPA_LABELS[code] || code;
 }
 
-function labelFromSubmodulo(subModulo) {
-  const s = String(subModulo || '').trim();
-  if (!s || /observ/i.test(s)) return null;
-  return getSubmoduloDisplayLabel(s);
-}
-
 function etapaFromSubmodulo(subModulo) {
   return getSubmoduloByLabel(subModulo)?.code || null;
 }
 
-function resolveWorkflowModuloLabel(row) {
-  const enriched = enrichReqRow(row);
-  const etapa = resolveWorkflowEtapa(enriched);
-  const snap = extractWorkflowSnapshot(enriched);
-  const subModulo = String(
-    enriched.sub_modulo_actual || enriched.subModuloActual
-    || snap?.subModuloActual || snap?.moduloActual || '',
-  ).trim();
-  const subEtapa = etapaFromSubmodulo(subModulo);
-  if (subModulo && subEtapa === etapa) {
-    const lbl = labelFromSubmodulo(subModulo);
-    if (lbl) return lbl;
-  }
-  return labelFromEtapa(etapa);
+function fullModuloLabelFromEtapa(etapa) {
+  const code = String(etapa || '').toUpperCase();
+  return SUBMODULOS_DESTINO.find((s) => s.code === code)?.label || null;
 }
 
-/** Observación abierta cuya acción pendiente es del receptor (subsanar). */
 function resolvePendienteReceptor(row) {
   const hilos = getListaObservaciones(row);
   const pending = getObservacionPendiente(row);
@@ -102,43 +85,65 @@ function resolvePendienteReceptor(row) {
   return pending;
 }
 
+/** Construye fila mínima para el Presenter desde campos sueltos (Paquetes/Pedidos). */
+export function buildPresenterRow(partial = {}) {
+  if (partial?.payload != null || partial?.requerimiento) {
+    const base = partial.requerimiento || partial;
+    return { ...base };
+  }
+  return {
+    id: partial.requerimiento_id || partial.id,
+    estado: partial.estado,
+    estado_actual: partial.estado_actual || partial.estadoActual,
+    sub_modulo_actual: partial.sub_modulo_actual || partial.sub_modulo || partial.estado_actual_texto,
+    estado_actual_texto: partial.estado_actual_texto || partial.estadoActualTexto,
+    payload: partial.payload,
+  };
+}
+
 /**
  * Presenter único — fuente de verdad del estado visual en toda la UI.
- * @param {Object} row - fila del requerimiento
- * @param {Object} [opts]
- * @param {string} [opts.moduloContext] - submódulo de la bandeja (acciones puedeSubsanar/puedeCerrar)
  */
 export function buildEstadoVisual(row, opts = {}) {
   const enriched = enrichReqRow(row);
   const workflowActual = resolveWorkflowEtapa(enriched);
   const pendienteReceptor = resolvePendienteReceptor(enriched);
-  const moduloResponsable = pendienteReceptor
-    ? (pendienteReceptor.destino_submodulo || pendienteReceptor.moduloReceptor || pendienteReceptor.moduloDestino || '')
-    : (enriched.sub_modulo_actual || enriched.subModuloActual || workflowActual);
 
-  const etapaReceptor = pendienteReceptor ? etapaFromSubmodulo(moduloResponsable) : null;
-  const textoPrincipal = pendienteReceptor
-    ? (labelFromEtapa(etapaReceptor) || labelFromSubmodulo(moduloResponsable) || labelFromEtapa(workflowActual))
-    : resolveWorkflowModuloLabel(enriched);
+  const moduloReceptorRaw = pendienteReceptor
+    ? String(pendienteReceptor.destino_submodulo || pendienteReceptor.moduloReceptor || pendienteReceptor.moduloDestino || '').trim()
+    : '';
 
-  const etapaColor = pendienteReceptor
-    ? (etapaFromSubmodulo(moduloResponsable) || workflowActual)
+  const etapaMostrada = pendienteReceptor
+    ? (etapaFromSubmodulo(moduloReceptorRaw) || workflowActual)
     : workflowActual;
-  const color = ESTADO_COLORES[String(etapaColor).toUpperCase()] || ESTADO_COLORES.REGISTRADO;
 
-  const motor = obtenerEstadoObservaciones(enriched, opts.moduloContext || null);
-  const badgeObservado = !!pendienteReceptor;
+  const textoPrincipal = labelFromEtapa(etapaMostrada);
+
+  const moduloResponsable = pendienteReceptor
+    ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada) || textoPrincipal)
+    : (fullModuloLabelFromEtapa(workflowActual) || textoPrincipal);
+
+  const moduloBadgeKey = pendienteReceptor
+    ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada))
+    : fullModuloLabelFromEtapa(workflowActual);
+
+  const motorBadge = obtenerEstadoObservaciones(enriched, moduloBadgeKey || null);
+  const motorActions = obtenerEstadoObservaciones(enriched, opts.moduloContext || null);
+  const badgeObservado = pendienteReceptor ? (motorBadge.requiereBadge === true) : false;
+
+  const color = ESTADO_COLORES[String(etapaMostrada).toUpperCase()] || ESTADO_COLORES.REGISTRADO;
 
   return {
     textoPrincipal,
     badgeObservado,
     workflowActual,
-    moduloResponsable: String(moduloResponsable || '').trim(),
+    moduloResponsable,
     color,
-    puedeSubsanar: motor.puedeSubsanar,
-    puedeCerrar: motor.puedeCerrar,
-    pendientesCount: motor.pendientesModuloCount ?? motor.pendientesCount ?? 0,
-    motor,
+    puedeSubsanar: motorActions.puedeSubsanar,
+    puedeCerrar: motorActions.puedeCerrar,
+    pendientesCount: motorBadge.pendientesModuloCount ?? motorBadge.pendientesCount ?? 0,
+    motor: motorActions,
+    motorBadge,
   };
 }
 
@@ -152,4 +157,4 @@ export function renderEstadoVisualHtml(row, opts = {}, escFn = (s) => String(s ?
   return workflowBadge;
 }
 
-export default { buildEstadoVisual, renderEstadoVisualHtml };
+export default { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow };

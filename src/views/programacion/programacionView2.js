@@ -128,13 +128,7 @@ function renderProgramacionRowCells(r, opts = {}) {
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
   const resp = r.responsable_actual || r.responsableActual || '—';
   const rol = getResponsableRolDisplay(r);
-  const estadoBadgeHtml = estadoModernBadge(
-    r.estado_actual || r.estadoActual,
-    r.estadoActualTexto || r.estado_actual_texto,
-    r.estado,
-    r,
-    'Programación',
-  );
+  const estadoBadgeHtml = estadoModernBadge(r, 'Programación');
   const nombreItem = descripcionesBien || r.denominacion || '—';
 
   return `
@@ -269,14 +263,6 @@ async function loadBandeja() {
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
-}
-
-function estadoBadge(estado) {
-  const e = String(estado || '');
-  if (/observ/i.test(e)) return `<span class="badge bg-danger">${esc(e)}</span>`;
-  if (e === 'Programado') return `<span class="badge bg-primary">${esc(e)}</span>`;
-  if (/aprobad/i.test(e)) return `<span class="badge bg-success">${esc(e)}</span>`;
-  return `<span class="badge bg-secondary">${esc(e)}</span>`;
 }
 
 function bindBandejaEvents(cont) {

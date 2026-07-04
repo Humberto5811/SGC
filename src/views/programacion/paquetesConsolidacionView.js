@@ -266,7 +266,7 @@ function renderMatrizTable(grupos) {
           <td class="text-end">${fmtMoney(f.monto_total)}</td>
           <td>${esc(f.centro || '—')}</td>
           <td>${esc(f.area_usuaria || '—')}</td>
-          <td>${estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto)}</td>
+          <td>${estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto, f.requerimiento || f)}</td>
           <td>${responsableDosLineas(f.responsable, f.sub_modulo)}</td>
           <td>${esc(f.meta || '—')}</td>
           <td>${esc(f.clasificador || '—')}</td>
@@ -331,6 +331,17 @@ function render() {
 
 async function loadData() {
   rawMatriz = await programacionService.getMatrizConsolidacion();
+  try {
+    const { contratacionesService } = await import('../../services/contratacionesService.js');
+    const resp = await contratacionesService.listProgramacion({ pageSize: 500 });
+    const reqMap = new Map((resp?.data || []).map((r) => [r.id, r]));
+    (rawMatriz?.paquetes || []).forEach((g) => {
+      g.filas = (g.filas || []).map((f) => {
+        const src = reqMap.get(f.requerimiento_id);
+        return src ? { ...f, requerimiento: src } : f;
+      });
+    });
+  } catch (_) {}
   const filters = readPaquetesFilters('paq');
   const filtered = filterMatrizPaquetes(rawMatriz, filters);
   filteredGrupos = filtered.paquetes;

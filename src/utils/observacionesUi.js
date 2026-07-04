@@ -1,11 +1,11 @@
 /**
- * Integración UI — delega 100% en EstadoVisualPresenter (RC3).
+ * Sincronización UI post-acciones de observaciones — delega en EstadoVisualPresenter.
  */
 import { regenerarSnapshotObservaciones } from '../../shared/observacionesMotor.js';
 import { esc, enrichReqRow } from './trazabilidad.js';
 import { buildEstadoVisual, renderEstadoVisualHtml } from './estadoVisualPresenter.js';
 
-export { regenerarSnapshotObservaciones, buildEstadoVisual, renderEstadoVisualHtml };
+export { regenerarSnapshotObservaciones };
 
 const MODULO_POR_PREFIX = Object.freeze({
   req: 'Registro de Requerimiento',
@@ -18,11 +18,6 @@ const MODULO_POR_PREFIX = Object.freeze({
 
 export function resolveModuloFromPrefix(prefix) {
   return MODULO_POR_PREFIX[prefix] || null;
-}
-
-/** @deprecated Usar renderEstadoVisualHtml — alias de compatibilidad. */
-export function renderEstadoVisualBadge(row, moduloLabel = null, escFn = esc) {
-  return renderEstadoVisualHtml(row, { moduloContext: moduloLabel }, escFn);
 }
 
 /** Regenera motor + actualiza celdas de la fila en bandeja (sin esperar reload). */
@@ -54,9 +49,6 @@ export function syncFilaBandejaObservaciones(row, opts = {}) {
 
 export default {
   regenerarSnapshotObservaciones,
-  buildEstadoVisual,
-  renderEstadoVisualHtml,
-  renderEstadoVisualBadge,
   syncFilaBandejaObservaciones,
   resolveModuloFromPrefix,
 };

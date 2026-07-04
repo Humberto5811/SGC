@@ -87,7 +87,7 @@ async function loadProgramacionList() {
           '<td>' + esc(r.area || '') + '</td>' +
           '<td>' + esc(r.responsable || r.centro_nombre || '') + '</td>' +
           '<td class="text-center">' + (r.monto_total ? 'S/. ' + r.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'S/. 0.00') + '</td>' +
-          '<td>' + estadoBadge(r.estado) + '</td>' +
+          '<td>' + estadoBadge(r.estado, r) + '</td>' +
           '<td class="text-center" style="white-space:nowrap;">' +
           '<button class="btn btn-xs btn-outline-primary prog-ver" data-id="' + r.id + '" title="Ver documento" style="' + style + '"><i class="bi bi-eye" style="font-size:11px;"></i></button> ' +
           '<button class="btn btn-xs btn-outline-info prog-attach" data-id="' + r.id + '" title="Adjuntos" style="' + style + '"><i class="bi bi-paperclip" style="font-size:11px;"></i> <span class="badge bg-info adjunto-count-' + r.id + '" style="font-size:9px;padding:1px 4px;">0</span></button> ' +

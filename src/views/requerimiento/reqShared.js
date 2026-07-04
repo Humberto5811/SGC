@@ -12,7 +12,7 @@ import { renderTimeline, timelineModalStyles } from '../../services/timelineServ
 import {
   estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
 } from '../../utils/trazabilidad.js';
-import { renderEstadoVisualHtml } from '../../utils/estadoVisualPresenter.js';
+import { renderEstadoVisualHtml, buildPresenterRow } from '../../utils/estadoVisualPresenter.js';
 import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
 import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId, calcularRondaRaiz } from '../../../shared/observacionesMotor.js';
 import { renderAdjuntosPanel } from '../../utils/adjuntosModal.js';
@@ -30,15 +30,10 @@ function safeParse(payload) {
   try { return JSON.parse(payload || '{}'); } catch (_) { return {}; }
 }
 
-// Badge de estado uniforme — delega en EstadoVisualPresenter.
+// Badge de estado — delega exclusivamente en EstadoVisualPresenter.
 export function estadoBadge(estado, row = null) {
   if (row && typeof row === 'object') return renderEstadoVisualHtml(row);
-  const e = String(estado || '');
-  let cls = 'bg-secondary';
-  if (/tr[aá]mite/i.test(e)) cls = 'bg-warning text-dark';
-  else if (/observ/i.test(e)) cls = 'bg-danger text-white';
-  else if (/aprobad/i.test(e)) cls = 'bg-success';
-  return `<span class="badge ${cls}">${esc(e || '—')}</span>`;
+  return renderEstadoVisualHtml(buildPresenterRow({ estado: String(estado || '') }));
 }
 
 export function ultimaObservacion(req) {
@@ -553,7 +548,7 @@ export async function showTrazabilidadModal(requerimientoId) {
         <div class="small text-muted">${esc(req.area || '')} · ${esc(req.centro || '')}</div>
       </div>
       <div class="row g-2 mb-3 small">
-        <div class="col-md-3"><strong>Estado actual:</strong><br/>${estadoActualBadge(data.estadoActual, data.estadoActualTexto)}</div>
+        <div class="col-md-3"><strong>Estado actual:</strong><br/>${estadoActualBadge({ ...req, estado_actual: data.estadoActual || req.estado_actual, sub_modulo_actual: data.subModuloActual || req.sub_modulo_actual, payload: req.payload })}</div>
         <div class="col-md-3"><strong>Submódulo:</strong><br/>${esc(data.subModuloActual || '—')}</div>
         <div class="col-md-3"><strong>Responsable:</strong><br/>${esc(data.responsableActual || '—')}</div>
         <div class="col-md-3"><strong>Días en etapa:</strong><br/>${diasEnEstadoBadge({ dias_en_estado: data.diasEnEstado })}${data.retrasado || Number(data.diasEnEstado) > 10 ? retrasadoIndicator({ dias_en_estado: data.diasEnEstado }) : ''}</div>

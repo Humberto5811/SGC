@@ -75,7 +75,7 @@ emitirObservacion(payloadDecEval, { origen_submodulo: 'DEC', destino_submodulo: 
 const rDecObsEval = row(payloadDecEval, 'EVALUACION', 'Evaluación de Requerimiento');
 const vDecObsEval = buildEstadoVisual(rDecObsEval);
 assert(vDecObsEval.textoPrincipal === 'Evaluación', `DEC→Eval muestra Evaluación, got ${vDecObsEval.textoPrincipal}`);
-assert(vDecObsEval.badgeObservado === true, 'Badge cuando receptor debe actuar');
+assert(vDecObsEval.badgeObservado === true, 'Badge requiereBadge cuando receptor debe actuar');
 assert(!/DEC/i.test(vDecObsEval.textoPrincipal), 'No muestra emisor DEC');
 
 const payloadReg = { observaciones: [] };

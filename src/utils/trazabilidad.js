@@ -1,6 +1,6 @@
 // Utilidades UI de trazabilidad de expedientes (frontend)
 import { computeMotorSnapshot, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
-import { buildEstadoVisual, renderEstadoVisualHtml } from './estadoVisualPresenter.js';
+import { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow } from './estadoVisualPresenter.js';
 
 export const ETAPA_BADGES = {
   REGISTRADO: 'secondary',
@@ -165,10 +165,10 @@ export function resolveUbicacionExpediente(row) {
 }
 
 export function isEstadoObservado(estadoOrRow) {
-  if (estadoOrRow && typeof estadoOrRow === 'object' && ('payload' in estadoOrRow || 'obsMotor' in estadoOrRow)) {
+  if (estadoOrRow && typeof estadoOrRow === 'object') {
     return buildEstadoVisual(estadoOrRow).badgeObservado;
   }
-  return /observ/i.test(String(estadoOrRow || '').trim());
+  return false;
 }
 
 export function getEstadoActualTexto(ubicacionCode) {
@@ -278,18 +278,15 @@ export function diasLabel(dias) {
   return d === 1 ? '1 día' : `${d} días`;
 }
 
-export function estadoActualBadge(estadoActual, estadoTexto, row = null) {
-  if (row) return renderEstadoVisualHtml(row);
-  const code = String(estadoActual || '').toUpperCase();
-  let cls = ETAPA_BADGES[code] || 'secondary';
-  const label = estadoTexto || ESTADO_ACTUAL_TEXTO[code] || ETAPA_LABELS[code] || code || '—';
-  if (cls === 'orange') {
-    return `<span class="badge" style="background:#fd7e14;color:#fff;">${esc(label)}</span>`;
+export function estadoActualBadge(rowOrEstado, estadoTexto = null) {
+  if (rowOrEstado && typeof rowOrEstado === 'object') {
+    return renderEstadoVisualHtml(rowOrEstado);
   }
-  if (cls === 'purple') {
-    return `<span class="badge" style="background:#6f42c1;color:#fff;">${esc(label)}</span>`;
-  }
-  return `<span class="badge bg-${cls}">${esc(label)}</span>`;
+  return renderEstadoVisualHtml(buildPresenterRow({
+    estado_actual: rowOrEstado,
+    sub_modulo: estadoTexto,
+    estado_actual_texto: estadoTexto,
+  }));
 }
 
 /** Icono rojo de observaciones (mismo estilo en todos los submódulos). */
