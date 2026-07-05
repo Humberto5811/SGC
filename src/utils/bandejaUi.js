@@ -66,6 +66,7 @@ export function bandejaGlobalStyles() {
     .req-col-timeline { width: 42px; text-align: center; }
     .req-col-req { width: 120px; }
     .req-col-tipo { width: 72px; }
+    .req-col-sigamef { min-width: 120px; }
     .req-col-desc { width: 28%; min-width: 160px; }
     .req-col-estado { width: 130px; }
     .req-col-resp { width: 130px; }
@@ -297,7 +298,8 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '') {
   if (exec) {
     return `
       <th class="req-col-req">N° Req</th>
-      <th class="req-col-desc">Ítem</th>
+      <th class="req-col-sigamef">Código SIGAMEF</th>
+      <th class="req-col-desc">Descripción</th>
       <th class="req-col-estado">Estado</th>
       <th class="req-col-resp">Responsable</th>
       <th class="req-col-dias">Días</th>
@@ -308,7 +310,8 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '') {
     <th class="req-col-timeline" title="Timeline">🕒</th>
     <th class="req-col-req">N° Req</th>
     <th class="req-col-tipo">Tipo</th>
-    <th class="req-col-desc">Ítem</th>
+    <th class="req-col-sigamef">Código SIGAMEF</th>
+    <th class="req-col-desc">Descripción</th>
     <th class="req-col-estado">Estado</th>
     <th class="req-col-resp">Responsable</th>
     <th class="req-col-dias">Días</th>
@@ -338,8 +341,8 @@ export function renderCompactRowCells(r, opts = {}) {
     </div>`;
 
   const reqCell = `
-    <div class="req-codigo fw-semibold">${escFn(row.codigo || ('#' + row.id))}</div>
-    <div class="req-sigamef small text-muted">SIGAMEF: ${escFn(sigamef || '—')}</div>`;
+    <div class="req-codigo fw-semibold">${escFn(row.codigo || ('#' + row.id))}</div>`;
+  const sigamefCell = `<span class="req-sigamef-text" title="${escFn(sigamef || '—')}">${escFn(sigamef || '—')}</span>`;
   const descCell = `
     <span class="req-desc-text" title="${escFn(descFull)}">${escFn(descShort || '—')}</span>${metaChips}`;
   const respCell = `
@@ -349,6 +352,7 @@ export function renderCompactRowCells(r, opts = {}) {
   if (exec) {
     return `
       <td title="${escFn(tooltip)}">${reqCell}</td>
+      <td class="req-col-sigamef">${sigamefCell}</td>
       <td title="${escFn(descFull)}">${descCell}</td>
       <td class="req-col-estado-cell">${estadoModernBadge(row, moduloBandeja)}</td>
       <td>${respCell}</td>
@@ -358,6 +362,7 @@ export function renderCompactRowCells(r, opts = {}) {
     <td class="req-col-timeline">${trazaIconHtml(row.id)}</td>
     <td title="${escFn(tooltip)}">${reqCell}</td>
     <td><span class="badge ${tipoBadge}" style="font-size:0.65rem;">${escFn(tipoLabel)}</span></td>
+    <td class="req-col-sigamef">${sigamefCell}</td>
     <td title="${escFn(descFull)}">${descCell}</td>
     <td class="req-col-estado-cell">${estadoModernBadge(row, moduloBandeja)}</td>
     <td>${respCell}</td>
