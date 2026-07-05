@@ -147,20 +147,23 @@ export function actosMenuItems(r, opts = {}) {
   const pending = getObservacionPendiente(r);
   const pendActos = observacionPendienteParaSubmodulo(pending, 'Coordinación CM');
   const obsLabel = labelBotonObservaciones(r, 'Coordinación CM');
-  const items = [
+  const baseItems = [
     { act: 'detail', label: 'Ver expediente', icon: 'bi-eye' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
     { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
   ];
   if (esCoordinador) {
-    items.push(
-      { act: 'approve', label: esPoolCoordinador ? 'Asignar analista' : 'Reasignar', icon: 'bi-person-check' },
+    return [
       { act: 'deriveAnalyst', label: 'Derivar a analista', icon: 'bi-person-plus' },
+      { act: 'approve', label: esPoolCoordinador ? 'Asignar analista' : 'Reasignar', icon: 'bi-person-check' },
       { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
       { act: 'derive', label: 'Derivar (otro destino)', icon: 'bi-arrow-right-circle' },
-    );
-  } else if (esAsignadoAMi) {
+      ...baseItems,
+    ];
+  }
+  const items = [...baseItems];
+  if (esAsignadoAMi) {
     items.push(
       { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
       { act: 'approve', label: 'Aprobar → Invitaciones', icon: 'bi-check-circle' },
