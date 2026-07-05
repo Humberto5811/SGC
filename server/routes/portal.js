@@ -17,15 +17,30 @@ import {
   resolverInvitacionToken,
   listarConsultasBandeja,
   responderConsultaAnalista,
+  listarRecepcionCotizaciones,
   listarValidacionesBandeja,
   validarCotizacion,
   ampliarPlazo,
 } from '../lib/portalProveedores.js';
 import {
+  listarValidacionesPendientesDerivacion,
+  listarValidacionesAsignadas,
+  getPreviewDerivacionValidacion,
+  derivarValidacionCotizacion,
+  getValidacionTrabajoDetalle,
+  enviarValidacionUsuario,
+  listUsuariosDerivacionValidacion,
+  getSubmodulosValidacion,
+  listarCuadroComparativo,
+  resolverPdfValidacionFirmada,
+} from '../lib/validacionesCotizacion.js';
+import {
   getSolicitudDetalleProveedor,
   getCotizacionWorkspace,
   resolverDocumentoPortal,
   registrarDocumentoTraza,
+  getCotizacionRecepcionDetalle,
+  resolverDocumentoCotizacionAnalista,
 } from '../lib/portalDocumentos.js';
 
 function clientIp(req) {
@@ -199,10 +214,119 @@ portalAnalistaRouter.put('/consultas/:id/responder', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+portalAnalistaRouter.get('/cotizaciones', async (req, res, next) => {
+  try {
+    const data = await listarRecepcionCotizaciones(req.query);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cotizaciones/:id', async (req, res, next) => {
+  try {
+    const data = await getCotizacionRecepcionDetalle(req.params.id);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cotizaciones/:id/documento/:ref/ver', async (req, res, next) => {
+  try {
+    const adj = await resolverDocumentoCotizacionAnalista(req.params.id, req.params.ref);
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    res.setHeader('Content-Type', adj.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(adj.nombre_archivo || 'documento.pdf')}"`);
+    res.send(buf);
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cotizaciones/:id/documento/:ref/descargar', async (req, res, next) => {
+  try {
+    const adj = await resolverDocumentoCotizacionAnalista(req.params.id, req.params.ref);
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    res.setHeader('Content-Type', adj.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(adj.nombre_archivo || 'documento')}"`);
+    res.send(buf);
+  } catch (err) { next(err); }
+});
+
 portalAnalistaRouter.get('/validaciones', async (_req, res, next) => {
   try {
-    const data = await listarValidacionesBandeja();
+    const data = await listarValidacionesPendientesDerivacion();
     res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/pendientes-derivacion', async (_req, res, next) => {
+  try {
+    const data = await listarValidacionesPendientesDerivacion();
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/asignadas', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || '';
+    const userId = req.headers['x-user-id'] || '';
+    const data = await listarValidacionesAsignadas(usuario, userId);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/submodulos', async (_req, res, next) => {
+  try {
+    res.json({ data: getSubmodulosValidacion() });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/usuarios', async (req, res, next) => {
+  try {
+    const data = await listUsuariosDerivacionValidacion(req.query.submodulo, req.query.search);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/:id/preview-derivacion', async (req, res, next) => {
+  try {
+    const data = await getPreviewDerivacionValidacion(req.params.id);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.post('/validaciones/:id/derivar', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const row = await derivarValidacionCotizacion(req.params.id, req.body, usuario);
+    res.json({ success: true, cotizacion: row });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/:id/trabajo', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || '';
+    const userId = req.headers['x-user-id'] || '';
+    const esAdmin = String(req.query.admin || '') === '1';
+    const data = await getValidacionTrabajoDetalle(req.params.id, usuario, userId, { esAdmin });
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.put('/validaciones/:id/enviar', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const userId = req.headers['x-user-id'] || '';
+    const esAdmin = String(req.body?.admin || '') === '1';
+    const row = await enviarValidacionUsuario(req.params.id, req.body, usuario, userId, { esAdmin });
+    res.json({ success: true, cotizacion: row });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/:id/pdf-validacion', async (req, res, next) => {
+  try {
+    const adj = await resolverPdfValidacionFirmada(req.params.id);
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    const inline = req.query.inline === '1';
+    res.setHeader('Content-Type', adj.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(adj.nombre_archivo || 'validacion.pdf')}"`);
+    res.send(buf);
   } catch (err) { next(err); }
 });
 
@@ -219,5 +343,12 @@ portalAnalistaRouter.post('/solicitud/:id/ampliar-plazo', async (req, res, next)
     const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
     const result = await ampliarPlazo(req.params.id, req.body, usuario);
     res.json(result);
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cuadro-comparativo', async (_req, res, next) => {
+  try {
+    const data = await listarCuadroComparativo();
+    res.json({ data });
   } catch (err) { next(err); }
 });

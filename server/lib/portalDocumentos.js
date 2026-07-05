@@ -364,3 +364,125 @@ export async function registrarDocumentoTraza({
     ip,
   });
 }
+
+function parseCotizacionAnexos(val) {
+  const parsed = parseJson(val, {});
+  if (Array.isArray(parsed)) return {};
+  return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+function fileFromEntry(f, fallbackNombre = 'documento') {
+  const b64 = f?.base64 || f?.contenido_base64;
+  if (!b64) return null;
+  const nombre = f.nombre || f.nombre_archivo || fallbackNombre;
+  return {
+    nombre_archivo: nombre,
+    mime_type: f.mime_type || guessMime(nombre),
+    contenido_base64: b64,
+  };
+}
+
+export function buildManifiestoCotizacion(cot) {
+  const docs = [];
+  const anexos = parseCotizacionAnexos(cot?.anexos);
+  (anexos.docs_solicitados || []).forEach((f, i) => {
+    const file = fileFromEntry(f, `Documento solicitado ${i + 1}`);
+    if (file) docs.push({ ref: `docs-${i}`, nombre: file.nombre_archivo, grupo: 'Documentos solicitados', mime_type: file.mime_type });
+  });
+  (anexos.requisitos || []).forEach((f, i) => {
+    const file = fileFromEntry(f, `Requisito técnico ${i + 1}`);
+    if (file) docs.push({ ref: `req-${i}`, nombre: file.nombre_archivo, grupo: 'Requisitos técnicos', mime_type: file.mime_type });
+  });
+  const a05a = fileFromEntry(anexos.anexo05a_firmado, 'Anexo 05-A firmado');
+  if (a05a) docs.push({ ref: 'anexo05a', nombre: a05a.nombre_archivo, grupo: 'Anexos firmados', mime_type: a05a.mime_type });
+  const a05b = fileFromEntry(anexos.anexo05b_firmado, 'Anexo 05-B firmado');
+  if (a05b) docs.push({ ref: 'anexo05b', nombre: a05b.nombre_archivo, grupo: 'Propuesta económica', mime_type: a05b.mime_type, economico: true });
+  const certs = parseJson(cot?.certificados, []);
+  (Array.isArray(certs) ? certs : []).forEach((f, i) => {
+    const file = fileFromEntry(f, `Certificado ${i + 1}`);
+    if (file) docs.push({ ref: `cert-${i}`, nombre: file.nombre_archivo, grupo: 'Certificados', mime_type: file.mime_type });
+  });
+  return docs;
+}
+
+/** Documentos técnicos para derivación al área usuaria (sin propuesta económica). */
+export function buildManifiestoCotizacionTecnica(cot) {
+  return buildManifiestoCotizacion(cot).filter((d) => !d.economico && d.ref !== 'anexo05b');
+}
+
+export { parseCotizacionAnexos };
+
+export async function getCotizacionRecepcionDetalle(cotizacionId) {
+  const { rows } = await query(`
+    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+    FROM cotizaciones_proveedor cot
+    JOIN proveedores p ON p.id = cot.proveedor_id
+    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    WHERE cot.id = $1
+  `, [cotizacionId]);
+  if (!rows.length) throw new Error('Cotización no encontrada');
+  const cot = rows[0];
+  const anexos = parseCotizacionAnexos(cot.anexos);
+  const propuestaEconomica = parseJson(cot.propuesta_economica, {});
+  const datosProveedor = anexos.datos_proveedor || propuestaEconomica.datos_proveedor || {};
+  return {
+    id: cot.id,
+    solicitud_id: cot.solicitud_id,
+    proveedor_id: cot.proveedor_id,
+    solicitud_codigo: cot.solicitud_codigo,
+    denominacion: cot.denominacion,
+    objeto: cot.objeto,
+    ruc: cot.ruc,
+    razon_social: cot.razon_social,
+    estado: cot.estado,
+    validacion_estado: cot.validacion_estado || '',
+    fecha_presentacion: cot.fecha_presentacion,
+    monto: propuestaEconomica.monto ?? null,
+    moneda: propuestaEconomica.moneda || 'PEN',
+    propuesta_tecnica: parseJson(cot.propuesta_tecnica, {}),
+    propuesta_economica: propuestaEconomica,
+    datos_proveedor: datosProveedor,
+    documentos: buildManifiestoCotizacion(cot),
+  };
+}
+
+export async function resolverDocumentoCotizacionAnalista(cotizacionId, docRef) {
+  const { rows } = await query('SELECT * FROM cotizaciones_proveedor WHERE id = $1', [cotizacionId]);
+  if (!rows.length) throw new Error('Cotización no encontrada');
+  const cot = rows[0];
+  const anexos = parseCotizacionAnexos(cot.anexos);
+  const ref = String(docRef || '');
+
+  const docsMatch = ref.match(/^docs-(\d+)$/);
+  if (docsMatch) {
+    const f = (anexos.docs_solicitados || [])[parseInt(docsMatch[1], 10)];
+    const file = fileFromEntry(f);
+    if (file) return file;
+  }
+
+  const reqMatch = ref.match(/^req-(\d+)$/);
+  if (reqMatch) {
+    const f = (anexos.requisitos || [])[parseInt(reqMatch[1], 10)];
+    const file = fileFromEntry(f);
+    if (file) return file;
+  }
+
+  if (ref === 'anexo05a') {
+    const file = fileFromEntry(anexos.anexo05a_firmado, 'Anexo_05-A_firmado.pdf');
+    if (file) return file;
+  }
+  if (ref === 'anexo05b') {
+    const file = fileFromEntry(anexos.anexo05b_firmado, 'Anexo_05-B_firmado.pdf');
+    if (file) return file;
+  }
+
+  const certMatch = ref.match(/^cert-(\d+)$/);
+  if (certMatch) {
+    const certs = parseJson(cot.certificados, []);
+    const f = (Array.isArray(certs) ? certs : [])[parseInt(certMatch[1], 10)];
+    const file = fileFromEntry(f);
+    if (file) return file;
+  }
+
+  throw new Error('Documento no encontrado');
+}

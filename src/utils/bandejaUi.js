@@ -17,6 +17,9 @@ const MODULO_BANDEJA_POR_PREFIX = Object.freeze({
   inv: 'Invitaciones',
 });
 
+/** Bandejas sin chip rojo de observaciones bajo Ítem (solo ocultación visual). */
+const OBS_CHIP_HIDDEN_PREFIXES = new Set(['req', 'eval', 'dec']);
+
 const executiveMode = new Map();
 
 export const ESTADO_BADGE_STYLES = {
@@ -323,11 +326,12 @@ export function renderCompactRowCells(r, opts = {}) {
   const sigamef = getSigamefRaw(row);
   const tooltip = buildRowTooltip(row);
   const obsPend = obsCount != null ? obsCount : countObservacionesPendientes(row, moduloBandeja);
+  const showObsChip = !OBS_CHIP_HIDDEN_PREFIXES.has(prefix) && obsPend > 0;
   const tipoBadge = row.tipo === 'servicios' ? 'bg-success' : row.tipo === 'locacion' ? 'bg-info' : 'bg-primary';
   const tipoLabel = row.tipo === 'servicios' ? 'Serv.' : row.tipo === 'locacion' ? 'Loc.' : 'Bien';
   const metaChips = `
     <div class="req-meta-chips">
-      ${obsPend > 0 ? `<button type="button" class="chip chip-obs chip-obs-btn" data-req-id="${row.id}" title="${obsPend} observación(es) pendiente(s)" onclick="event.stopPropagation()"><i class="bi bi-exclamation-circle-fill"></i> ${obsPend}</button>` : ''}
+      ${showObsChip ? `<button type="button" class="chip chip-obs chip-obs-btn" data-req-id="${row.id}" title="${obsPend} observación(es) pendiente(s)" onclick="event.stopPropagation()"><i class="bi bi-exclamation-circle-fill"></i> ${obsPend}</button>` : ''}
       ${adjCount > 0
     ? `<button type="button" class="chip chip-adj chip-adj-btn bandeja-adj-count-${row.id}" data-req-id="${row.id}" title="${adjCount} documento(s) adjunto(s)" onclick="event.stopPropagation()"><i class="bi bi-file-earmark-text"></i> ${adjCount}</button>`
     : `<button type="button" class="chip chip-adj chip-adj-btn bandeja-adj-count-${row.id} d-none" data-req-id="${row.id}" onclick="event.stopPropagation()"><i class="bi bi-file-earmark-text"></i> 0</button>`}

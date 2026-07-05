@@ -121,6 +121,41 @@ export const contratacionesService = {
   async responderConsultaAnalista(id, body) {
     return api.put(`/contrataciones/portal-analista/consultas/${id}/responder`, body);
   },
+  async listRecepcionCotizaciones(params = {}) {
+    const q = new URLSearchParams(params).toString();
+    return api.get(`/contrataciones/portal-analista/cotizaciones${q ? `?${q}` : ''}`);
+  },
+  async getRecepcionCotizacionDetalle(id) {
+    return api.get(`/contrataciones/portal-analista/cotizaciones/${id}`);
+  },
+  async listValidacionesPendientes() {
+    return api.get('/contrataciones/portal-analista/validaciones/pendientes-derivacion');
+  },
+  async listValidacionesAsignadas() {
+    return api.get('/contrataciones/portal-analista/validaciones/asignadas');
+  },
+  async getValidacionSubmodulos() {
+    return api.get('/contrataciones/portal-analista/validaciones/submodulos');
+  },
+  async listValidacionUsuarios(submodulo, search = '') {
+    const q = new URLSearchParams({ submodulo, search }).toString();
+    return api.get(`/contrataciones/portal-analista/validaciones/usuarios?${q}`);
+  },
+  async getPreviewDerivacionValidacion(id) {
+    return api.get(`/contrataciones/portal-analista/validaciones/${id}/preview-derivacion`);
+  },
+  async derivarValidacion(id, body) {
+    return api.post(`/contrataciones/portal-analista/validaciones/${id}/derivar`, body);
+  },
+  async getValidacionTrabajo(id, admin = false) {
+    return api.get(`/contrataciones/portal-analista/validaciones/${id}/trabajo${admin ? '?admin=1' : ''}`);
+  },
+  async enviarValidacion(id, body) {
+    return api.put(`/contrataciones/portal-analista/validaciones/${id}/enviar`, body);
+  },
+  async listCuadroComparativo() {
+    return api.get('/contrataciones/portal-analista/cuadro-comparativo');
+  },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');
   },

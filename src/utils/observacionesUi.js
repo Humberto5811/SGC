@@ -34,7 +34,7 @@ export function syncFilaBandejaObservaciones(row, opts = {}) {
     estadoTd.innerHTML = renderEstadoVisualHtml(fresh, { moduloContext: mod }, escFn);
   }
   const obsChip = tr.querySelector('.chip-obs');
-  const count = visual.pendientesCount ?? 0;
+  const count = visual.motor?.pendientesModuloCount ?? 0;
   if (count > 0) {
     if (obsChip) {
       obsChip.innerHTML = `<i class="bi bi-exclamation-circle-fill"></i> ${count}`;

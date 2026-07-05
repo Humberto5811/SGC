@@ -1,0 +1,38 @@
+{
+  "id": 51,
+  "codigo": "REQ-051",
+  "observaciones": [
+    {
+      "id": "obs-1",
+      "estado": "SUBSANADA",
+      "origen_submodulo": "Evaluación de Requerimiento",
+      "destino_submodulo": "Registro de Requerimiento",
+      "motivo": "Obs 1",
+      "subsanacion": { "texto": "Subsanado registro", "fecha": "2026-06-01" }
+    },
+    {
+      "id": "obs-2",
+      "estado": "SUBSANADA",
+      "origen_submodulo": "Evaluación de Requerimiento",
+      "destino_submodulo": "Registro de Requerimiento",
+      "motivo": "Obs 2",
+      "subsanacion": { "texto": "Subsanado registro", "fecha": "2026-06-02" }
+    },
+    {
+      "id": "obs-3",
+      "estado": "SUBSANADA",
+      "origen_submodulo": "DEC",
+      "destino_submodulo": "Evaluación de Requerimiento",
+      "motivo": "Obs DEC→Eval",
+      "subsanacion": { "texto": "Subsanado eval", "fecha": "2026-06-03" }
+    },
+    {
+      "id": "obs-4",
+      "estado": "CERRADA",
+      "cerrada": true,
+      "origen_submodulo": "Programación",
+      "destino_submodulo": "Evaluación de Requerimiento",
+      "motivo": "Obs Prog→Eval cerrada"
+    }
+  ]
+}

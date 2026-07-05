@@ -402,16 +402,51 @@ export async function responderConsultaAnalista(consultaId, body, usuario) {
   return c;
 }
 
-export async function listarValidacionesBandeja() {
+export async function listarRecepcionCotizaciones(queryParams = {}) {
+  const estado = String(queryParams.estado || '').trim();
+  const params = [];
+  let where = `WHERE cot.estado = 'COTIZACION_PRESENTADA'`;
+  if (estado) {
+    params.push(estado);
+    where += ` AND cot.estado = $${params.length}`;
+  }
   const { rows } = await query(`
-    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.fecha_presentacion,
+      cot.validacion_estado, cot.created_at, cot.propuesta_economica,
+      p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
-    WHERE cot.estado = 'COTIZACION_PRESENTADA'
-    ORDER BY cot.fecha_presentacion DESC
-  `);
-  return rows;
+    ${where}
+    ORDER BY cot.fecha_presentacion DESC NULLS LAST, cot.created_at DESC
+    LIMIT 500
+  `, params);
+  return rows.map((r) => {
+    const eco = typeof r.propuesta_economica === 'object'
+      ? r.propuesta_economica
+      : (() => { try { return JSON.parse(r.propuesta_economica || '{}'); } catch (_) { return {}; } })();
+    return {
+      id: r.id,
+      solicitud_id: r.solicitud_id,
+      proveedor_id: r.proveedor_id,
+      estado: r.estado,
+      validacion_estado: r.validacion_estado || '',
+      fecha_presentacion: r.fecha_presentacion,
+      created_at: r.created_at,
+      monto: eco.monto ?? null,
+      moneda: eco.moneda || 'PEN',
+      ruc: r.ruc,
+      razon_social: r.razon_social,
+      solicitud_codigo: r.solicitud_codigo,
+      denominacion: r.denominacion,
+      objeto: r.objeto,
+    };
+  });
+}
+
+export async function listarValidacionesBandeja() {
+  const { listarValidacionesPendientesDerivacion } = await import('./validacionesCotizacion.js');
+  return listarValidacionesPendientesDerivacion();
 }
 
 export async function validarCotizacion(cotizacionId, body, usuario) {
