@@ -18,12 +18,12 @@ export function registroMenuItems(r) {
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
+    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
+    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
     { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
-    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
-    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
-    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
 
@@ -56,12 +56,12 @@ export function evalMenuItems(r) {
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
-    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !motorObs },
+    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: aprobado || !enTramite },
-    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !motorObs },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
-    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
 
@@ -89,11 +89,11 @@ export function decMenuItems(r) {
   const obsLabel = labelBotonObservaciones(r, 'DEC');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
-    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
-    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
     { act: 'approve', label: 'Aprobar DEC', icon: 'bi-check-circle', disabled: !puedeAprobarDEC },
-    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
+    { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
 
@@ -118,11 +118,11 @@ export function progMenuItems(r) {
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
-    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !obsEnabled },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
-    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
+    { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !obsEnabled },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
 
@@ -193,11 +193,11 @@ export function invitacionesMenuItems(r) {
   const obsLabel = labelBotonObservaciones(r, 'Invitaciones');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+    { act: 'crearSc', label: 'Crear Solicitud de Cotización', icon: 'bi-file-earmark-plus' },
     { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
-    { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
-    { act: 'crearSc', label: 'Crear Solicitud de Cotización', icon: 'bi-file-earmark-plus' },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
 
