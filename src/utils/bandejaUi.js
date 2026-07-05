@@ -299,7 +299,7 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '') {
     return `
       <th class="req-col-req">N° Req</th>
       <th class="req-col-sigamef">Código SIGAMEF</th>
-      <th class="req-col-desc">Ítem</th>
+      <th class="req-col-desc">Descripción</th>
       <th class="req-col-estado">Estado</th>
       <th class="req-col-resp">Responsable</th>
       <th class="req-col-dias">Días</th>
@@ -311,7 +311,7 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '') {
     <th class="req-col-req">N° Req</th>
     <th class="req-col-tipo">Tipo</th>
     <th class="req-col-sigamef">Código SIGAMEF</th>
-    <th class="req-col-desc">Ítem</th>
+    <th class="req-col-desc">Descripción</th>
     <th class="req-col-estado">Estado</th>
     <th class="req-col-resp">Responsable</th>
     <th class="req-col-dias">Días</th>
