@@ -25,6 +25,7 @@ import {
 } from '../../utils/actosModals.js';
 import { estadoModernBadge } from '../../utils/bandejaUi.js';
 import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
+import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -51,18 +52,6 @@ function actosSortBandejaHeaders(sortState = null) {
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
     ${sortableTh('Días', 'dias', sortState)}
     <th class="req-col-acc"></th>`;
-}
-
-function looksPedidoSigamefCode(value) {
-  const first = String(value || '').split(',')[0].trim();
-  return /^(PB|PS)-/i.test(first);
-}
-
-function resolvePedidoSigamef(r) {
-  const backend = String(r.pedidos_sigamef || r.pedidosSigamef || r.pedido_sigamef || '').trim();
-  if (looksPedidoSigamefCode(backend)) return backend;
-  if (backend) return backend;
-  return String(r.codigo_sigamef || '').trim() || '—';
 }
 
 function getResponsableRolDisplayCm(r) {

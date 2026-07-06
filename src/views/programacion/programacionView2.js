@@ -24,6 +24,7 @@ import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { loadPaquetesConsolidacionTab, openPaquetePanel, highlightPedidoInPaquetesMatriz } from './paquetesConsolidacionView.js';
 import { loadPedidosConsolidacionTab, invalidatePedidosMatriz, reloadPedidosConsolidacion } from './pedidosConsolidacionView.js';
+import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -80,19 +81,6 @@ function getPayloadItemTexts(r) {
     }
   } catch (_) {}
   return { codigosSigamef, descripcionesBien };
-}
-
-function looksPedidoSigamefCode(value) {
-  const first = String(value || '').split(',')[0].trim();
-  return /^(PB|PS)-/i.test(first);
-}
-
-function resolvePedidoSigamef(r, labelFallback = '') {
-  const backend = String(r.pedidos_sigamef || r.pedidosSigamef || r.pedido_sigamef || '').trim();
-  const fallback = String(labelFallback || '').trim();
-  if (looksPedidoSigamefCode(backend)) return backend;
-  if (looksPedidoSigamefCode(fallback)) return fallback;
-  return backend || fallback || String(r.codigo_sigamef || '').trim() || '—';
 }
 
 function getResponsableRolDisplay(r) {
@@ -214,10 +202,16 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
     pedidosCountMap = countMap || {};
 
     rows = applyBandejaFilters(rows, progListFilters);
-    rows = rows.map((r) => enrichReqRow({
-      ...r,
-      pedidos_sigamef: resolvePedidoSigamef(r, pedidosLabelMap[r.id] || pedidosLabelMap[String(r.id)] || ''),
-    }));
+    rows = rows.map((r) => {
+      const withPedido = {
+        ...r,
+        pedidos_sigamef: r.pedidos_sigamef || r.pedidosSigamef || pedidosLabelMap[r.id] || pedidosLabelMap[String(r.id)] || '',
+      };
+      return enrichReqRow({
+        ...withPedido,
+        pedidos_sigamef: resolvePedidoSigamef(withPedido),
+      });
+    });
     rows = sortBandejaRows(rows, progListSort.sort, progListSort.dir);
     allRows = rows;
     updateSummaryCards(rows, 'progTrazaSummary');

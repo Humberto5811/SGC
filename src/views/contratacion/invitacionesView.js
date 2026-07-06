@@ -14,6 +14,7 @@ import { usePagination } from '../../utils/paginacion.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { estadoModernBadge } from '../../utils/bandejaUi.js';
 import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
+import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 import { showSolicitudCotizacionModal, showInvitarProveedoresModal } from '../../utils/invitacionesModals.js';
 import {
   bindTrazabilidadButtons, showObservacionDirigidaModal, showTrazabilidadModal,
@@ -96,18 +97,6 @@ function invitacionesBandejaHeaders(sortState = null) {
     <th class="text-center actos-col-inv-count" style="min-width:72px;">Invitado</th>
     <th class="text-center actos-col-inv-count" style="min-width:100px;">N° Invitaciones</th>
     <th class="req-col-acc"></th>`;
-}
-
-function looksPedidoSigamefCode(value) {
-  const first = String(value || '').split(',')[0].trim();
-  return /^(PB|PS)-/i.test(first);
-}
-
-function resolvePedidoSigamef(r) {
-  const backend = String(r.pedidos_sigamef || r.pedidosSigamef || r.pedido_sigamef || '').trim();
-  if (looksPedidoSigamefCode(backend)) return backend;
-  if (backend) return backend;
-  return String(r.codigo_sigamef || '').trim() || '—';
 }
 
 function getResponsableRolDisplayInv(r) {
