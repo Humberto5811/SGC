@@ -90,7 +90,7 @@ export async function buildMatrizConsolidacionPaquetes() {
   const { rows: paquetes } = await query(`
     SELECT pp.*
     FROM paquetes_programacion pp
-    ORDER BY pp.codigo_paquete ASC NULLS LAST, pp.id ASC
+    ORDER BY pp.created_at DESC NULLS LAST, pp.id DESC
   `);
 
   const resultado = [];

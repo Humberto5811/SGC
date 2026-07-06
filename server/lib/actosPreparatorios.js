@@ -213,7 +213,7 @@ export async function listarBandejaActos(page, pageSize, queryParams = {}, optio
       ${TRAZA_EXTRA_SELECT}
     ${BASE_FROM}
     ${where}
-    ORDER BY r.fecha_estado_actual DESC NULLS LAST, r.codigo ASC NULLS LAST
+    ORDER BY r.created_at DESC NULLS LAST, r.id DESC
     LIMIT $${limitIdx} OFFSET $${offsetIdx}
   `, params);
 

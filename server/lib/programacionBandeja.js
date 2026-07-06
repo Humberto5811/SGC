@@ -57,7 +57,7 @@ export async function listarBandejaProgramacion(page, pageSize, queryParams = {}
       ${TRAZA_EXTRA_SELECT}
     ${REQUERIMIENTO_BANDEJA_FROM}
     ${where}
-    ORDER BY r.fecha_estado_actual DESC NULLS LAST, r.codigo ASC NULLS LAST
+    ORDER BY r.created_at DESC NULLS LAST, r.id DESC
     LIMIT $${limitIdx} OFFSET $${offsetIdx}
   `, params);
 

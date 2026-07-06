@@ -46,7 +46,7 @@ export async function buildMatrizSeguimientoPedidos() {
     LEFT JOIN centros c ON a.centro_id = c.id
     LEFT JOIN paquete_requerimientos pr ON pr.requerimiento_id = r.id
     LEFT JOIN paquetes_programacion pp ON pp.id = pr.paquete_id
-    ORDER BY p.nro_pedido ASC NULLS LAST, r.codigo ASC NULLS LAST, p.id ASC
+    ORDER BY r.created_at DESC NULLS LAST, r.id DESC
   `);
 
   const filas = [];

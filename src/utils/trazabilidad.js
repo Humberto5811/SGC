@@ -263,6 +263,10 @@ export {
   buildExportRowData,
   updateBandejaAdjCount,
   isExecutiveMode,
+  sortBandejaRows,
+  bindSortHandlers,
+  mergeSortParams,
+  sortableTh,
 } from './bandejaUi.js';
 
 export function retrasadoIndicator(row) {

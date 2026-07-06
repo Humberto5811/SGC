@@ -58,7 +58,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
         ${TRAZA_EXTRA_SELECT}
       ${BASE_FROM}
       ${where}
-      ORDER BY r.codigo ASC NULLS LAST, r.id ASC
+      ORDER BY r.created_at DESC NULLS LAST, r.id DESC
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `;
 

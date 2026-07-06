@@ -83,7 +83,6 @@ export function renderPaquetesFilterBar(prefix = 'paq') {
         <div class="col-md-12 d-flex gap-2 flex-wrap mt-1">
           <button type="button" class="btn btn-sm btn-primary" id="${prefix}BtnFilter"><i class="bi bi-funnel"></i> Filtrar</button>
           <button type="button" class="btn btn-sm btn-outline-secondary" id="${prefix}BtnClear">Limpiar</button>
-          <button type="button" class="btn btn-sm btn-outline-dark" id="${prefix}BtnExecutive"><i class="bi bi-bar-chart"></i> Vista Ejecutiva</button>
           <button type="button" class="btn btn-sm btn-outline-success" id="${prefix}BtnExport"><i class="bi bi-file-earmark-excel"></i> Exportar Excel</button>
         </div>
       </div>
