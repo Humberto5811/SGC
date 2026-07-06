@@ -21,8 +21,10 @@ import {
   isCoordinadorActos, isExpedientePoolCoordinador, isExpedienteAsignadoAMi,
   showAsignarAnalistaModal, showAprobarInvitacionesModal, showActosDestinoModal,
   showDerivarAnalistaModal,
-  renderActosRowCells, actosBandejaStyles,
+  actosBandejaStyles,
 } from '../../utils/actosModals.js';
+import { estadoModernBadge } from '../../utils/bandejaUi.js';
+import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -42,12 +44,79 @@ function actosSortBandejaHeaders(sortState = null) {
     ${sortableTh('Pedido SIGAMEF', 'pedido', sortState, 'actos-col-pedido')}
     ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'actos-col-sigamef')}
     ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
-    ${sortableTh('Área Usuaria', 'area', sortState)}
+    ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
+    ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('Estado Actual', 'estado', sortState)}
     ${sortableTh('Responsable Actual', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
     ${sortableTh('Días', 'dias', sortState)}
     <th class="req-col-acc"></th>`;
+}
+
+function looksPedidoSigamefCode(value) {
+  const first = String(value || '').split(',')[0].trim();
+  return /^(PB|PS)-/i.test(first);
+}
+
+function resolvePedidoSigamef(r) {
+  const backend = String(r.pedidos_sigamef || r.pedidosSigamef || r.pedido_sigamef || '').trim();
+  if (looksPedidoSigamefCode(backend)) return backend;
+  if (backend) return backend;
+  return String(r.codigo_sigamef || '').trim() || '—';
+}
+
+function getResponsableRolDisplayCm(r) {
+  const resp = String(r?.responsable_actual || r?.responsableActual || '').trim();
+  if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
+  if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
+  return getRolDisplayFromRow(r);
+}
+
+function renderCmBandejaRowCells(r, opts = {}) {
+  const { escFn = esc } = opts;
+  const sigamef = (() => {
+    try {
+      const p = JSON.parse(r.payload || '{}');
+      const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
+      if (items?.length) return items.map((it) => it.item_bien || '').filter(Boolean).join(', ');
+    } catch (_) {}
+    return '';
+  })();
+  const nombreItem = (() => {
+    try {
+      const p = JSON.parse(r.payload || '{}');
+      const items = r.tipo === 'servicios' ? (p.servicioItems || []) : r.tipo === 'locacion' ? (p.locadorItems || []) : (p.items || []);
+      if (Array.isArray(items) && items.length) {
+        const names = items.map((it) => it.nombre_item || '').filter(Boolean);
+        if (names.length) return names.join(', ');
+      }
+    } catch (_) {}
+    return r.denominacion || '';
+  })();
+  const paqBadge = r.codigo_paquete
+    ? `<span class="badge bg-success">${escFn(r.codigo_paquete)}</span>`
+    : '<span class="text-muted small">Sin paquete</span>';
+  const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
+  const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
+  const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
+  const resp = r.responsable_actual || r.responsableActual || '—';
+  const rol = getResponsableRolDisplayCm(r);
+  const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
+  const pedidos = resolvePedidoSigamef(r);
+
+  return `
+    <td class="text-center"><button type="button" class="btn btn-link btn-sm p-0 req-traza text-secondary" data-id="${r.id}" onclick="event.stopPropagation()"><i class="bi bi-clock-history"></i></button></td>
+    <td><strong>${escFn(r.codigo || ('#' + r.id))}</strong></td>
+    <td class="actos-col-paq">${paqBadge}</td>
+    <td class="actos-col-pedido small">${escFn(pedidos)}</td>
+    <td class="actos-col-sigamef small">${escFn(sigamef || '—')}</td>
+    <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
+    <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
+    <td class="actos-col-area">${escFn(r.area || '—')}</td>
+    <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
+    <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
+    <td class="small text-muted">${escFn(fechaFmt)}</td>
+    <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
 }
 
 function getCurrentUser() {
@@ -100,7 +169,10 @@ function renderActosView() {
   const perfil = isCoordinadorActos(user) ? 'Coordinador de Contratos Menores' : 'Analista de Contratos Menores';
   return `
     <div class="container-fluid actos-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}
+        .actos-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
+        .actos-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
+      </style>
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-file-earmark-ruled"></i> Coordinación CM</h3>
@@ -168,7 +240,7 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
     const tbody = rows.map((r) => {
       const ctx = getRowContext(r);
       return `<tr data-req-id="${r.id}">
-        ${renderActosRowCells(r, { escFn: esc })}
+        ${renderCmBandejaRowCells(r, { escFn: esc })}
         ${renderActionMenuCell(r.id, actosMenuItems(r, ctx), actosHiddenActions(r, ctx))}
       </tr>`;
     }).join('');

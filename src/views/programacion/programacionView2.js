@@ -62,6 +62,8 @@ export function renderProgramacionView() {
       .prog-bandeja-page { overflow: visible; padding-bottom: 2rem; }
       .prog-bandeja-wrap .table-responsive { overflow-x: auto; overflow-y: visible; }
       .prog-bandeja-wrap .req-list-table { table-layout: auto; width: 100%; min-width: 1280px; }
+      .prog-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
+      .prog-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
     </style>
   `;
 }
@@ -78,6 +80,19 @@ function getPayloadItemTexts(r) {
     }
   } catch (_) {}
   return { codigosSigamef, descripcionesBien };
+}
+
+function looksPedidoSigamefCode(value) {
+  const first = String(value || '').split(',')[0].trim();
+  return /^(PB|PS)-/i.test(first);
+}
+
+function resolvePedidoSigamef(r, labelFallback = '') {
+  const backend = String(r.pedidos_sigamef || r.pedidosSigamef || r.pedido_sigamef || '').trim();
+  const fallback = String(labelFallback || '').trim();
+  if (looksPedidoSigamefCode(backend)) return backend;
+  if (looksPedidoSigamefCode(fallback)) return fallback;
+  return backend || fallback || String(r.codigo_sigamef || '').trim() || '—';
 }
 
 function getResponsableRolDisplay(r) {
@@ -104,7 +119,8 @@ function programacionBandejaHeaders(sortState = null) {
     ${sortableTh('Pedido SIGAMEF', 'pedido', sortState, 'actos-col-pedido')}
     ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'actos-col-sigamef')}
     ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
-    ${sortableTh('Área Usuaria', 'area', sortState)}
+    ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
+    ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('Estado Actual', 'estado', sortState)}
     ${sortableTh('Responsable Actual', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
@@ -119,8 +135,8 @@ function renderProgramacionRowCells(r, opts = {}) {
   const paqBadge = r.codigo_paquete
     ? `<span class="badge bg-success">${esc(r.codigo_paquete)}</span>`
     : '<span class="text-muted small">Sin paquete</span>';
-  const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '';
-  const pedidosDisplay = pedidos
+  const pedidos = resolvePedidoSigamef(r);
+  const pedidosDisplay = pedidos && pedidos !== '—'
     ? esc(pedidos)
     : (pedCnt > 0
       ? `<span class="badge bg-success">${pedCnt} pedido${pedCnt === 1 ? '' : 's'}</span>`
@@ -140,7 +156,8 @@ function renderProgramacionRowCells(r, opts = {}) {
     <td class="actos-col-pedido small">${pedidosDisplay}</td>
     <td class="actos-col-sigamef small">${esc(codigosSigamef || '—')}</td>
     <td class="actos-col-desc"><span class="req-desc-text" title="${esc(nombreItem)}">${esc(nombreItem)}</span></td>
-    <td>${esc(r.area || '—')}</td>
+    <td class="actos-col-centro"><span class="req-centro-text" title="${esc(r.centro_nombre || r.centro || '—')}">${esc(r.centro_nombre || r.centro || '—')}</span></td>
+    <td class="actos-col-area">${esc(r.area || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${esc(resp)}</div><div class="req-resp-role">${esc(rol)}</div></td>
     <td class="small text-muted">${esc(fechaFmt)}</td>
@@ -199,7 +216,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
     rows = applyBandejaFilters(rows, progListFilters);
     rows = rows.map((r) => enrichReqRow({
       ...r,
-      pedidos_sigamef: r.pedidos_sigamef || r.pedidosSigamef || pedidosLabelMap[r.id] || pedidosLabelMap[String(r.id)] || '',
+      pedidos_sigamef: resolvePedidoSigamef(r, pedidosLabelMap[r.id] || pedidosLabelMap[String(r.id)] || ''),
     }));
     rows = sortBandejaRows(rows, progListSort.sort, progListSort.dir);
     allRows = rows;
