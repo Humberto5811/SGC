@@ -122,7 +122,7 @@ function renderActosView() {
           </div>
         </div>
       </div>` : ''}
-      ${renderFilterBarHtml('actos')}
+      ${renderFilterBarHtml('actos', { hideExecutive: true })}
       <hr/>
       <div id="actosList"><div class="text-muted">Cargando…</div></div>
     </div>

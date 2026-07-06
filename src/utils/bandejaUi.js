@@ -293,28 +293,117 @@ export function applyBandejaFilters(rows, filters = {}) {
   return list;
 }
 
-export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '') {
+function bandejaSortIndicator(sortState, sortKey) {
+  if (!sortState || sortState.sort !== sortKey) return '';
+  return sortState.dir === 'asc' ? ' ▲' : ' ▼';
+}
+
+/** Cabecera ordenable con data-sort e indicador ▲/▼ */
+export function sortableTh(label, sortKey, sortState = null, className = '') {
+  if (!sortKey) {
+    return className ? `<th class="${className}">${label}</th>` : `<th>${label}</th>`;
+  }
+  const cls = className ? ` class="${className}"` : '';
+  const ind = bandejaSortIndicator(sortState, sortKey);
+  return `<th${cls} data-sort="${sortKey}" title="Click para ordenar">${label}${ind}</th>`;
+}
+
+export function mergeSortParams(current = {}, override = {}) {
+  const next = { sort: current.sort || 'created_at', dir: current.dir || 'desc' };
+  if (override.sort) next.sort = override.sort;
+  if (override.dir) next.dir = override.dir;
+  return next;
+}
+
+function bandejaSortValue(row, field) {
+  switch (field) {
+    case 'codigo': return String(row.codigo || '');
+    case 'tipo': return String(row.tipo || '');
+    case 'sigamef': return getSigamefRaw(row);
+    case 'denominacion': return getRowDescripcionRaw(row);
+    case 'estado': return String(row.estado || row.estado_actual || row.estadoActual || '');
+    case 'responsable':
+      return String(row.responsable_actual || row.responsableActual || row.responsable || '');
+    case 'dias':
+      return Number(row.dias_en_estado ?? calcDiasEnEstado(row.fecha_estado_actual || row.fechaEstadoActual) ?? 0);
+    case 'created_at':
+      if (row.created_at) return new Date(row.created_at).getTime();
+      return Number(row.id) || 0;
+    case 'codigo_solicitud':
+      return String(row.codigo_solicitud || row.codigoSolicitud || '');
+    case 'paquete': return String(row.codigo_paquete || '');
+    case 'pedido': return String(row.pedidos_sigamef || row.pedidosSigamef || '');
+    case 'area': return String(row.area || '');
+    case 'fecha': {
+      const ref = row.fecha_estado_actual || row.fechaEstadoActual || row.created_at;
+      return ref ? new Date(ref).getTime() : 0;
+    }
+    default:
+      return row[field] ?? '';
+  }
+}
+
+/** Ordenamiento client-side de filas de bandeja (sort/dir alineados con data-sort). */
+export function sortBandejaRows(rows = [], sort = 'created_at', dir = 'desc') {
+  const mult = dir === 'asc' ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const va = bandejaSortValue(a, sort);
+    const vb = bandejaSortValue(b, sort);
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * mult;
+    return String(va).localeCompare(String(vb), 'es', { numeric: true, sensitivity: 'base' }) * mult;
+  });
+}
+
+/**
+ * Enlaza clic en cabeceras con data-sort.
+ * @param {Element|string} container - contenedor de la tabla o selector CSS
+ * @param {Function} loadFunction - recibe { sort, dir }
+ */
+export function bindSortHandlers(container, loadFunction, options = {}) {
+  const root = typeof container === 'string' ? document.querySelector(container) : container;
+  if (!root) {
+    console.warn('bindSortHandlers: contenedor no encontrado');
+    return null;
+  }
+  const { defaultSort = 'created_at', defaultDir = 'desc', getSort } = options;
+
+  root.querySelectorAll('th[data-sort]').forEach((th) => {
+    const sortKey = th.dataset.sort;
+    if (!sortKey) return;
+    th.style.cursor = 'pointer';
+    if (!th.getAttribute('title')) th.title = 'Click para ordenar';
+    th.onclick = () => {
+      const current = getSort?.() || { sort: defaultSort, dir: defaultDir };
+      const dir = current.sort === sortKey && current.dir === 'asc' ? 'desc' : 'asc';
+      if (typeof loadFunction === 'function') loadFunction({ sort: sortKey, dir });
+    };
+  });
+
+  return root;
+}
+
+export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '', sortState = null) {
   const exec = isExecutiveMode(prefix);
   if (exec) {
     return `
-      <th class="req-col-req">N° Req</th>
-      <th class="req-col-sigamef">Código SIGAMEF</th>
-      <th class="req-col-desc">Descripción</th>
-      <th class="req-col-estado">Estado</th>
-      <th class="req-col-resp">Responsable</th>
-      <th class="req-col-dias">Días</th>
+      ${sortableTh('N° Req', 'codigo', sortState, 'req-col-req')}
+      ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'req-col-sigamef')}
+      ${sortableTh('Descripción', 'denominacion', sortState, 'req-col-desc')}
+      ${sortableTh('Estado', 'estado', sortState, 'req-col-estado')}
+      ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
+      ${sortableTh('Días', 'dias', sortState, 'req-col-dias')}
       ${extraColsBeforeAcc}
       <th class="req-col-acc"></th>`;
   }
   return `
     <th class="req-col-timeline" title="Timeline">🕒</th>
-    <th class="req-col-req">N° Req</th>
-    <th class="req-col-tipo">Tipo</th>
-    <th class="req-col-sigamef">Código SIGAMEF</th>
-    <th class="req-col-desc">Descripción</th>
-    <th class="req-col-estado">Estado</th>
-    <th class="req-col-resp">Responsable</th>
-    <th class="req-col-dias">Días</th>
+    ${sortableTh('N° Req', 'codigo', sortState, 'req-col-req')}
+    ${sortableTh('Tipo', 'tipo', sortState, 'req-col-tipo')}
+    ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'req-col-sigamef')}
+    ${sortableTh('Descripción', 'denominacion', sortState, 'req-col-desc')}
+    ${sortableTh('Estado', 'estado', sortState, 'req-col-estado')}
+    ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
+    ${sortableTh('Días', 'dias', sortState, 'req-col-dias')}
     ${extraColsBeforeAcc}
     <th class="req-col-acc"></th>`;
 }
@@ -404,14 +493,16 @@ export function bindActionMenus(container, actMap = {}) {
   });
 }
 
-export function wrapBandejaTable({ containerId, prefix = 'req', headExtraBefore = '', extraColsBeforeAcc = '', bodyHtml }) {
+export function wrapBandejaTable({
+  containerId, prefix = 'req', headExtraBefore = '', extraColsBeforeAcc = '', bodyHtml, sortState = null,
+}) {
   return `
     <style>${bandejaGlobalStyles()}</style>
     <div class="sgc-bandeja-wrap" id="${containerId}-wrap">
       <div class="table-responsive">
         <table class="table table-sm table-hover align-middle req-list-table mb-0">
           <thead class="table-light">
-            <tr>${headExtraBefore}${bandejaTraceHeaders(prefix, extraColsBeforeAcc)}</tr>
+            <tr>${headExtraBefore}${bandejaTraceHeaders(prefix, extraColsBeforeAcc, sortState)}</tr>
           </thead>
           <tbody>${bodyHtml}</tbody>
         </table>

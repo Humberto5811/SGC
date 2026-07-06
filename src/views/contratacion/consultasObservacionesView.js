@@ -2,7 +2,8 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
-import { renderContratacionBandejaStub } from '../../utils/contratacionBandejaStub.js';
+import { renderFilterBarHtml, renderSummaryCardsHtml, bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
 
@@ -30,7 +31,27 @@ const consultasPagination = usePagination(
 );
 
 export function renderConsultasObservacionesView() {
-  return renderContratacionBandejaStub(VIEW_CONFIG);
+  const { prefix, title, icon, description, listId } = VIEW_CONFIG;
+  return `
+    <div class="container-fluid actos-bandeja-page">
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
+          <p class="text-muted mb-0">${esc(description)}</p>
+        </div>
+        <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-arrow-clockwise"></i> Actualizar
+        </button>
+      </div>
+      ${renderSummaryCardsHtml(`${prefix}TrazaSummary`)}
+      ${renderFilterBarHtml(prefix, { hideExecutive: true })}
+      <hr/>
+      <div id="${esc(listId)}" class="sgc-bandeja-wrap actos-bandeja-wrap">
+        <div class="text-muted">Cargando…</div>
+      </div>
+    </div>
+  `;
 }
 
 function showResponderConsultaModal(consulta) {
