@@ -4,6 +4,7 @@ import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import { renderContratacionBandejaStub } from '../../utils/contratacionBandejaStub.js';
 import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
+import { usePagination } from '../../utils/paginacion.js';
 import { downloadAnexo07A, triggerPdfUpload } from '../../utils/validacionAnexo07aPdf.js';
 
 const API_BASE = 'http://localhost:3000/api';
@@ -91,6 +92,20 @@ const VIEW_CONFIG = {
 const SI_NO_OPTS = ['', 'Sí', 'No'];
 const CUMPLE_OPTS = ['', 'SI CUMPLE', 'NO CUMPLE'];
 const RESULTADO_OPTS = ['', 'Especificaciones Técnicas válidas', 'Especificaciones Técnicas NO válidas'];
+
+const validacionesPagination = usePagination(
+  'validaciones',
+  async () => {
+    const [pendResp, asigResp] = await Promise.all([
+      isUsuarioCm() ? contratacionesService.listValidacionesPendientes() : Promise.resolve({ data: [] }),
+      contratacionesService.listValidacionesAsignadas(),
+    ]);
+    const pendientes = (pendResp.data || []).map((r) => ({ ...r, _section: 'pendiente' }));
+    const asignadas = (asigResp.data || []).map((r) => ({ ...r, _section: 'asignada' }));
+    return { data: [...pendientes, ...asignadas] };
+  },
+  { defaultPageSize: 25, pageSizeOptions: [25, 50, 100] },
+);
 
 function renderDocsList(cotId, docs, opts = {}) {
   if (!docs?.length) return '<div class="text-muted small">Sin documentos técnicos.</div>';
@@ -483,23 +498,25 @@ function renderTabla(rows, tipo) {
     </table>`;
 }
 
-async function loadValidaciones() {
+async function loadValidaciones(resetPage = false) {
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
   try {
-    const [pendResp, asigResp] = await Promise.all([
-      isUsuarioCm() ? contratacionesService.listValidacionesPendientes() : Promise.resolve({ data: [] }),
-      contratacionesService.listValidacionesAsignadas(),
-    ]);
-    const pendientes = pendResp.data || [];
-    const asignadas = asigResp.data || [];
+    if (resetPage) validacionesPagination.resetPage();
+    const result = await validacionesPagination.loadData({}, resetPage);
+    const pageRows = result.data || [];
+    const allRows = result.allData || pageRows;
+    const totalPendientes = allRows.filter((r) => r._section === 'pendiente');
+    const totalAsignadas = allRows.filter((r) => r._section === 'asignada');
+    const pendientes = pageRows.filter((r) => r._section === 'pendiente');
+    const asignadas = pageRows.filter((r) => r._section === 'asignada');
 
-    if (!pendientes.length && !asignadas.length) {
+    if (!totalPendientes.length && !totalAsignadas.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay validaciones pendientes ni asignadas.</div>';
       return;
     }
 
-    let html = '';
+    let html = '<div class="sgc-bandeja-wrap" id="validacionesOuter">';
     if (isUsuarioCm() && pendientes.length) {
       html += `
         <div class="mb-4">
@@ -510,13 +527,14 @@ async function loadValidaciones() {
     }
     if (asignadas.length) {
       html += `
-        <div>
+        <div class="mb-0">
           <h6 class="fw-bold text-success mb-2"><i class="bi bi-person-check"></i> Mis validaciones asignadas</h6>
           ${renderTabla(asignadas, 'asignadas')}
         </div>`;
-    } else if (!isUsuarioCm() || !pendientes.length) {
+    } else if (!isUsuarioCm() || !totalPendientes.length) {
       html += '<div class="alert alert-light border">No tiene validaciones asignadas.</div>';
     }
+    html += '</div>';
 
     cont.innerHTML = html;
     cont.querySelectorAll('.val-derivar').forEach((btn) => {
@@ -525,6 +543,7 @@ async function loadValidaciones() {
     cont.querySelectorAll('.val-trabajo').forEach((btn) => {
       btn.onclick = () => showTrabajoValidacionModal(btn.dataset.id);
     });
+    validacionesPagination.renderControls('validacionesOuter', () => loadValidaciones(false));
   } catch (err) {
     cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -537,11 +556,11 @@ export function renderValidacionesView() {
 export function initValidacionesView() {
   bindBandejaToolbar({
     prefix: VIEW_CONFIG.prefix,
-    onFilter: () => loadValidaciones(),
-    onClear: () => loadValidaciones(),
-    onExecutiveToggle: () => loadValidaciones(),
+    onFilter: () => loadValidaciones(true),
+    onClear: () => loadValidaciones(true),
+    onExecutiveToggle: () => loadValidaciones(true),
   });
   const reload = document.getElementById(`${VIEW_CONFIG.prefix}Reload`);
-  if (reload) reload.onclick = () => loadValidaciones();
+  if (reload) reload.onclick = () => loadValidaciones(true);
   loadValidaciones();
 }

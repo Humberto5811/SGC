@@ -2,13 +2,15 @@
 import { authService } from '../../services/authService.js';
 import { permissionsService } from '../../services/permissionsService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { fetchBandejaDEC } from '../../utils/bandejaRequerimientos.js';
+import { loadDECBandeja } from '../../utils/bandejaRequerimientos.js';
+import { usePagination } from '../../utils/paginacion.js';
 import { reqShared, todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from '../requerimiento/reqShared.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 import {
   renderFilterBarHtml, readFilterParams,
   renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
 import { decMenuItems, decHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
@@ -22,6 +24,8 @@ function esc(s) {
 
 let lastRows = [];
 let listFilters = {};
+let listSort = { sort: 'created_at', dir: 'desc' };
+const decPagination = usePagination('dec', loadDECBandeja, { defaultPageSize: 25 });
 
 function renderDecView() {
   return `
@@ -34,18 +38,26 @@ function renderDecView() {
         <button id="decReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
       ${renderSummaryCardsHtml('decTrazaSummary')}
-      ${renderFilterBarHtml('dec')}
+      ${renderFilterBarHtml('dec', { hideExecutive: true })}
       <hr/>
       <div id="decList"><div class="text-muted">Cargando…</div></div>
     </div>
   `;
 }
 
-async function loadDecList() {
+async function loadDecList(sortOverride = {}, resetPage = false) {
   const cont = document.getElementById('decList');
   if (!cont) return;
   try {
-    let rows = await fetchBandejaDEC(listFilters);
+    listSort = mergeSortParams(listSort, sortOverride);
+    if (resetPage) decPagination.resetPage();
+    const result = await decPagination.loadData({
+      ...listFilters,
+      sort: listSort.sort,
+      dir: listSort.dir,
+    }, resetPage);
+    let rows = result.data || [];
+    rows = sortBandejaRows(rows, listSort.sort, listSort.dir);
     lastRows = rows;
     updateSummaryCards(rows, 'decTrazaSummary');
 
@@ -57,6 +69,7 @@ async function loadDecList() {
     cont.innerHTML = wrapBandejaTable({
       containerId: 'decList',
       prefix: 'dec',
+      sortState: listSort,
       bodyHtml: rows.map((r) => `
         <tr data-req-id="${r.id}">
           ${renderTraceRowCells(r, { prefix: 'dec', escFn: esc })}
@@ -92,6 +105,10 @@ async function loadDecList() {
     cont.querySelectorAll('.dec-aprobar').forEach((b) => b.onclick = () => aprobarDec(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));
     permissionsService.applyActivityButtons(cont);
+    bindSortHandlers(document.getElementById('decList-wrap'), (p) => loadDecList(p, true), {
+      getSort: () => listSort,
+    });
+    decPagination.renderControls('decList-wrap', () => loadDecList({}, false));
   } catch (e) {
     cont.innerHTML = '<div class="alert alert-danger">Error al cargar: ' + esc(e.message) + '</div>';
   }
@@ -140,9 +157,8 @@ async function observarDec(id) {
 function initDecView() {
   bindBandejaToolbar({
     prefix: 'dec',
-    onFilter: () => { listFilters = readFilterParams('dec'); loadDecList(); },
-    onClear: () => { listFilters = {}; loadDecList(); },
-    onExecutiveToggle: () => loadDecList(),
+    onFilter: () => { listFilters = readFilterParams('dec'); loadDecList({}, true); },
+    onClear: () => { listFilters = {}; loadDecList({}, true); },
   });
   const reload = document.getElementById('decReload');
   if (reload) reload.onclick = () => loadDecList();

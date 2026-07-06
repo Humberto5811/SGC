@@ -2,6 +2,7 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { renderContratacionBandejaStub } from '../../utils/contratacionBandejaStub.js';
 import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
+import { usePagination } from '../../utils/paginacion.js';
 
 const API_BASE = 'http://localhost:3000/api';
 
@@ -69,6 +70,11 @@ const VIEW_CONFIG = {
 };
 
 let cotizacionesCache = [];
+const recepcionPagination = usePagination(
+  'recepcion',
+  (params) => contratacionesService.listRecepcionCotizaciones(params),
+  { defaultPageSize: 25, pageSizeOptions: [25, 50, 100] },
+);
 
 export function renderRecepcionCotizacionesView() {
   return renderContratacionBandejaStub(VIEW_CONFIG);
@@ -258,41 +264,45 @@ async function showCotizacionDetalleModal(cotId) {
   }
 }
 
-async function loadCotizaciones() {
+async function loadCotizaciones(resetPage = false) {
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
   try {
-    const resp = await contratacionesService.listRecepcionCotizaciones();
-    const rows = resp.data || [];
-    cotizacionesCache = rows;
-    if (!rows.length) {
+    if (resetPage) recepcionPagination.resetPage();
+    const result = await recepcionPagination.loadData({}, resetPage);
+    const rows = result.data || [];
+    cotizacionesCache = result.allData || rows;
+    if (!rows.length && !cotizacionesCache.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay cotizaciones recibidas de proveedores.</div>';
       return;
     }
     cont.innerHTML = `
-      <table class="table table-sm table-hover table-bordered">
-        <thead class="table-light"><tr>
-          <th>Solicitud</th><th>Proveedor</th><th>Monto ofertado</th><th>Fecha recepción</th><th>Validación</th><th>Acciones</th>
-        </tr></thead>
-        <tbody>${rows.map((c) => `
-          <tr>
-            <td>
-              <strong>${esc(c.solicitud_codigo)}</strong>
-              <div class="small text-muted">${esc((c.denominacion || c.objeto || '').slice(0, 60))}</div>
-            </td>
-            <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-            <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
-            <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
-            <td><span class="badge bg-${badgeValidacion(c.validacion_estado)}">${esc(c.validacion_estado || 'Pendiente')}</span></td>
-            <td class="text-nowrap">
-              <button type="button" class="btn btn-sm btn-primary rc-ver" data-id="${c.id}">Ver propuesta</button>
-            </td>
-          </tr>`).join('')}</tbody>
-      </table>`;
+      <div class="sgc-bandeja-wrap" id="recepCotOuter">
+        <table class="table table-sm table-hover table-bordered mb-0">
+          <thead class="table-light"><tr>
+            <th>Solicitud</th><th>Proveedor</th><th>Monto ofertado</th><th>Fecha recepción</th><th>Validación</th><th>Acciones</th>
+          </tr></thead>
+          <tbody>${rows.map((c) => `
+            <tr>
+              <td>
+                <strong>${esc(c.solicitud_codigo)}</strong>
+                <div class="small text-muted">${esc((c.denominacion || c.objeto || '').slice(0, 60))}</div>
+              </td>
+              <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
+              <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
+              <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
+              <td><span class="badge bg-${badgeValidacion(c.validacion_estado)}">${esc(c.validacion_estado || 'Pendiente')}</span></td>
+              <td class="text-nowrap">
+                <button type="button" class="btn btn-sm btn-primary rc-ver" data-id="${c.id}">Ver propuesta</button>
+              </td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
 
     cont.querySelectorAll('.rc-ver').forEach((btn) => {
       btn.onclick = () => showCotizacionDetalleModal(btn.dataset.id);
     });
+    recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));
   } catch (err) {
     cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -301,11 +311,11 @@ async function loadCotizaciones() {
 export function initRecepcionCotizacionesView() {
   bindBandejaToolbar({
     prefix: VIEW_CONFIG.prefix,
-    onFilter: () => loadCotizaciones(),
-    onClear: () => loadCotizaciones(),
-    onExecutiveToggle: () => loadCotizaciones(),
+    onFilter: () => loadCotizaciones(true),
+    onClear: () => loadCotizaciones(true),
+    onExecutiveToggle: () => loadCotizaciones(true),
   });
   const reload = document.getElementById(`${VIEW_CONFIG.prefix}Reload`);
-  if (reload) reload.onclick = () => loadCotizaciones();
+  if (reload) reload.onclick = () => loadCotizaciones(true);
   loadCotizaciones();
 }

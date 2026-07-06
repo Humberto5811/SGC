@@ -8,8 +8,10 @@ import {
   renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
   isEstadoObservado,
+  sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
-import { fetchBandejaEvaluacion } from '../../utils/bandejaRequerimientos.js';
+import { loadEvaluacionBandeja } from '../../utils/bandejaRequerimientos.js';
+import { usePagination } from '../../utils/paginacion.js';
 import { evalMenuItems, evalHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
@@ -22,6 +24,8 @@ function esc(s) {
 
 let lastEvalRows = [];
 let listFilters = {};
+let listSort = { sort: 'created_at', dir: 'desc' };
+const evalPagination = usePagination('evaluacion', loadEvaluacionBandeja, { defaultPageSize: 25 });
 
 function renderEvaluacionRequerimientoView() {
   return `
@@ -34,20 +38,29 @@ function renderEvaluacionRequerimientoView() {
         <button id="evalReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
       ${renderSummaryCardsHtml('evalTrazaSummary')}
-      ${renderFilterBarHtml('eval')}
+      ${renderFilterBarHtml('eval', { hideExecutive: true })}
       <hr/>
       <div id="evalList"><div class="text-muted">Cargando…</div></div>
     </div>
   `;
 }
 
-async function loadEvaluacionList() {
+async function loadEvaluacionList(sortOverride = {}, resetPage = false) {
   const cont = document.getElementById('evalList');
   if (!cont) return;
   try {
-    let rows = await fetchBandejaEvaluacion(listFilters);
-    lastEvalRows = rows;
-    updateSummaryCards(rows, 'evalTrazaSummary');
+    listSort = mergeSortParams(listSort, sortOverride);
+    if (resetPage) evalPagination.resetPage();
+    const fetched = await loadEvaluacionBandeja({
+      ...listFilters,
+      sort: listSort.sort,
+      dir: listSort.dir,
+    });
+    const sorted = sortBandejaRows(fetched.data || [], listSort.sort, listSort.dir);
+    const result = evalPagination.paginateVirtual(sorted);
+    const rows = result.data || [];
+    lastEvalRows = sorted;
+    updateSummaryCards(sorted, 'evalTrazaSummary');
 
     if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos enviados a evaluación.</div>';
@@ -57,6 +70,7 @@ async function loadEvaluacionList() {
     cont.innerHTML = wrapBandejaTable({
       containerId: 'evalList',
       prefix: 'eval',
+      sortState: listSort,
       bodyHtml: rows.map((r) => `
         <tr data-req-id="${r.id}">
           ${renderTraceRowCells(r, { prefix: 'eval', escFn: esc })}
@@ -100,6 +114,10 @@ async function loadEvaluacionList() {
     cont.querySelectorAll('.eval-approve').forEach((b) => b.onclick = () => approveRequerimiento(b.dataset.id));
     cont.querySelectorAll('.eval-del').forEach((b) => b.onclick = () => eliminarRequerimiento(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));
+    bindSortHandlers(document.getElementById('evalList-wrap'), (p) => loadEvaluacionList(p, true), {
+      getSort: () => listSort,
+    });
+    evalPagination.renderControls('evalList-wrap', () => loadEvaluacionList({}, false));
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
@@ -188,9 +206,8 @@ async function eliminarRequerimiento(id) {
 function initEvaluacionRequerimientoView() {
   bindBandejaToolbar({
     prefix: 'eval',
-    onFilter: () => { listFilters = readFilterParams('eval'); loadEvaluacionList(); },
-    onClear: () => { listFilters = {}; loadEvaluacionList(); },
-    onExecutiveToggle: () => loadEvaluacionList(),
+    onFilter: () => { listFilters = readFilterParams('eval'); loadEvaluacionList({}, true); },
+    onClear: () => { listFilters = {}; loadEvaluacionList({}, true); },
   });
   const reload = document.getElementById('evalReload');
   if (reload) reload.onclick = () => loadEvaluacionList();

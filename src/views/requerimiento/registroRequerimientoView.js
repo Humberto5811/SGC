@@ -32,11 +32,16 @@ import {
   renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
   buildExportRowData, updateBandejaAdjCount,
+  sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
 import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
+import { loadRegistroBandeja } from '../../utils/bandejaRequerimientos.js';
+import { usePagination } from '../../utils/paginacion.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
+
+const registroPagination = usePagination('registro', loadRegistroBandeja, { defaultPageSize: 25 });
 
 const DOC_TITULO = '__FORMATO_BIENES_DOC__';
 
@@ -79,6 +84,7 @@ let state = {
 // Últimas filas cargadas en el listado (para exportar a Excel)
 let lastListRows = [];
 let registroListFilters = {};
+let registroListSort = { sort: 'created_at', dir: 'desc' };
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -201,7 +207,7 @@ function renderSelect() {
         <button id="reqExport" class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-excel"></i> Exportar reporte</button>
       </div>
       ${renderSummaryCardsHtml('reqTrazaSummary')}
-      ${renderFilterBarHtml('req')}
+      ${renderFilterBarHtml('req', { hideExecutive: true })}
       <div id="reqList"><div class="text-muted">Cargando…</div></div>
     </div>
   `;
@@ -218,24 +224,19 @@ async function verObservacionesReadOnly(id) {
   });
 }
 
-async function loadList() {
+async function loadList(sortOverride = {}, resetPage = false) {
   const cont = document.getElementById('reqList');
   if (!cont) return;
   try {
-    const resp = await requerimientosService.listConDetalles({ pageSize: 200, ...registroListFilters });
-    let rows = ((resp && resp.data) || []).map(enrichReqRow);
-    
-    // Ordenar ascendente por número de código
-    rows = rows.slice().sort((a, b) => {
-      const getNum = (r) => {
-        if (r && r.codigo) {
-          const m = String(r.codigo).match(/(\d+)/);
-          if (m) return Number(m[1]);
-        }
-        return Number(r && r.id) || 0;
-      };
-      return getNum(a) - getNum(b);
-    });
+    registroListSort = mergeSortParams(registroListSort, sortOverride);
+    if (resetPage) registroPagination.resetPage();
+    const result = await registroPagination.loadData({
+      ...registroListFilters,
+      sort: registroListSort.sort,
+      dir: registroListSort.dir,
+    }, resetPage);
+    let rows = (result.data || []).map(enrichReqRow);
+    rows = sortBandejaRows(rows, registroListSort.sort, registroListSort.dir);
     lastListRows = rows;
     updateSummaryCards(rows, 'reqTrazaSummary');
     if (!rows.length) {
@@ -245,6 +246,7 @@ async function loadList() {
     cont.innerHTML = wrapBandejaTable({
       containerId: 'reqList',
       prefix: 'req',
+      sortState: registroListSort,
       bodyHtml: rows.map((r) => `
         <tr data-req-id="${r.id}">
           ${renderTraceRowCells(r, { prefix: 'req', escFn: esc })}
@@ -295,6 +297,10 @@ async function loadList() {
     cont.querySelectorAll('.req-ver-obs').forEach((b) => b.onclick = () => verObservacionesReadOnly(b.dataset.id));
     cont.querySelectorAll('.req-del').forEach((b) => b.onclick = () => deleteRequerimiento(b.dataset.id));
     rows.forEach((r) => cargarContadorAdjuntos(r.id));
+    bindSortHandlers(document.getElementById('reqList-wrap'), (p) => loadList(p, true), {
+      getSort: () => registroListSort,
+    });
+    registroPagination.renderControls('reqList-wrap', () => loadList({}, false));
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
@@ -332,9 +338,8 @@ function attachSelect() {
   if (rl) rl.onclick = exportarReporte;
   bindBandejaToolbar({
     prefix: 'req',
-    onFilter: () => { registroListFilters = readFilterParams('req'); loadList(); },
-    onClear: () => { registroListFilters = {}; loadList(); },
-    onExecutiveToggle: () => loadList(),
+    onFilter: () => { registroListFilters = readFilterParams('req'); loadList({}, true); },
+    onClear: () => { registroListFilters = {}; loadList({}, true); },
   });
   loadList();
 }

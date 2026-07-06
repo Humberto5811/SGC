@@ -11,10 +11,12 @@ import {
   renderSummaryCardsHtml, updateSummaryCards,
   renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
   bandejaTableStyles,
+  sortBandejaRows, bindSortHandlers, mergeSortParams, sortableTh,
 } from '../../utils/trazabilidad.js';
 import { estadoModernBadge } from '../../utils/bandejaUi.js';
 import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
-import { fetchBandejaProgramacion } from '../../utils/bandejaRequerimientos.js';
+import { loadProgramacionBandeja } from '../../utils/bandejaRequerimientos.js';
+import { usePagination } from '../../utils/paginacion.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -53,7 +55,7 @@ export function renderProgramacionView() {
         <li class="nav-item"><a class="nav-link" href="#" data-tab="pedidos">📑 Pedidos</a></li>
       </ul>
       <div id="progTrazaSummaryWrap">${renderSummaryCardsHtml('progTrazaSummary')}</div>
-      <div id="progFilterWrap">${renderFilterBarHtml('prog')}</div>
+      <div id="progFilterWrap">${renderFilterBarHtml('prog', { hideExecutive: true })}</div>
       <div id="progContent"><div class="text-muted">Cargando…</div></div>
     </div>
     <style>${bandejaTableStyles()}${actosBandejaStyles()}
@@ -93,20 +95,20 @@ function renderPedidosAdjuntosCell(pedCnt, reqId) {
   return '<span class="text-muted small">Sin pedidos</span>';
 }
 
-function programacionBandejaHeaders() {
+function programacionBandejaHeaders(sortState = null) {
   return `
     <th style="width:35px;"><input type="checkbox" id="progSelectAll" title="Seleccionar todos"></th>
     <th class="req-col-timeline" title="Timeline">🕒</th>
-    <th>N° Requerimiento</th>
-    <th>Paquete</th>
-    <th>Pedido SIGAMEF</th>
-    <th>Código SIGAMEF</th>
-    <th>Descripción</th>
-    <th>Área Usuaria</th>
-    <th>Estado Actual</th>
-    <th>Responsable Actual</th>
-    <th>Fecha Asignación</th>
-    <th>Días</th>
+    ${sortableTh('N° Requerimiento', 'codigo', sortState)}
+    ${sortableTh('Paquete', 'paquete', sortState, 'actos-col-paq')}
+    ${sortableTh('Pedido SIGAMEF', 'pedido', sortState, 'actos-col-pedido')}
+    ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'actos-col-sigamef')}
+    ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
+    ${sortableTh('Área Usuaria', 'area', sortState)}
+    ${sortableTh('Estado Actual', 'estado', sortState)}
+    ${sortableTh('Responsable Actual', 'responsable', sortState)}
+    ${sortableTh('Fecha Asignación', 'fecha', sortState)}
+    ${sortableTh('Días', 'dias', sortState)}
     <th>Pedidos Adjuntos</th>
     <th class="req-col-acc"></th>`;
 }
@@ -148,6 +150,8 @@ function renderProgramacionRowCells(r, opts = {}) {
 
 let currentTab = 'bandeja';
 let progListFilters = {};
+let progListSort = { sort: 'created_at', dir: 'desc' };
+const progPagination = usePagination('programacion', loadProgramacionBandeja, { defaultPageSize: 25 });
 
 // ==================== LOAD ====================
 async function buildPedidosLabelMap() {
@@ -171,13 +175,20 @@ async function buildPedidosLabelMap() {
   }
 }
 
-async function loadBandeja() {
+async function loadBandeja(sortOverride = {}, resetPage = false) {
   setTabChrome('bandeja');
   const cont = document.getElementById('progContent');
   if (!cont) return;
   try {
     cont.innerHTML = '<div class="text-muted">Cargando…</div>';
-    let rows = await fetchBandejaProgramacion(progListFilters);
+    progListSort = mergeSortParams(progListSort, sortOverride);
+    if (resetPage) progPagination.resetPage();
+    const result = await progPagination.loadData({
+      ...progListFilters,
+      sort: progListSort.sort,
+      dir: progListSort.dir,
+    }, resetPage);
+    let rows = result.data || [];
     let countMap = {};
     let pedidosLabelMap = {};
     try { countMap = await programacionService.getPedidosCount(); } catch (_) {}
@@ -190,6 +201,7 @@ async function loadBandeja() {
       ...r,
       pedidos_sigamef: r.pedidos_sigamef || r.pedidosSigamef || pedidosLabelMap[r.id] || pedidosLabelMap[String(r.id)] || '',
     }));
+    rows = sortBandejaRows(rows, progListSort.sort, progListSort.dir);
     allRows = rows;
     updateSummaryCards(rows, 'progTrazaSummary');
 
@@ -216,14 +228,20 @@ async function loadBandeja() {
     }).join('');
 
     cont.innerHTML = `
-      <div class="table-responsive prog-bandeja-wrap actos-bandeja-wrap">
+      <div class="sgc-bandeja-wrap" id="progBandejaOuter">
+      <div class="table-responsive prog-bandeja-wrap actos-bandeja-wrap" id="progBandejaWrap">
         <table class="table table-sm table-hover table-bordered req-list-table mb-0">
-          <thead class="table-light"><tr>${programacionBandejaHeaders()}</tr></thead>
+          <thead class="table-light"><tr>${programacionBandejaHeaders(progListSort)}</tr></thead>
           <tbody>${tbody}</tbody>
         </table>
+      </div>
       </div>`;
 
     bindBandejaEvents(cont);
+    bindSortHandlers(cont.querySelector('#progBandejaWrap'), (p) => loadBandeja(p, true), {
+      getSort: () => progListSort,
+    });
+    progPagination.renderControls('progBandejaOuter', () => loadBandeja({}, false));
     bindTrazabilidadButtons(cont);
     bindActionMenus(cont, {
       detail: (id) => {
@@ -965,9 +983,8 @@ export function initProgramacionView() {
 
     bindBandejaToolbar({
       prefix: 'prog',
-      onFilter: () => { progListFilters = readFilterParams('prog'); if (currentTab === 'bandeja') loadBandeja(); },
-      onClear: () => { progListFilters = {}; if (currentTab === 'bandeja') loadBandeja(); },
-      onExecutiveToggle: () => { if (currentTab === 'bandeja') loadBandeja(); },
+      onFilter: () => { progListFilters = readFilterParams('prog'); if (currentTab === 'bandeja') loadBandeja({}, true); },
+      onClear: () => { progListFilters = {}; if (currentTab === 'bandeja') loadBandeja({}, true); },
     });
 
     currentTab = 'bandeja';

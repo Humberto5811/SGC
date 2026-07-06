@@ -2,7 +2,8 @@
 import { authService } from '../../services/authService.js';
 import { permissionsService } from '../../services/permissionsService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { fetchBandejaActosPreparatorios } from '../../utils/bandejaRequerimientos.js';
+import { loadActosBandeja } from '../../utils/bandejaRequerimientos.js';
+import { usePagination } from '../../utils/paginacion.js';
 import { todasObservaciones, historialHtml, bindTrazabilidadButtons, showSubsanacionDirigidaModal, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../requerimiento/reqShared.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
@@ -10,6 +11,7 @@ import {
   renderFilterBarHtml, readFilterParams, applyBandejaFilters,
   renderSummaryCardsHtml, updateSummaryCards, bandejaTableStyles,
   renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  sortBandejaRows, bindSortHandlers, mergeSortParams, sortableTh,
 } from '../../utils/trazabilidad.js';
 import { actosMenuItems, actosHiddenActions } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
@@ -19,7 +21,7 @@ import {
   isCoordinadorActos, isExpedientePoolCoordinador, isExpedienteAsignadoAMi,
   showAsignarAnalistaModal, showAprobarInvitacionesModal, showActosDestinoModal,
   showDerivarAnalistaModal,
-  renderActosRowCells, actosBandejaHeaders, actosBandejaStyles,
+  renderActosRowCells, actosBandejaStyles,
 } from '../../utils/actosModals.js';
 
 function esc(s) {
@@ -29,6 +31,24 @@ function esc(s) {
 
 let lastRows = [];
 let listFilters = {};
+let listSort = { sort: 'created_at', dir: 'desc' };
+const actosPagination = usePagination('actos', loadActosBandeja, { defaultPageSize: 25 });
+
+function actosSortBandejaHeaders(sortState = null) {
+  return `
+    <th class="req-col-timeline" title="Timeline">🕒</th>
+    ${sortableTh('N° Requerimiento', 'codigo', sortState)}
+    ${sortableTh('Paquete', 'paquete', sortState, 'actos-col-paq')}
+    ${sortableTh('Pedido SIGAMEF', 'pedido', sortState, 'actos-col-pedido')}
+    ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'actos-col-sigamef')}
+    ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
+    ${sortableTh('Área Usuaria', 'area', sortState)}
+    ${sortableTh('Estado Actual', 'estado', sortState)}
+    ${sortableTh('Responsable Actual', 'responsable', sortState)}
+    ${sortableTh('Fecha Asignación', 'fecha', sortState)}
+    ${sortableTh('Días', 'dias', sortState)}
+    <th class="req-col-acc"></th>`;
+}
 
 function getCurrentUser() {
   return (authService.getCurrentUser && authService.getCurrentUser()) || {};
@@ -104,16 +124,23 @@ function renderActosView() {
       </div>` : ''}
       ${renderFilterBarHtml('actos')}
       <hr/>
-      <div id="actosList" class="sgc-bandeja-wrap actos-bandeja-wrap"><div class="text-muted">Cargando…</div></div>
+      <div id="actosList"><div class="text-muted">Cargando…</div></div>
     </div>
   `;
 }
 
-async function loadActosList() {
+async function loadActosList(sortOverride = {}, resetPage = false) {
   const cont = document.getElementById('actosList');
   if (!cont) return;
   try {
-    let rows = await fetchBandejaActosPreparatorios(listFilters);
+    listSort = mergeSortParams(listSort, sortOverride);
+    if (resetPage) actosPagination.resetPage();
+    const result = await actosPagination.loadData({
+      ...listFilters,
+      sort: listSort.sort,
+      dir: listSort.dir,
+    }, resetPage);
+    let rows = result.data || [];
     rows = applyBandejaFilters(rows, listFilters);
     const buscar = String(listFilters.buscar || '').toLowerCase();
     if (buscar) {
@@ -129,6 +156,7 @@ async function loadActosList() {
       });
     }
     rows = filterRowsForProfile(rows, listFilters);
+    rows = sortBandejaRows(rows, listSort.sort, listSort.dir);
     lastRows = rows;
     updateSummaryCards(rows, 'actosTrazaSummary');
 
@@ -146,14 +174,20 @@ async function loadActosList() {
     }).join('');
 
     cont.innerHTML = `
-      <div class="table-responsive">
+      <div class="sgc-bandeja-wrap" id="actosBandejaOuter">
+      <div class="table-responsive actos-bandeja-wrap" id="actosBandejaWrap">
         <table class="table table-sm table-hover table-bordered req-list-table mb-0">
-          <thead class="table-light"><tr>${actosBandejaHeaders()}</tr></thead>
+          <thead class="table-light"><tr>${actosSortBandejaHeaders(listSort)}</tr></thead>
           <tbody>${tbody}</tbody>
         </table>
+      </div>
       </div>`;
 
     bindTrazabilidadButtons(cont);
+    bindSortHandlers(cont.querySelector('#actosBandejaWrap'), (p) => loadActosList(p, true), {
+      getSort: () => listSort,
+    });
+    actosPagination.renderControls('actosBandejaOuter', () => loadActosList({}, false));
     bindActionMenus(cont, {
       detail: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
@@ -355,12 +389,12 @@ function fixActosDropdownMenus(container) {
 function initActosPreparatoriosView() {
   bindBandejaToolbar({
     prefix: 'actos',
-    onFilter: () => { listFilters = readActosFilterParams(); loadActosList(); },
+    onFilter: () => { listFilters = readActosFilterParams(); loadActosList({}, true); },
     onClear: () => {
       listFilters = {};
       const vista = document.getElementById('actosFiltroVista');
       if (vista) vista.value = '';
-      loadActosList();
+      loadActosList({}, true);
     },
     onExecutiveToggle: () => loadActosList(),
   });

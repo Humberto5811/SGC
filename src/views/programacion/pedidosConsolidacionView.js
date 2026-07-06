@@ -10,9 +10,12 @@ import {
   paqueteBadgeHtml, exportPedidosExcel, pedidosMatrizStyles,
   estadoPaqueteBadge, responsableDosLineas, fmtMoney,
 } from '../../utils/pedidosConsolidacion.js';
+import { usePagination } from '../../utils/paginacion.js';
 
 let rawFilas = [];
 let displayFilas = [];
+let allFilteredFilas = [];
+const pedPagination = usePagination('pedidos', () => programacionService.getMatrizPedidos(), { defaultPageSize: 25 });
 let sortField = 'pedido';
 let sortDir = 'asc';
 let callbacks = {};
@@ -124,7 +127,9 @@ function applyView() {
   const filters = readPedidosFilters('ped');
   let filas = filterFilasPedidos(rawFilas, filters);
   filas = sortFilasPedidos(filas, sortField, sortDir);
-  displayFilas = filas;
+  allFilteredFilas = filas;
+  const result = pedPagination.paginateVirtual(filas);
+  displayFilas = result.data;
 
   const kpi = document.getElementById('pedKpiWrap');
   const table = document.getElementById('pedMatrizTable');
@@ -132,6 +137,7 @@ function applyView() {
   if (table) {
     table.innerHTML = renderTable();
     bindTableEvents(table);
+    pedPagination.renderControls('pedMatrizTable', () => applyView());
   }
 }
 
@@ -175,15 +181,19 @@ export async function loadPedidosConsolidacionTab(containerId, cbs = {}) {
 
     applyView();
 
-    document.getElementById('pedBtnFilter')?.addEventListener('click', () => applyView());
+    document.getElementById('pedBtnFilter')?.addEventListener('click', () => {
+      pedPagination.resetPage();
+      applyView();
+    });
     document.getElementById('pedBtnClear')?.addEventListener('click', () => {
       ['pedSearch', 'pedFiltroEstado', 'pedFiltroResp', 'pedFiltroArea', 'pedFiltroCentro', 'pedFiltroDesde', 'pedFiltroHasta'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      pedPagination.resetPage();
       applyView();
     });
-    document.getElementById('pedBtnExport')?.addEventListener('click', () => exportPedidosExcel(displayFilas));
+    document.getElementById('pedBtnExport')?.addEventListener('click', () => exportPedidosExcel(allFilteredFilas));
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error: ${esc(e.message)}</div>`;
   }
