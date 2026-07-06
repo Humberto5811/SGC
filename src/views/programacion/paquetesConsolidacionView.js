@@ -8,11 +8,12 @@ import {
   filterMatrizPaquetes, exportMatrizExcel, paquetesMatrizStyles,
   estadoPaqueteBadge, responsableDosLineas, fmtMoney,
 } from '../../utils/paquetesConsolidacion.js';
+import { usePagination } from '../../utils/paginacion.js';
 
 let rawMatriz = null;
+const paqPagination = usePagination('paquetes', () => programacionService.getMatrizConsolidacion(), { defaultPageSize: 25 });
 let filteredGrupos = [];
 let collapsedPaquetes = new Set();
-let executiveMode = false;
 let panelEl = null;
 let backdropEl = null;
 let callbacks = {};
@@ -56,8 +57,6 @@ const COLS_FULL = [
   'Paquete', 'Requerimiento', 'Pedido', 'Tipo', 'Código SIGAMEF', 'Descripción',
   'Cant.', 'Monto Total', 'Centro', 'Área Usuaria', 'Estado Actual', 'Responsable', 'Meta', 'Clasificador', 'Acciones',
 ];
-
-const COLS_EXEC = ['Paquete', 'Requerimientos', 'Monto Total', 'Estado', 'Responsable', 'Acciones'];
 
 function ensurePanel() {
   ensurePanelStyles();
@@ -217,7 +216,7 @@ function renderAccionesPaquete(paqueteId, estado) {
 }
 
 function renderMatrizTable(grupos) {
-  const cols = executiveMode ? COLS_EXEC : COLS_FULL;
+  const cols = COLS_FULL;
   const thead = `<tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr>`;
 
   let tbody = '';
@@ -227,19 +226,6 @@ function renderMatrizTable(grupos) {
     const expanded = !collapsedPaquetes.has(pid);
     const icon = expanded ? '▼' : '▶';
     const badgeEst = p.estado === 'Aprobado' ? 'bg-success' : 'bg-info';
-
-    if (executiveMode) {
-      const estadoResumen = g.filas[0];
-      tbody += `<tr class="paq-group-row" data-paq-toggle="${pid}">
-        <td><span class="paq-toggle">${icon}</span> <strong>${esc(p.codigo_paquete)}</strong></td>
-        <td>${g.resumen.cant_requerimientos} REQ · ${g.resumen.cant_pedidos} ped.</td>
-        <td><strong>${fmtMoney(g.resumen.monto_total)}</strong></td>
-        <td><span class="badge ${badgeEst}">${esc(p.estado)}</span></td>
-        <td>${responsableDosLineas(estadoResumen?.responsable, estadoResumen?.sub_modulo)}</td>
-        <td class="text-nowrap">${renderAccionesPaquete(pid, p.estado)}</td>
-      </tr>`;
-      return;
-    }
 
     tbody += `<tr class="paq-group-row" data-paq-toggle="${pid}" data-paq-panel="${pid}">
       <td colspan="${cols.length}">
@@ -322,10 +308,13 @@ function render() {
   const kpi = document.getElementById('paqKpiWrap');
   const table = document.getElementById('paqMatrizTable');
   const ind = filterMatrizPaquetes({ paquetes: filteredGrupos }, {}).indicadores;
+  const result = paqPagination.paginateVirtual(filteredGrupos);
+  const pageGrupos = result.data;
   if (kpi) kpi.innerHTML = renderPaquetesKpiCards(ind);
   if (table) {
-    table.innerHTML = renderMatrizTable(filteredGrupos);
+    table.innerHTML = renderMatrizTable(pageGrupos);
     bindMatrizEvents(table);
+    paqPagination.renderControls('paqMatrizTable', () => render());
   }
 }
 
@@ -372,6 +361,7 @@ export async function loadPaquetesConsolidacionTab(containerId, cbs = {}) {
     render();
 
     document.getElementById('paqBtnFilter')?.addEventListener('click', async () => {
+      paqPagination.resetPage();
       await loadData();
       render();
     });
@@ -380,13 +370,8 @@ export async function loadPaquetesConsolidacionTab(containerId, cbs = {}) {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      paqPagination.resetPage();
       await loadData();
-      render();
-    });
-    document.getElementById('paqBtnExecutive')?.addEventListener('click', () => {
-      executiveMode = !executiveMode;
-      document.getElementById('paqBtnExecutive')?.classList.toggle('btn-dark', executiveMode);
-      document.getElementById('paqBtnExecutive')?.classList.toggle('btn-outline-dark', !executiveMode);
       render();
     });
     document.getElementById('paqBtnExport')?.addEventListener('click', () => {

@@ -4,6 +4,7 @@ import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import { renderContratacionBandejaStub } from '../../utils/contratacionBandejaStub.js';
 import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
+import { usePagination } from '../../utils/paginacion.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -22,6 +23,11 @@ const VIEW_CONFIG = {
 };
 
 let consultasCache = [];
+const consultasPagination = usePagination(
+  'consultas',
+  (params) => contratacionesService.listConsultasAnalista(params),
+  { defaultPageSize: 25, pageSizeOptions: [25, 50, 100] },
+);
 
 export function renderConsultasObservacionesView() {
   return renderContratacionBandejaStub(VIEW_CONFIG);
@@ -146,32 +152,35 @@ function showResponderConsultaModal(consulta) {
   });
 }
 
-async function loadConsultas() {
+async function loadConsultas(resetPage = false) {
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
   try {
-    const resp = await contratacionesService.listConsultasAnalista();
-    const rows = resp.data || [];
-    consultasCache = rows;
-    if (!rows.length) {
+    if (resetPage) consultasPagination.resetPage();
+    const result = await consultasPagination.loadData({}, resetPage);
+    const rows = result.data || [];
+    consultasCache = result.allData || rows;
+    if (!rows.length && !consultasCache.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay consultas pendientes.</div>';
       return;
     }
     cont.innerHTML = `
-      <table class="table table-sm table-hover table-bordered">
-        <thead class="table-light"><tr>
-          <th>Solicitud</th><th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th><th>Acciones</th>
-        </tr></thead>
-        <tbody>${rows.map((c) => `
-          <tr>
-            <td>${esc(c.solicitud_codigo)}</td>
-            <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-            <td>${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 80))}</div></td>
-            <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'warning'}">${esc(c.estado)}</span></td>
-            <td class="small">${esc(fmtFecha(c.created_at))}</td>
-            <td>${c.estado === 'PENDIENTE' ? `<button class="btn btn-sm btn-primary co-responder" data-id="${c.id}">Responder</button>` : '—'}</td>
-          </tr>`).join('')}</tbody>
-      </table>`;
+      <div class="sgc-bandeja-wrap" id="consultasObsOuter">
+        <table class="table table-sm table-hover table-bordered mb-0">
+          <thead class="table-light"><tr>
+            <th>Solicitud</th><th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th><th>Acciones</th>
+          </tr></thead>
+          <tbody>${rows.map((c) => `
+            <tr>
+              <td>${esc(c.solicitud_codigo)}</td>
+              <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
+              <td>${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 80))}</div></td>
+              <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'warning'}">${esc(c.estado)}</span></td>
+              <td class="small">${esc(fmtFecha(c.created_at))}</td>
+              <td>${c.estado === 'PENDIENTE' ? `<button class="btn btn-sm btn-primary co-responder" data-id="${c.id}">Responder</button>` : '—'}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
 
     cont.querySelectorAll('.co-responder').forEach((btn) => {
       btn.onclick = async () => {
@@ -181,6 +190,7 @@ async function loadConsultas() {
         if (ok) loadConsultas();
       };
     });
+    consultasPagination.renderControls('consultasObsOuter', () => loadConsultas(false));
   } catch (err) {
     cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -189,11 +199,11 @@ async function loadConsultas() {
 export function initConsultasObservacionesView() {
   bindBandejaToolbar({
     prefix: VIEW_CONFIG.prefix,
-    onFilter: () => loadConsultas(),
-    onClear: () => loadConsultas(),
-    onExecutiveToggle: () => loadConsultas(),
+    onFilter: () => loadConsultas(true),
+    onClear: () => loadConsultas(true),
+    onExecutiveToggle: () => loadConsultas(true),
   });
   const reload = document.getElementById(`${VIEW_CONFIG.prefix}Reload`);
-  if (reload) reload.onclick = () => loadConsultas();
+  if (reload) reload.onclick = () => loadConsultas(true);
   loadConsultas();
 }

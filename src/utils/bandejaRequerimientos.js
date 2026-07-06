@@ -161,37 +161,94 @@ export function sortRequerimientosByCodigo(rows) {
   });
 }
 
+function mapPaginatedBandejaResponse(resp, params = {}) {
+  return {
+    data: sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow)),
+    total: resp?.total ?? 0,
+    page: resp?.page ?? params.page ?? 1,
+    pageSize: resp?.pageSize ?? params.pageSize ?? 25,
+    totalPages: resp?.totalPages ?? 1,
+  };
+}
+
+/** Registro — paginación server-side. */
+export async function loadRegistroBandeja(params = {}) {
+  const resp = await requerimientosService.listConDetalles(params);
+  return mapPaginatedBandejaResponse(resp, params);
+}
+
+/** Evaluación — filtro cliente; paginación virtual sobre el subset filtrado. */
+export async function loadEvaluacionBandeja(params = {}) {
+  const resp = await requerimientosService.listConDetalles({ ...params, page: 1, pageSize: 500 });
+  const filtered = sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow))
+    .filter(requerimientoVisibleEnEvaluacion);
+  return { data: filtered };
+}
+
+/** DEC — paginación server-side. */
+export async function loadDECBandeja(params = {}) {
+  try {
+    const { contratacionesService } = await import('../services/contratacionesService.js');
+    const resp = await contratacionesService.listDEC(params);
+    return mapPaginatedBandejaResponse(resp, params);
+  } catch (_) {
+    const rows = await fetchAllRequerimientosBandeja(params);
+    return { data: rows.filter(requerimientoVisibleEnDEC) };
+  }
+}
+
+/** Programación — paginación server-side. */
+export async function loadProgramacionBandeja(params = {}) {
+  try {
+    const { contratacionesService } = await import('../services/contratacionesService.js');
+    const resp = await contratacionesService.listProgramacion(params);
+    return mapPaginatedBandejaResponse(resp, params);
+  } catch (_) {
+    const rows = await fetchAllRequerimientosBandeja(params);
+    return { data: rows.filter(requerimientoVisibleEnProgramacion) };
+  }
+}
+
+/** Invitaciones — paginación server-side. */
+export async function loadInvitacionesBandeja(params = {}) {
+  const { contratacionesService } = await import('../services/contratacionesService.js');
+  const resp = await contratacionesService.listInvitaciones(params);
+  return mapPaginatedBandejaResponse(resp, params);
+}
+
+/** Coordinación CM — paginación server-side. */
+export async function loadActosBandeja(params = {}) {
+  try {
+    const { contratacionesService } = await import('../services/contratacionesService.js');
+    const apiFilters = { ...params };
+    if (params.mi_equipo) apiFilters.mi_equipo = params.mi_equipo;
+    if (params.solo_mios) apiFilters.solo_mios = params.solo_mios;
+    const resp = await contratacionesService.listActos(apiFilters);
+    return mapPaginatedBandejaResponse(resp, params);
+  } catch (_) {
+    const rows = await fetchAllRequerimientosBandeja(params);
+    return { data: rows.filter(requerimientoVisibleEnActosPreparatorios) };
+  }
+}
+
 export async function fetchAllRequerimientosBandeja(filters = {}) {
-  const resp = await requerimientosService.listConDetalles({ pageSize: 500, ...filters });
-  return sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
+  const resp = await loadRegistroBandeja(filters);
+  return resp.data || [];
 }
 
 export async function fetchBandejaEvaluacion(filters = {}) {
-  const rows = await fetchAllRequerimientosBandeja(filters);
-  return rows.filter(requerimientoVisibleEnEvaluacion);
+  const resp = await loadEvaluacionBandeja(filters);
+  return resp.data || [];
 }
 
 export async function fetchBandejaDEC(filters = {}) {
-  try {
-    const { contratacionesService } = await import('../services/contratacionesService.js');
-    const resp = await contratacionesService.listDEC({ pageSize: 500, ...filters });
-    return sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
-  } catch (_) {
-    const rows = await fetchAllRequerimientosBandeja(filters);
-    return rows.filter(requerimientoVisibleEnDEC);
-  }
+  const resp = await loadDECBandeja(filters);
+  return resp.data || [];
 }
 
 export async function fetchBandejaProgramacion(filters = {}) {
-  try {
-    const { contratacionesService } = await import('../services/contratacionesService.js');
-    const resp = await contratacionesService.listProgramacion({ pageSize: 500, ...filters });
-    let list = sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
-    return list;
-  } catch (_) {
-    const rows = await fetchAllRequerimientosBandeja(filters);
-    return rows.filter(requerimientoVisibleEnProgramacion);
-  }
+  const resp = await loadProgramacionBandeja(filters);
+  return resp.data || [];
 }
 
 /** Actos / Coordinación CM: tablero de supervisión con trazabilidad completa. */
@@ -235,24 +292,14 @@ export async function enrichActosRowsWithPaquete(rows) {
 }
 
 export async function fetchBandejaActosPreparatorios(filters = {}, options = {}) {
-  let list = [];
-  try {
-    const { contratacionesService } = await import('../services/contratacionesService.js');
-    const apiFilters = { pageSize: 500, ...filters };
-    if (filters.mi_equipo) apiFilters.mi_equipo = filters.mi_equipo;
-    if (filters.solo_mios) apiFilters.solo_mios = filters.solo_mios;
-    const resp = await contratacionesService.listActos(apiFilters);
-    list = sortRequerimientosByCodigo(((resp && resp.data) || []).map(enrichReqRow));
-  } catch (_) {
-    const rows = await fetchAllRequerimientosBandeja(filters);
-    list = rows.filter(requerimientoVisibleEnActosPreparatorios);
-  }
+  const resp = await loadActosBandeja(filters);
+  let list = resp.data || [];
   if (options.soloMios && options.usuarioNombre) {
     const me = String(options.usuarioNombre).toLowerCase();
     list = list.filter((r) => {
-      const resp = String(r.responsable_actual || r.responsableActual || '').toLowerCase();
-      if (/coordinador.*contratos/i.test(resp)) return false;
-      return resp.includes(me) || me.split(' ').some((p) => p.length > 2 && resp.includes(p));
+      const respName = String(r.responsable_actual || r.responsableActual || '').toLowerCase();
+      if (/coordinador.*contratos/i.test(respName)) return false;
+      return respName.includes(me) || me.split(' ').some((p) => p.length > 2 && respName.includes(p));
     });
   }
   return list;
