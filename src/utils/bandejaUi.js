@@ -44,7 +44,7 @@ export const ESTADO_BADGE_STYLES = {
 export function bandejaGlobalStyles() {
   return `
     .sgc-bandeja-wrap .table-responsive { overflow-x: auto; overflow-y: visible; }
-    .sgc-bandeja-wrap .req-list-table { table-layout: fixed; width: 100%; min-width: 720px; }
+    .sgc-bandeja-wrap .req-list-table { table-layout: fixed; width: 100%; min-width: 960px; }
     .sgc-bandeja-wrap .req-col-acc { position: static; overflow: visible; }
     .sgc-bandeja-wrap .req-col-acc .dropdown { position: static; }
     .sgc-bandeja-wrap .req-col-acc .dropdown-menu { z-index: 1080; max-height: 70vh; overflow-y: auto; }
@@ -64,15 +64,19 @@ export function bandejaGlobalStyles() {
     .sgc-kpi-card .kpi-value { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
     .sgc-search-bar { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 0.75rem; }
     .req-col-timeline { width: 42px; text-align: center; }
-    .req-col-req { width: 120px; }
-    .req-col-tipo { width: 72px; }
-    .req-col-sigamef { min-width: 120px; }
-    .req-col-desc { width: 28%; min-width: 160px; }
-    .req-col-estado { width: 130px; }
-    .req-col-resp { width: 130px; }
-    .req-col-dias { width: 72px; text-align: center; }
-    .req-col-acc { width: 56px; text-align: center; position: static; overflow: visible; }
-    .req-desc-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+    .req-col-req { width: 100px; }
+    .req-col-tipo { width: 120px; }
+    .req-col-sigamef { width: 130px; min-width: 100px; max-width: 160px; }
+    .req-col-desc { width: 18%; min-width: 150px; }
+    .req-col-centro { width: 150px; min-width: 120px; }
+    .req-col-area { width: 150px; min-width: 120px; }
+    .req-col-estado { width: 130px; min-width: 110px; }
+    .req-col-resp { width: 150px; min-width: 120px; }
+    .req-col-dias { width: 60px; text-align: center; }
+    .req-col-acc { width: 50px; text-align: center; position: static; overflow: visible; }
+    .req-desc-text,
+    .req-centro-text,
+    .req-area-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
     .req-meta-chips { margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; }
     .req-meta-chips .chip { font-size: 0.68rem; padding: 1px 6px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
     .req-meta-chips .chip-obs { color: #dc3545; background: #fff5f5; border-color: #f1aeb5; font-weight: 600; }
@@ -389,6 +393,8 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '', sor
       ${sortableTh('N° Req', 'codigo', sortState, 'req-col-req')}
       ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'req-col-sigamef')}
       ${sortableTh('Descripción', 'denominacion', sortState, 'req-col-desc')}
+      ${sortableTh('Centro', 'centro_nombre', sortState, 'req-col-centro')}
+      ${sortableTh('Área Usuaria', 'area', sortState, 'req-col-area')}
       ${sortableTh('Estado', 'estado', sortState, 'req-col-estado')}
       ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
       ${sortableTh('Días', 'dias', sortState, 'req-col-dias')}
@@ -401,6 +407,8 @@ export function bandejaTraceHeaders(prefix = 'req', extraColsBeforeAcc = '', sor
     ${sortableTh('Tipo', 'tipo', sortState, 'req-col-tipo')}
     ${sortableTh('Código SIGAMEF', 'sigamef', sortState, 'req-col-sigamef')}
     ${sortableTh('Descripción', 'denominacion', sortState, 'req-col-desc')}
+    ${sortableTh('Centro', 'centro_nombre', sortState, 'req-col-centro')}
+    ${sortableTh('Área Usuaria', 'area', sortState, 'req-col-area')}
     ${sortableTh('Estado', 'estado', sortState, 'req-col-estado')}
     ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
     ${sortableTh('Días', 'dias', sortState, 'req-col-dias')}
@@ -434,6 +442,8 @@ export function renderCompactRowCells(r, opts = {}) {
   const sigamefCell = `<span class="req-sigamef-text" title="${escFn(sigamef || '—')}">${escFn(sigamef || '—')}</span>`;
   const descCell = `
     <span class="req-desc-text" title="${escFn(descFull)}">${escFn(descShort || '—')}</span>${metaChips}`;
+  const centroCell = `<span class="req-centro-text" title="${escFn(row.centro_nombre || row.centro || '—')}">${escFn(row.centro_nombre || row.centro || '—')}</span>`;
+  const areaCell = `<span class="req-area-text" title="${escFn(row.area || row.area_nombre || '—')}">${escFn(row.area || row.area_nombre || '—')}</span>`;
   const respCell = `
     <div class="req-resp-name">${escFn(row.responsableActual)}</div>
     <div class="req-resp-role">${escFn(getResponsableRol(row))}</div>`;
@@ -442,20 +452,24 @@ export function renderCompactRowCells(r, opts = {}) {
     return `
       <td title="${escFn(tooltip)}">${reqCell}</td>
       <td class="req-col-sigamef">${sigamefCell}</td>
-      <td title="${escFn(descFull)}">${descCell}</td>
+      <td class="req-col-desc" title="${escFn(descFull)}">${descCell}</td>
+      <td class="req-col-centro">${centroCell}</td>
+      <td class="req-col-area">${areaCell}</td>
       <td class="req-col-estado-cell">${estadoModernBadge(row, moduloBandeja)}</td>
-      <td>${respCell}</td>
-      <td class="text-center">${diasBadgeHtml(row)}</td>`;
+      <td class="req-col-resp">${respCell}</td>
+      <td class="req-col-dias text-center">${diasBadgeHtml(row)}</td>`;
   }
   return `
     <td class="req-col-timeline">${trazaIconHtml(row.id)}</td>
-    <td title="${escFn(tooltip)}">${reqCell}</td>
-    <td><span class="badge ${tipoBadge}" style="font-size:0.65rem;">${escFn(tipoLabel)}</span></td>
+    <td class="req-col-req" title="${escFn(tooltip)}">${reqCell}</td>
+    <td class="req-col-tipo"><span class="badge ${tipoBadge}" style="font-size:0.65rem;">${escFn(tipoLabel)}</span></td>
     <td class="req-col-sigamef">${sigamefCell}</td>
-    <td title="${escFn(descFull)}">${descCell}</td>
+    <td class="req-col-desc" title="${escFn(descFull)}">${descCell}</td>
+    <td class="req-col-centro">${centroCell}</td>
+    <td class="req-col-area">${areaCell}</td>
     <td class="req-col-estado-cell">${estadoModernBadge(row, moduloBandeja)}</td>
-    <td>${respCell}</td>
-    <td class="text-center">${diasBadgeHtml(row)}</td>`;
+    <td class="req-col-resp">${respCell}</td>
+    <td class="req-col-dias text-center">${diasBadgeHtml(row)}</td>`;
 }
 
 export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '') {
