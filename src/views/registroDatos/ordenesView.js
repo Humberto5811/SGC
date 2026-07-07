@@ -5,6 +5,7 @@ const view = createCrudView({
   title: 'Órdenes',
   icon: 'bi-receipt',
   excel: true,
+  importPath: '/ordenes/import',
   fields: [
     { name: 'numero', label: 'Número', type: 'text', required: true, col: 4 },
     { name: 'tipo', label: 'Tipo', type: 'select', options: ['Compra', 'Servicio'], col: 4 },

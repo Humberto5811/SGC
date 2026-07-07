@@ -25,7 +25,6 @@ const PAGE_SIZE = 50;
 export function createCrudView(cfg) {
   const { resource, title, icon = 'bi-table', subtitle = '', fields, columns, excel = false } = cfg;
   const importPath = cfg.importPath || null;
-  const importAlwaysReplace = cfg.importAlwaysReplace || false;
   const tableStyle = cfg.tableStyle || '';
   const onPrint = typeof cfg.onPrint === 'function' ? cfg.onPrint : null;
   const printTitle = cfg.printTitle || 'Imprimir / PDF';
@@ -44,11 +43,23 @@ export function createCrudView(cfg) {
 
   const id = (suffix) => `${resource}_${suffix}`;
 
+  function formatDateDisplay(v) {
+    if (!v) return '';
+    const text = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+    const n = Number(text);
+    if (Number.isFinite(n) && n > 20000 && n < 120000) {
+      const epoch = Date.UTC(1899, 11, 30);
+      return new Date(epoch + Math.round(n) * 86400000).toISOString().slice(0, 10);
+    }
+    return text.slice(0, 10);
+  }
+
   function fmtCell(item, col) {
     let v = item[col.name];
     if (col.type === 'bool') return v ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-x-circle text-secondary"></i>';
     if (col.type === 'money') return (parseFloat(v) || 0).toFixed(2);
-    if (col.type === 'date' && v) return String(v).slice(0, 10);
+    if (col.type === 'date' && v) return formatDateDisplay(v);
     return v == null ? '' : String(v);
   }
 
@@ -311,8 +322,23 @@ export function createCrudView(cfg) {
     })();
   }
 
-  // Importación masiva: mapea TODOS los encabezados del Excel (en minúsculas) a
-  // las columnas de la tabla y envía las filas en un solo lote al endpoint /import.
+  function formatImportStats(resp, fileName = '') {
+    const leidos = resp.leidos ?? resp.read ?? '—';
+    const ins = resp.insertados ?? resp.inserted ?? 0;
+    const upd = resp.actualizados ?? resp.updated ?? 0;
+    const omit = resp.omitidos ?? resp.skipped ?? 0;
+    const errs = (resp.errores || []).length;
+    const dur = resp.duracion_ms ? `\nTiempo: ${resp.duracion_ms} ms` : '';
+    const archivo = fileName ? `\nArchivo: ${fileName}` : '';
+    let msg = `Importación UPSERT finalizada.${archivo}${dur}\n\nLeídos: ${leidos}\nInsertados: ${ins}\nActualizados: ${upd}\nOmitidos: ${omit}\nErrores: ${errs}`;
+    if (errs > 0 && resp.errores?.length) {
+      const preview = resp.errores.slice(0, 5).map((e) => `  Fila ${e.fila}: ${e.error}`).join('\n');
+      msg += `\n\nDetalle (primeros errores):\n${preview}`;
+    }
+    return msg;
+  }
+
+  // Importación masiva UPSERT vía ImportEngine (sin TRUNCATE).
   function bulkImport(file) {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -326,15 +352,15 @@ export function createCrudView(cfg) {
           Object.keys(r).forEach((k) => { rec[k.toLowerCase().trim()] = r[k]; });
           return rec;
         });
-        const mode = importAlwaysReplace ? 'replace'
-          : state.total > 0
-            ? (confirm(`Se encontraron ${rows.length} registros.\n\nACEPTAR = REEMPLAZAR los datos actuales (${state.total}).\nCANCELAR = AGREGAR a los existentes.`) ? 'replace' : 'append')
-            : 'replace';
-        const resp = await api.post(importPath, { rows, mode });
+        const resp = await api.post(importPath, {
+          rows,
+          archivo: file.name || '',
+          fileName: file.name || '',
+        });
         state.page = 1; state.search = '';
         const si = document.getElementById(id('search')); if (si) si.value = '';
         await refresh();
-        alert(`Importación exitosa: ${resp.inserted} registros ${mode === 'replace' ? 'cargados' : 'agregados'}.`);
+        alert(formatImportStats(resp, file.name));
       } catch (err) {
         console.error('Error al importar Excel (masivo):', err);
         alert('Error al importar: ' + (err.message || 'verifique el formato del archivo.'));

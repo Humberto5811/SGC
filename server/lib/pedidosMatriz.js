@@ -17,9 +17,13 @@ function tipoLabel(tipo) {
   return 'BIEN';
 }
 
+import { generatePedidoSigamef } from './pedidoSigamefCodes.js';
+
 function pedidoLabel(ped) {
-  const pref = String(ped.tipo || 'PB').slice(0, 2).toUpperCase();
-  return ped.nro_pedido ? `${pref}-${ped.nro_pedido}` : String(ped.codigo_pedido || '');
+  if (ped.pedido_sigamef) return String(ped.pedido_sigamef);
+  const generated = generatePedidoSigamef(ped.pedido_tipo || ped.tipo, ped.nro_pedido);
+  if (generated) return generated;
+  return String(ped.nro_pedido || '');
 }
 
 export async function buildMatrizSeguimientoPedidos() {
@@ -28,7 +32,7 @@ export async function buildMatrizSeguimientoPedidos() {
       rp.id AS asociacion_id,
       rp.fecha_registro AS fecha_asociacion,
       p.id AS pedido_id,
-      p.codigo_pedido, p.ano_eje, p.tipo AS pedido_tipo, p.nro_pedido,
+      p.codigo_pedido, p.pedido_sigamef, p.ano_eje, p.tipo AS pedido_tipo, p.nro_pedido,
       p.centro, p.descripcion AS pedido_descripcion, p.cant_solicitada,
       p.precio_unitario, p.total_item, p.codigo_sigamef, p.sec_func, p.especifica,
       p.fecha_pedido,

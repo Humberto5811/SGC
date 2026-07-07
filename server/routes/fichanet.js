@@ -1,11 +1,9 @@
-// Rutas de Ficha NET.
-// Reutiliza el CRUD genérico (lista paginada + búsqueda) y añade:
-//  - POST /import  : carga masiva por lotes (reemplazar o agregar)
-//  - DELETE /      : vaciar la tabla
+// Rutas de Ficha NET — importación UPSERT vía ImportEngine.
 import express from 'express';
 import { crudRouter } from '../crud.js';
-import { bulkImportRouter } from '../bulkImport.js';
+import { importEngineRouter } from '../bulkImport.js';
 import { query } from '../db.js';
+import { cleanString, normalizeRowKeys, normalizeDateValue } from '../lib/importNormalize.js';
 
 const COLUMNS = [
   'idfichanet', 'idcartcod', 'idcartcodigosiga', 'dscartnombre', 'dscclasdescripcion',
@@ -15,9 +13,10 @@ const COLUMNS = [
   'dscartobservaciones', 'dafechacreacion', 'dsusuariocrea', 'nu_version',
 ];
 
+const DATE_COLS = new Set(['dscartfechavencimiento', 'dafechacreacion']);
+
 const router = express.Router();
 
-// Búsqueda exacta por código SIGAMEF (idcartcodigosiga) — antes del CRUD /:id
 router.get('/por-codigo/:codigo', async (req, res, next) => {
   try {
     const codigo = String(req.params.codigo || '').trim();
@@ -31,13 +30,24 @@ router.get('/por-codigo/:codigo', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Bulk import + truncate via shared utility
-router.use('/', bulkImportRouter({
+router.use('/', importEngineRouter({
   table: 'ficha_net',
+  catalogo: 'ficha_net',
   columns: COLUMNS,
+  conflictKeys: ['idcartcodigosiga'],
+  transform: (raw) => normalizeRowKeys(raw),
+  validate: (row) => (!cleanString(row.idcartcodigosiga) ? 'idcartcodigosiga requerido' : null),
+  coerce: (row) => {
+    const out = {};
+    for (const c of COLUMNS) {
+      const v = row[c];
+      if (DATE_COLS.has(c)) out[c] = normalizeDateValue(v);
+      else out[c] = cleanString(v);
+    }
+    return out;
+  },
 }));
 
-// CRUD genérico (GET lista/paginada, GET :id, POST, PUT, DELETE :id)
 router.use('/', crudRouter({
   table: 'ficha_net',
   columns: COLUMNS,

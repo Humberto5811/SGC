@@ -133,7 +133,7 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
       COALESCE(ped.pedidos_sigamef, '') AS pedidos_sigamef
     FROM requerimientos r
     LEFT JOIN LATERAL (
-      SELECT string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.codigo_pedido), ''), CONCAT('PED-', p.nro_pedido)), ', ') AS pedidos_sigamef
+      SELECT string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.pedido_sigamef), ''), CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)), ', ') AS pedidos_sigamef
       FROM requerimiento_pedidos rp
       JOIN pedidos_sigamef p ON rp.pedido_sigamef_id = p.id
       WHERE rp.requerimiento_id = r.id

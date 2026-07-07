@@ -8,7 +8,7 @@ export const REQUERIMIENTO_BANDEJA_FROM = `
   LEFT JOIN LATERAL (
     SELECT string_agg(
       DISTINCT COALESCE(
-        NULLIF(TRIM(p.codigo_pedido), ''),
+        NULLIF(TRIM(p.pedido_sigamef), ''),
         CASE
           WHEN p.nro_pedido IS NOT NULL AND TRIM(COALESCE(p.nro_pedido, '')) <> ''
           THEN CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)
@@ -16,7 +16,7 @@ export const REQUERIMIENTO_BANDEJA_FROM = `
         END
       ),
       ', ' ORDER BY COALESCE(
-        NULLIF(TRIM(p.codigo_pedido), ''),
+        NULLIF(TRIM(p.pedido_sigamef), ''),
         CASE
           WHEN p.nro_pedido IS NOT NULL AND TRIM(COALESCE(p.nro_pedido, '')) <> ''
           THEN CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)

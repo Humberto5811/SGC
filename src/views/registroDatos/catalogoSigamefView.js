@@ -489,18 +489,22 @@ function importExcel(file) {
         return;
       }
 
-      const mode = totalRecords > 0
-        ? (confirm(`Se encontraron ${imported.length} registros.\n\nPresione ACEPTAR para REEMPLAZAR los datos actuales (${totalRecords} registros).\nPresione CANCELAR para AGREGAR los registros al catálogo existente.`) ? 'replace' : 'append')
-        : 'replace';
-
       try {
-        const resp = await api.post('/catalogo/import', { rows: imported, mode });
+        const resp = await api.post('/catalogo/import', {
+          rows: imported,
+          archivo: file.name || '',
+          fileName: file.name || '',
+        });
         searchTerm = '';
         currentPage = 1;
         const searchInput = document.getElementById('searchCatalogo');
         if (searchInput) searchInput.value = '';
         await refreshTable();
-        alert(`Importación exitosa: ${resp.inserted} registros ${mode === 'replace' ? 'cargados' : 'agregados'}.`);
+        const ins = resp.insertados ?? resp.inserted ?? 0;
+        const upd = resp.actualizados ?? resp.updated ?? 0;
+        const omit = resp.omitidos ?? resp.skipped ?? 0;
+        const errs = (resp.errores || []).length;
+        alert(`Importación UPSERT finalizada.\n\nLeídos: ${resp.leidos ?? imported.length}\nInsertados: ${ins}\nActualizados: ${upd}\nOmitidos: ${omit}\nErrores: ${errs}`);
       } catch (apiErr) {
         console.error('Error al enviar importación al servidor:', apiErr);
         alert('Error al guardar la importación en el servidor: ' + apiErr.message);

@@ -6,6 +6,7 @@ const metasView = createCrudView({
   title: 'Metas',
   icon: 'bi-bullseye',
   excel: true,
+  importPath: '/metas/import',
   fields: [
     { name: 'codigo', label: 'Código', type: 'text', required: true, col: 4 },
     { name: 'nombre', label: 'Nombre', type: 'text', required: true, col: 8 },
@@ -24,6 +25,7 @@ const areasView = createCrudView({
   title: 'Áreas',
   icon: 'bi-diagram-3',
   excel: true,
+  importPath: '/areas/import',
   fields: [
     { name: 'codigo', label: 'Código', type: 'text', required: true, col: 4 },
     { name: 'nombre', label: 'Nombre del Área', type: 'text', required: true, col: 8 },

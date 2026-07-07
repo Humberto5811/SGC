@@ -11,13 +11,13 @@
 export function resolvePedidoSigamef(row) {
   if (!row) return '—';
 
+  if (row.pedido_sigamef && row.pedido_sigamef !== '—' && row.pedido_sigamef !== '') {
+    return row.pedido_sigamef;
+  }
+
   const pedidosSigamef = row.pedidos_sigamef ?? row.pedidosSigamef;
   if (pedidosSigamef && pedidosSigamef !== '—' && pedidosSigamef !== '') {
     return pedidosSigamef;
-  }
-
-  if (row.pedido_sigamef && row.pedido_sigamef !== '—' && row.pedido_sigamef !== '') {
-    return row.pedido_sigamef;
   }
 
   if (row.codigo_sigamef && row.codigo_sigamef !== '—' && row.codigo_sigamef !== '') {

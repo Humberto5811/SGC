@@ -5,6 +5,7 @@ const view = createCrudView({
   title: 'Configuración Documentaria',
   icon: 'bi-gear',
   excel: true,
+  importPath: '/configuracion/import',
   fields: [
     { name: 'objeto', label: 'Objeto', type: 'select', options: ['Bienes', 'Servicios', 'Obras', 'Consultoría'], col: 4 },
     { name: 'nombre', label: 'Nombre del Documento', type: 'text', required: true, col: 8 },

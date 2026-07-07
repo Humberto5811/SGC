@@ -23,6 +23,9 @@ import adjuntosRouter from './routes/adjuntos.js';
 import programacionRouter from './routes/programacion.js';
 import usuariosRouter from './routes/usuarios.js';
 import proveedoresMaestroRouter from './routes/proveedoresMaestro.js';
+import {
+  metasImportRouter, areasImportRouter, ordenesImportRouter, configuracionImportRouter,
+} from './routes/registroDatosImports.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
 import { ejecutarRegistroCrear, ejecutarRegistroEditar } from './lib/registroMigrationFacade.js';
 import { trazaFromObservacionEntry } from './lib/observacionDestino.js';
@@ -302,21 +305,25 @@ app.use('/api/fichas', crudRouter({
   columns: ['codigo', 'descripcion', 'unidad_medida', 'version', 'estado', 'observaciones'],
   searchCols: ['codigo', 'descripcion'],
 }));
+app.use('/api/configuracion', configuracionImportRouter);
 app.use('/api/configuracion', crudRouter({
   table: 'configuracion_doc',
   columns: ['objeto', 'nombre', 'descripcion', 'obligatorio', 'estado'],
   searchCols: ['objeto', 'nombre'],
 }));
+app.use('/api/metas', metasImportRouter);
 app.use('/api/metas', crudRouter({
   table: 'metas',
   columns: ['codigo', 'nombre', 'descripcion', 'estado'],
   searchCols: ['codigo', 'nombre'],
 }));
+app.use('/api/areas', areasImportRouter);
 app.use('/api/areas', crudRouter({
   table: 'areas',
   columns: ['codigo', 'nombre', 'responsable', 'estado'],
   searchCols: ['codigo', 'nombre', 'responsable'],
 }));
+app.use('/api/ordenes', ordenesImportRouter);
 app.use('/api/ordenes', crudRouter({
   table: 'ordenes',
   columns: ['numero', 'tipo', 'proveedor', 'ruc', 'monto', 'fecha', 'estado'],

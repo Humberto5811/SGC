@@ -23,10 +23,14 @@ function tipoLabel(tipo) {
   return 'BIEN';
 }
 
+import { generatePedidoSigamef } from './pedidoSigamefCodes.js';
+
 function pedidoLabel(ped) {
   if (!ped) return '';
-  const pref = String(ped.tipo || 'PB').slice(0, 2).toUpperCase();
-  return ped.nro_pedido ? `${pref}-${ped.nro_pedido}` : String(ped.codigo_pedido || ped.nro_pedido || '');
+  if (ped.pedido_sigamef) return String(ped.pedido_sigamef);
+  const generated = generatePedidoSigamef(ped.tipo, ped.nro_pedido);
+  if (generated) return generated;
+  return String(ped.nro_pedido || '');
 }
 
 function itemFromReq(req, ped) {
@@ -120,7 +124,7 @@ export async function buildMatrizConsolidacionPaquetes() {
     let pedidos = [];
     if (reqIds.length) {
       const { rows: peds } = await query(`
-        SELECT p.id, p.ano_eje, p.tipo, p.nro_pedido, p.codigo_pedido, p.centro, p.descripcion,
+        SELECT p.id, p.ano_eje, p.tipo, p.nro_pedido, p.pedido_sigamef, p.codigo_pedido, p.centro, p.descripcion,
                p.cant_solicitada, p.precio_unitario, p.total_item,
                p.codigo_sigamef, p.sec_func, p.especifica, p.unidad_medida,
                rp.requerimiento_id,
