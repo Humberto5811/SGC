@@ -47,6 +47,7 @@ function actosSortBandejaHeaders(sortState = null) {
     ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
+    ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
     ${sortableTh('Estado Actual', 'estado', sortState)}
     ${sortableTh('Responsable Actual', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
@@ -102,6 +103,7 @@ function renderCmBandejaRowCells(r, opts = {}) {
     <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
     <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
+    <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>

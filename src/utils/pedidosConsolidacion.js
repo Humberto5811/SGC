@@ -220,6 +220,14 @@ export function pedidosMatrizStyles() {
     .ped-matriz-wrap .table th.sorted-desc::after { content: ' ▼'; font-size: 0.65rem; }
     .ped-matriz-wrap .table-responsive { max-height: 70vh; overflow: auto; }
     .ped-matriz-wrap tr.ped-row-highlight { background: #fff3cd !important; outline: 2px solid #ffc107; }
+    .ped-matriz-wrap .ped-col-area { max-width: 120px; min-width: 90px; width: 110px; }
+    .ped-matriz-wrap .ped-area-text {
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; word-break: break-word; line-height: 1.25;
+    }
+    .ped-matriz-wrap .req-col-acc { width: 50px; text-align: center; position: static; overflow: visible; }
+    .ped-matriz-wrap .req-col-acc .dropdown { position: static; }
+    .ped-matriz-wrap .bandeja-actions-btn { padding: 2px 8px; line-height: 1; font-size: 1.1rem; border: 1px solid #dee2e6; }
     @media (max-width: 1366px) {
       .ped-col-meta, .ped-col-clas { display: none; }
     }

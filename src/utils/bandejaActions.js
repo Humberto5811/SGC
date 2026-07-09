@@ -115,9 +115,11 @@ export function progMenuItems(r) {
   const puedeAprobar = enProgramacion || esAprobadoDec;
   const obsLabel = labelBotonObservaciones(r, 'Programación');
   const obsEnabled = enProgramacion || esAprobadoDec;
+  const cmnLabel = r.cmn ? 'Editar CMN' : 'Agregar CMN';
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
+    { act: 'cmn', label: cmnLabel, icon: 'bi-card-text', disabled: !puedeGestionar },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
     { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !obsEnabled },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
@@ -135,6 +137,7 @@ export function progHiddenActions(r) {
   const obsEnabled = enProgramacion || esAprobadoDec;
   return `
     <button type="button" class="prog-add-pedido" data-act-trigger="pedido" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
+    <button type="button" class="prog-edit-cmn" data-act-trigger="cmn" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
     <button type="button" class="prog-ver" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="prog-attach" data-act-trigger="attach" data-id="${r.id}"></button>
     <button type="button" class="prog-observar" data-act-trigger="obs" data-id="${r.id}" ${obsEnabled ? '' : 'disabled'}></button>
@@ -211,4 +214,34 @@ export function invitacionesHiddenActions(r) {
     <button type="button" class="inv-obs" data-act-trigger="obs" data-id="${r.id}"></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
     <button type="button" class="inv-sc" data-act-trigger="crearSc" data-id="${r.id}"></button>`;
+}
+
+export function pedidosMenuItems(f = {}) {
+  const items = [
+    { act: 'detail', label: 'Ver expediente', icon: 'bi-eye' },
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
+  ];
+  if (f.paquete_id) {
+    items.push({ act: 'goPaq', label: 'Ir al paquete', icon: 'bi-box-seam' });
+  }
+  return items;
+}
+
+export function paquetesMenuItems(estado) {
+  const items = [
+    { act: 'detail', label: 'Ver panel', icon: 'bi-layout-sidebar' },
+  ];
+  if (estado === 'Pendiente') {
+    items.push(
+      { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle' },
+      { act: 'delete', label: 'Eliminar', icon: 'bi-trash' },
+    );
+  }
+  return items;
+}
+
+export function paquetesReqMenuItems() {
+  return [
+    { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
+  ];
 }

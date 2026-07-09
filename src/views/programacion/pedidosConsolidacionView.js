@@ -4,6 +4,9 @@ import { trazabilidadService } from '../../services/trazabilidadService.js';
 import { renderTimeline, timelineModalStyles } from '../../services/timelineService.js';
 import { openDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { enrichReqRow } from '../../utils/trazabilidad.js';
+import { renderActionMenuCell, bindActionMenus } from '../../utils/bandejaUi.js';
+import { pedidosMenuItems } from '../../utils/bandejaActions.js';
+import { formatPedidoOperativo } from '../../utils/bandejaHelpers.js';
 import {
   esc, renderPedidosKpiCards, renderPedidosFilterBar, readPedidosFilters,
   filterFilasPedidos, computeIndicadoresPedidos, sortFilasPedidos,
@@ -21,7 +24,7 @@ let sortDir = 'asc';
 let callbacks = {};
 
 const SORT_MAP = {
-  Pedido: 'pedido',
+  'Pedido SIGAMEF': 'pedido',
   Requerimiento: 'requerimiento_codigo',
   Paquete: 'paquete',
   Estado: 'estado',
@@ -31,7 +34,7 @@ const SORT_MAP = {
 
 function renderTable() {
   const headers = [
-    { label: 'Pedido', sort: 'Pedido' },
+    { label: 'Pedido SIGAMEF', sort: 'Pedido SIGAMEF' },
     { label: 'Requerimiento', sort: 'Requerimiento' },
     { label: 'Paquete', sort: 'Paquete' },
     { label: 'Tipo', sort: null },
@@ -40,7 +43,7 @@ function renderTable() {
     { label: 'Cant.', sort: null },
     { label: 'Monto Total', sort: null },
     { label: 'Centro', sort: null },
-    { label: 'Área Usuaria', sort: null },
+    { label: 'Área Usuaria', sort: null, cls: 'ped-col-area' },
     { label: 'Estado Actual', sort: 'Estado' },
     { label: 'Responsable', sort: 'Responsable' },
     { label: 'Meta', sort: null, cls: 'ped-col-meta' },
@@ -58,9 +61,11 @@ function renderTable() {
     const tipMeta = f.meta ? `Meta: ${f.meta}` : '';
     const tipClas = f.clasificador ? `Clasificador: ${f.clasificador}` : '';
     const tipDias = `${f.dias_en_estado} días en estado`;
+    const pedidoLabel = formatPedidoOperativo(f.pedido);
+    const areaText = f.area_usuaria || '—';
     return `<tr data-pedido-id="${f.pedido_id}" data-paquete-id="${f.paquete_id || ''}"
       title="${esc([tipMeta, tipClas, tipDias].filter(Boolean).join(' · '))}">
-      <td><strong>${esc(f.pedido)}</strong></td>
+      <td><strong>${esc(pedidoLabel)}</strong></td>
       <td>${esc(f.requerimiento_codigo)}</td>
       <td>${paqueteBadgeHtml(f.codigo_paquete)}</td>
       <td><span class="badge bg-light text-dark border">${esc(f.tipo)}</span></td>
@@ -69,16 +74,12 @@ function renderTable() {
       <td class="text-end">${esc(f.cantidad)}</td>
       <td class="text-end">${fmtMoney(f.monto_total)}</td>
       <td>${esc(f.centro || '—')}</td>
-      <td>${esc(f.area_usuaria || '—')}</td>
+      <td class="ped-col-area"><span class="ped-area-text" title="${esc(areaText)}">${esc(areaText)}</span></td>
       <td title="${esc(tipDias)}">${estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto, f.requerimiento || f)}</td>
       <td>${responsableDosLineas(f.responsable, f.sub_modulo)}</td>
       <td class="ped-col-meta" title="${esc(f.meta)}">${esc(f.meta || '—')}</td>
       <td class="ped-col-clas" title="${esc(f.clasificador)}">${esc(f.clasificador || '—')}</td>
-      <td class="text-nowrap text-center">
-        <button class="btn btn-xs btn-outline-primary ped-act-exp" data-req-id="${f.requerimiento_id}" title="Ver expediente"><i class="bi bi-eye"></i></button>
-        <button class="btn btn-xs btn-outline-secondary ped-act-traza" data-req-id="${f.requerimiento_id}" title="Trazabilidad"><i class="bi bi-clock-history"></i></button>
-        ${f.paquete_id ? `<button class="btn btn-xs btn-outline-success ped-act-paq" data-paq-id="${f.paquete_id}" data-ped-id="${f.pedido_id}" title="Ir al paquete"><i class="bi bi-box-seam"></i></button>` : ''}
-      </td>
+      ${renderActionMenuCell(`ped-${f.pedido_id}`, pedidosMenuItems(f), '')}
     </tr>`;
   }).join('');
 
@@ -98,28 +99,28 @@ function bindTableEvents(cont) {
       applyView();
     };
   });
-  cont.querySelectorAll('.ped-act-exp').forEach((b) => {
-    b.onclick = (e) => {
-      e.stopPropagation();
-      const f = displayFilas.find((x) => String(x.requerimiento_id) === String(b.dataset.reqId));
+
+  bindActionMenus(cont, {
+    detail: (id) => {
+      const pedidoId = String(id).replace(/^ped-/, '');
+      const f = displayFilas.find((x) => String(x.pedido_id) === pedidoId);
       if (f?.requerimiento) openDetailPanel(enrichReqRow(f.requerimiento));
-    };
-  });
-  cont.querySelectorAll('.ped-act-traza').forEach((b) => {
-    b.onclick = async (e) => {
-      e.stopPropagation();
+    },
+    timeline: async (id) => {
+      const pedidoId = String(id).replace(/^ped-/, '');
+      const f = displayFilas.find((x) => String(x.pedido_id) === pedidoId);
+      if (!f?.requerimiento_id) return;
       try {
-        const t = await trazabilidadService.get(b.dataset.reqId);
+        const t = await trazabilidadService.get(f.requerimiento_id);
         const w = window.open('', '_blank', 'width=640,height=720');
         w.document.write(`<html><head><title>Trazabilidad</title><style>${timelineModalStyles()}</style></head><body>${renderTimeline(t.historial || t.historialEstados || [])}</body></html>`);
       } catch (err) { alert(err.message); }
-    };
-  });
-  cont.querySelectorAll('.ped-act-paq').forEach((b) => {
-    b.onclick = (e) => {
-      e.stopPropagation();
-      callbacks.onGoToPaquete?.(Number(b.dataset.paqId), Number(b.dataset.pedId));
-    };
+    },
+    goPaq: (id) => {
+      const pedidoId = String(id).replace(/^ped-/, '');
+      const f = displayFilas.find((x) => String(x.pedido_id) === pedidoId);
+      if (f?.paquete_id) callbacks.onGoToPaquete?.(Number(f.paquete_id), Number(f.pedido_id));
+    },
   });
 }
 

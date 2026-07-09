@@ -32,7 +32,7 @@ const DOCS_SOLICITADOS_OPTS = [
   'Otros documentos',
 ];
 
-const REQUISITOS_TECNICOS_OPTS = [
+const REQUISITOS_TECNICOS_BIENES = [
   'Precio',
   'Garantía del producto',
   'Plazo de entrega',
@@ -45,8 +45,52 @@ const REQUISITOS_TECNICOS_OPTS = [
   'Hoja de Seguridad',
   'Certificado de Conformidad',
   'Certificado de Calidad',
+  'RNP vigente',
+  'Consulta RUC vigente',
   'Certificado de Análisis',
 ];
+
+const REQUISITOS_TECNICOS_OPTS = REQUISITOS_TECNICOS_BIENES;
+
+/** Catálogos dinámicos por tipo de contratación (extensible a Licitaciones / Concursos). */
+export const CATALOGOS_POR_TIPO = {
+  Bienes: {
+    docs_solicitados: DOCS_SOLICITADOS_OPTS,
+    requisitos_tecnicos: REQUISITOS_TECNICOS_BIENES,
+  },
+  Servicios: {
+    docs_solicitados: ['Anexo 09', 'Anexo 10', 'Otros documentos'],
+    requisitos_tecnicos: [
+      'Experiencia de ventas',
+      'Registro Nacional de Proveedores (RNP) vigente',
+      'Consulta RUC activo',
+      'Curriculum Vitae del personal',
+      'Seguros',
+      'Permisos',
+      'Certificaciones',
+      'Otros documentos',
+    ],
+  },
+  Locadores: {
+    docs_solicitados: [
+      'Anexo 09', 'Anexo 10', 'Anexo 12', 'Anexo 13', 'Anexo 14', 'Anexo 15', 'Anexo 16', 'Otros documentos',
+    ],
+    requisitos_tecnicos: [
+      'Formación Académica',
+      'Experiencia General',
+      'Experiencia Específica',
+      'Serum',
+      'Colegiado y habilitado',
+      'Capacitación',
+      'Registro Nacional de Proveedores vigente',
+      'Consulta RUC activo',
+      'Suspensión de Cuarta Categoría',
+      'Curriculum Vitae documentado',
+      'Seguros',
+      'Otros documentos',
+    ],
+  },
+};
 
 const TIPOS_OPTS = ['Bienes', 'Servicios', 'Locadores'];
 const TIPOS_EVALUACION_OPTS = ['Por paquete de ítems', 'Por relación de ítems'];
@@ -62,6 +106,7 @@ export function getCatalogosSolicitud() {
   return {
     docs_solicitados: DOCS_SOLICITADOS_OPTS,
     requisitos_tecnicos: REQUISITOS_TECNICOS_OPTS,
+    catalogos_por_tipo: CATALOGOS_POR_TIPO,
     tipos: TIPOS_OPTS,
     tipos_evaluacion: TIPOS_EVALUACION_OPTS,
     lugares_rapidos: LUGARES_RAPIDOS,
@@ -687,6 +732,9 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
       COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
       sc.cotizaciones_fin AS fecha_culminacion,
       (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_id,
+      (SELECT r.codigo FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_codigo,
       COALESCE(sc.contador_envios, 0)::int AS contador_envios,
       CASE
         WHEN COALESCE(sc.contador_envios, 0) > 0 THEN 'Sol.Cot. Enviada (' || sc.contador_envios || ')'
@@ -706,7 +754,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
       WHERE cp.solicitud_id = sc.id AND cp.estado = 'COTIZACION_PRESENTADA'
     ) cot_stats ON TRUE
     ${where}
-    ORDER BY sc.anio ASC, sc.correlativo ASC, sc.id ASC
+    ORDER BY sc.anio DESC, sc.correlativo DESC, sc.id DESC
     LIMIT $${params.length - 1} OFFSET $${params.length}
   `, params);
 

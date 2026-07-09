@@ -8,6 +8,8 @@ import {
   filterMatrizPaquetes, exportMatrizExcel, paquetesMatrizStyles,
   estadoPaqueteBadge, responsableDosLineas, fmtMoney,
 } from '../../utils/paquetesConsolidacion.js';
+import { renderActionMenuCell, bindActionMenus } from '../../utils/bandejaUi.js';
+import { paquetesMenuItems, paquetesReqMenuItems } from '../../utils/bandejaActions.js';
 import { usePagination } from '../../utils/paginacion.js';
 
 let rawMatriz = null;
@@ -206,13 +208,7 @@ async function renderPanelTab(detail, tab) {
 }
 
 function renderAccionesPaquete(paqueteId, estado) {
-  if (estado !== 'Pendiente') {
-    return `<button class="btn btn-xs btn-outline-info paq-act-detail" data-id="${paqueteId}" title="Panel"><i class="bi bi-layout-sidebar"></i></button>`;
-  }
-  return `
-    <button class="btn btn-xs btn-outline-info paq-act-detail" data-id="${paqueteId}" title="Panel"><i class="bi bi-layout-sidebar"></i></button>
-    <button class="btn btn-xs btn-outline-success paq-act-approve" data-id="${paqueteId}" title="Aprobar"><i class="bi bi-check-circle"></i></button>
-    <button class="btn btn-xs btn-outline-danger paq-act-del" data-id="${paqueteId}" title="Eliminar"><i class="bi bi-trash"></i></button>`;
+  return renderActionMenuCell(`paq-${paqueteId}`, paquetesMenuItems(estado), '');
 }
 
 function renderMatrizTable(grupos) {
@@ -256,9 +252,7 @@ function renderMatrizTable(grupos) {
           <td>${responsableDosLineas(f.responsable, f.sub_modulo)}</td>
           <td>${esc(f.meta || '—')}</td>
           <td>${esc(f.clasificador || '—')}</td>
-          <td class="text-center">
-            <button class="btn btn-xs btn-outline-secondary paq-req-traza" data-req-id="${f.requerimiento_id}" title="Trazabilidad"><i class="bi bi-clock-history"></i></button>
-          </td>
+          ${renderActionMenuCell(`paq-req-${f.requerimiento_id}`, paquetesReqMenuItems(), '')}
         </tr>`;
       });
     }
@@ -272,7 +266,7 @@ function renderMatrizTable(grupos) {
 function bindMatrizEvents(cont) {
   cont.querySelectorAll('[data-paq-toggle]').forEach((row) => {
     row.onclick = (e) => {
-      if (e.target.closest('.paq-act-detail, .paq-act-approve, .paq-act-del, .paq-req-traza')) return;
+      if (e.target.closest('.req-col-acc, .bandeja-menu-act, .bandeja-actions-btn')) return;
       const id = Number(row.dataset.paqToggle);
       if (collapsedPaquetes.has(id)) collapsedPaquetes.delete(id);
       else collapsedPaquetes.add(id);
@@ -282,25 +276,29 @@ function bindMatrizEvents(cont) {
   cont.querySelectorAll('[data-paq-panel]').forEach((row) => {
     row.addEventListener('dblclick', () => openPaquetePanel(Number(row.dataset.paqPanel)));
   });
-  cont.querySelectorAll('.paq-act-detail').forEach((b) => {
-    b.onclick = (e) => { e.stopPropagation(); openPaquetePanel(Number(b.dataset.id)); };
-  });
-  cont.querySelectorAll('.paq-act-approve').forEach((b) => {
-    b.onclick = (e) => { e.stopPropagation(); callbacks.onApprove?.(Number(b.dataset.id)); };
-  });
-  cont.querySelectorAll('.paq-act-del').forEach((b) => {
-    b.onclick = (e) => { e.stopPropagation(); callbacks.onDelete?.(Number(b.dataset.id)); };
-  });
-  cont.querySelectorAll('.paq-req-traza').forEach((b) => {
-    b.onclick = async (e) => {
-      e.stopPropagation();
-      const id = b.dataset.reqId;
+
+  bindActionMenus(cont, {
+    detail: (id) => {
+      if (String(id).startsWith('paq-req-')) return;
+      openPaquetePanel(Number(String(id).replace(/^paq-/, '')));
+    },
+    approve: (id) => {
+      if (String(id).startsWith('paq-req-')) return;
+      callbacks.onApprove?.(Number(String(id).replace(/^paq-/, '')));
+    },
+    delete: (id) => {
+      if (String(id).startsWith('paq-req-')) return;
+      callbacks.onDelete?.(Number(String(id).replace(/^paq-/, '')));
+    },
+    timeline: async (id) => {
+      if (!String(id).startsWith('paq-req-')) return;
+      const reqId = String(id).replace(/^paq-req-/, '');
       try {
-        const t = await trazabilidadService.get(id);
+        const t = await trazabilidadService.get(reqId);
         const w = window.open('', '_blank', 'width=640,height=720');
         w.document.write(`<html><head><title>Trazabilidad</title><style>${timelineModalStyles()}</style></head><body>${renderTimeline(t.historial || [])}</body></html>`);
       } catch (err) { alert(err.message); }
-    };
+    },
   });
 }
 

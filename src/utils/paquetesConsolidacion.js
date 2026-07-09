@@ -207,6 +207,9 @@ export function paquetesMatrizStyles() {
     .paq-group-row .paq-toggle { width: 24px; display: inline-block; text-align: center; }
     .paq-detail-row { background: #fff; }
     .paq-matriz-wrap .table-responsive { max-height: 70vh; overflow: auto; }
+    .paq-matriz-wrap .req-col-acc { width: 50px; text-align: center; position: static; overflow: visible; }
+    .paq-matriz-wrap .req-col-acc .dropdown { position: static; }
+    .paq-matriz-wrap .bandeja-actions-btn { padding: 2px 8px; line-height: 1; font-size: 1.1rem; border: 1px solid #dee2e6; }
     .ped-row-highlight, tr.ped-row-highlight { background: #fff3cd !important; outline: 2px solid #ffc107; }
   `;
 }

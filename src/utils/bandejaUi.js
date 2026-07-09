@@ -338,6 +338,12 @@ function bandejaSortValue(row, field) {
     case 'paquete': return String(row.codigo_paquete || '');
     case 'pedido': return String(row.pedidos_sigamef || row.pedidosSigamef || '');
     case 'area': return String(row.area || '');
+    case 'cmn': {
+      const raw = String(row.cmn || '').trim();
+      if (!raw) return Number.POSITIVE_INFINITY;
+      const num = parseInt(raw.replace(/\D/g, ''), 10);
+      return Number.isNaN(num) ? Number.POSITIVE_INFINITY : num;
+    }
     case 'fecha': {
       const ref = row.fecha_estado_actual || row.fechaEstadoActual || row.created_at;
       return ref ? new Date(ref).getTime() : 0;

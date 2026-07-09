@@ -109,6 +109,7 @@ function programacionBandejaHeaders(sortState = null) {
     ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
+    ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
     ${sortableTh('Estado Actual', 'estado', sortState)}
     ${sortableTh('Responsable Actual', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
@@ -146,6 +147,7 @@ function renderProgramacionRowCells(r, opts = {}) {
     <td class="actos-col-desc"><span class="req-desc-text" title="${esc(nombreItem)}">${esc(nombreItem)}</span></td>
     <td class="actos-col-centro"><span class="req-centro-text" title="${esc(r.centro_nombre || r.centro || '—')}">${esc(r.centro_nombre || r.centro || '—')}</span></td>
     <td class="actos-col-area">${esc(r.area || '—')}</td>
+    <td class="actos-col-cmn small">${esc(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${esc(resp)}</div><div class="req-resp-role">${esc(rol)}</div></td>
     <td class="small text-muted">${esc(fechaFmt)}</td>
@@ -259,6 +261,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
         const req = allRows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
       },
+      cmn: (id) => openEditCmnModal(Number(id)),
       obs: (id) => handleBandejaObservaciones(id, allRows, {
         submoduloLabel: 'Programación',
         puedeObservar: (r) => {
@@ -312,6 +315,7 @@ function bindBandejaEvents(cont) {
   });
 
   cont.querySelectorAll('.prog-add-pedido').forEach((b) => b.onclick = () => openAsociarPedidosModal(Number(b.dataset.id)));
+  cont.querySelectorAll('.prog-edit-cmn').forEach((b) => b.onclick = () => openEditCmnModal(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
   cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
   cont.querySelectorAll('.prog-aprobar').forEach((b) => b.onclick = () => aprobarProgramacion(Number(b.dataset.id)));
@@ -331,6 +335,67 @@ function updateConsolidarBtn() {
   const count = selectedIds.size;
   if (btn) btn.disabled = count < 2;
   if (label) label.textContent = `${count} seleccionados`;
+}
+
+function formatCmnValue(raw) {
+  const num = parseInt(String(raw || '').replace(/\D/g, ''), 10);
+  return Number.isNaN(num) ? '' : String(num).padStart(5, '0');
+}
+
+function updateProgCmnCell(id, cmnFormatted) {
+  const idx = allRows.findIndex((x) => String(x.id) === String(id));
+  if (idx >= 0) allRows[idx] = { ...allRows[idx], cmn: cmnFormatted };
+  const cell = document.querySelector(`#progBandejaWrap tr[data-req-id="${id}"] .actos-col-cmn`);
+  if (cell) cell.textContent = cmnFormatted || '—';
+}
+
+async function openEditCmnModal(id) {
+  const req = allRows.find((x) => String(x.id) === String(id));
+  if (!req) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal fade show d-block';
+  overlay.style.background = 'rgba(0,0,0,.45)';
+  overlay.innerHTML = `
+    <div class="modal-dialog modal-sm modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header py-2">
+          <h6 class="modal-title mb-0">Agregar / Editar CMN</h6>
+          <button type="button" class="btn-close" id="progCmnClose"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-muted mb-2">Requerimiento <strong>${esc(req.codigo || ('#' + req.id))}</strong></p>
+          <label class="form-label small mb-1">CMN N°</label>
+          <input type="text" class="form-control form-control-sm" id="progCmnInput"
+            maxlength="5" placeholder="00000" value="${esc(req.cmn || '')}" style="width:100px;text-align:center;">
+          <div class="form-text">5 dígitos. Si el área usuaria ya registró CMN, se muestra para edición.</div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="progCmnCancel">Cancelar</button>
+          <button type="button" class="btn btn-sm btn-primary" id="progCmnSave">Guardar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  const input = overlay.querySelector('#progCmnInput');
+  input.oninput = () => { input.value = input.value.replace(/\D/g, '').slice(0, 5); };
+  input.onblur = () => { if (input.value) input.value = formatCmnValue(input.value); };
+  overlay.querySelector('#progCmnClose').onclick = close;
+  overlay.querySelector('#progCmnCancel').onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#progCmnSave').onclick = async () => {
+    const cmnFormatted = formatCmnValue(input.value);
+    try {
+      await requerimientosService.update(id, { cmn: cmnFormatted });
+      updateProgCmnCell(id, cmnFormatted);
+      close();
+    } catch (e) {
+      alert('Error al guardar CMN: ' + e.message);
+    }
+  };
+  input.focus();
 }
 
 async function aprobarProgramacion(id) {

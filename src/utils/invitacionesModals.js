@@ -6,18 +6,15 @@ import { openSelectorProveedoresModal, showHistorialProveedorModal } from './inv
 import { adjuntosService } from '../services/adjuntosService.js';
 import {
   renderAdjuntosTable, bindAdjuntosTable, renderDocumentosTable, bindDocumentosTable,
-  openBase64Document, isPdfLike,
+  openBase64Document,
 } from './documentViewer.js';
+import {
+  getCatalogoTipo, splitDatetimeParts, mergeDateTime, displayCmnValue,
+  itemCantidadForTipo, mapTipoFromRow,
+} from './solicitudCatalogos.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function mapTipoFromRow(r) {
-  const t = String(r?.tipo || '').toLowerCase();
-  if (t === 'servicios') return 'Servicios';
-  if (t === 'locacion') return 'Locadores';
-  return 'Bienes';
 }
 
 const MSG_CONSULTA_FUERA_PLAZO = 'Consulta fuera de plazo';
@@ -43,6 +40,67 @@ function openModal(html) {
   modal?.show();
   makeModalDraggable(el);
   return { el, modal, close: () => { modal?.hide(); setTimeout(() => el.remove(), 250); } };
+}
+
+const SC_FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.webp';
+const SC_FILE_MIMES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+]);
+
+function isAllowedScFile(file) {
+  if (!file) return false;
+  const mime = String(file.type || '').toLowerCase();
+  if (SC_FILE_MIMES.has(mime)) return true;
+  return /\.(pdf|docx?|xlsx?|jpe?g|png|gif|webp)$/i.test(file.name || '');
+}
+
+function openScSubModal({ title, bodyHtml, submitLabel = 'Guardar', onSubmit }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal fade show d-block';
+    overlay.style.background = 'rgba(0,0,0,.45)';
+    overlay.style.zIndex = '1090';
+    overlay.innerHTML = `
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header py-2 bg-light">
+            <h6 class="modal-title mb-0">${esc(title)}</h6>
+            <button type="button" class="btn-close" id="scSubClose"></button>
+          </div>
+          <div class="modal-body">
+            ${bodyHtml}
+            <div id="scSubError" class="alert alert-danger small py-2 mb-0 mt-2 d-none"></div>
+          </div>
+          <div class="modal-footer py-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="scSubCancel">Cancelar</button>
+            <button type="button" class="btn btn-sm btn-primary" id="scSubSubmit">${esc(submitLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = (result) => { overlay.remove(); resolve(result); };
+    const showError = (msg) => {
+      const err = overlay.querySelector('#scSubError');
+      if (err) { err.textContent = msg; err.classList.remove('d-none'); }
+    };
+    overlay.querySelector('#scSubClose').onclick = () => close(null);
+    overlay.querySelector('#scSubCancel').onclick = () => close(null);
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    overlay.querySelector('#scSubSubmit').onclick = async () => {
+      overlay.querySelector('#scSubError')?.classList.add('d-none');
+      try {
+        const ok = await onSubmit(overlay, showError);
+        if (ok !== false) close(ok);
+      } catch (err) {
+        showError(err.message || 'No se pudo completar la operación');
+      }
+    };
+  });
 }
 
 function toDatetimeLocalValue(d) {
@@ -110,8 +168,12 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
   const first = rows[0] || detalleExistente?.requerimientos?.[0] || {};
   const tipoAuto = mapTipoFromRow(first);
   const sol = detalleExistente?.solicitud || null;
-  const docsCatalog = catalogos.docs_solicitados || [];
-  const reqCatalog = catalogos.requisitos_tecnicos || [];
+  const catalogosPorTipo = catalogos.catalogos_por_tipo || {};
+  const cmnInicial = displayCmnValue(sol?.cmn || first.cmn);
+  const ciParts = splitDatetimeParts(sol?.consultas_inicio, toDatetimeLocalValue);
+  const cfParts = splitDatetimeParts(sol?.consultas_fin, toDatetimeLocalValue);
+  const tiParts = splitDatetimeParts(sol?.cotizaciones_inicio, toDatetimeLocalValue);
+  const tfParts = splitDatetimeParts(sol?.cotizaciones_fin, toDatetimeLocalValue);
 
   const state = {
     solicitudId: sol?.id || null,
@@ -171,6 +233,10 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       .sc-btn-inst i, .sc-btn-inst .bi { color: #fff !important; }
       .sc-btn-inst:hover { background: #0b5ed7 !important; color: #fff !important; }
       #scWizardModal .modal-header { cursor: move; }
+      .sc-doc-adj { padding: .15rem .4rem !important; font-size: .68rem !important; line-height: 1.2; }
+      .sc-req-grid { font-size: .72rem; }
+      .sc-req-grid .form-check-label { font-size: .72rem; }
+      .sc-cronograma-time { max-width: 110px; }
     </style>
     <ul class="nav sc-step-tabs mb-3">${stepsHtml}</ul>
 
@@ -186,7 +252,8 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
               `<option ${t === (sol?.tipo || tipoAuto) ? 'selected' : ''}>${esc(t)}</option>`).join('')}
           </select></div>
         <div class="col-md-2"><label class="form-label small">CMN</label>
-          <input class="form-control form-control-sm" id="scCmn" value="${esc(sol?.cmn || first.cmn || '')}"></div>
+          <input class="form-control form-control-sm" id="scCmn" readonly
+            value="${esc(cmnInicial)}" placeholder="" title="Valor registrado en Programación"></div>
         <div class="col-md-4"><label class="form-label small">Área usuaria</label>
           <input class="form-control form-control-sm" id="scArea" value="${esc(sol?.area_usuaria || first.area || '')}"></div>
         <div class="col-md-4"><label class="form-label small">Tipo de evaluación <span class="text-danger">*</span></label>
@@ -199,17 +266,25 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       <hr/>
       <h6 class="small fw-bold">Cronograma de consultas</h6>
       <div class="row g-2 mb-3">
-        <div class="col-md-3"><label class="form-label small">Fecha/Hora Inicio Consultas</label>
-          <input type="datetime-local" class="form-control form-control-sm" id="scConsultasInicio" value="${esc(toDatetimeLocalValue(sol?.consultas_inicio))}"></div>
-        <div class="col-md-3"><label class="form-label small">Fecha/Hora Fin Consultas</label>
-          <input type="datetime-local" class="form-control form-control-sm" id="scConsultasFin" value="${esc(toDatetimeLocalValue(sol?.consultas_fin))}"></div>
+        <div class="col-md-3"><label class="form-label small">Fecha Inicio Consultas</label>
+          <input type="date" class="form-control form-control-sm" id="scConsultasInicioF" value="${esc(ciParts.date)}"></div>
+        <div class="col-md-2"><label class="form-label small">Hora</label>
+          <input type="time" class="form-control form-control-sm sc-cronograma-time" id="scConsultasInicioH" step="60" value="${esc(ciParts.time)}"></div>
+        <div class="col-md-3"><label class="form-label small">Fecha Fin Consultas</label>
+          <input type="date" class="form-control form-control-sm" id="scConsultasFinF" value="${esc(cfParts.date)}"></div>
+        <div class="col-md-2"><label class="form-label small">Hora</label>
+          <input type="time" class="form-control form-control-sm sc-cronograma-time" id="scConsultasFinH" step="60" value="${esc(cfParts.time)}"></div>
       </div>
       <h6 class="small fw-bold">Cronograma de cotización</h6>
       <div class="row g-2">
-        <div class="col-md-3"><label class="form-label small">Fecha/Hora Inicio Cotización</label>
-          <input type="datetime-local" class="form-control form-control-sm" id="scCotInicio" value="${esc(toDatetimeLocalValue(sol?.cotizaciones_inicio))}"></div>
-        <div class="col-md-3"><label class="form-label small">Fecha/Hora Fin Cotización</label>
-          <input type="datetime-local" class="form-control form-control-sm" id="scCotFin" value="${esc(toDatetimeLocalValue(sol?.cotizaciones_fin))}"></div>
+        <div class="col-md-3"><label class="form-label small">Fecha Inicio Cotización</label>
+          <input type="date" class="form-control form-control-sm" id="scCotInicioF" value="${esc(tiParts.date)}"></div>
+        <div class="col-md-2"><label class="form-label small">Hora</label>
+          <input type="time" class="form-control form-control-sm sc-cronograma-time" id="scCotInicioH" step="60" value="${esc(tiParts.time)}"></div>
+        <div class="col-md-3"><label class="form-label small">Fecha Fin Cotización</label>
+          <input type="date" class="form-control form-control-sm" id="scCotFinF" value="${esc(tfParts.date)}"></div>
+        <div class="col-md-2"><label class="form-label small">Hora</label>
+          <input type="time" class="form-control form-control-sm sc-cronograma-time" id="scCotFinH" step="60" value="${esc(tfParts.time)}"></div>
       </div>
     </div>
 
@@ -220,13 +295,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
             <h6 class="border-bottom pb-2 mb-2">Documentos solicitados al proveedor</h6>
             <table class="table table-sm sc-sel-table mb-2">
               <thead><tr><th style="width:28px;"></th><th>Documento</th><th>Adjunto</th><th style="width:80px;">Acciones</th></tr></thead>
-              <tbody id="scDocsPick">${docsCatalog.map((d, i) => `
-                <tr data-doc-name="${esc(d)}">
-                  <td><input type="checkbox" class="form-check-input sc-doc-check" id="scDoc${i}" value="${esc(d)}"></td>
-                  <td><label class="small mb-0" for="scDoc${i}">${esc(d)}</label></td>
-                  <td class="sc-doc-adj-cell small text-muted">—</td>
-                  <td><button type="button" class="btn btn-sm sc-btn-inst sc-doc-adj" data-doc="${esc(d)}"><i class="bi bi-paperclip"></i> Adjuntar</button></td>
-                </tr>`).join('')}</tbody>
+              <tbody id="scDocsPick"></tbody>
             </table>
             <button type="button" class="btn btn-sm sc-btn-inst" id="scAddOtroDoc"><i class="bi bi-plus"></i> Agregar otro documento</button>
             <h6 class="border-bottom pb-1 mt-3 mb-2">Documentos Seleccionados (<span id="scDocsCount">0</span>)</h6>
@@ -239,15 +308,11 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         <div class="col-md-6">
           <div class="sc-docs-panel">
             <h6 class="border-bottom pb-2 mb-2">Requerimientos técnicos mínimos</h6>
-            <div class="row g-1 mb-2">${reqCatalog.map((d, i) => `
-              <div class="col-md-6"><div class="form-check">
-                <input class="form-check-input sc-req-check" type="checkbox" id="scReq${i}" value="${esc(d)}">
-                <label class="form-check-label small" for="scReq${i}">${esc(d)}</label>
-              </div></div>`).join('')}</div>
+            <div class="row g-1 mb-2 sc-req-grid" id="scReqGrid"></div>
             <button type="button" class="btn btn-sm btn-outline-primary mb-2" id="scAddOtroReq"><i class="bi bi-plus"></i> Agregar otro requisito</button>
             <h6 class="border-bottom pb-1 mb-2">Requisitos Seleccionados (<span id="scReqCount">0</span>)</h6>
             <table class="table table-sm table-bordered sc-sel-table mb-0">
-              <thead class="table-light"><tr><th>Requisito técnico</th><th>Obligatorio</th><th>Archivo adjunto</th><th>Acciones</th></tr></thead>
+              <thead class="table-light"><tr><th>Requisito técnico</th><th>Obligatorio</th><th>Acciones</th></tr></thead>
               <tbody id="scReqResumen"></tbody>
             </table>
           </div>
@@ -331,6 +396,96 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
 
   const lugaresRapidos = catalogos.lugares_rapidos || [];
 
+  function getCurrentTipo() {
+    return el.querySelector('#scTipo')?.value || sol?.tipo || tipoAuto || 'Bienes';
+  }
+
+  function getDocsCatalog() {
+    return getCatalogoTipo(catalogosPorTipo, getCurrentTipo()).docs_solicitados || [];
+  }
+
+  function getReqCatalog() {
+    return getCatalogoTipo(catalogosPorTipo, getCurrentTipo()).requisitos_tecnicos || [];
+  }
+
+  function pruneSelectionsForTipo() {
+    const docs = new Set(getDocsCatalog());
+    const reqs = new Set(getReqCatalog());
+    state.docsResumen = state.docsResumen.filter((d) => docs.has(d.documento));
+    state.reqResumen = state.reqResumen.filter((r) => reqs.has(r.requisito));
+  }
+
+  function bindDocPickEvents() {
+    el.querySelectorAll('.sc-doc-check').forEach((cb) => {
+      cb.onchange = () => {
+        const doc = cb.value;
+        if (cb.checked) addDocToResumen(doc);
+        else {
+          const idx = state.docsResumen.findIndex((d) => d.documento === doc);
+          if (idx >= 0) state.docsResumen.splice(idx, 1);
+          renderDocsResumen();
+        }
+      };
+    });
+    el.querySelectorAll('.sc-doc-adj').forEach((btn) => {
+      btn.onclick = () => {
+        const doc = btn.dataset.doc;
+        const cb = el.querySelector(`.sc-doc-check[value="${CSS.escape(doc)}"]`);
+        if (cb) cb.checked = true;
+        attachDocFile(doc);
+      };
+    });
+  }
+
+  function bindReqPickEvents() {
+    el.querySelectorAll('.sc-req-check').forEach((cb) => {
+      cb.onchange = () => {
+        const req = cb.value;
+        if (cb.checked) {
+          if (!state.reqResumen.some((d) => d.requisito === req)) {
+            state.reqResumen.push({ requisito: req, obligatorio: true, archivo: '' });
+            renderReqResumen();
+          }
+        } else {
+          const idx = state.reqResumen.findIndex((d) => d.requisito === req);
+          if (idx >= 0) { state.reqResumen.splice(idx, 1); renderReqResumen(); }
+        }
+      };
+    });
+  }
+
+  function rebuildDocsTab() {
+    const docsCatalog = getDocsCatalog();
+    const reqCatalog = getReqCatalog();
+    const pick = el.querySelector('#scDocsPick');
+    const grid = el.querySelector('#scReqGrid');
+    if (pick) {
+      pick.innerHTML = docsCatalog.map((d, i) => `
+        <tr data-doc-name="${esc(d)}">
+          <td><input type="checkbox" class="form-check-input sc-doc-check" id="scDoc${i}" value="${esc(d)}"></td>
+          <td><label class="small mb-0" for="scDoc${i}">${esc(d)}</label></td>
+          <td class="sc-doc-adj-cell small text-muted">—</td>
+          <td><button type="button" class="btn btn-sm sc-btn-inst sc-doc-adj" data-doc="${esc(d)}"><i class="bi bi-paperclip"></i> Adjuntar</button></td>
+        </tr>`).join('');
+      bindDocPickEvents();
+    }
+    if (grid) {
+      grid.innerHTML = reqCatalog.map((d, i) => `
+        <div class="col-md-6"><div class="form-check">
+          <input class="form-check-input sc-req-check" type="checkbox" id="scReq${i}" value="${esc(d)}">
+          <label class="form-check-label" for="scReq${i}">${esc(d)}</label>
+        </div></div>`).join('');
+      bindReqPickEvents();
+    }
+    state.docsResumen.forEach((d) => syncDocPickRow(d.documento));
+    state.reqResumen.forEach((r) => {
+      const cb = [...el.querySelectorAll('.sc-req-check')].find((c) => c.value === r.requisito);
+      if (cb) cb.checked = true;
+    });
+    renderDocsResumen();
+    renderReqResumen();
+  }
+
   function refreshStepTabs() {
     STEP_ORDER.forEach((step) => {
       const btn = el.querySelector(`[data-sc-tab="${step}"]`);
@@ -387,8 +542,35 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     tb.innerHTML = state.docsResumen.map((d, i) => `
       <tr><td>${esc(d.documento)}</td><td>${esc(d.archivo || '—')}</td>
       <td class="small">${esc(fmtRegistro(d.fecha_registro))}</td>
-      <td><button type="button" class="btn btn-sm sc-btn-inst sc-doc-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button></td></tr>`).join('')
+      <td class="text-nowrap">
+        ${d.contenido_base64 ? `
+          <button type="button" class="btn btn-sm btn-outline-primary sc-doc-res-ver" data-i="${i}">Ver</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary sc-doc-res-dl" data-i="${i}">Descargar</button>` : ''}
+        <button type="button" class="btn btn-sm sc-btn-inst sc-doc-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button>
+      </td></tr>`).join('')
       || '<tr><td colspan="4" class="text-muted small">Sin documentos seleccionados</td></tr>';
+    tb.querySelectorAll('.sc-doc-res-ver').forEach((btn) => {
+      btn.onclick = () => {
+        const d = state.docsResumen[parseInt(btn.dataset.i, 10)];
+        if (d?.contenido_base64) {
+          openBase64Document({
+            nombre: d.archivo || d.documento,
+            mime_type: d.mime_type,
+            contenido_base64: d.contenido_base64,
+          });
+        }
+      };
+    });
+    tb.querySelectorAll('.sc-doc-res-dl').forEach((btn) => {
+      btn.onclick = () => {
+        const d = state.docsResumen[parseInt(btn.dataset.i, 10)];
+        if (!d?.contenido_base64) return;
+        const a = document.createElement('a');
+        a.href = `data:${d.mime_type || 'application/octet-stream'};base64,${d.contenido_base64}`;
+        a.download = d.archivo || d.documento || 'documento';
+        a.click();
+      };
+    });
     tb.querySelectorAll('.sc-doc-del').forEach((btn) => {
       btn.onclick = () => {
         const removed = state.docsResumen.splice(parseInt(btn.dataset.i, 10), 1)[0];
@@ -396,7 +578,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         renderDocsResumen();
       };
     });
-    docsCatalog.forEach((d) => syncDocPickRow(d));
+    getDocsCatalog().forEach((d) => syncDocPickRow(d));
     state.docsResumen.forEach((d) => syncDocPickRow(d.documento));
   }
 
@@ -407,10 +589,9 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     if (!tb) return;
     tb.innerHTML = state.reqResumen.map((d, i) => `
       <tr><td>${esc(d.requisito)}</td>
-      <td class="text-center">${d.obligatorio !== false ? '<i class="bi bi-check-circle-fill text-success"></i>' : '—'}</td>
-      <td class="small">${d.archivo ? `<i class="bi bi-paperclip"></i> ${esc(d.archivo)}` : '—'}</td>
+      <td class="text-center">${d.obligatorio !== false ? 'SI' : 'NO'}</td>
       <td><button type="button" class="btn btn-sm sc-btn-inst sc-req-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button></td></tr>`).join('')
-      || '<tr><td colspan="4" class="text-muted small">Sin requisitos seleccionados</td></tr>';
+      || '<tr><td colspan="3" class="text-muted small">Sin requisitos seleccionados</td></tr>';
     tb.querySelectorAll('.sc-req-del').forEach((btn) => {
       btn.onclick = () => {
         const removed = state.reqResumen.splice(parseInt(btn.dataset.i, 10), 1)[0];
@@ -430,11 +611,15 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       if (fecha) row.fecha_registro = fecha;
       if (extra.contenido_base64) row.contenido_base64 = extra.contenido_base64;
       if (extra.mime_type) row.mime_type = extra.mime_type;
+      if (extra.tamano != null) row.tamano = extra.tamano;
+      if (extra.comentario != null) row.comentario = extra.comentario;
     } else {
       state.docsResumen.push({
         documento: docName, archivo, fecha_registro: fecha,
         contenido_base64: extra.contenido_base64 || null,
         mime_type: extra.mime_type || null,
+        tamano: extra.tamano || null,
+        comentario: extra.comentario || '',
       });
     }
     renderDocsResumen();
@@ -460,27 +645,34 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     const tb = el.querySelector('#scItemsBody');
     const lb = el.querySelector('#scLugaresBody');
     if (!tb || !lb) return;
-    tb.innerHTML = state.items.map((it, i) => `
+    const tipoActual = getCurrentTipo();
+    tb.innerHTML = state.items.map((it, i) => {
+      const cant = itemCantidadForTipo(tipoActual, it.cantidad);
+      return `
       <tr>
         <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
         <td>${esc(it.paquete || '—')}</td><td class="small">${esc(it.pedido_sigamef || '—')}</td>
         <td>${esc(it.codigo_sigamef || '—')}</td><td>${esc(it.descripcion || '—')}</td>
-        <td class="text-center">${esc(it.cantidad ?? 1)}</td>
+        <td class="text-center">${esc(cant)}</td>
         <td class="small text-nowrap">
           <button type="button" class="btn btn-sm sc-btn-inst me-1 sc-item-req" data-i="${i}"><i class="bi bi-eye"></i> VER REQUERIMIENTO</button>
           <button type="button" class="btn btn-sm sc-btn-inst sc-item-docs" data-i="${i}"><i class="bi bi-folder2-open"></i> DOCUMENTOS</button>
         </td>
-      </tr>`).join('');
-    lb.innerHTML = state.lugares.map((it, i) => `
+      </tr>`;
+    }).join('');
+    lb.innerHTML = state.lugares.map((it, i) => {
+      const cant = itemCantidadForTipo(tipoActual, it.cantidad);
+      return `
       <tr data-li="${i}">
         <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
         <td>${esc(it.paquete || '—')}</td><td class="small">${esc(it.pedido_sigamef || '—')}</td>
         <td>${esc(it.codigo_sigamef || '—')}</td><td>${esc(it.descripcion || '—')}</td>
-        <td class="text-center">${esc(it.cantidad ?? 1)}</td>
+        <td class="text-center">${esc(cant)}</td>
         <td><input class="form-control form-control-sm sc-loc-region" value="${esc(it.region || '')}"></td>
         <td><input class="form-control form-control-sm sc-loc-prov" value="${esc(it.provincia || '')}"></td>
         <td><input class="form-control form-control-sm sc-loc-dist" value="${esc(it.distrito || '')}"></td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
     lb.querySelectorAll('tr').forEach((tr) => {
       const i = parseInt(tr.dataset.li, 10);
       tr.querySelector('.sc-loc-region').oninput = (e) => { state.lugares[i].region = e.target.value; };
@@ -491,8 +683,12 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
   }
 
   function bindItemActions() {
+    const tipoActual = getCurrentTipo();
     el.querySelector('#scItemsBody')?.querySelectorAll('.sc-item-req').forEach((btn) => {
-      btn.onclick = () => showItemRequerimientoModal(state.items[parseInt(btn.dataset.i, 10)]);
+      btn.onclick = () => showItemRequerimientoModal(state.items[parseInt(btn.dataset.i, 10)], {
+        tipo: tipoActual,
+        catalogosPorTipo,
+      });
     });
     el.querySelector('#scItemsBody')?.querySelectorAll('.sc-item-docs').forEach((btn) => {
       btn.onclick = () => showItemDocumentosModal(state.items[parseInt(btn.dataset.i, 10)], state);
@@ -549,18 +745,36 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       requerimiento_ids: effectiveReqIds,
       tipo: el.querySelector('#scTipo')?.value,
       denominacion: el.querySelector('#scDenominacion')?.value,
-      cmn: el.querySelector('#scCmn')?.value,
+      cmn: displayCmnValue(el.querySelector('#scCmn')?.value || cmnInicial),
       area_usuaria: el.querySelector('#scArea')?.value,
       tipo_evaluacion: el.querySelector('#scTipoEval')?.value,
-      consultas_inicio: el.querySelector('#scConsultasInicio')?.value || null,
-      consultas_fin: el.querySelector('#scConsultasFin')?.value || null,
-      cotizaciones_inicio: el.querySelector('#scCotInicio')?.value || null,
-      cotizaciones_fin: el.querySelector('#scCotFin')?.value || null,
+      consultas_inicio: mergeDateTime(
+        el.querySelector('#scConsultasInicioF')?.value,
+        el.querySelector('#scConsultasInicioH')?.value,
+      ),
+      consultas_fin: mergeDateTime(
+        el.querySelector('#scConsultasFinF')?.value,
+        el.querySelector('#scConsultasFinH')?.value,
+      ),
+      cotizaciones_inicio: mergeDateTime(
+        el.querySelector('#scCotInicioF')?.value,
+        el.querySelector('#scCotInicioH')?.value,
+      ),
+      cotizaciones_fin: mergeDateTime(
+        el.querySelector('#scCotFinF')?.value,
+        el.querySelector('#scCotFinH')?.value,
+      ),
     };
     if (!payload.tipo_evaluacion) throw new Error('El tipo de evaluación es obligatorio');
     validarCronogramaCliente(payload);
     return payload;
   }
+
+  el.querySelector('#scTipo')?.addEventListener('change', () => {
+    pruneSelectionsForTipo();
+    rebuildDocsTab();
+    renderItems();
+  });
 
   el.querySelectorAll('[data-sc-tab]').forEach((btn) => {
     btn.onclick = () => {
@@ -569,56 +783,79 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     };
   });
 
-  el.querySelectorAll('.sc-doc-check').forEach((cb) => {
-    cb.onchange = () => {
-      const doc = cb.value;
-      if (cb.checked) addDocToResumen(doc);
-      else {
-        const idx = state.docsResumen.findIndex((d) => d.documento === doc);
-        if (idx >= 0) state.docsResumen.splice(idx, 1);
-        renderDocsResumen();
-      }
-    };
-  });
+  async function showAgregarDocumentoModal() {
+    const result = await openScSubModal({
+      title: 'Agregar documento solicitado al proveedor',
+      submitLabel: 'Agregar documento',
+      bodyHtml: `
+        <div class="mb-2">
+          <label class="form-label small mb-1">Nombre del documento <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="scAddDocNombre" maxlength="200">
+        </div>
+        <div class="mb-2">
+          <label class="form-label small mb-1">Archivo adjunto <span class="text-danger">*</span></label>
+          <input type="file" class="form-control form-control-sm" id="scAddDocFile" accept="${SC_FILE_ACCEPT}">
+          <div class="form-text">PDF, Word, Excel o imagen.</div>
+        </div>
+        <div class="mb-0">
+          <label class="form-label small mb-1">Descripción / comentario</label>
+          <textarea class="form-control form-control-sm" id="scAddDocComentario" rows="2" maxlength="500"></textarea>
+        </div>`,
+      onSubmit: async (overlay, showError) => {
+        const nombre = overlay.querySelector('#scAddDocNombre')?.value?.trim();
+        const file = overlay.querySelector('#scAddDocFile')?.files?.[0];
+        const comentario = overlay.querySelector('#scAddDocComentario')?.value?.trim() || '';
+        if (!nombre) { showError('El nombre del documento es obligatorio.'); return false; }
+        if (!file) { showError('Debe adjuntar un archivo.'); return false; }
+        if (!isAllowedScFile(file)) { showError('Formato no permitido. Use PDF, Word, Excel o imagen.'); return false; }
+        const meta = await readFileWithContent(file);
+        addDocToResumen(nombre, meta.nombre, meta.fecha_registro, { ...meta, comentario });
+        return true;
+      },
+    });
+    return result;
+  }
 
-  el.querySelectorAll('.sc-doc-adj').forEach((btn) => {
-    btn.onclick = () => {
-      const doc = btn.dataset.doc;
-      const cb = el.querySelector(`.sc-doc-check[value="${CSS.escape(doc)}"]`);
-      if (cb) cb.checked = true;
-      attachDocFile(doc);
-    };
-  });
-
-  el.querySelector('#scAddOtroDoc')?.addEventListener('click', () => {
-    const nombre = prompt('Nombre del documento:');
-    if (!nombre?.trim()) return;
-    addDocToResumen(nombre.trim());
-    const cb = el.querySelector(`.sc-doc-check[value="${CSS.escape('Otros documentos')}"]`);
-    if (cb) cb.checked = true;
-  });
-
-  el.querySelectorAll('.sc-req-check').forEach((cb) => {
-    cb.onchange = () => {
-      const req = cb.value;
-      if (cb.checked) {
-        if (!state.reqResumen.some((d) => d.requisito === req)) {
-          state.reqResumen.push({ requisito: req, obligatorio: true, archivo: '' });
-          renderReqResumen();
+  async function showAgregarRequisitoModal() {
+    const result = await openScSubModal({
+      title: 'Agregar requisito técnico mínimo',
+      submitLabel: 'Agregar requisito',
+      bodyHtml: `
+        <div class="mb-2">
+          <label class="form-label small mb-1">Nombre del requisito técnico <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="scAddReqNombre" maxlength="200">
+        </div>
+        <div class="mb-2">
+          <label class="form-label small mb-1">Obligatorio</label>
+          <select class="form-select form-select-sm" id="scAddReqObl">
+            <option value="SI" selected>SI</option>
+            <option value="NO">NO</option>
+          </select>
+        </div>
+        <div class="mb-0">
+          <label class="form-label small mb-1">Observación</label>
+          <textarea class="form-control form-control-sm" id="scAddReqObs" rows="2" maxlength="500"></textarea>
+        </div>`,
+      onSubmit: async (overlay, showError) => {
+        const nombre = overlay.querySelector('#scAddReqNombre')?.value?.trim();
+        const obligatorio = overlay.querySelector('#scAddReqObl')?.value === 'SI';
+        const observacion = overlay.querySelector('#scAddReqObs')?.value?.trim() || '';
+        if (!nombre) { showError('El nombre del requisito es obligatorio.'); return false; }
+        if (state.reqResumen.some((r) => r.requisito === nombre)) {
+          showError('Ya existe un requisito con ese nombre.');
+          return false;
         }
-      } else {
-        const idx = state.reqResumen.findIndex((d) => d.requisito === req);
-        if (idx >= 0) { state.reqResumen.splice(idx, 1); renderReqResumen(); }
-      }
-    };
-  });
+        state.reqResumen.push({ requisito: nombre, obligatorio, observacion, archivo: '' });
+        renderReqResumen();
+        return true;
+      },
+    });
+    return result;
+  }
 
-  el.querySelector('#scAddOtroReq')?.addEventListener('click', () => {
-    const nombre = prompt('Nombre del requisito técnico:');
-    if (!nombre?.trim()) return;
-    state.reqResumen.push({ requisito: nombre.trim(), obligatorio: true, archivo: '' });
-    renderReqResumen();
-  });
+  el.querySelector('#scAddOtroDoc')?.addEventListener('click', () => showAgregarDocumentoModal());
+
+  el.querySelector('#scAddOtroReq')?.addEventListener('click', () => showAgregarRequisitoModal());
 
   el.querySelector('#scAplicarLugar')?.addEventListener('click', () => {
     const id = el.querySelector('#scLugarRapido')?.value;
@@ -679,9 +916,18 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
           renderItems();
           activateStep('items');
         } else if (state.currentStep === 'items') {
+          const tipoActual = getCurrentTipo();
+          const itemsNorm = state.items.map((it) => ({
+            ...it,
+            cantidad: itemCantidadForTipo(tipoActual, it.cantidad),
+          }));
+          const lugaresNorm = state.lugares.map((l) => ({
+            ...l,
+            cantidad: itemCantidadForTipo(tipoActual, l.cantidad),
+          }));
           await contratacionesService.actualizarSolicitudCotizacion(state.solicitudId, {
-            detalle_items: state.items,
-            lugares_entrega_item: state.lugares,
+            detalle_items: itemsNorm,
+            lugares_entrega_item: lugaresNorm,
           });
           completeStep('items');
           unlockStep('invitaciones');
@@ -716,9 +962,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       el.querySelectorAll('.sc-prov-sel:not(:disabled)').forEach((cb) => { cb.checked = e.target.checked; });
     });
 
-    renderDocsResumen();
-    renderReqResumen();
-    state.docsResumen.forEach((d) => syncDocPickRow(d.documento));
+    rebuildDocsTab();
     state.reqResumen.forEach((r) => {
       const cb = [...el.querySelectorAll('.sc-req-check')].find((c) => c.value === r.requisito);
       if (cb) cb.checked = true;
@@ -737,8 +981,8 @@ export async function showInvitarProveedoresModal(solicitudId) {
   return showSolicitudCotizacionModal([], [], { solicitudId, initialTab: 'invitaciones' });
 }
 
-async function showItemRequerimientoModal(item) {
-  if (!item?.requerimiento_id) { alert('Sin requerimiento asociado'); return; }
+async function showItemRequerimientoModal(item, opts = {}) {
+  if (!item?.requerimiento_id) return;
   let req = null;
   let adjuntos = [];
   try {
@@ -746,55 +990,39 @@ async function showItemRequerimientoModal(item) {
     const adjResp = await adjuntosService.getAdjuntos(item.requerimiento_id);
     adjuntos = adjResp?.adjuntos || adjResp?.data || [];
   } catch (_) {}
+  const tipoContratacion = opts.tipo || mapTipoFromRow(req || item);
   const payload = (() => { try { return JSON.parse(req?.payload || '{}'); } catch (_) { return {}; } })();
   const items = payload.items || payload.servicioItems || payload.locadorItems || [];
-  const pdfAdj = adjuntos.find((a) => isPdfLike(a.mime_type, a.nombre_archivo));
+  const cantDisplay = itemCantidadForTipo(tipoContratacion, item.cantidad);
   const wrap = document.createElement('div');
   wrap.innerHTML = `
     <div class="modal fade" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
-      <div class="modal-header prov-draggable-header"><h5 class="modal-title">Requerimiento ${esc(item.requerimiento_codigo || item.requerimiento_id)}</h5>
+      <div class="modal-header prov-draggable-header"><h5 class="modal-title">Requerimiento ${esc(item.requerimiento_codigo || item.requerimiento_id)} — ${esc(tipoContratacion)}</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
         <ul class="nav nav-tabs mb-3">
-          <li class="nav-item"><a class="nav-link active" href="#" data-it="req">Requerimiento</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" data-it="ped">Pedidos</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" data-it="adj">Documentos Adicionales</a></li>
+          <li class="nav-item"><a class="nav-link active" href="#" data-it="ped">Pedidos</a></li>
+          <li class="nav-item"><a class="nav-link" href="#" data-it="adj">Documentos</a></li>
         </ul>
-        <div id="itPaneReq">
-          <div class="row g-2 mb-2">
-            <div class="col-md-8"><p class="mb-1"><strong>Denominación:</strong> ${esc(req?.denominacion || item.descripcion)}</p>
-              <p class="mb-1"><strong>Área:</strong> ${esc(req?.area || '—')}</p>
-              <p class="mb-0"><strong>Estado:</strong> ${esc(req?.estado_actual || req?.estado || '—')}</p></div>
-            <div class="col-md-4"><p class="mb-0"><strong>CMN:</strong> ${esc(req?.cmn || '—')}</p></div>
-          </div>
-          <div id="itReqPdfWrap" style="min-height:55vh;border:1px solid #dee2e6;border-radius:6px;overflow:hidden;">
-            ${pdfAdj ? `<iframe id="itReqPdfFrame" title="PDF Requerimiento" style="width:100%;height:55vh;border:0;"></iframe>`
-              : `<div class="p-4 text-center text-muted"><p>No hay PDF del requerimiento adjunto.</p>
-                <p class="small">Los documentos adicionales están en la pestaña correspondiente.</p></div>`}
-          </div>
-        </div>
-        <div id="itPanePed" class="d-none"><table class="table table-sm table-bordered"><thead><tr>
+        <div id="itPanePed">
+          <table class="table table-sm table-bordered"><thead><tr>
           <th>Pedido</th><th>Código</th><th>Descripción</th><th>Cant.</th></tr></thead><tbody>
           ${items.map((p) => `<tr><td>${esc(p.pedido_sigamef || item.pedido_sigamef || '—')}</td>
             <td>${esc(p.item_bien || p.codigo_sigamef || item.codigo_sigamef || '—')}</td>
             <td>${esc(p.nombre_item || p.descripcion || item.descripcion || '—')}</td>
-            <td>${esc(p.cantidad ?? item.cantidad ?? 1)}</td></tr>`).join('')
-            || `<tr><td>${esc(item.pedido_sigamef || '—')}</td><td>${esc(item.codigo_sigamef || '—')}</td><td>${esc(item.descripcion || '—')}</td><td>${esc(item.cantidad ?? 1)}</td></tr>`}
+            <td>${esc(itemCantidadForTipo(tipoContratacion, p.cantidad ?? item.cantidad))}</td></tr>`).join('')
+            || `<tr><td>${esc(item.pedido_sigamef || '—')}</td><td>${esc(item.codigo_sigamef || '—')}</td><td>${esc(item.descripcion || '—')}</td><td>${esc(cantDisplay)}</td></tr>`}
         </tbody></table></div>
-        <div id="itPaneAdj" class="d-none"><div id="itAdjTable">${renderAdjuntosTable(adjuntos)}</div></div>
+        <div id="itPaneAdj" class="d-none">
+          <div id="itAdjTable">${renderAdjuntosTable(adjuntos)}</div>
+        </div>
       </div>
     </div></div></div>`;
   document.body.appendChild(wrap);
   const mEl = wrap.firstElementChild;
   makeModalDraggable(mEl);
   bindAdjuntosTable(wrap);
-  if (pdfAdj) {
-    apiGetAdjuntoPdf(pdfAdj.id, pdfAdj.mime_type).then((b64) => {
-      const frame = wrap.querySelector('#itReqPdfFrame');
-      if (frame && b64) frame.src = `data:${pdfAdj.mime_type || 'application/pdf'};base64,${b64}`;
-    }).catch(() => {});
-  }
-  const panes = { req: 'itPaneReq', ped: 'itPanePed', adj: 'itPaneAdj' };
+  const panes = { ped: 'itPanePed', adj: 'itPaneAdj' };
   wrap.querySelectorAll('[data-it]').forEach((tab) => {
     tab.onclick = (e) => {
       e.preventDefault();
@@ -806,12 +1034,6 @@ async function showItemRequerimientoModal(item) {
   const m = window.bootstrap.Modal.getOrCreateInstance(mEl);
   mEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
   m.show();
-}
-
-async function apiGetAdjuntoPdf(id, mime) {
-  const { api } = await import('../services/apiService.js');
-  const data = await api.get(`/adjuntos/descargar/${id}`);
-  return data?.contenido_base64 || null;
 }
 
 function showItemDocumentosModal(item, wizardState) {

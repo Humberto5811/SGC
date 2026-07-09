@@ -34,5 +34,12 @@ export function resolvePedidoSigamef(row) {
  */
 export function isValidPedidoSigamef(value) {
   const first = String(value || '').split(',')[0].trim();
-  return /^P[BS]-\d+$/i.test(first);
+  return /^P[BSL]?-\d+/i.test(first);
+}
+
+/** Etiqueta operativa de pedido: PB-/PS-/PL-; oculta código interno PED-xxxxx. */
+export function formatPedidoOperativo(value) {
+  const v = String(value || '').trim();
+  if (!v || /^PED-/i.test(v)) return '—';
+  return v;
 }

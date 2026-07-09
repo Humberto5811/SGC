@@ -90,6 +90,7 @@ function invitacionesBandejaHeaders(sortState = null) {
     ${sortableTh('Descripción', 'denominacion', sortState, 'actos-col-desc')}
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
+    ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
     ${sortableTh('Estado Actual', 'estado', sortState)}
     ${sortableTh('Responsable Actual', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
@@ -149,6 +150,7 @@ function renderInvBandejaRowCells(r, opts = {}) {
     <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
     <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
+    <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
     <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>
@@ -264,7 +266,8 @@ async function loadSolicitudesTab(resetPage = false) {
         <div class="table-responsive inv-bandeja-wrap actos-bandeja-wrap">
         <table class="table table-sm table-hover table-bordered req-list-table mb-0">
           <thead class="table-light"><tr>
-            <th>N° Solicitud</th>
+            <th>Solicitud de Cotización</th>
+            <th>N° Requerimiento</th>
             <th>Descripción de la contratación</th>
             <th>Estado de invitación</th>
             <th>Fecha publicación</th>
@@ -276,6 +279,7 @@ async function loadSolicitudesTab(resetPage = false) {
           <tbody>${rows.map((s) => `
             <tr data-sol-id="${s.id}">
               <td><strong>${esc(s.codigo)}</strong></td>
+              <td><strong>${esc(s.requerimiento_codigo || '—')}</strong></td>
               <td>${esc(s.descripcion_contratacion || s.denominacion || s.objeto || '—')}</td>
               <td>${solicitudEstadoBadge(s)}</td>
               <td class="small">${fmtDt(s.fecha_publicacion)}</td>
