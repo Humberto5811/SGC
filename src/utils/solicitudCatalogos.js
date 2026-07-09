@@ -1,4 +1,5 @@
 /** Helpers compartidos — catálogos dinámicos Solicitud de Cotización por tipo. */
+import { splitDatetimeParts as splitCronogramaParts } from './cronogramaDatetime.js';
 
 export function getCatalogoTipo(catalogosPorTipo, tipo) {
   const t = tipo || 'Bienes';
@@ -9,10 +10,7 @@ export function getCatalogoTipo(catalogosPorTipo, tipo) {
 }
 
 export function splitDatetimeParts(iso, toLocalFn) {
-  const local = toLocalFn ? toLocalFn(iso) : '';
-  if (!local) return { date: '', time: '' };
-  const [date, time] = String(local).split('T');
-  return { date: date || '', time: (time || '00:00').slice(0, 5) };
+  return splitCronogramaParts(iso, toLocalFn);
 }
 
 export function mergeDateTime(date, time) {

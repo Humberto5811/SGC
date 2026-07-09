@@ -1,5 +1,8 @@
 import { portalService } from '../../services/portalService.js';
-import { esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout, PROVEEDOR_ROUTES } from '../../utils/proveedorShared.js';
+import {
+  esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
+  PROVEEDOR_ROUTES, cleanupModalBackdrop, makeModalDraggable,
+} from '../../utils/proveedorShared.js';
 
 export function renderMisConsultasView() {
   if (!requireProveedorSession()) return '';
@@ -21,7 +24,38 @@ export function renderMisConsultasView() {
           <div class="col-12"><button class="btn btn-sm btn-success" id="provConsEnviar">Enviar consulta</button></div>
         </div>
       </div>
+    </div>
+    <div class="modal fade" id="provConsRespModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header py-2 prov-draggable-header">
+            <h6 class="modal-title" id="provConsRespTitle">Respuesta publicada</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body small" id="provConsRespBody"></div>
+          <div class="modal-footer py-2">
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
+      </div>
     </div>`);
+}
+
+function showRespuestaCompleta(c) {
+  const modal = document.getElementById('provConsRespModal');
+  const title = document.getElementById('provConsRespTitle');
+  const body = document.getElementById('provConsRespBody');
+  title.textContent = `Respuesta — ${c.asunto || 'Consulta'}`;
+  body.innerHTML = `
+    <p class="mb-2"><strong>Solicitud:</strong> ${esc(c.solicitud_codigo || '—')}</p>
+    <p class="mb-2"><strong>Asunto:</strong> ${esc(c.asunto || '—')}</p>
+    <p class="mb-2"><strong>Estado:</strong> ${esc(c.estado)}</p>
+    <p class="mb-2"><strong>Fecha respuesta:</strong> ${fmtDt(c.updated_at || c.created_at)}</p>
+    <hr>
+    <p class="mb-1 fw-semibold">Respuesta publicada:</p>
+    <div class="border rounded p-2 bg-light" style="white-space:pre-wrap;">${esc(c.respuesta || '—')}</div>`;
+  makeModalDraggable(modal);
+  bootstrap.Modal.getOrCreateInstance(modal).show();
 }
 
 async function loadConsultas() {
@@ -33,22 +67,50 @@ async function loadConsultas() {
     return;
   }
   cont.innerHTML = `
-    <table class="table table-sm table-bordered mb-0">
-      <thead class="table-light"><tr>
-        <th>Fecha</th><th>Asunto</th><th>Estado</th><th>Respuesta publicada</th>
-      </tr></thead>
-      <tbody>${rows.map((c) => `
-        <tr>
-          <td class="small">${fmtDt(c.created_at)}</td>
-          <td>${esc(c.asunto)}</td>
-          <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'secondary'}">${esc(c.estado)}</span></td>
-          <td class="small">${c.absolucion_publica && c.respuesta ? esc(c.respuesta.slice(0, 120)) + '…' : '—'}</td>
-        </tr>`).join('')}</tbody>
-    </table>`;
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered table-hover mb-0">
+        <thead class="table-light"><tr>
+          <th>N° Solicitud de Cotización</th>
+          <th>Descripción</th>
+          <th>Asunto</th>
+          <th>Fecha</th>
+          <th>Estado</th>
+          <th>Respuesta publicada</th>
+          <th style="width:120px;">Acciones</th>
+        </tr></thead>
+        <tbody>${rows.map((c, i) => {
+          const desc = c.denominacion || c.objeto || '—';
+          const tieneResp = c.absolucion_publica && c.respuesta;
+          const preview = tieneResp ? esc(String(c.respuesta).slice(0, 80)) : '—';
+          return `
+          <tr>
+            <td class="small">${esc(c.solicitud_codigo || '—')}</td>
+            <td class="small">${esc(desc)}</td>
+            <td>${esc(c.asunto || '—')}</td>
+            <td class="small text-nowrap">${fmtDt(c.created_at)}</td>
+            <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'secondary'}">${esc(c.estado)}</span></td>
+            <td class="small">${preview}${tieneResp && c.respuesta.length > 80 ? '…' : ''}</td>
+            <td class="text-nowrap">
+              ${tieneResp ? `<button type="button" class="btn btn-outline-primary btn-sm py-0 prov-cons-ver" data-i="${i}">Ver respuesta completa</button>` : '—'}
+            </td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+
+  cont.querySelectorAll('.prov-cons-ver').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const c = rows[parseInt(btn.dataset.i, 10)];
+      if (c) showRespuestaCompleta(c);
+    });
+  });
 }
 
 export async function initMisConsultasView() {
   bindProveedorLogout();
+  cleanupModalBackdrop();
+  const modal = document.getElementById('provConsRespModal');
+  modal?.addEventListener('hidden.bs.modal', cleanupModalBackdrop);
   try {
     await loadConsultas();
     const inv = await portalService.listMisInvitaciones();

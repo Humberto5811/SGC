@@ -1,6 +1,9 @@
 // Documentos del portal de proveedores — agregación y entrega segura
 import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
+import {
+  CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
+} from './cronogramaDatetime.js';
 
 function parseJson(val, fallback = []) {
   if (Array.isArray(val)) return val;
@@ -10,13 +13,15 @@ function parseJson(val, fallback = []) {
 
 export async function assertAccesoSolicitud(proveedorId, solicitudId) {
   const { rows } = await query(`
-    SELECT ip.*, sc.*
+    SELECT ip.*, sc.id, sc.codigo, sc.objeto, sc.denominacion, sc.estado, sc.tipo,
+      sc.tipo_evaluacion, sc.docs_solicitados, sc.requisitos_tecnicos, sc.detalle_items,
+      ${CRONOGRAMA_SELECT_SQL}
     FROM invitacion_proveedores ip
     JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
     WHERE ip.proveedor_id = $1 AND ip.solicitud_id = $2
   `, [proveedorId, solicitudId]);
   if (!rows.length) throw new Error('Sin acceso a esta convocatoria');
-  return rows[0];
+  return normalizeCronogramaRow(rows[0]);
 }
 
 async function loadAdjuntosPorRequerimiento(requerimientoIds) {
@@ -220,6 +225,7 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
       objeto: acceso.objeto,
       denominacion: acceso.denominacion,
       estado: acceso.estado,
+      tipo: acceso.tipo || '',
       tipo_evaluacion: acceso.tipo_evaluacion,
       consultas_inicio: acceso.consultas_inicio,
       consultas_fin: acceso.consultas_fin,
@@ -267,6 +273,7 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
       denominacion: acceso.denominacion,
       objeto: acceso.objeto,
       estado: acceso.estado,
+      tipo: acceso.tipo || '',
       consultas_inicio: acceso.consultas_inicio,
       consultas_fin: acceso.consultas_fin,
       cotizaciones_inicio: acceso.cotizaciones_inicio,
@@ -277,9 +284,7 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
     items: itemsConDocs,
     cotizacion_existente: cotRows[0] || null,
     proveedor: provRows[0] || null,
-    convocatoria_cerrada: acceso.cotizaciones_fin
-      ? (new Date() > new Date(acceso.cotizaciones_fin) || String(acceso.estado).toUpperCase() === 'CERRADA')
-      : false,
+    convocatoria_cerrada: isConvocatoriaCerrada(acceso),
   };
 }
 

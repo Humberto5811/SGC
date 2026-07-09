@@ -1,5 +1,8 @@
 // Utilidades compartidas — Portal externo de Proveedores (separado del SGC)
 import { portalService } from '../services/portalService.js';
+import {
+  formatCronogramaDisplay, formatCronogramaRangoDisplay,
+} from './cronogramaDatetime.js';
 
 export const PROVEEDOR_ROUTES = {
   login: 'proveedor/login',
@@ -24,7 +27,35 @@ export function esc(s) {
 
 export function fmtDt(v) {
   if (!v) return '—';
-  return esc(String(v).slice(0, 16).replace('T', ' '));
+  return esc(formatCronogramaDisplay(v));
+}
+
+/** Rango de cronograma tal como viene del servidor (sin recalcular). */
+export function fmtCronogramaRango(inicio, fin) {
+  if (!inicio && !fin) return '—';
+  return esc(formatCronogramaRangoDisplay(inicio, fin));
+}
+
+export function renderProveedorIdentidad() {
+  const s = getProveedorSession();
+  if (!s?.ruc && !s?.razon_social) return '';
+  return `
+    <div class="prov-identidad-bar small text-white-50 px-2 pb-1" style="margin-top:-0.5rem;">
+      RUC: <strong class="text-white">${esc(s.ruc || '—')}</strong>
+      · Razón social: <strong class="text-white">${esc(s.razon_social || '—')}</strong>
+    </div>`;
+}
+
+export function renderCronogramaCard(sol) {
+  if (!sol) return '';
+  return `
+    <div class="card bg-light border-0 mb-3 prov-crono-wrap">
+      <div class="card-body py-2 prov-crono-box">
+        <div class="fw-semibold mb-1">Cronograma</div>
+        <div class="prov-crono-line"><span class="text-muted me-1">Consultas:</span>${fmtCronogramaRango(sol.consultas_inicio, sol.consultas_fin)}</div>
+        <div class="prov-crono-line mt-1"><span class="text-muted me-1">Cotización:</span>${fmtCronogramaRango(sol.cotizaciones_inicio, sol.cotizaciones_fin)}</div>
+      </div>
+    </div>`;
 }
 
 /** Elimina backdrops huérfanos de Bootstrap que bloquean la interfaz. */
@@ -163,9 +194,16 @@ export function renderProveedorShell(activeRoute, bodyHtml, { showNav = true } =
       .proveedor-portal-page .prov-cot-top-compact .card-body { padding: .5rem .75rem; }
       .proveedor-portal-page .prov-upload-row { border: 1px dashed #ced4da; border-radius: .375rem; padding: .5rem; margin-bottom: .5rem; }
       .proveedor-portal-page .prov-step-panel { min-height: 200px; }
+      .proveedor-portal-page .prov-adj-del {
+        color: #fff !important; background: #dc3545; border: none; font-size: .7rem;
+        padding: .15rem .4rem; border-radius: .25rem; line-height: 1.2; white-space: nowrap;
+      }
+      .proveedor-portal-page .prov-adj-del:hover { background: #bb2d3b; color: #fff !important; }
+      .proveedor-portal-page .prov-firma-spacer { margin-top: 1.25rem; }
     </style>
     <div class="proveedor-portal-page min-vh-100" style="background:#eef2f7;padding:16px;">
       ${showNav && session ? renderProveedorNav(activeRoute) : ''}
+      ${showNav && session ? renderProveedorIdentidad() : ''}
       <div class="container-fluid px-0">${bodyHtml}</div>
     </div>`;
 }

@@ -21,6 +21,7 @@ import {
 } from '../requerimiento/reqShared.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { printRequerimiento, manageAdjuntos } from '../requerimiento/registroRequerimientoView.js';
+import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -235,7 +236,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
 
 function fmtDt(v) {
   if (!v) return '—';
-  return esc(String(v).slice(0, 16).replace('T', ' '));
+  return esc(formatCronogramaDisplay(v));
 }
 
 function switchToSolicitudesTab() {

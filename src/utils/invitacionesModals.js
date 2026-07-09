@@ -9,9 +9,10 @@ import {
   openBase64Document,
 } from './documentViewer.js';
 import {
-  getCatalogoTipo, splitDatetimeParts, mergeDateTime, displayCmnValue,
+  getCatalogoTipo, mergeDateTime, displayCmnValue,
   itemCantidadForTipo, mapTipoFromRow,
 } from './solicitudCatalogos.js';
+import { splitDatetimeParts, toDatetimeLocalValue } from './cronogramaDatetime.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -101,14 +102,6 @@ function openScSubModal({ title, bodyHtml, submitLabel = 'Guardar', onSubmit }) 
       }
     };
   });
-}
-
-function toDatetimeLocalValue(d) {
-  if (!d) return '';
-  const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 }
 
 function fmtRegistro(iso) {
@@ -1142,4 +1135,4 @@ function showItemDocumentosModal(item, wizardState) {
   m.show();
 }
 
-export { toDatetimeLocalValue };
+export { toDatetimeLocalValue } from './cronogramaDatetime.js';

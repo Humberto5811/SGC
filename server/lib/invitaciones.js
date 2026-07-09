@@ -9,6 +9,7 @@ import {
 import { enviarInvitacionProveedorEmail } from './emailService.js';
 import { listarBandejaInvitaciones, SUBMODULO_INVITACIONES } from './invitacionesBandeja.js';
 import { prepararInvitacionPortal } from './proveedorPortal.js';
+import { normalizeCronogramaRow } from './cronogramaDatetime.js';
 
 export { listarBandejaInvitaciones, SUBMODULO_INVITACIONES };
 
@@ -636,7 +637,7 @@ export async function getSolicitudDetalle(solicitudId) {
     JOIN proveedores p ON p.id = ip.proveedor_id
     WHERE ip.solicitud_id = $1 OR ip.requerimiento_id IN (SELECT requerimiento_id FROM solicitud_requerimientos WHERE solicitud_id = $1)
   `, [solicitudId]);
-  return { solicitud, requerimientos: reqs.rows, invitados: invitados.rows };
+  return { solicitud: normalizeCronogramaRow(solicitud), requerimientos: reqs.rows, invitados: invitados.rows };
 }
 
 export async function listarSolicitudesPorRequerimiento(requerimientoId) {
@@ -730,7 +731,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
       COALESCE(inv_stats.enviados, 0)::int AS proveedores_enviados,
       COALESCE(cot_stats.cotizaciones, 0)::int AS cotizaciones_recibidas,
       COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
-      sc.cotizaciones_fin AS fecha_culminacion,
+      to_char(sc.cotizaciones_fin, 'YYYY-MM-DD"T"HH24:MI') AS fecha_culminacion,
       (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_id,
       (SELECT r.codigo FROM solicitud_requerimientos sr
         JOIN requerimientos r ON r.id = sr.requerimiento_id
@@ -759,7 +760,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
   `, params);
 
   return {
-    data: rows,
+    data: rows.map(normalizeCronogramaRow),
     total,
     page,
     pageSize,

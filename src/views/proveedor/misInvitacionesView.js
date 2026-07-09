@@ -2,6 +2,7 @@ import { portalService } from '../../services/portalService.js';
 import {
   esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
   PROVEEDOR_ROUTES, cleanupModalBackdrop, dismissProveedorModal, makeModalDraggable,
+  renderCronogramaCard, fmtCronogramaRango,
 } from '../../utils/proveedorShared.js';
 import { renderDocumentoLista, renderRequisitosTecnicos, bindDocumentoActions, attachSolicitudId } from '../../utils/proveedorDocumentos.js';
 
@@ -53,13 +54,7 @@ async function showDetalleInvitacion(solicitudId, codigo) {
         <p class="small text-muted mb-0">Estado: <span class="badge bg-info">${esc(sol.estado)}</span>
           · Evaluación: ${esc(sol.tipo_evaluacion || '—')}</p>
       </div>
-      <div class="card bg-light border-0 mb-3 prov-crono-wrap">
-        <div class="card-body py-2 prov-crono-box">
-          <div class="fw-semibold mb-1">Cronograma</div>
-          <div class="prov-crono-line"><span class="text-muted me-1">Consultas:</span>${fmtDt(sol.consultas_inicio)} — ${fmtDt(sol.consultas_fin)}</div>
-          <div class="prov-crono-line mt-1"><span class="text-muted me-1">Cotización:</span>${fmtDt(sol.cotizaciones_inicio)} — ${fmtDt(sol.cotizaciones_fin)}</div>
-        </div>
-      </div>
+      ${renderCronogramaCard(sol)}
       <h6 class="border-bottom pb-2">Documentos de la convocatoria</h6>
       <div class="mb-3" id="provInvDocs">${renderDocumentoLista(docs)}</div>
       <h6 class="border-bottom pb-2">Requisitos técnicos mínimos</h6>
@@ -122,8 +117,8 @@ export async function initMisInvitacionesView() {
               <td><strong>${esc(r.codigo)}</strong></td>
               <td>${esc(r.denominacion || r.objeto || '—')}</td>
               <td><span class="badge bg-info">${esc(r.estado_invitacion || r.estado)}</span></td>
-              <td class="small">${fmtDt(r.consultas_inicio)} — ${fmtDt(r.consultas_fin)}</td>
-              <td class="small">${fmtDt(r.cotizaciones_inicio)} — ${fmtDt(r.cotizaciones_fin)}</td>
+              <td class="small">${fmtCronogramaRango(r.consultas_inicio, r.consultas_fin)}</td>
+              <td class="small">${fmtCronogramaRango(r.cotizaciones_inicio, r.cotizaciones_fin)}</td>
               <td class="text-nowrap">
                 <button type="button" class="btn btn-sm btn-outline-primary prov-inv-ver"
                   data-id="${r.solicitud_id}" data-codigo="${esc(r.codigo)}">Ver solicitud</button>

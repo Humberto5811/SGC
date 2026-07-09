@@ -1,4 +1,16 @@
-/** Generación PDF — Anexo 05-A y 05-B (portal proveedores) */
+/** Generación PDF — Anexos de cotización (portal proveedores) */
+import {
+  GLOSA_SERVICIOS_06B_TODO_COSTO, GLOSA_SERVICIOS_06B_CONFIRMACION,
+  TEXTO_CONFIRMACION_TR_06A, TEXTO_AUTORIZACION_CORREO_06,
+  IMPORTANTE_ANEXO11, CONFIRMACION_ANEXO11, GLOSA_LOCADORES_FORMA_PAGO,
+  DECLARO_CONOCER_ANEXO11, GLOSA_PENALIDAD_ANEXO11, FORMULA_PENALIDAD_ANEXO11,
+  FORMULA_F_ANEXO11, CIERRE_PENALIDAD_ANEXO11, NOTA_COTIZACION_ANEXO11,
+  PLAZOS_ENTREGABLES_LABELS, MAX_ENTREGABLES_LOCADOR, cantidadPorTipo,
+} from './proveedorCotizacionConfig.js';
+
+const MARGIN = 54;
+const PAGE_W = 612;
+const CONTENT_W = PAGE_W - MARGIN * 2;
 
 export const TEXTO_AUTORIZACION_CORREO = 'Asimismo, AUTORIZO que el correo electrónico consignado en la presente Declaración Jurada sea utilizado como medio formal de comunicación con la Entidad para que me notifique las siguientes actuaciones: i) emisión de la Orden o Contrato, ii) ampliación de plazo, iii) otras modificaciones a la Orden o Contrato, iv) Observaciones al bien y Levantamiento de Observaciones al bien, v) apercibimiento para cumplimiento de obligaciones contractuales, vi) Resolución Parcial o Total del Contrato u Orden, vii) comunicación de penalidades y descargos respectivos; y viii) otras actuaciones durante la etapa de ejecución contractual.';
 
@@ -17,6 +29,93 @@ function appendWrappedText(doc, text, x, y, maxWidth, lineHeight = 11) {
   const lines = doc.splitTextToSize(text, maxWidth);
   doc.text(lines, x, y);
   return y + lines.length * lineHeight;
+}
+
+function centerText(doc, text, y, fontSize = 11) {
+  doc.setFontSize(fontSize);
+  const tw = doc.getTextWidth(text);
+  doc.text(text, (PAGE_W - tw) / 2, y);
+}
+
+function ensureSpace(doc, y, needed = 40) {
+  const pageH = doc.internal.pageSize.getHeight();
+  if (y + needed > pageH - MARGIN) {
+    doc.addPage();
+    return MARGIN + 20;
+  }
+  return y;
+}
+
+function renderTituloAnexo(doc, num, linea1, linea2, y0 = 36) {
+  let y = y0;
+  doc.setFont(undefined, 'bold');
+  centerText(doc, `ANEXO Nº ${num}`, y, 12);
+  y += 16;
+  centerText(doc, linea1, y, 10);
+  y += 13;
+  if (linea2) {
+    centerText(doc, linea2, y, 10);
+    y += 13;
+  }
+  doc.setFont(undefined, 'normal');
+  return y + 10;
+}
+
+function renderCartaServicios(doc, asuntoServicio, y) {
+  y = ensureSpace(doc, y, 90);
+  doc.setFontSize(10);
+  doc.text('Lima,         de                     del  20__', MARGIN, y);
+  y += 15;
+  doc.text('Señores:', MARGIN, y);
+  y += 13;
+  doc.text('INSTITUTO NACIONAL DE SALUD – INS', MARGIN, y);
+  y += 13;
+  doc.text('Presente.-', MARGIN, y);
+  y += 15;
+  doc.setFont(undefined, 'bold');
+  const asunto = `Asunto: Cotización para la contratación de Servicio de ${asuntoServicio || '_____________________'}`;
+  y = appendWrappedText(doc, asunto, MARGIN, y, CONTENT_W, 12) + 4;
+  doc.setFont(undefined, 'normal');
+  y = appendWrappedText(
+    doc,
+    'Por medio de la presente hacemos llegar nuestra cotización de acuerdo a la información remitida según el siguiente detalle:',
+    MARGIN, y, CONTENT_W, 11,
+  ) + 8;
+  return y;
+}
+
+function renderDatosProveedor06A(doc, datos, startY) {
+  const d = datos || {};
+  let y = ensureSpace(doc, startY, 120);
+  doc.setFontSize(9);
+  const rows = [
+    ['Razón Social:', d.razon_social || ''],
+    ['Nº R.U.C.:', d.ruc || ''],
+    ['Domicilio fiscal:', d.domicilio_fiscal || ''],
+    ['Datos del Representante Legal:', d.representante_legal || ''],
+    ['Persona de Contacto:', d.persona_contacto || ''],
+    ['Teléfono y/o Celular:', d.celular || ''],
+    ['Correo Electrónico:', d.correo || ''],
+  ];
+  rows.forEach(([label, val]) => {
+    y = ensureSpace(doc, y, 20);
+    doc.setFont(undefined, 'bold');
+    doc.text(label, MARGIN, y);
+    doc.setFont(undefined, 'normal');
+    const lines = doc.splitTextToSize(String(val), CONTENT_W - 150);
+    doc.text(lines, MARGIN + 150, y);
+    y += Math.max(13, lines.length * 11);
+  });
+  return y + 6;
+}
+
+function renderFirmaRepresentante(doc, y) {
+  y = ensureSpace(doc, y, 50);
+  doc.setFontSize(9);
+  doc.text('___________________________', MARGIN, y);
+  y += 14;
+  doc.text('Firma del Representante Legal', MARGIN, y);
+  return y + 10;
 }
 
 function appendDatosProveedor(doc, datos, startY) {
@@ -89,6 +188,10 @@ export function downloadAnexo05A({ solicitud, items, formItems, proveedor, datos
     margin: { left: 40, right: 40 },
   });
 
+  let y = doc.lastAutoTable.finalY + 24;
+  doc.setFontSize(9);
+  doc.text('Firma del proveedor:', 40, y);
+  doc.line(40, y + 28, 280, y + 28);
   doc.save(`Anexo_05-A_${codigo.replace(/\s+/g, '_')}.pdf`);
 }
 
@@ -102,11 +205,11 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
   doc.text(`Solicitud: ${codigo}`, 40, 56);
 
   let total = 0;
-  const body = (items || []).map((it, idx) => {
+  const body = (items || []).map((it) => {
     const p = precios[it.item_key] || {};
     total += Number(p.total || 0);
     return [
-      String(idx + 1),
+      it.requerimiento_codigo || '',
       String(it.descripcion || '').slice(0, 60),
       String(it.cantidad ?? 1),
       money(p.unitario),
@@ -116,7 +219,7 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
 
   doc.autoTable({
     startY: 72,
-    head: [['Ítem', 'Descripción', 'Cant.', 'P.Unitario S/.', 'P.Total S/.']],
+    head: [['Req.', 'Descripción', 'Cant.', 'P.Unitario S/.', 'P.Total S/.']],
     body,
     styles: { fontSize: 9 },
     headStyles: { fillColor: [108, 117, 125] },
@@ -133,6 +236,238 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
   y += 6;
   appendWrappedText(doc, TEXTO_LEY_27444, 40, y, 520);
   doc.save(`Anexo_05-B_${codigo.replace(/\s+/g, '_')}.pdf`);
+}
+
+export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, locador = false }) {
+  const jsPDF = ensureJsPdf();
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const asunto = solicitud?.denominacion || solicitud?.objeto || '';
+  const descCol = locador ? 'Descripción del servicio de locación' : 'Descripción del Servicio';
+
+  let y = renderTituloAnexo(
+    doc, '06-A',
+    'FORMATO DE COTIZACIÓN DE SERVICIOS:',
+    'PROPUESTA TÉCNICA - DECLARACIÓN JURADA DE OFERTA',
+  );
+  y = renderCartaServicios(doc, asunto, y);
+
+  const body = (items || []).map((it, idx) => [
+    String(idx + 1),
+    it.requerimiento_codigo || '',
+    String(it.descripcion || ''),
+    String(cantidadPorTipo(locador ? 'Locadores' : 'Servicios', it.cantidad)),
+    it.unidad_medida || 'servicio',
+  ]);
+
+  doc.autoTable({
+    startY: y,
+    head: [['Ítem', 'Nº REQ', descCol, 'Cantidad', 'Unidad de medida']],
+    body,
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
+    margin: { left: MARGIN, right: MARGIN },
+  });
+
+  y = doc.lastAutoTable.finalY + 12;
+  y = ensureSpace(doc, y, 30);
+  doc.setFontSize(9);
+  y = appendWrappedText(doc, TEXTO_CONFIRMACION_TR_06A, MARGIN, y, CONTENT_W) + 8;
+
+  y = ensureSpace(doc, y, 30);
+  doc.setFont(undefined, 'bold');
+  doc.text('Plazo de ejecución:', MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  doc.text(String(extra?.plazo_ejecucion || '[Debe indicar el plazo de ejecución ofertado]'), MARGIN + 110, y);
+  y += 14;
+  doc.setFont(undefined, 'bold');
+  doc.text('Forma de pago:', MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  doc.text(String(extra?.forma_pago || 'De acuerdo a lo indicado en al Requerimiento.'), MARGIN + 80, y);
+  y += 18;
+
+  y = renderDatosProveedor06A(doc, {
+    razon_social: datos?.razon_social || proveedor?.razon_social,
+    ruc: datos?.ruc || proveedor?.ruc,
+    domicilio_fiscal: datos?.domicilio_fiscal,
+    representante_legal: datos?.representante_legal,
+    persona_contacto: datos?.persona_contacto,
+    celular: datos?.celular,
+    correo: datos?.correo,
+  }, y);
+
+  y = ensureSpace(doc, y, 60);
+  doc.setFontSize(8);
+  y = appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO_06, MARGIN, y, CONTENT_W) + 10;
+  renderFirmaRepresentante(doc, y);
+
+  const codigo = solicitud?.codigo || 'SC';
+  doc.save(`Anexo_06-A_${codigo.replace(/\s+/g, '_')}.pdf`);
+}
+
+export function downloadAnexo06B({ solicitud, items, precios, proveedor, datos }) {
+  const jsPDF = ensureJsPdf();
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const asunto = solicitud?.denominacion || solicitud?.objeto || '';
+
+  let y = renderTituloAnexo(
+    doc, '06-B',
+    'FORMATO DE COTIZACIÓN DE SERVICIOS:',
+    'PROPUESTA ECONÓMICA- DECLARACIÓN JURADA DE OFERTA',
+  );
+  y = renderCartaServicios(doc, asunto, y);
+
+  let total = 0;
+  const body = (items || []).map((it, idx) => {
+    const p = precios?.[it.item_key] || {};
+    total += Number(p.total || 0);
+    return [
+      String(idx + 1),
+      it.requerimiento_codigo || '',
+      String(it.descripcion || ''),
+      String(cantidadPorTipo('Servicios', it.cantidad)),
+      it.unidad_medida || 'servicio',
+      money(p.unitario),
+      money(p.total),
+    ];
+  });
+
+  doc.autoTable({
+    startY: y,
+    head: [[
+      'Ítem', 'Nº REQ', 'Descripción del Servicio', 'Cantidad', 'Unidad de medida',
+      'Precio Unitario S/\n(Inc. IGV)', 'Precio Total S/\n(Inc. IGV)',
+    ]],
+    body,
+    styles: { fontSize: 7.5, cellPadding: 3 },
+    headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
+    margin: { left: MARGIN, right: MARGIN },
+  });
+
+  y = doc.lastAutoTable.finalY + 12;
+  y = ensureSpace(doc, y, 20);
+  doc.setFontSize(10);
+  doc.setFont(undefined, 'bold');
+  doc.text(`Precio Total S/ (Incluido IGV): ${money(total)}`, MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  y += 18;
+
+  doc.setFontSize(8);
+  y = appendWrappedText(doc, GLOSA_SERVICIOS_06B_TODO_COSTO, MARGIN, y, CONTENT_W) + 6;
+  y = appendWrappedText(doc, GLOSA_SERVICIOS_06B_CONFIRMACION, MARGIN, y, CONTENT_W) + 8;
+  y = appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO_06, MARGIN, y, CONTENT_W) + 10;
+  renderFirmaRepresentante(doc, y);
+
+  const codigo = solicitud?.codigo || 'SC';
+  doc.save(`Anexo_06-B_${codigo.replace(/\s+/g, '_')}.pdf`);
+}
+
+export function downloadAnexo11({ solicitud, items, entregablesEco, extra, proveedor, datos }) {
+  const jsPDF = ensureJsPdf();
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const it = (items || [])[0] || {};
+  const servicio = it.descripcion || solicitud?.denominacion || solicitud?.objeto || '';
+
+  let y = renderTituloAnexo(
+    doc, '11',
+    'FORMATO DE PROPUESTA ECONÓMICA – SÓLO PARA TERCEROS',
+    '',
+  );
+  y -= 4;
+  doc.setFontSize(10);
+  doc.text('Instituto Nacional de Salud', MARGIN, y);
+  y += 13;
+  doc.text('Presente. -', MARGIN, y);
+  y += 15;
+  doc.setFont(undefined, 'bold');
+  doc.text(`SERVICIO: ${servicio}`, MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  y += 16;
+  y = appendWrappedText(
+    doc,
+    'Por medio de la presente, hago de su conocimiento mi propuesta económica, de acuerdo a los términos de referencia solicitados por la Unidad de Adquisiciones, conforme al siguiente detalle:',
+    MARGIN, y, CONTENT_W,
+  ) + 8;
+
+  const ents = entregablesEco?.[it.item_key] || Array.from({ length: MAX_ENTREGABLES_LOCADOR }, (_, i) => ({
+    nro: i + 1, um: 'Servicio', precio_unitario: 0, total: 0,
+  }));
+  let total = 0;
+  const body = ents.slice(0, MAX_ENTREGABLES_LOCADOR).map((e, idx) => {
+    total += Number(e.total || 0);
+    return [
+      String(idx + 1),
+      idx === 0 ? String(servicio) : '',
+      String(e.nro ?? idx + 1),
+      e.um || 'Servicio',
+      money(e.precio_unitario),
+      money(e.total),
+    ];
+  });
+
+  doc.autoTable({
+    startY: y,
+    head: [[
+      'N°', 'Descripción del Servicio', 'N° de entregables', 'Unidad de medida',
+      'Precio Unitario por cada entregable S/\n(Inc. IGV)', 'Precio Total S/\n(Inc. IGV)',
+    ]],
+    body,
+    styles: { fontSize: 7.5, cellPadding: 3 },
+    headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
+    margin: { left: MARGIN, right: MARGIN },
+  });
+
+  y = doc.lastAutoTable.finalY + 10;
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'bold');
+  doc.text(`Precio Total S/ (Incluido IGV): ${money(total)}`, MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  y += 16;
+
+  doc.setFontSize(8);
+  y = appendWrappedText(doc, IMPORTANTE_ANEXO11, MARGIN, y, CONTENT_W) + 6;
+  y = appendWrappedText(doc, CONFIRMACION_ANEXO11, MARGIN, y, CONTENT_W) + 8;
+
+  y = ensureSpace(doc, y, 20);
+  doc.setFont(undefined, 'bold');
+  doc.text('Plazo de ejecución:', MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  const plazoEj = extra?.plazo_ejecucion
+    || '-Hasta los ...... días calendario contados a partir del día de notificada la orden de servicio.';
+  y = appendWrappedText(doc, plazoEj, MARGIN + 95, y, CONTENT_W - 95, 11) + 6;
+
+  doc.setFont(undefined, 'bold');
+  doc.text('Plazo para la presentación del producto:', MARGIN, y);
+  doc.setFont(undefined, 'normal');
+  y += 12;
+  const plazos = extra?.plazos_entregables || [];
+  PLAZOS_ENTREGABLES_LABELS.forEach((lbl, i) => {
+    const val = plazos[i] || '…. días calendario contados a partir del día de notificada la o.s.';
+    y = ensureSpace(doc, y, 14);
+    doc.text(`-${lbl} ${val}`, MARGIN + 8, y);
+    y += 11;
+  });
+  y += 4;
+  y = appendWrappedText(doc, GLOSA_LOCADORES_FORMA_PAGO, MARGIN, y, CONTENT_W) + 6;
+  y = appendWrappedText(doc, DECLARO_CONOCER_ANEXO11, MARGIN, y, CONTENT_W) + 6;
+  y = appendWrappedText(doc, GLOSA_PENALIDAD_ANEXO11, MARGIN, y, CONTENT_W) + 4;
+  doc.text(FORMULA_PENALIDAD_ANEXO11, MARGIN + 10, y);
+  y += 11;
+  doc.text(FORMULA_F_ANEXO11, MARGIN + 10, y);
+  y += 11;
+  y = appendWrappedText(doc, CIERRE_PENALIDAD_ANEXO11, MARGIN, y, CONTENT_W) + 10;
+
+  doc.text('Lima,   de        de 20…', MARGIN, y);
+  y += 14;
+  doc.text(NOTA_COTIZACION_ANEXO11, MARGIN, y);
+  y += 20;
+  doc.text(`Firma: ${extra?.firma_nombre || ''}`, MARGIN, y);
+  y += 13;
+  doc.text(`Nombres completos: ${extra?.firma_nombre || datos?.representante_legal || ''}`, MARGIN, y);
+  y += 13;
+  doc.text(`DNI: ${extra?.firma_dni || ''}`, MARGIN, y);
+
+  const codigo = solicitud?.codigo || 'SC';
+  doc.save(`Anexo_11_${codigo.replace(/\s+/g, '_')}.pdf`);
 }
 
 export function readUploadFile(file) {

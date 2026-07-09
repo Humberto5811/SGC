@@ -2,6 +2,9 @@
 import bcrypt from 'bcrypt';
 import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
+import {
+  CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
+} from './cronogramaDatetime.js';
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
 
@@ -101,15 +104,13 @@ export async function requirePortalProveedor(req, res, next) {
 }
 
 function convocatoriaCerrada(solicitud) {
-  if (!solicitud?.cotizaciones_fin) return false;
-  if (String(solicitud.estado || '').toUpperCase() === 'CERRADA') return true;
-  return new Date() > new Date(solicitud.cotizaciones_fin);
+  return isConvocatoriaCerrada(solicitud);
 }
 
 export async function listMisInvitaciones(proveedorId) {
   const { rows } = await query(`
     SELECT ip.*, sc.codigo, sc.objeto, sc.denominacion, sc.estado AS solicitud_estado,
-      sc.consultas_inicio, sc.consultas_fin, sc.cotizaciones_inicio, sc.cotizaciones_fin,
+      ${CRONOGRAMA_SELECT_SQL},
       sc.docs_solicitados, sc.requisitos_tecnicos, sc.lugar_entrega,
       ip.url_invitacion, ip.token_acceso, ip.estado_invitacion, ip.fecha_ultimo_envio
     FROM invitacion_proveedores ip
@@ -118,7 +119,7 @@ export async function listMisInvitaciones(proveedorId) {
     ORDER BY sc.cotizaciones_fin ASC NULLS LAST
   `, [proveedorId]);
   return rows.map((r) => ({
-    ...r,
+    ...normalizeCronogramaRow(r),
     convocatoria_cerrada: convocatoriaCerrada(r),
   }));
 }
@@ -168,7 +169,9 @@ export async function registrarConsulta(proveedorId, body, req) {
 
 export async function listConsultasProveedor(proveedorId, solicitudId) {
   const { rows } = await query(`
-    SELECT c.* FROM consultas_proveedor c
+    SELECT c.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+    FROM consultas_proveedor c
+    LEFT JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
     WHERE c.proveedor_id = $1 AND ($2::int IS NULL OR c.solicitud_id = $2)
     ORDER BY c.created_at DESC
   `, [proveedorId, solicitudId || null]);
@@ -330,7 +333,8 @@ export async function listMisCotizaciones(proveedorId) {
 export async function getEstadoParticipacion(proveedorId) {
   const { rows: invitaciones } = await query(`
     SELECT ip.estado, ip.estado_invitacion, ip.fecha_envio, ip.fecha_ultimo_envio,
-      sc.id AS solicitud_id, sc.codigo, sc.denominacion, sc.cotizaciones_fin,
+      sc.id AS solicitud_id, sc.codigo, sc.denominacion,
+      to_char(sc.cotizaciones_fin, 'YYYY-MM-DD"T"HH24:MI') AS cotizaciones_fin,
       cot.estado AS cotizacion_estado, cot.validacion_estado, cot.fecha_presentacion,
       cot.created_at AS cotizacion_created_at
     FROM invitacion_proveedores ip
