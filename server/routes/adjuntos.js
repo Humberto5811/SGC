@@ -21,6 +21,27 @@ router.get('/descargar/:adjuntoId', async (req, res, next) => {
   }
 });
 
+// GET /api/adjuntos/solicitud/:solicitudId - Adjuntos de todos los requerimientos vinculados
+router.get('/solicitud/:solicitudId', async (req, res, next) => {
+  try {
+    const { solicitudId } = req.params;
+    const res2 = await query(
+      `SELECT ra.id, ra.nombre_archivo, ra.mime_type, ra.tamaño_bytes, ra.usuario_carga, ra.created_at,
+              r.id AS requerimiento_id, r.codigo AS requerimiento_codigo
+       FROM requerimientos_adjuntos ra
+       JOIN requerimientos r ON r.id = ra.requerimiento_id
+       WHERE ra.requerimiento_id IN (
+         SELECT requerimiento_id FROM solicitud_requerimientos WHERE solicitud_id = $1
+       )
+       ORDER BY r.codigo, ra.created_at DESC`,
+      [solicitudId]
+    );
+    res.json({ success: true, adjuntos: res2.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/adjuntos/listar/:requerimientoId - Obtener adjuntos de un requerimiento
 router.get('/listar/:requerimientoId', async (req, res, next) => {
   try {

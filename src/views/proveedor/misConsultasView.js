@@ -1,7 +1,7 @@
 import { portalService } from '../../services/portalService.js';
 import {
   esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
-  PROVEEDOR_ROUTES, cleanupModalBackdrop, makeModalDraggable,
+  PROVEEDOR_ROUTES, cleanupModalBackdrop, makeModalDraggable, labelEstadoConsulta,
 } from '../../utils/proveedorShared.js';
 
 export function renderMisConsultasView() {
@@ -49,7 +49,7 @@ function showRespuestaCompleta(c) {
   body.innerHTML = `
     <p class="mb-2"><strong>Solicitud:</strong> ${esc(c.solicitud_codigo || '—')}</p>
     <p class="mb-2"><strong>Asunto:</strong> ${esc(c.asunto || '—')}</p>
-    <p class="mb-2"><strong>Estado:</strong> ${esc(c.estado)}</p>
+    <p class="mb-2"><strong>Estado:</strong> ${esc(labelEstadoConsulta(c.estado))}</p>
     <p class="mb-2"><strong>Fecha respuesta:</strong> ${fmtDt(c.updated_at || c.created_at)}</p>
     <hr>
     <p class="mb-1 fw-semibold">Respuesta publicada:</p>
@@ -88,7 +88,7 @@ async function loadConsultas() {
             <td class="small">${esc(desc)}</td>
             <td>${esc(c.asunto || '—')}</td>
             <td class="small text-nowrap">${fmtDt(c.created_at)}</td>
-            <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'secondary'}">${esc(c.estado)}</span></td>
+            <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'secondary'}">${esc(labelEstadoConsulta(c.estado))}</span></td>
             <td class="small">${preview}${tieneResp && c.respuesta.length > 80 ? '…' : ''}</td>
             <td class="text-nowrap">
               ${tieneResp ? `<button type="button" class="btn btn-outline-primary btn-sm py-0 prov-cons-ver" data-i="${i}">Ver respuesta completa</button>` : '—'}
@@ -135,6 +135,10 @@ export async function initMisConsultasView() {
         consulta: document.getElementById('provConsTexto')?.value,
       });
       document.getElementById('provConsFormCard')?.classList.add('d-none');
+      const asuntoEl = document.getElementById('provConsAsunto');
+      const textoEl = document.getElementById('provConsTexto');
+      if (asuntoEl) asuntoEl.value = '';
+      if (textoEl) textoEl.value = '';
       await loadConsultas();
     } catch (err) { alert(err.message); }
   });

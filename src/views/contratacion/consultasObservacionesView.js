@@ -2,10 +2,10 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
-import { renderFilterBarHtml, renderSummaryCardsHtml, bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
+import { openAdjuntosSolicitudModal } from '../../utils/adjuntosModal.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -13,6 +13,19 @@ function esc(s) {
 
 function fmtFecha(iso) {
   return String(iso || '').slice(0, 16).replace('T', ' ');
+}
+
+function labelEstadoConsulta(estado) {
+  const v = String(estado || '').toUpperCase();
+  if (v === 'RESPONDIDA') return 'Respondida';
+  if (v === 'PENDIENTE') return 'Pendiente';
+  return estado || 'Pendiente';
+}
+
+function badgeEstadoConsulta(estado) {
+  const v = String(estado || '').toUpperCase();
+  const cls = v === 'RESPONDIDA' ? 'success' : 'warning text-dark';
+  return `<span class="badge bg-${cls}">${esc(labelEstadoConsulta(estado))}</span>`;
 }
 
 const VIEW_CONFIG = {
@@ -24,11 +37,74 @@ const VIEW_CONFIG = {
 };
 
 let consultasCache = [];
+let filtroEstado = '';
 const consultasPagination = usePagination(
   'consultas',
   (params) => contratacionesService.listConsultasAnalista(params),
   { defaultPageSize: 25, pageSizeOptions: [25, 50, 100] },
 );
+
+function renderConsultasSummaryCards(containerId) {
+  return `
+    <div id="${containerId}" class="row g-2 mb-3 traza-summary-cards">
+      <div class="col-4">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">Total</div>
+          <div class="kpi-value text-dark" data-consulta-kpi="total">0</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">Respondida</div>
+          <div class="kpi-value text-success" data-consulta-kpi="respondida">0</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">Pendiente</div>
+          <div class="kpi-value text-warning" data-consulta-kpi="pendiente">0</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function updateConsultasSummaryCards(rows, containerId) {
+  const root = document.getElementById(containerId);
+  if (!root) return;
+  const all = Array.isArray(rows) ? rows : [];
+  const total = all.length;
+  const respondida = all.filter((c) => String(c.estado || '').toUpperCase() === 'RESPONDIDA').length;
+  const pendiente = all.filter((c) => String(c.estado || '').toUpperCase() === 'PENDIENTE').length;
+  const map = { total, respondida, pendiente };
+  Object.entries(map).forEach(([k, v]) => {
+    const el = root.querySelector(`[data-consulta-kpi="${k}"]`);
+    if (el) el.textContent = String(v);
+  });
+}
+
+function renderConsultasFilterBar(prefix) {
+  return `
+    <div class="sgc-search-bar mb-3">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label small mb-0">Estado</label>
+          <select class="form-select form-select-sm" id="${prefix}FiltroEstado">
+            <option value="">Todos</option>
+            <option value="PENDIENTE">Pendiente</option>
+            <option value="RESPONDIDA">Respondida</option>
+          </select>
+        </div>
+        <div class="col-md-3 d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-primary" id="${prefix}FiltroBtn">
+            <i class="bi bi-funnel"></i> Filtrar
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="${prefix}FiltroLimpiar">
+            Limpiar
+          </button>
+        </div>
+      </div>
+    </div>`;
+}
 
 export function renderConsultasObservacionesView() {
   const { prefix, title, icon, description, listId } = VIEW_CONFIG;
@@ -44,8 +120,8 @@ export function renderConsultasObservacionesView() {
           <i class="bi bi-arrow-clockwise"></i> Actualizar
         </button>
       </div>
-      ${renderSummaryCardsHtml(`${prefix}TrazaSummary`)}
-      ${renderFilterBarHtml(prefix, { hideExecutive: true })}
+      ${renderConsultasSummaryCards(`${prefix}TrazaSummary`)}
+      ${renderConsultasFilterBar(prefix)}
       <hr/>
       <div id="${esc(listId)}" class="sgc-bandeja-wrap actos-bandeja-wrap">
         <div class="text-muted">Cargando…</div>
@@ -77,12 +153,16 @@ function showResponderConsultaModal(consulta) {
                       <strong>${esc(consulta.solicitud_codigo || '—')}</strong>
                     </div>
                     <div class="col-md-4">
+                      <span class="text-muted d-block">Requerimiento</span>
+                      <strong>${esc(consulta.requerimiento_codigo || '—')}</strong>
+                    </div>
+                    <div class="col-md-4">
                       <span class="text-muted d-block">Fecha de consulta</span>
                       <strong>${esc(fmtFecha(consulta.created_at))}</strong>
                     </div>
                     <div class="col-md-4">
                       <span class="text-muted d-block">Estado</span>
-                      <span class="badge bg-warning text-dark">${esc(consulta.estado || 'PENDIENTE')}</span>
+                      ${badgeEstadoConsulta(consulta.estado)}
                     </div>
                     <div class="col-12">
                       <span class="text-muted d-block">Proveedor</span>
@@ -173,32 +253,44 @@ function showResponderConsultaModal(consulta) {
   });
 }
 
+function buildLoadParams() {
+  const params = {};
+  if (filtroEstado) params.estado = filtroEstado;
+  return params;
+}
+
 async function loadConsultas(resetPage = false) {
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
   try {
     if (resetPage) consultasPagination.resetPage();
-    const result = await consultasPagination.loadData({}, resetPage);
+    const result = await consultasPagination.loadData(buildLoadParams(), resetPage);
     const rows = result.data || [];
     consultasCache = result.allData || rows;
+    updateConsultasSummaryCards(consultasCache, `${VIEW_CONFIG.prefix}TrazaSummary`);
+
     if (!rows.length && !consultasCache.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay consultas pendientes.</div>';
+      cont.innerHTML = '<div class="alert alert-light border">No hay consultas registradas.</div>';
       return;
     }
     cont.innerHTML = `
       <div class="sgc-bandeja-wrap" id="consultasObsOuter">
         <table class="table table-sm table-hover table-bordered mb-0">
           <thead class="table-light"><tr>
-            <th>Solicitud</th><th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th><th>Acciones</th>
+            <th>Solicitud</th><th>Requerimiento</th><th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th><th>Acciones</th>
           </tr></thead>
           <tbody>${rows.map((c) => `
             <tr>
-              <td>${esc(c.solicitud_codigo)}</td>
+              <td>${esc(c.solicitud_codigo || '—')}</td>
+              <td>${esc(c.requerimiento_codigo || '—')}</td>
               <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
               <td>${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 80))}</div></td>
-              <td><span class="badge bg-${c.estado === 'RESPONDIDA' ? 'success' : 'warning'}">${esc(c.estado)}</span></td>
+              <td>${badgeEstadoConsulta(c.estado)}</td>
               <td class="small">${esc(fmtFecha(c.created_at))}</td>
-              <td>${c.estado === 'PENDIENTE' ? `<button class="btn btn-sm btn-primary co-responder" data-id="${c.id}">Responder</button>` : '—'}</td>
+              <td class="text-nowrap">
+                ${c.estado === 'PENDIENTE' ? `<button class="btn btn-sm btn-primary co-responder me-1" data-id="${c.id}">Responder</button>` : ''}
+                <button class="btn btn-sm btn-outline-secondary co-adjuntos" data-sid="${c.solicitud_id}">Ver Adjuntos</button>
+              </td>
             </tr>`).join('')}</tbody>
         </table>
       </div>`;
@@ -211,6 +303,14 @@ async function loadConsultas(resetPage = false) {
         if (ok) loadConsultas();
       };
     });
+
+    cont.querySelectorAll('.co-adjuntos').forEach((btn) => {
+      btn.onclick = () => {
+        const sid = parseInt(btn.dataset.sid, 10);
+        if (sid) openAdjuntosSolicitudModal(sid, true);
+      };
+    });
+
     consultasPagination.renderControls('consultasObsOuter', () => loadConsultas(false));
   } catch (err) {
     cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
@@ -218,13 +318,18 @@ async function loadConsultas(resetPage = false) {
 }
 
 export function initConsultasObservacionesView() {
-  bindBandejaToolbar({
-    prefix: VIEW_CONFIG.prefix,
-    onFilter: () => loadConsultas(true),
-    onClear: () => loadConsultas(true),
-    onExecutiveToggle: () => loadConsultas(true),
+  const { prefix } = VIEW_CONFIG;
+  document.getElementById(`${prefix}FiltroBtn`)?.addEventListener('click', () => {
+    filtroEstado = document.getElementById(`${prefix}FiltroEstado`)?.value || '';
+    loadConsultas(true);
   });
-  const reload = document.getElementById(`${VIEW_CONFIG.prefix}Reload`);
+  document.getElementById(`${prefix}FiltroLimpiar`)?.addEventListener('click', () => {
+    filtroEstado = '';
+    const sel = document.getElementById(`${prefix}FiltroEstado`);
+    if (sel) sel.value = '';
+    loadConsultas(true);
+  });
+  const reload = document.getElementById(`${prefix}Reload`);
   if (reload) reload.onclick = () => loadConsultas(true);
   loadConsultas();
 }

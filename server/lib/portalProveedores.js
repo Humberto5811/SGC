@@ -164,7 +164,13 @@ export async function registrarConsulta(proveedorId, body, req) {
     usuario: req.portalProveedor?.ruc, ip: clientIp(req),
   });
 
-  return rows[0];
+  const { rows: enriched } = await query(`
+    SELECT c.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+    FROM consultas_proveedor c
+    LEFT JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
+    WHERE c.id = $1
+  `, [rows[0].id]);
+  return enriched[0] || rows[0];
 }
 
 export async function listConsultasProveedor(proveedorId, solicitudId) {
@@ -372,10 +378,12 @@ export async function listarConsultasBandeja(queryParams = {}) {
     where += ` AND c.estado = $${params.length}`;
   }
   const { rows } = await query(`
-    SELECT c.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo
+    SELECT c.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo,
+      r.codigo AS requerimiento_codigo
     FROM consultas_proveedor c
     JOIN proveedores p ON p.id = c.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
+    LEFT JOIN requerimientos r ON r.id = c.requerimiento_id
     ${where}
     ORDER BY c.created_at DESC
     LIMIT 500

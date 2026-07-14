@@ -111,6 +111,62 @@ export async function renderAdjuntosPanel(containerId, requerimientoId, opts = {
   await refresh();
 }
 
+/** Modal de solo lectura con adjuntos de todos los requerimientos de una solicitud. */
+export async function openAdjuntosSolicitudModal(solicitudId, readOnly = true) {
+  try {
+    const resp = await adjuntosService.getAdjuntosSolicitud(solicitudId);
+    const adjuntosData = (resp && resp.adjuntos) || [];
+    const modalId = `modAdjSol_${solicitudId}`;
+    document.getElementById(modalId)?.remove();
+    const rows = adjuntosData.length
+      ? adjuntosData.map((a) => `
+        <div class="d-flex justify-content-between align-items-center p-2 border rounded mb-2">
+          <div class="flex-grow-1">
+            <span class="badge bg-light text-dark border me-1">${esc(a.requerimiento_codigo || 'REQ')}</span>
+            <span class="small fw-bold">${esc(a.nombre_archivo || '')}</span>
+            <div class="text-muted small">${a.tamaño_bytes ? (a.tamaño_bytes / 1024).toFixed(1) + ' KB' : ''}</div>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary adj-open" data-id="${a.id}" data-name="${esc(a.nombre_archivo || '')}" title="Ver / descargar"><i class="bi bi-download"></i></button>
+        </div>`).join('')
+      : '<div class="text-muted">Sin adjuntos registrados para los requerimientos de esta solicitud.</div>';
+    const html = `
+      <div class="modal fade" id="${modalId}" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title"><i class="bi bi-paperclip"></i> Ver Adjuntos — Solicitud</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">${rows}</div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    container.innerHTML = html;
+    const modalEl = document.getElementById(modalId);
+    modalEl.querySelectorAll('.adj-open').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await adjuntosService.descargarAdjunto(b.dataset.id, b.dataset.name);
+        } catch (err) {
+          alert('Error al descargar: ' + err.message);
+        }
+      };
+    });
+    const modal = new bootstrap.Modal(modalEl);
+    modalEl.addEventListener('hidden.bs.modal', function onHide() {
+      container.remove();
+    }, { once: true });
+    modal.show();
+  } catch (err) {
+    alert('Error al cargar adjuntos: ' + err.message);
+  }
+}
+
 /** Modal Bootstrap — menú Acciones y cualquier otro punto de entrada. */
 export async function openAdjuntosModal(requerimientoId, readOnly = false) {
   try {
@@ -181,4 +237,4 @@ export async function openAdjuntosModal(requerimientoId, readOnly = false) {
 /** Alias retrocompatible. */
 export const manageAdjuntos = openAdjuntosModal;
 
-export default { openAdjuntosModal, manageAdjuntos, renderAdjuntosPanel, renderAdjuntosLista, syncAdjuntosCount };
+export default { openAdjuntosModal, openAdjuntosSolicitudModal, manageAdjuntos, renderAdjuntosPanel, renderAdjuntosLista, syncAdjuntosCount };

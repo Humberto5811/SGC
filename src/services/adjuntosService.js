@@ -27,6 +27,9 @@ export const adjuntosService = {
   // Obtener lista de adjuntos de un requerimiento
   getAdjuntos: (requerimientoId) => api.get(`/adjuntos/listar/${requerimientoId}`),
 
+  // Adjuntos de todos los requerimientos vinculados a una solicitud de cotización
+  getAdjuntosSolicitud: (solicitudId) => api.get(`/adjuntos/solicitud/${solicitudId}`),
+
   // Descargar/abrir un adjunto
   descargarAdjunto: async (adjuntoId, nombreArchivo) => {
     const res = await api.get(`/adjuntos/descargar/${adjuntoId}`);

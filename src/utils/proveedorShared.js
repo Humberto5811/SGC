@@ -40,10 +40,18 @@ export function renderProveedorIdentidad() {
   const s = getProveedorSession();
   if (!s?.ruc && !s?.razon_social) return '';
   return `
-    <div class="prov-identidad-bar small text-white-50 px-2 pb-1" style="margin-top:-0.5rem;">
-      RUC: <strong class="text-white">${esc(s.ruc || '—')}</strong>
-      · Razón social: <strong class="text-white">${esc(s.razon_social || '—')}</strong>
+    <div class="prov-identidad-bar small bg-white border rounded shadow-sm px-3 py-2 mb-3">
+      <span class="text-muted">RUC:</span> <strong>${esc(s.ruc || '—')}</strong>
+      <span class="text-muted ms-3">Razón social:</span> <strong>${esc(s.razon_social || '—')}</strong>
     </div>`;
+}
+
+/** Etiqueta legible para estado de consulta del portal. */
+export function labelEstadoConsulta(estado) {
+  const v = String(estado || '').toUpperCase();
+  if (v === 'RESPONDIDA') return 'Respondida';
+  if (v === 'PENDIENTE') return 'Pendiente';
+  return estado || 'Pendiente';
 }
 
 export function renderCronogramaCard(sol) {
