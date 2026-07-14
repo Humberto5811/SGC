@@ -5,6 +5,8 @@ import { registrarTrazaPortal } from './invitaciones.js';
 import {
   CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
 } from './cronogramaDatetime.js';
+import { estadoDisplayRecepcion } from './validacionesCotizacion.js';
+import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
 
@@ -271,6 +273,13 @@ export async function presentarCotizacion(proveedorId, body, req) {
     usuario: req.portalProveedor?.ruc, ip: clientIp(req),
   });
 
+  await syncRequerimientosSolicitudWorkflow(solicitud_id, {
+    etapaDestino: 'RECEPCION_COTIZACIONES',
+    usuario: req.portalProveedor?.ruc || 'Portal',
+    observacion: 'Cotización presentada — expediente en Recepción de Cotizaciones',
+    etapaEjecutor: 'INVITACIONES',
+  });
+
   const datosProveedor = propuesta_economica?.datos_proveedor || propuesta_economica?.datos || {};
   if (Object.keys(datosProveedor).length) {
     await sincronizarProveedorDesdePortal(proveedorId, datosProveedor, req.portalProveedor?.ruc);
@@ -415,17 +424,33 @@ export async function responderConsultaAnalista(consultaId, body, usuario) {
 }
 
 export async function listarRecepcionCotizaciones(queryParams = {}) {
-  const estado = String(queryParams.estado || '').trim();
+  const valEstado = String(queryParams.validacion_estado || queryParams.estado || '').trim().toUpperCase();
   const params = [];
   let where = `WHERE cot.estado = 'COTIZACION_PRESENTADA'`;
-  if (estado) {
-    params.push(estado);
-    where += ` AND cot.estado = $${params.length}`;
+  if (valEstado === 'PENDIENTE' || valEstado === 'COTIZACION_PRESENTADA') {
+    where += ` AND COALESCE(cot.validacion_estado, '') IN ('', 'PENDIENTE')`;
+  } else if (valEstado === 'DERIVADA' || valEstado === 'ENVIADA_VALIDACION') {
+    where += ` AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO')`;
+  } else if (valEstado === 'VALIDADA_AU' || valEstado === 'VALIDADA') {
+    where += ` AND cot.validacion_estado IN ('APTO', 'NO_APTO', 'OBSERVADO')`;
+  } else if (valEstado) {
+    params.push(valEstado);
+    where += ` AND cot.validacion_estado = $${params.length}`;
   }
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.fecha_presentacion,
-      cot.validacion_estado, cot.created_at, cot.propuesta_economica,
-      p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+      cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
+      p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      COALESCE((
+        SELECT string_agg(DISTINCT r.codigo, ', ' ORDER BY r.codigo)
+        FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = cot.solicitud_id
+      ), (
+        SELECT string_agg(DISTINCT elem->>'requerimiento_codigo', ', ' ORDER BY elem->>'requerimiento_codigo')
+        FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
+        WHERE COALESCE(elem->>'requerimiento_codigo', '') <> ''
+      ), '') AS requerimientos_texto
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -437,12 +462,15 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
     const eco = typeof r.propuesta_economica === 'object'
       ? r.propuesta_economica
       : (() => { try { return JSON.parse(r.propuesta_economica || '{}'); } catch (_) { return {}; } })();
+    const valEst = r.validacion_estado || '';
     return {
       id: r.id,
       solicitud_id: r.solicitud_id,
       proveedor_id: r.proveedor_id,
       estado: r.estado,
-      validacion_estado: r.validacion_estado || '',
+      validacion_estado: valEst,
+      estado_recepcion: estadoDisplayRecepcion(valEst),
+      validacion_responsable: r.validacion_responsable || '',
       fecha_presentacion: r.fecha_presentacion,
       created_at: r.created_at,
       monto: eco.monto ?? null,
@@ -452,6 +480,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       solicitud_codigo: r.solicitud_codigo,
       denominacion: r.denominacion,
       objeto: r.objeto,
+      requerimientos_texto: r.requerimientos_texto || '',
+      requerimientos_codigos: r.requerimientos_texto || '',
     };
   });
 }

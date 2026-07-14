@@ -216,6 +216,18 @@ export function invitacionesHiddenActions(r) {
     <button type="button" class="inv-sc" data-act-trigger="crearSc" data-id="${r.id}"></button>`;
 }
 
+export function recepcionCotizacionesMenuItems(c) {
+  const items = [
+    { act: 'verPropuesta', label: 'Ver propuesta', icon: 'bi-eye' },
+  ];
+  const v = String(c?.validacion_estado || '').toUpperCase();
+  const puedeEnviar = c?.estado === 'COTIZACION_PRESENTADA' && (!v || v === 'PENDIENTE');
+  if (puedeEnviar) {
+    items.push({ act: 'enviarValidar', label: 'Enviar a validar', icon: 'bi-send' });
+  }
+  return items;
+}
+
 export function pedidosMenuItems(f = {}) {
   const items = [
     { act: 'detail', label: 'Ver expediente', icon: 'bi-eye' },

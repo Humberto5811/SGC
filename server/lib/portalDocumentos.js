@@ -419,7 +419,7 @@ export { parseCotizacionAnexos };
 
 export async function getCotizacionRecepcionDetalle(cotizacionId) {
   const { rows } = await query(`
-    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo, sc.detalle_items
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -437,6 +437,8 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     solicitud_codigo: cot.solicitud_codigo,
     denominacion: cot.denominacion,
     objeto: cot.objeto,
+    tipo: cot.tipo || '',
+    detalle_items: parseJson(cot.detalle_items, []),
     ruc: cot.ruc,
     razon_social: cot.razon_social,
     estado: cot.estado,

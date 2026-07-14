@@ -83,6 +83,7 @@ export function mapEstadoToUbicacion(estado) {
   if (/invitaci/i.test(e)) return 'INVITACIONES';
   if (/sol\.?\s*cot\.?\s*enviada/i.test(e)) return 'INVITACIONES';
   if (/cotizaci/i.test(e)) return 'RECEPCION_COTIZACIONES';
+  if (/valid\.?\s*usuario|validaci[oó]n.*usuario|en valid/i.test(e)) return 'VALIDACION_USUARIO';
   if (/cuadro comp/i.test(e)) return 'CUADRO_COMPARATIVO';
   if (/\bccp\b/i.test(e) || /en ccp/i.test(e)) return 'CCP';
   if (/ejecuci/i.test(e)) return 'EJECUCION';
@@ -105,6 +106,7 @@ export function getEstadoNegocioFromEtapa(etapaCode) {
     case 'ACTOS_PREPARATORIOS': return 'Programado';
     case 'INVITACIONES': return 'En Invitaciones';
     case 'RECEPCION_COTIZACIONES': return 'En Cotizaciones';
+    case 'VALIDACION_USUARIO': return 'En Valid. Usuario';
     case 'CUADRO_COMPARATIVO': return 'En Cuadro Comparativo';
     case 'CCP': return 'En CCP';
     case 'EJECUCION': return 'En Ejecución';

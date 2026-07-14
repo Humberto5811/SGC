@@ -99,6 +99,12 @@ export function mapEstadoToUbicacion(estado) {
   if (/actos prep|coordinaci[oó]n cm/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (/observado actos|observado coordin/i.test(e)) return 'ACTOS_PREPARATORIOS';
   if (/invitaci/i.test(e)) return 'INVITACIONES';
+  if (/sol\.?\s*cot\.?\s*enviada/i.test(e)) return 'INVITACIONES';
+  if (/cotizaci/i.test(e)) return 'RECEPCION_COTIZACIONES';
+  if (/valid\.?\s*usuario|validaci[oó]n.*usuario|en valid/i.test(e)) return 'VALIDACION_USUARIO';
+  if (/cuadro comp/i.test(e)) return 'CUADRO_COMPARATIVO';
+  if (/\bccp\b/i.test(e) || /en ccp/i.test(e)) return 'CCP';
+  if (/ejecuci/i.test(e)) return 'EJECUCION';
   if (/finaliz/i.test(e)) return 'FINALIZADO';
   return 'REGISTRADO';
 }
@@ -119,6 +125,7 @@ export function getEstadoNegocioFromEtapa(etapaCode) {
     case 'ACTOS_PREPARATORIOS': return 'Programado';
     case 'INVITACIONES': return 'En Invitaciones';
     case 'RECEPCION_COTIZACIONES': return 'En Cotizaciones';
+    case 'VALIDACION_USUARIO': return 'En Valid. Usuario';
     case 'CUADRO_COMPARATIVO': return 'En Cuadro Comparativo';
     case 'CCP': return 'En CCP';
     case 'EJECUCION': return 'En Ejecución';
@@ -378,7 +385,7 @@ export function enrichReqRow(r) {
   const snapEtapa = workflowSnapshot?.etapaActual
     ? String(workflowSnapshot.etapaActual).toUpperCase()
     : null;
-  const etapaWorkflow = snapEtapa || ubicacion;
+  const etapaWorkflow = ubicacion || snapEtapa;
   const snapSub = workflowSnapshot?.subModuloActual || workflowSnapshot?.moduloActual || null;
   const subModulo = snapSub || r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[etapaWorkflow] || getEstadoActualTexto(etapaWorkflow);
   const estadoNegocio = String(r?.estado || '').trim() || resolveEstadoNegocioFromRow(r);

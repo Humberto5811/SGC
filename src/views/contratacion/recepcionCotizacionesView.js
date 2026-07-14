@@ -1,9 +1,12 @@
-// Recepción de Cotizaciones — bandeja analista CM
+// Recepción de Cotizaciones — bandeja analista CM (RC7.6 / RC7.6.3)
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { renderFilterBarHtml, renderSummaryCardsHtml, bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles, renderActionMenuCell, bindActionMenus } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
+import { showEnviarValidarModal } from '../../utils/derivarValidacionModal.js';
+import { renderPropuestaTecnicaRecepcion, renderPropuestaEconomicaRecepcion } from '../../utils/recepcionPropuestaRows.js';
+import { recepcionCotizacionesMenuItems } from '../../utils/bandejaActions.js';
+import { formatRequerimientosBandeja } from '../../utils/recepcionCotizacionUtils.js';
 
 const API_BASE = 'http://localhost:3000/api';
 
@@ -35,6 +38,24 @@ function authHeaders() {
     }
   } catch (_) { /* noop */ }
   return {};
+}
+
+function labelEstadoRecepcion(c) {
+  return c.estado_recepcion || mapEstadoRecepcion(c.validacion_estado);
+}
+
+function mapEstadoRecepcion(validacionEstado) {
+  const v = String(validacionEstado || '').toUpperCase();
+  if (v === 'DERIVADA' || v === 'EN_PROCESO') return 'Enviada a validación AU';
+  if (['APTO', 'NO_APTO', 'OBSERVADO'].includes(v)) return 'Validada por área usuaria';
+  return 'Cotización presentada';
+}
+
+function badgeEstadoRecepcion(validacionEstado) {
+  const label = mapEstadoRecepcion(validacionEstado);
+  if (label === 'Enviada a validación AU') return 'info text-dark';
+  if (label === 'Validada por área usuaria') return 'success';
+  return 'primary';
 }
 
 async function openCotizacionDoc(cotId, ref, inline = false) {
@@ -71,11 +92,82 @@ const VIEW_CONFIG = {
 };
 
 let cotizacionesCache = [];
+let filtroEstado = '';
 const recepcionPagination = usePagination(
   'recepcion',
   (params) => contratacionesService.listRecepcionCotizaciones(params),
   { defaultPageSize: 25, pageSizeOptions: [25, 50, 100] },
 );
+
+function renderRecepcionSummaryCards(containerId) {
+  return `
+    <div id="${containerId}" class="row g-2 mb-3 traza-summary-cards">
+      <div class="col-6 col-md">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">Total expedientes</div>
+          <div class="kpi-value text-dark" data-recep-kpi="total">0</div>
+        </div>
+      </div>
+      <div class="col-6 col-md">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">En cotización</div>
+          <div class="kpi-value text-primary" data-recep-kpi="enCotizacion">0</div>
+        </div>
+      </div>
+      <div class="col-6 col-md">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">Enviados a validar</div>
+          <div class="kpi-value text-info" data-recep-kpi="enviadosValidar">0</div>
+        </div>
+      </div>
+      <div class="col-6 col-md">
+        <div class="sgc-kpi-card">
+          <div class="kpi-label">Validados por usuario</div>
+          <div class="kpi-value text-success" data-recep-kpi="validadosUsuario">0</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function updateRecepcionSummaryCards(rows, containerId) {
+  const root = document.getElementById(containerId);
+  if (!root) return;
+  const all = Array.isArray(rows) ? rows : [];
+  const norm = (c) => String(c.validacion_estado || '').toUpperCase();
+  const counts = {
+    total: all.length,
+    enCotizacion: all.filter((c) => !norm(c) || norm(c) === 'PENDIENTE').length,
+    enviadosValidar: all.filter((c) => ['DERIVADA', 'EN_PROCESO'].includes(norm(c))).length,
+    validadosUsuario: all.filter((c) => ['APTO', 'NO_APTO', 'OBSERVADO'].includes(norm(c))).length,
+  };
+  Object.entries(counts).forEach(([k, v]) => {
+    const el = root.querySelector(`[data-recep-kpi="${k}"]`);
+    if (el) el.textContent = String(v);
+  });
+}
+
+function renderRecepcionFilterBar(prefix) {
+  return `
+    <div class="sgc-search-bar mb-3">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label small mb-0">Estado</label>
+          <select class="form-select form-select-sm" id="${prefix}FiltroEstado">
+            <option value="">Todos</option>
+            <option value="PENDIENTE">Cotización presentada</option>
+            <option value="ENVIADA_VALIDACION">Enviada a validación AU</option>
+            <option value="VALIDADA_AU">Validada por área usuaria</option>
+          </select>
+        </div>
+        <div class="col-md-3 d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-primary" id="${prefix}FiltroBtn">
+            <i class="bi bi-funnel"></i> Filtrar
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="${prefix}FiltroLimpiar">Limpiar</button>
+        </div>
+      </div>
+    </div>`;
+}
 
 export function renderRecepcionCotizacionesView() {
   const { prefix, title, icon, description, listId } = VIEW_CONFIG;
@@ -91,69 +183,14 @@ export function renderRecepcionCotizacionesView() {
           <i class="bi bi-arrow-clockwise"></i> Actualizar
         </button>
       </div>
-      ${renderSummaryCardsHtml(`${prefix}TrazaSummary`)}
-      ${renderFilterBarHtml(prefix, { hideExecutive: true })}
+      ${renderRecepcionSummaryCards(`${prefix}TrazaSummary`)}
+      ${renderRecepcionFilterBar(prefix)}
       <hr/>
       <div id="${esc(listId)}" class="sgc-bandeja-wrap actos-bandeja-wrap">
         <div class="text-muted">Cargando…</div>
       </div>
     </div>
   `;
-}
-
-function badgeValidacion(estado) {
-  const e = String(estado || '').toUpperCase();
-  if (e === 'APTO') return 'success';
-  if (e === 'NO_APTO') return 'danger';
-  if (e === 'OBSERVADO') return 'warning';
-  return 'secondary';
-}
-
-function renderItemsTecnicos(items) {
-  if (!items?.length) {
-    return '<div class="text-muted small">Sin información técnica registrada.</div>';
-  }
-  return `
-    <div class="table-responsive">
-      <table class="table table-sm table-bordered mb-0">
-        <thead class="table-light text-center">
-          <tr>
-            <th>Ítem</th><th>Presentación</th><th>Cant.</th><th>Marca</th><th>Modelo</th>
-            <th>País</th><th>Garantía</th><th>Plazo entrega</th>
-          </tr>
-        </thead>
-        <tbody>${items.map((it) => `
-          <tr>
-            <td class="small">${esc(it.item_key || '—')}</td>
-            <td class="small">${esc(it.presentacion || '—')}</td>
-            <td class="text-center small">${esc(it.cantidad_ofertada ?? '—')}</td>
-            <td class="small">${esc(it.marca || '—')}</td>
-            <td class="small">${esc(it.modelo || '—')}</td>
-            <td class="small">${esc(it.pais || '—')}</td>
-            <td class="small">${esc(it.garantia || '—')}</td>
-            <td class="small">${esc(it.plazo_entrega || '—')}</td>
-          </tr>`).join('')}</tbody>
-      </table>
-    </div>`;
-}
-
-function renderPrecios(precios) {
-  const rows = Object.entries(precios || {}).filter(([k]) => k !== 'datos_proveedor');
-  if (!rows.length) {
-    return '<div class="text-muted small">Sin precios registrados.</div>';
-  }
-  return `
-    <div class="table-responsive">
-      <table class="table table-sm table-bordered mb-0">
-        <thead class="table-light"><tr><th>Ítem</th><th class="text-end">Unitario</th><th class="text-end">Total</th></tr></thead>
-        <tbody>${rows.map(([key, p]) => `
-          <tr>
-            <td class="small">${esc(key)}</td>
-            <td class="text-end small">${fmtMonto(p?.unitario)}</td>
-            <td class="text-end small">${fmtMonto(p?.total)}</td>
-          </tr>`).join('')}</tbody>
-      </table>
-    </div>`;
 }
 
 function renderDocumentosList(cotId, documentos) {
@@ -248,8 +285,9 @@ async function showCotizacionDetalleModal(cotId) {
               <span class="text-muted d-block">Fecha de envío</span>
               <strong>${esc(fmtFecha(c.fecha_presentacion))}</strong>
               <div class="mt-1">
-                <span class="badge bg-${badgeValidacion(c.validacion_estado)}">${esc(c.validacion_estado || 'Pendiente validación')}</span>
+                <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(mapEstadoRecepcion(c.validacion_estado))}</span>
               </div>
+              ${c.validacion_responsable ? `<div class="text-muted mt-1">Responsable AU: ${esc(c.validacion_responsable)}</div>` : ''}
             </div>
             <div class="col-md-4">
               <span class="text-muted d-block">Monto total ofertado</span>
@@ -272,11 +310,10 @@ async function showCotizacionDetalleModal(cotId) {
           ${renderDocumentosList(c.id, c.documentos)}
         </div>
         <div class="tab-pane fade" id="${id}_tabTec">
-          ${renderItemsTecnicos(c.propuesta_tecnica?.items)}
+          ${renderPropuestaTecnicaRecepcion(c, esc)}
         </div>
         <div class="tab-pane fade" id="${id}_tabEco">
-          ${renderPrecios(c.propuesta_economica?.precios)}
-          <div class="mt-2 small text-muted">Validez de la oferta: ${esc(datos.validez_oferta || '—')}</div>
+          ${renderPropuestaEconomicaRecepcion(c, esc, fmtMonto)}
         </div>
       </div>`;
     bindDocumentoButtons(body);
@@ -285,14 +322,22 @@ async function showCotizacionDetalleModal(cotId) {
   }
 }
 
+function buildLoadParams() {
+  const params = {};
+  if (filtroEstado) params.estado = filtroEstado;
+  return params;
+}
+
 async function loadCotizaciones(resetPage = false) {
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
   try {
     if (resetPage) recepcionPagination.resetPage();
-    const result = await recepcionPagination.loadData({}, resetPage);
+    const result = await recepcionPagination.loadData(buildLoadParams(), resetPage);
     const rows = result.data || [];
     cotizacionesCache = result.allData || rows;
+    updateRecepcionSummaryCards(cotizacionesCache, `${VIEW_CONFIG.prefix}TrazaSummary`);
+
     if (!rows.length && !cotizacionesCache.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay cotizaciones recibidas de proveedores.</div>';
       return;
@@ -301,27 +346,38 @@ async function loadCotizaciones(resetPage = false) {
       <div class="sgc-bandeja-wrap" id="recepCotOuter">
         <table class="table table-sm table-hover table-bordered mb-0">
           <thead class="table-light"><tr>
-            <th>Solicitud</th><th>Proveedor</th><th>Monto ofertado</th><th>Fecha recepción</th><th>Validación</th><th>Acciones</th>
+            <th>Solicitud</th><th>Requerimiento</th><th>Proveedor</th><th>Monto ofertado</th>
+            <th>Fecha recepción</th><th>Estado</th><th>Acciones</th>
           </tr></thead>
-          <tbody>${rows.map((c) => `
+          <tbody>${rows.map((c) => {
+            const estadoLabel = labelEstadoRecepcion(c);
+            const responsableHint = c.validacion_responsable && estadoLabel === 'Enviada a validación AU'
+              ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
+            return `
             <tr>
               <td>
                 <strong>${esc(c.solicitud_codigo)}</strong>
                 <div class="small text-muted">${esc((c.denominacion || c.objeto || '').slice(0, 60))}</div>
               </td>
+              <td class="small">${formatRequerimientosBandeja(c, esc)}</td>
               <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
               <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
               <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
-              <td><span class="badge bg-${badgeValidacion(c.validacion_estado)}">${esc(c.validacion_estado || 'Pendiente')}</span></td>
-              <td class="text-nowrap">
-                <button type="button" class="btn btn-sm btn-primary rc-ver" data-id="${c.id}">Ver propuesta</button>
+              <td>
+                <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(estadoLabel)}</span>
+                ${responsableHint}
               </td>
-            </tr>`).join('')}</tbody>
+              ${renderActionMenuCell(c.id, recepcionCotizacionesMenuItems(c), '')}
+            </tr>`;
+          }).join('')}</tbody>
         </table>
       </div>`;
 
-    cont.querySelectorAll('.rc-ver').forEach((btn) => {
-      btn.onclick = () => showCotizacionDetalleModal(btn.dataset.id);
+    bindActionMenus(cont, {
+      verPropuesta: (id) => showCotizacionDetalleModal(id),
+      enviarValidar: (id) => {
+        showEnviarValidarModal(id, { onSuccess: () => loadCotizaciones(true) });
+      },
     });
     recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));
   } catch (err) {
@@ -330,13 +386,18 @@ async function loadCotizaciones(resetPage = false) {
 }
 
 export function initRecepcionCotizacionesView() {
-  bindBandejaToolbar({
-    prefix: VIEW_CONFIG.prefix,
-    onFilter: () => loadCotizaciones(true),
-    onClear: () => loadCotizaciones(true),
-    onExecutiveToggle: () => loadCotizaciones(true),
+  const { prefix } = VIEW_CONFIG;
+  document.getElementById(`${prefix}FiltroBtn`)?.addEventListener('click', () => {
+    filtroEstado = document.getElementById(`${prefix}FiltroEstado`)?.value || '';
+    loadCotizaciones(true);
   });
-  const reload = document.getElementById(`${VIEW_CONFIG.prefix}Reload`);
+  document.getElementById(`${prefix}FiltroLimpiar`)?.addEventListener('click', () => {
+    filtroEstado = '';
+    const sel = document.getElementById(`${prefix}FiltroEstado`);
+    if (sel) sel.value = '';
+    loadCotizaciones(true);
+  });
+  const reload = document.getElementById(`${prefix}Reload`);
   if (reload) reload.onclick = () => loadCotizaciones(true);
   loadCotizaciones();
 }

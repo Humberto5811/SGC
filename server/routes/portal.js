@@ -25,9 +25,11 @@ import {
 import {
   listarValidacionesPendientesDerivacion,
   listarValidacionesAsignadas,
+  listarValidacionesExpedientes,
   getPreviewDerivacionValidacion,
   derivarValidacionCotizacion,
   getValidacionTrabajoDetalle,
+  guardarValidacionParcial,
   enviarValidacionUsuario,
   listUsuariosDerivacionValidacion,
   getSubmodulosValidacion,
@@ -262,6 +264,16 @@ portalAnalistaRouter.get('/validaciones/pendientes-derivacion', async (_req, res
   } catch (err) { next(err); }
 });
 
+portalAnalistaRouter.get('/validaciones/expedientes', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || '';
+    const userId = req.headers['x-user-id'] || '';
+    const esAdmin = String(req.query.admin || '') === '1';
+    const data = await listarValidacionesExpedientes(usuario, userId, { esAdmin, soloAsignadas: !esAdmin });
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
 portalAnalistaRouter.get('/validaciones/asignadas', async (req, res, next) => {
   try {
     const usuario = req.headers['x-user-name'] || '';
@@ -306,6 +318,16 @@ portalAnalistaRouter.get('/validaciones/:id/trabajo', async (req, res, next) => 
     const esAdmin = String(req.query.admin || '') === '1';
     const data = await getValidacionTrabajoDetalle(req.params.id, usuario, userId, { esAdmin });
     res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.put('/validaciones/:id/guardar', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const userId = req.headers['x-user-id'] || '';
+    const esAdmin = String(req.body?.admin || '') === '1';
+    const row = await guardarValidacionParcial(req.params.id, req.body, usuario, userId, { esAdmin });
+    res.json({ success: true, cotizacion: row });
   } catch (err) { next(err); }
 });
 

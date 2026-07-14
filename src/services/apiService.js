@@ -8,8 +8,10 @@ function authHeaders() {
       const user = JSON.parse(raw);
       const h = {};
       if (user && user.id) h['x-user-id'] = String(user.id);
-      if (user && (user.username || user.nombre || user.dni)) {
-        h['x-user-name'] = String(user.username || user.nombre || user.dni);
+      const fullName = [user.apellidos, user.nombres].filter(Boolean).join(' ').trim();
+      if (fullName) h['x-user-name'] = fullName;
+      else if (user && (user.nombre || user.username || user.dni)) {
+        h['x-user-name'] = String(user.nombre || user.username || user.dni);
       }
       return h;
     }

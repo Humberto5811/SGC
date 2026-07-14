@@ -131,6 +131,9 @@ export const contratacionesService = {
   async listValidacionesPendientes() {
     return api.get('/contrataciones/portal-analista/validaciones/pendientes-derivacion');
   },
+  async listValidacionesExpedientes(esAdmin = false) {
+    return api.get(`/contrataciones/portal-analista/validaciones/expedientes${esAdmin ? '?admin=1' : ''}`);
+  },
   async listValidacionesAsignadas() {
     return api.get('/contrataciones/portal-analista/validaciones/asignadas');
   },
@@ -147,11 +150,14 @@ export const contratacionesService = {
   async derivarValidacion(id, body) {
     return api.post(`/contrataciones/portal-analista/validaciones/${id}/derivar`, body);
   },
-  async getValidacionTrabajo(id, admin = false) {
-    return api.get(`/contrataciones/portal-analista/validaciones/${id}/trabajo${admin ? '?admin=1' : ''}`);
+  async getValidacionTrabajo(id, esAdmin = false) {
+    return api.get(`/contrataciones/portal-analista/validaciones/${id}/trabajo${esAdmin ? '?admin=1' : ''}`);
   },
-  async enviarValidacion(id, body) {
-    return api.put(`/contrataciones/portal-analista/validaciones/${id}/enviar`, body);
+  async guardarValidacionParcial(id, body, esAdmin = false) {
+    return api.put(`/contrataciones/portal-analista/validaciones/${id}/guardar`, { ...body, admin: esAdmin ? '1' : '0' });
+  },
+  async enviarValidacion(id, body, esAdmin = false) {
+    return api.put(`/contrataciones/portal-analista/validaciones/${id}/enviar`, { ...body, admin: esAdmin ? '1' : '0' });
   },
   async listCuadroComparativo() {
     return api.get('/contrataciones/portal-analista/cuadro-comparativo');
