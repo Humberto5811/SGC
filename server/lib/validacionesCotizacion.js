@@ -153,20 +153,118 @@ function estadoDisplayValidacion(validacionEstado, cotEstado) {
   return validacionEstado || cotEstado || '';
 }
 
-/** Etiqueta de bandeja Validaciones (RC7.7). */
+/**
+ * Destinos oficiales al cerrar validación AU (vía sync + registrarMovimiento).
+ * APTO → CUADRO_COMPARATIVO (catálogo Workflow APROBAR).
+ * NO_APTO/OBSERVADO → RECEPCION_COTIZACIONES (regla operativa actual).
+ * Nota RC7.7A: el flujo funcional solicitado pedía INVITACIONES para no apto;
+ * no se altera el motor ni se hardcodea INVITACIONES en la vista.
+ */
+export const DESTINOS_SALIDA_VALIDACION = Object.freeze({
+  APTO: Object.freeze({
+    code: 'CUADRO_COMPARATIVO',
+    label: 'Cuadro Comparativo',
+    estado_bandeja: 'Derivado a Cuadro Comparativo',
+    bloqueado: true,
+  }),
+  NO_APTO: Object.freeze({
+    code: 'RECEPCION_COTIZACIONES',
+    label: 'Recepción de Cotizaciones',
+    estado_bandeja: 'Derivado a Recepción de Cotizaciones',
+    bloqueado: true,
+    nota: 'Destino oficial vigente. El flujo solicitado (Invitaciones) contradice esta regla; no se alteró el Workflow Engine.',
+  }),
+  OBSERVADO: Object.freeze({
+    code: 'RECEPCION_COTIZACIONES',
+    label: 'Recepción de Cotizaciones',
+    estado_bandeja: 'Derivado a Recepción de Cotizaciones',
+    bloqueado: true,
+  }),
+});
+
+export function resolverDestinoSalidaValidacion(estadoVal) {
+  const v = String(estadoVal || '').toUpperCase();
+  if (v === 'APTO') return DESTINOS_SALIDA_VALIDACION.APTO;
+  if (v === 'NO_APTO') return DESTINOS_SALIDA_VALIDACION.NO_APTO;
+  return DESTINOS_SALIDA_VALIDACION.OBSERVADO;
+}
+
+/** Etiqueta de bandeja Validaciones (RC7.7 / RC7.7A). */
 export function estadoDisplayBandejaValidacion(validacionEstado) {
   const v = String(validacionEstado || '').toUpperCase();
   if (v === 'DERIVADA' || v === 'EN_PROCESO') return 'Pendiente de validación';
-  if (v === 'APTO') return 'Validado';
-  if (v === 'NO_APTO' || v === 'OBSERVADO') return 'Observado / Requiere subsanación';
+  if (v === 'APTO') return DESTINOS_SALIDA_VALIDACION.APTO.estado_bandeja;
+  if (v === 'NO_APTO' || v === 'OBSERVADO') return resolverDestinoSalidaValidacion(v).estado_bandeja;
   return 'Pendiente de validación';
 }
 
 function badgeBandejaClass(validacionEstado) {
   const v = String(validacionEstado || '').toUpperCase();
   if (v === 'APTO') return 'success';
-  if (v === 'NO_APTO' || v === 'OBSERVADO') return 'danger';
+  if (v === 'NO_APTO' || v === 'OBSERVADO') return 'warning';
   return 'warning';
+}
+
+function formatRequerimientosCodes(requerimientos = [], detalleItems = []) {
+  const fromSr = (requerimientos || []).map((r) => r.codigo).filter(Boolean);
+  if (fromSr.length) return [...new Set(fromSr)].join(', ');
+  const fromItems = (Array.isArray(detalleItems) ? detalleItems : [])
+    .map((it) => it.requerimiento_codigo || it.codigo)
+    .filter(Boolean);
+  return [...new Set(fromItems)].join(', ');
+}
+
+function bytesFromBase64(b64) {
+  if (!b64) return null;
+  const s = String(b64);
+  const padding = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((s.length * 3) / 4) - padding);
+}
+
+function enrichDocsCotizacion(docs, cot) {
+  const anexos = parseCotizacionAnexos(cot?.anexos);
+  const fecha = cot?.fecha_presentacion || cot?.updated_at || null;
+  return (docs || []).map((d) => {
+    let tamaño = d.tamaño_bytes ?? null;
+    let fechaDoc = d.fecha || fecha;
+    const ref = String(d.ref || '');
+    if (tamaño == null) {
+      let entry = null;
+      if (ref.startsWith('docs-')) entry = (anexos.docs_solicitados || [])[Number(ref.split('-')[1])];
+      else if (ref.startsWith('req-')) entry = (anexos.requisitos || [])[Number(ref.split('-')[1])];
+      else if (ref === 'anexo05a') entry = anexos.anexo05a_firmado;
+      else if (ref.startsWith('cert-')) {
+        const certs = parseJson(cot?.certificados, []);
+        entry = (Array.isArray(certs) ? certs : [])[Number(ref.split('-')[1])];
+      }
+      const b64 = entry?.base64 || entry?.contenido_base64;
+      if (b64) tamaño = bytesFromBase64(b64);
+      if (entry?.uploaded_at || entry?.fecha) fechaDoc = entry.uploaded_at || entry.fecha;
+    }
+    return {
+      ...d,
+      tipo: d.grupo || d.fuente || 'Documento',
+      fecha: fechaDoc,
+      tamaño_bytes: tamaño,
+      estado: d.estado || 'Presentado',
+    };
+  });
+}
+
+function resumenPropuestaTecnica(cot) {
+  const prop = parseJson(cot?.propuesta_tecnica, {});
+  const items = Array.isArray(prop.items) ? prop.items : [];
+  return {
+    tiene_propuesta: items.length > 0 || Object.keys(prop).length > 0,
+    items: items.map((it, idx) => ({
+      item: idx + 1,
+      item_key: it.item_key || '',
+      marca: it.marca || '',
+      pais: it.pais || it.procedencia || '',
+      descripcion: it.descripcion || '',
+    })),
+    notas: prop.notas || prop.observacion || '',
+  };
 }
 
 function normalizeTipoContratacion(tipo) {
@@ -263,9 +361,76 @@ export async function listUsuariosDerivacionValidacion(submoduloCode, search = '
     .filter((u) => {
       const p = u.permisosNorm;
       if (modReq) return p.modulos.includes('REQUERIMIENTOS') && p.submodulos.includes(code);
+      // Destinos de salida post-validación (RC7.7A)
+      if (['CUADRO_COMPARATIVO', 'RECEPCION_COTIZACIONES', 'INVITACIONES'].includes(code)) {
+        return p.modulos.includes('CONTRATACIONES') && p.submodulos.includes(code);
+      }
       return p.modulos.includes('CONTRATACIONES') && p.submodulos.includes(code);
     })
     .map(({ permisosNorm, ...rest }) => rest);
+}
+
+/**
+ * Lista liviana proveedor × requerimiento (sin documentos).
+ * Una fila por combinación cotización/proveedor + requerimiento vinculado.
+ */
+export async function listarProveedoresSolicitudValidacion(solicitudId, usuario, userId, opts = {}) {
+  const sid = parseInt(solicitudId, 10);
+  if (!Number.isFinite(sid)) throw new Error('Solicitud inválida');
+  const { rows } = await query(`
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+      cot.validacion_estado, cot.validacion_responsable, cot.validacion_informe,
+      cot.fecha_presentacion, cot.updated_at,
+      p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+    FROM cotizaciones_proveedor cot
+    JOIN proveedores p ON p.id = cot.proveedor_id
+    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    WHERE cot.solicitud_id = $1
+      AND cot.estado = 'COTIZACION_PRESENTADA'
+      AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
+    ORDER BY p.razon_social ASC, cot.fecha_presentacion DESC NULLS LAST
+  `, [sid]);
+  const reqs = await loadRequerimientosSolicitud(sid);
+  const esAdmin = !!opts.esAdmin;
+  const authOpts = { esAdmin, usuarioNombre: usuario };
+  const out = [];
+  for (const r of rows) {
+    const perm = canUserValidateExpediente(r, usuario, userId, authOpts);
+    const reqsFila = r.requerimiento_id
+      ? reqs.filter((q) => q.id === r.requerimiento_id)
+      : reqs;
+    const lista = reqsFila.length ? reqsFila : [{ id: null, codigo: '', denominacion: r.denominacion || r.objeto || '', area: '', cmn: '' }];
+    for (const req of lista) {
+      out.push({
+        cotizacion_id: r.id,
+        solicitud_id: r.solicitud_id,
+        proveedor_id: r.proveedor_id,
+        requerimiento_id: req.id || r.requerimiento_id || null,
+        ruc: r.ruc || '',
+        razon_social: r.razon_social || '',
+        fecha_presentacion: r.fecha_presentacion,
+        estado: r.estado,
+        validacion_estado: r.validacion_estado || '',
+        estado_display: estadoDisplayValidacion(r.validacion_estado, r.estado),
+        estado_bandeja: estadoDisplayBandejaValidacion(r.validacion_estado),
+        estado_bandeja_class: badgeBandejaClass(r.validacion_estado),
+        requerimiento_codigo: req.codigo || '',
+        requerimientos: req.codigo || '',
+        descripcion: req.denominacion || r.denominacion || r.objeto || '',
+        centro: req.cmn || req.area || '',
+        puede_validar: perm.puedeValidar,
+        puede_ver: perm.puedeVer,
+        sin_asignacion: perm.sinAsignacion,
+      });
+    }
+  }
+  return out;
+}
+
+export function getDestinosSalidaPorResultado(resultado, cumple) {
+  const estadoVal = mapResultadoFormulario(resultado, cumple);
+  const dest = resolverDestinoSalidaValidacion(estadoVal);
+  return { resultado_mapeado: estadoVal, destino: dest };
 }
 
 export async function listarValidacionesPendientesDerivacion() {
@@ -486,34 +651,82 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
   const inf = parseInforme(cot);
   const items = await buildItemsFormulario07a(cot);
   const requerimientos = await loadRequerimientosSolicitud(cot.solicitud_id);
-  const documentos_requerimiento = await loadDocumentosRequerimientoSolicitud(cot.solicitud_id);
+  const reqIdsVinculados = new Set(requerimientos.map((r) => r.id));
+  if (cot.requerimiento_id) reqIdsVinculados.add(cot.requerimiento_id);
+  const documentos_requerimiento = (await loadDocumentosRequerimientoSolicitud(cot.solicitud_id))
+    .filter((d) => !d.requerimiento_id || reqIdsVinculados.has(d.requerimiento_id))
+    .map((d) => ({
+      ...d,
+      tipo: d.grupo || 'Documento del requerimiento',
+      fecha: d.created_at || null,
+      estado: 'Disponible',
+    }));
   const areaUsuaria = requerimientos.map((r) => r.area).filter(Boolean).join(', ')
     || inf.derivacion?.submodulo_label || '';
+  const reqCodes = formatRequerimientosCodes(requerimientos, parseJson(cot.detalle_items, []));
+  const docsTecnicos = enrichDocsCotizacion(
+    inf.derivacion?.documentos_tecnicos || buildManifiestoCotizacionTecnica(cot),
+    cot,
+  );
+  const proveedoresSolicitud = await listarProveedoresSolicitudValidacion(
+    cot.solicitud_id,
+    usuario,
+    userId,
+    { esAdmin },
+  );
+  const yaDerivado = ['APTO', 'NO_APTO', 'OBSERVADO'].includes(estado);
+  const destinoActual = yaDerivado
+    ? resolverDestinoSalidaValidacion(estado)
+    : null;
+  const fechaAuto = new Date().toLocaleDateString('es-PE');
   return {
     ...mapCotizacionRow(cot),
+    requerimientos: reqCodes || mapCotizacionRow(cot).requerimientos || '',
     tipo_contratacion: normalizeTipoContratacion(cot.solicitud_tipo),
     area_usuaria: areaUsuaria,
     descripcion: cot.denominacion || cot.objeto || '',
-    requerimientos_detalle: requerimientos,
-    documentos_tecnicos: inf.derivacion?.documentos_tecnicos || buildManifiestoCotizacionTecnica(cot),
+    requerimientos_detalle: requerimientos.map((r) => ({
+      id: r.id,
+      codigo: r.codigo,
+      denominacion: r.denominacion,
+      area: r.area,
+      cmn: r.cmn,
+      centro: r.cmn || r.area || '',
+    })),
+    documentos_tecnicos: docsTecnicos,
     documentos_requerimiento,
-    documentos_cotizacion: inf.derivacion?.documentos_tecnicos || buildManifiestoCotizacionTecnica(cot),
+    documentos_cotizacion: docsTecnicos,
+    propuesta_tecnica: resumenPropuestaTecnica(cot),
+    excluye_economica: true,
+    proveedores_solicitud: proveedoresSolicitud,
     formulario_07a: {
       items,
       lugar: inf.formulario_07a?.lugar || 'Chorrillos',
-      fecha: inf.formulario_07a?.fecha || new Date().toLocaleDateString('es-PE'),
-      profesional: inf.formulario_07a?.profesional || usuario,
+      fecha: inf.formulario_07a?.fecha || fechaAuto,
+      profesional: inf.formulario_07a?.profesional || responsableNombreDeCot(cot) || usuario,
       producto_adquisicion: cot.denominacion || cot.objeto || '',
       resultado_global: inf.formulario_07a?.resultado_global || '',
       observacion_global: inf.formulario_07a?.observacion_global || '',
       sustento: inf.formulario_07a?.sustento || '',
       cumple: inf.formulario_07a?.cumple || '',
     },
-    pdf_firmado: inf.pdf_firmado || null,
+    pdf_firmado: inf.pdf_firmado
+      ? {
+          nombre: inf.pdf_firmado.nombre,
+          mime_type: inf.pdf_firmado.mime_type,
+          base64: inf.pdf_firmado.base64,
+          uploaded_at: inf.pdf_firmado.uploaded_at,
+          tamaño_bytes: inf.pdf_firmado.tamaño_bytes || bytesFromBase64(inf.pdf_firmado.base64),
+        }
+      : null,
     solo_tecnica: true,
-    puede_derivar: perm.puedeValidar && ['DERIVADA', 'EN_PROCESO'].includes(estado),
-    puede_editar: perm.puedeValidar,
-    destino_derivacion: 'CUADRO_COMPARATIVO',
+    puede_derivar: perm.puedeValidar && ['DERIVADA', 'EN_PROCESO'].includes(estado) && !yaDerivado,
+    puede_editar: perm.puedeValidar && !yaDerivado,
+    ya_derivado: yaDerivado,
+    destino_derivacion: destinoActual?.code || DESTINOS_SALIDA_VALIDACION.APTO.code,
+    destino_salida: destinoActual,
+    destinos_salida: DESTINOS_SALIDA_VALIDACION,
+    derivacion_salida: inf.derivacion_salida || null,
   };
 }
 
@@ -530,7 +743,17 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
   }
 
   const inf = parseInforme(cot);
-  const informe = { ...inf, formulario_07a: { ...inf.formulario_07a, ...formulario_07a } };
+  const formMerged = {
+    ...inf.formulario_07a,
+    ...formulario_07a,
+    // Fecha/responsable de trazabilidad (no campos manuales en UI RC7.7A)
+    fecha: new Date().toLocaleDateString('es-PE'),
+    profesional: formulario_07a?.profesional
+      || inf.formulario_07a?.profesional
+      || responsableNombreDeCot(cot)
+      || usuario,
+  };
+  const informe = { ...inf, formulario_07a: formMerged };
   if (quitar_pdf) {
     informe.pdf_firmado = null;
   } else if (pdf_firmado?.base64) {
@@ -538,6 +761,7 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
       nombre: pdf_firmado.nombre || 'Validacion_Anexo_07A.pdf',
       mime_type: pdf_firmado.mime_type || 'application/pdf',
       base64: pdf_firmado.base64,
+      tamaño_bytes: pdf_firmado.tamaño_bytes || bytesFromBase64(pdf_firmado.base64),
       uploaded_at: new Date().toISOString(),
       uploaded_by: usuario,
     };
@@ -579,31 +803,94 @@ function mapResultadoFormulario(resultado, cumple) {
 }
 
 export async function enviarValidacionUsuario(cotizacionId, body, usuario, userId, opts = {}) {
-  const { formulario_07a, pdf_firmado, resultado, observacion } = body || {};
-  if (!formulario_07a?.items?.length) throw new Error('Complete el formulario de validación');
-  if (!pdf_firmado?.base64) throw new Error('Adjunte el PDF firmado de la validación');
+  const {
+    formulario_07a,
+    pdf_firmado,
+    resultado,
+    observacion,
+    destino_submodulo,
+    responsable_destino_id,
+    responsable_destino_nombre,
+    observacion_derivacion,
+  } = body || {};
 
   const cot = await loadCotizacionFull(cotizacionId);
   const esAdmin = !!opts.esAdmin;
+  const estadoActual = String(cot.validacion_estado || '').toUpperCase();
+
+  // Idempotencia: si ya fue derivado, no repetir evento ni cambiar responsable.
+  if (['APTO', 'NO_APTO', 'OBSERVADO'].includes(estadoActual)) {
+    const row = mapCotizacionRow({
+      ...cot,
+      ruc: cot.ruc,
+      razon_social: cot.razon_social,
+      solicitud_codigo: cot.solicitud_codigo,
+      denominacion: cot.denominacion,
+      objeto: cot.objeto,
+    });
+    return {
+      ...row,
+      ya_derivado: true,
+      idempotente: true,
+      destino_salida: resolverDestinoSalidaValidacion(estadoActual),
+    };
+  }
+
   if (!matchResponsableParaEdicion(cot, usuario, userId, { esAdmin, usuarioNombre: usuario })) {
     throw new Error('No tiene permiso para derivar esta validación');
   }
+  if (!formulario_07a?.items?.length) throw new Error('Complete el formulario de validación');
+  if (!pdf_firmado?.base64) throw new Error('Adjunte el PDF firmado de la validación');
+
   const estadoVal = mapResultadoFormulario(
     resultado || formulario_07a.resultado_global,
     formulario_07a.cumple,
   );
+  const destOficial = resolverDestinoSalidaValidacion(estadoVal);
+  const destinoCode = String(destino_submodulo || destOficial.code).toUpperCase();
+  if (destinoCode !== destOficial.code) {
+    throw new Error(`Destino no permitido. El Workflow determina: ${destOficial.label}`);
+  }
+  const respDestId = parseInt(responsable_destino_id, 10);
+  const respDestNombre = String(responsable_destino_nombre || '').trim();
+  if (!Number.isFinite(respDestId) || !respDestNombre) {
+    throw new Error('Seleccione el usuario responsable del submódulo destino');
+  }
+
   const obs = String(observacion || formulario_07a.observacion_global || '').trim();
   if (!obs) throw new Error('Las observaciones de la validación son obligatorias');
+  if (String(estadoVal) !== 'APTO' && !String(formulario_07a.sustento || '').trim() && !obs) {
+    throw new Error('Indique sustento u observación para el resultado');
+  }
+
+  const fechaAuto = new Date().toLocaleDateString('es-PE');
+  const formPersist = {
+    ...formulario_07a,
+    fecha: fechaAuto,
+    profesional: formulario_07a.profesional || responsableNombreDeCot(cot) || usuario,
+  };
 
   const informe = {
     ...parseInforme(cot),
-    formulario_07a,
+    formulario_07a: formPersist,
     pdf_firmado: {
       nombre: pdf_firmado.nombre || 'Validacion_Anexo_07A.pdf',
       mime_type: pdf_firmado.mime_type || 'application/pdf',
       base64: pdf_firmado.base64,
+      tamaño_bytes: pdf_firmado.tamaño_bytes || bytesFromBase64(pdf_firmado.base64),
       uploaded_at: new Date().toISOString(),
       uploaded_by: usuario,
+    },
+    derivacion_salida: {
+      submodulo: destOficial.code,
+      submodulo_label: destOficial.label,
+      responsable_id: respDestId,
+      responsable_nombre: respDestNombre,
+      observacion: String(observacion_derivacion || '').trim(),
+      resultado: estadoVal,
+      derivado_por: usuario,
+      derivado_por_id: userId ? parseInt(userId, 10) : null,
+      derivado_at: new Date().toISOString(),
     },
     enviado_at: new Date().toISOString(),
     enviado_por: usuario,
@@ -616,14 +903,46 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
       validacion_informe = $4::jsonb,
       historial = historial || $5::jsonb,
       updated_at = NOW()
-    WHERE id = $1 RETURNING *
+    WHERE id = $1
+      AND validacion_estado IN ('DERIVADA', 'EN_PROCESO')
+    RETURNING *
   `, [
     cotizacionId,
     estadoVal,
     obs,
     JSON.stringify(informe),
-    JSON.stringify([{ tipo: 'validacion_enviada', resultado: estadoVal, usuario, fecha: new Date().toISOString() }]),
+    JSON.stringify([{
+      tipo: 'validacion_enviada',
+      resultado: estadoVal,
+      destino: destOficial.code,
+      responsable_destino: respDestNombre,
+      usuario,
+      fecha: new Date().toISOString(),
+    }]),
   ]);
+
+  // Condición de carrera / doble click: otro proceso ya derivó.
+  if (!rows.length) {
+    const again = await loadCotizacionFull(cotizacionId);
+    const est = String(again.validacion_estado || '').toUpperCase();
+    if (['APTO', 'NO_APTO', 'OBSERVADO'].includes(est)) {
+      return {
+        ...mapCotizacionRow({
+          ...again,
+          ruc: again.ruc,
+          razon_social: again.razon_social,
+          solicitud_codigo: again.solicitud_codigo,
+          denominacion: again.denominacion,
+          objeto: again.objeto,
+        }),
+        ya_derivado: true,
+        idempotente: true,
+        destino_salida: resolverDestinoSalidaValidacion(est),
+      };
+    }
+    throw new Error('No se pudo derivar el expediente (estado no editable)');
+  }
+
   const updated = rows[0];
 
   await registrarTrazaPortal({
@@ -650,38 +969,52 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
       WHERE id = $1 AND estado NOT IN ('CERRADA')
     `, [updated.solicitud_id]);
     await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
-      etapaDestino: 'CUADRO_COMPARATIVO',
+      etapaDestino: destOficial.code,
       usuario,
-      observacion: 'Validación técnica aprobada por área usuaria',
+      observacion: observacion_derivacion || 'Validación técnica aprobada por área usuaria',
       etapaEjecutor: 'VALIDACION_USUARIO',
-    });
-    await registrarTrazaPortal({
-      solicitud_id: updated.solicitud_id,
-      proveedor_id: updated.proveedor_id,
-      requerimiento_id: updated.requerimiento_id,
-      evento: 'VALIDACION_EXPEDIENTE_DERIVADO',
-      detalle: 'Expediente derivado desde Validación → Cuadro Comparativo',
-      usuario,
+      responsable: respDestNombre,
     });
   } else {
     await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
-      etapaDestino: 'RECEPCION_COTIZACIONES',
+      etapaDestino: destOficial.code,
       usuario,
-      observacion: 'Validación con observaciones — retorno a Recepción de Cotizaciones',
+      observacion: observacion_derivacion
+        || 'Validación con observaciones — retorno a Recepción de Cotizaciones',
       etapaEjecutor: 'VALIDACION_USUARIO',
-      responsable: cot.validacion_responsable || usuario,
-    });
-    await registrarTrazaPortal({
-      solicitud_id: updated.solicitud_id,
-      proveedor_id: updated.proveedor_id,
-      requerimiento_id: updated.requerimiento_id,
-      evento: 'VALIDACION_EXPEDIENTE_DERIVADO',
-      detalle: 'Expediente derivado desde Validación → Recepción de Cotizaciones',
-      usuario,
+      responsable: respDestNombre,
     });
   }
 
-  return mapCotizacionRow({ ...updated, ruc: cot.ruc, razon_social: cot.razon_social, solicitud_codigo: cot.solicitud_codigo, denominacion: cot.denominacion, objeto: cot.objeto });
+  await registrarTrazaPortal({
+    solicitud_id: updated.solicitud_id,
+    proveedor_id: updated.proveedor_id,
+    requerimiento_id: updated.requerimiento_id,
+    evento: 'VALIDACION_EXPEDIENTE_DERIVADO',
+    detalle: `Expediente derivado desde Validación → ${destOficial.label} (${respDestNombre})`,
+    usuario,
+  });
+
+  const cotizacion = {
+    ...mapCotizacionRow({
+      ...updated,
+      ruc: cot.ruc,
+      razon_social: cot.razon_social,
+      solicitud_codigo: cot.solicitud_codigo,
+      denominacion: cot.denominacion,
+      objeto: cot.objeto,
+    }),
+    ya_derivado: true,
+    destino_salida: destOficial,
+  };
+  return {
+    ...cotizacion,
+    ok: true,
+    estado: estadoVal,
+    destino: destOficial,
+    responsable: { id: respDestId, nombre: respDestNombre },
+    workflow: { etapaDestino: destOficial.code, etapaEjecutor: 'VALIDACION_USUARIO' },
+  };
 }
 
 export async function listarCuadroComparativo() {

@@ -144,6 +144,13 @@ export const contratacionesService = {
     const q = new URLSearchParams({ submodulo, search }).toString();
     return api.get(`/contrataciones/portal-analista/validaciones/usuarios?${q}`);
   },
+  async getDestinosSalidaValidacion(resultado = '', cumple = '') {
+    const q = new URLSearchParams({ resultado, cumple }).toString();
+    return api.get(`/contrataciones/portal-analista/validaciones/destinos-salida?${q}`);
+  },
+  async listProveedoresValidacionSolicitud(solicitudId, esAdmin = false) {
+    return api.get(`/contrataciones/portal-analista/validaciones/solicitud/${solicitudId}/proveedores${esAdmin ? '?admin=1' : ''}`);
+  },
   async getPreviewDerivacionValidacion(id) {
     return api.get(`/contrataciones/portal-analista/validaciones/${id}/preview-derivacion`);
   },

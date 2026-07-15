@@ -32,9 +32,9 @@ export function renderValidacionesStatsHtml(stats, containerId = 'validacionesSt
   return `
     <div id="${containerId}" class="row g-2 mb-3">
       <div class="col-6 col-md-3"><div class="sgc-kpi-card"><div class="kpi-label">Total expedientes</div><div class="kpi-value text-dark" data-val-kpi="total">${s.total}</div></div></div>
-      <div class="col-6 col-md-3"><div class="sgc-kpi-card"><div class="kpi-label">Validado</div><div class="kpi-value text-success" data-val-kpi="validado">${s.validado}</div></div></div>
+      <div class="col-6 col-md-3"><div class="sgc-kpi-card"><div class="kpi-label">Derivado a Cuadro Comp.</div><div class="kpi-value text-success" data-val-kpi="validado">${s.validado}</div></div></div>
       <div class="col-6 col-md-3"><div class="sgc-kpi-card"><div class="kpi-label">Pendientes de validación</div><div class="kpi-value text-warning" data-val-kpi="pendiente">${s.pendiente}</div></div></div>
-      <div class="col-6 col-md-3"><div class="sgc-kpi-card"><div class="kpi-label">Observado / Requiere subsanación</div><div class="kpi-value text-danger" data-val-kpi="observado">${s.observado}</div></div></div>
+      <div class="col-6 col-md-3"><div class="sgc-kpi-card"><div class="kpi-label">Derivados / Observados</div><div class="kpi-value text-danger" data-val-kpi="observado">${s.observado}</div></div></div>
     </div>`;
 }
 

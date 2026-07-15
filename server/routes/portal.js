@@ -33,6 +33,8 @@ import {
   enviarValidacionUsuario,
   listUsuariosDerivacionValidacion,
   getSubmodulosValidacion,
+  listarProveedoresSolicitudValidacion,
+  getDestinosSalidaPorResultado,
   listarCuadroComparativo,
   resolverPdfValidacionFirmada,
 } from '../lib/validacionesCotizacion.js';
@@ -296,6 +298,28 @@ portalAnalistaRouter.get('/validaciones/usuarios', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+portalAnalistaRouter.get('/validaciones/destinos-salida', async (req, res, next) => {
+  try {
+    const data = getDestinosSalidaPorResultado(req.query.resultado, req.query.cumple);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/validaciones/solicitud/:solicitudId/proveedores', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || '';
+    const userId = req.headers['x-user-id'] || '';
+    const esAdmin = String(req.query.admin || '') === '1';
+    const data = await listarProveedoresSolicitudValidacion(
+      req.params.solicitudId,
+      usuario,
+      userId,
+      { esAdmin },
+    );
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
 portalAnalistaRouter.get('/validaciones/:id/preview-derivacion', async (req, res, next) => {
   try {
     const data = await getPreviewDerivacionValidacion(req.params.id);
@@ -337,7 +361,15 @@ portalAnalistaRouter.put('/validaciones/:id/enviar', async (req, res, next) => {
     const userId = req.headers['x-user-id'] || '';
     const esAdmin = String(req.body?.admin || '') === '1';
     const row = await enviarValidacionUsuario(req.params.id, req.body, usuario, userId, { esAdmin });
-    res.json({ success: true, cotizacion: row });
+    res.json({
+      success: true,
+      ok: row?.ok !== false,
+      cotizacion: row,
+      estado: row?.estado || row?.validacion_estado,
+      destino: row?.destino || row?.destino_salida,
+      responsable: row?.responsable,
+      workflow: row?.workflow,
+    });
   } catch (err) { next(err); }
 });
 
