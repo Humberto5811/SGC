@@ -179,6 +179,18 @@ export const contratacionesService = {
   async getCuadroComparativoExpediente(solicitudId) {
     return api.get(`/contrataciones/portal-analista/cuadro-comparativo/expedientes/${solicitudId}`);
   },
+  async getCuadroComparativoDetalle(solicitudId) {
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/detalle`);
+  },
+  async crearCuadroBorrador(solicitudId, body = {}) {
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/borrador`, body);
+  },
+  async guardarCuadroBorrador(cuadroId, body = {}) {
+    return api.put(`/contrataciones/portal-analista/cuadro-comparativo/${cuadroId}/borrador`, body);
+  },
+  async listCuadroVersiones(solicitudId) {
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/versiones`);
+  },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');
   },

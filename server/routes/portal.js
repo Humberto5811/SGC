@@ -42,6 +42,10 @@ import {
   listarCuadroComparativo,
   listarCuadroComparativoExpedientes,
   getCuadroComparativoExpediente,
+  obtenerDetalleCuadro,
+  crearOBuscarBorrador,
+  guardarBorradorCuadro,
+  listarVersionesCuadro,
 } from '../lib/cuadroComparativo.js';
 import {
   getSolicitudDetalleProveedor,
@@ -461,6 +465,43 @@ portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (_req, res, ne
 portalAnalistaRouter.get('/cuadro-comparativo/expedientes/:solicitudId', async (req, res, next) => {
   try {
     const data = await getCuadroComparativoExpediente(req.params.solicitudId);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+/** RC8.2 — matriz Bienes + borrador */
+portalAnalistaRouter.get('/cuadro-comparativo/:solicitudId/detalle', async (req, res, next) => {
+  try {
+    const data = await obtenerDetalleCuadro(req.params.solicitudId);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.post('/cuadro-comparativo/:solicitudId/borrador', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await crearOBuscarBorrador(req.params.solicitudId, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.put('/cuadro-comparativo/:cuadroId/borrador', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await guardarBorradorCuadro(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data });
+  } catch (err) {
+    if (err?.code === 'CONFLICT_VERSION' || err?.status === 409) {
+      res.status(409).json({ error: err.message, code: 'CONFLICT_VERSION' });
+      return;
+    }
+    next(err);
+  }
+});
+
+portalAnalistaRouter.get('/cuadro-comparativo/:solicitudId/versiones', async (req, res, next) => {
+  try {
+    const data = await listarVersionesCuadro(req.params.solicitudId);
     res.json({ data });
   } catch (err) { next(err); }
 });

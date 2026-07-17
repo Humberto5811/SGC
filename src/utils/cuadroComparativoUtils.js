@@ -24,6 +24,7 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'PENDIENTE' || s === 'PENDIENTE_DE_ELABORAR' || s === 'PENDIENTE_ELABORAR') {
     return ESTADOS_CUADRO.PENDIENTE_ELABORAR;
   }
+  if (s === 'BORRADOR') return ESTADOS_CUADRO.EN_ELABORACION;
   if (s === 'EN_ELABORACION' || s === 'ELABORACION') return ESTADOS_CUADRO.EN_ELABORACION;
   if (s === 'GENERADO' || s === 'GENERADA') return ESTADOS_CUADRO.GENERADO;
   if (s === 'FIRMADO' || s === 'FIRMADA') return ESTADOS_CUADRO.FIRMADO;

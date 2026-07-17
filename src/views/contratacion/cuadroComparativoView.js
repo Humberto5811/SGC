@@ -15,6 +15,7 @@ import {
   filterCuadroExpedientes,
   ESTADOS_CUADRO_LABEL,
 } from '../../utils/cuadroComparativoUtils.js';
+import { showElaborarCuadroModal } from '../../utils/cuadroComparativoModal.js';
 
 const API_BASE = 'http://localhost:3000/api';
 
@@ -269,29 +270,14 @@ async function showVerValidaciones(solicitudId) {
   });
 }
 
-function showElaborarCuadroPlaceholder(solicitudId) {
+async function openElaborarCuadro(solicitudId) {
   const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
-  showBootstrapModal(`
-    <div class="modal fade" tabindex="-1">
-      <div class="modal-dialog">
-        <div class="modal-content">
-          <div class="modal-header bg-light">
-            <h5 class="modal-title"><i class="bi bi-table"></i> Elaborar cuadro</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-          </div>
-          <div class="modal-body">
-            <p class="mb-2">Solicitud <strong>${esc(row?.solicitud_codigo || solicitudId)}</strong></p>
-            <div class="alert alert-info mb-0">
-              La elaboración del Anexo N.° 8A — Cuadro Comparativo de Precios estará disponible en la siguiente etapa (RC8.2).
-              En RC8.1 solo se gestiona la bandeja por Solicitud de Cotización.
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-          </div>
-        </div>
-      </div>
-    </div>`);
+  const tipo = String(row?.tipo || '').toLowerCase();
+  if (tipo && tipo !== 'bien' && tipo !== 'bienes') {
+    alert(`RC8.2 elabora solo Bienes. Tipo actual: ${row?.tipo || '—'}. Servicios/Locadores se habilitarán después.`);
+    return;
+  }
+  await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
 }
 
 async function loadCuadro(resetPage = false) {
@@ -344,7 +330,7 @@ async function loadCuadro(resetPage = false) {
     bindActionMenus(cont, {
       verExpediente: (id) => showVerExpediente(id),
       verValidaciones: (id) => showVerValidaciones(id),
-      elaborarCuadro: (id) => showElaborarCuadroPlaceholder(id),
+      elaborarCuadro: (id) => openElaborarCuadro(id),
     });
     cuadroPagination.renderControls('cuadroCompOuter', () => loadCuadro(false));
   } catch (err) {
