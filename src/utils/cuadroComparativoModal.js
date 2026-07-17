@@ -2,6 +2,7 @@
  * Modal Elaborar Cuadro Comparativo — Bienes (RC8.2/RC8.3).
  */
 import { contratacionesService } from '../services/contratacionesService.js';
+import { api } from '../services/apiService.js';
 import {
   renderMatrizBienesHtml,
   renderResumenProveedores,
@@ -13,6 +14,12 @@ import {
   collectSeleccionesFromDom,
 } from './cuadroComparativoMatriz.js';
 import { labelCuadroEstado, badgeClassCuadro } from './cuadroComparativoUtils.js';
+import {
+  previewAnexo8APdf,
+  downloadAnexo8APdf,
+  generateAnexo8APdf,
+  validateCuadroParaAnexo8A,
+} from './cuadroComparativoPdf.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -146,6 +153,15 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
             <button type="button" class="btn btn-success" id="ccBtnAdjudicar">
               <i class="bi bi-award"></i> Guardar adjudicación
             </button>
+            <button type="button" class="btn btn-outline-dark" id="ccBtnPreview8a" title="Requiere adjudicación">
+              <i class="bi bi-eye"></i> Previsualizar Anexo 8A
+            </button>
+            <button type="button" class="btn btn-dark" id="ccBtnGenerar8a" title="Genera y persiste PDF">
+              <i class="bi bi-file-earmark-pdf"></i> Generar Anexo 8A
+            </button>
+            <button type="button" class="btn btn-outline-dark" id="ccBtnDescargar8a">
+              <i class="bi bi-download"></i> Descargar
+            </button>
           </div>
         </div>
       </div>
@@ -252,6 +268,99 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       alert(err.message || 'No se pudo adjudicar');
     } finally {
       btn.disabled = false;
+    }
+  };
+
+  async function loadInstitucional() {
+    let entidad = {};
+    let logo_data_url = '';
+    try { entidad = await api.get('/entidad') || {}; } catch (_) { /* opcional */ }
+    try {
+      const resp = await api.list('logotipos', { page: 1, pageSize: 100, search: '' });
+      const logos = resp?.data || [];
+      const pick = logos.find((l) => /principal/i.test(l.tipo || '') && l.data_url)
+        || logos.find((l) => (l.estado || 'Activo') !== 'Inactivo' && l.data_url)
+        || logos.find((l) => l.data_url);
+      if (pick) logo_data_url = pick.data_url || '';
+    } catch (_) { /* opcional */ }
+    return { entidad, logo_data_url };
+  }
+
+  async function buildPersistidoParaPdf() {
+    if (!cuadro?.id) throw new Error('No hay cuadro persistido');
+    const resp = await contratacionesService.getCuadroPdfData(cuadro.id);
+    const data = resp.data || resp;
+    const inst = await loadInstitucional();
+    let elaborado = '';
+    try {
+      const u = JSON.parse(localStorage.getItem('currentUser') || 'null');
+      elaborado = [u?.apellidos, u?.nombres].filter(Boolean).join(' ').trim()
+        || u?.nombre || u?.username || '';
+    } catch (_) { /* noop */ }
+    return {
+      ...data,
+      entidad: inst.entidad,
+      logo_data_url: inst.logo_data_url,
+      elaborado_por: elaborado,
+    };
+  }
+
+  el.querySelector('#ccBtnPreview8a').onclick = async () => {
+    try {
+      const persistido = await buildPersistidoParaPdf();
+      const val = validateCuadroParaAnexo8A(persistido);
+      if (!val.ok) {
+        alert(`No se puede previsualizar:\n- ${val.faltantes.join('\n- ')}`);
+        return;
+      }
+      previewAnexo8APdf(persistido);
+    } catch (err) {
+      alert(err.message || 'No se pudo previsualizar');
+    }
+  };
+
+  el.querySelector('#ccBtnGenerar8a').onclick = async () => {
+    if (!cuadro?.id) return alert('No hay cuadro persistido');
+    if (String(cuadro.estado || '').toUpperCase() === 'FIRMADO') {
+      return alert('Cuadro firmado: no se puede regenerar sin anular la versión.');
+    }
+    const btn = el.querySelector('#ccBtnGenerar8a');
+    btn.disabled = true;
+    try {
+      const persistido = await buildPersistidoParaPdf();
+      const val = validateCuadroParaAnexo8A(persistido);
+      if (!val.ok) {
+        alert(`No se puede generar el Anexo 8A:\n- ${val.faltantes.join('\n- ')}`);
+        return;
+      }
+      const { base64, filename, report } = generateAnexo8APdf(persistido);
+      const resp = await contratacionesService.guardarCuadroPdf(cuadro.id, {
+        pdf_contenido: base64,
+        pdf_nombre: filename,
+        version_report: report.meta.version,
+      });
+      const data = resp.data || resp;
+      cuadro = data.cuadro || { ...cuadro, estado: 'GENERADO', version: data.version };
+      const badge = el.querySelector('#ccEstadoBadge');
+      if (badge) {
+        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+      }
+      alert(`Anexo 8A generado y guardado (v${data.version || cuadro.version}). Estado: GENERADO.`);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err) {
+      alert(err.message || 'No se pudo generar el Anexo');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  el.querySelector('#ccBtnDescargar8a').onclick = async () => {
+    try {
+      const persistido = await buildPersistidoParaPdf();
+      downloadAnexo8APdf(persistido);
+    } catch (err) {
+      alert(err.message || 'No se pudo descargar');
     }
   };
 

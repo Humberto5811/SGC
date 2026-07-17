@@ -401,7 +401,7 @@ export async function getCuadroComparativoExpediente(solicitudId) {
 
 async function loadSolicitudRow(solicitudId) {
   const { rows } = await query(`
-    SELECT id, codigo, denominacion, objeto, tipo, estado, detalle_items, area_usuaria
+    SELECT id, codigo, denominacion, objeto, tipo, estado, detalle_items, area_usuaria, cmn
     FROM solicitudes_cotizacion WHERE id = $1
   `, [solicitudId]);
   if (!rows.length) throw new Error('Solicitud no encontrada');
@@ -807,5 +807,144 @@ export async function listarVersionesCuadro(solicitudId) {
 /** Alias API RC8.2 */
 export async function getDetalleCuadro(solicitudId) {
   return obtenerDetalleCuadro(solicitudId);
+}
+
+/**
+ * Payload para Anexo 8A: solo datos persistidos (no reconstruye desde UI).
+ */
+export async function obtenerDatosPdfCuadro(cuadroId) {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  const { rows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+  if (!rows.length) throw new Error('Cuadro no encontrado');
+  const row = rows[0];
+  const estado = String(row.estado || '').toUpperCase();
+  if (!['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR'].includes(estado)) {
+    throw new Error('El Anexo 8A requiere cuadro ADJUDICADO o GENERADO');
+  }
+  const sc = await loadSolicitudRow(row.solicitud_id);
+  const reqMap = await loadRequerimientosPorSolicitudes([row.solicitud_id]);
+  const datos = parseJson(row.datos_json, {});
+  const expediente = {
+    solicitud_codigo: sc.codigo,
+    denominacion: sc.denominacion || sc.objeto,
+    area_usuaria: sc.area_usuaria || '',
+    cmn: sc.cmn || '',
+    requerimientos: reqMap.get(row.solicitud_id) || [],
+  };
+  return {
+    cuadro: mapCuadroRow(row),
+    datos_json: datos,
+    matriz: datos,
+    adjudicacion: datos.adjudicacion || null,
+    expediente,
+    solicitud_codigo: sc.codigo,
+    cmn: sc.cmn || '',
+    area_usuaria: sc.area_usuaria || '',
+  };
+}
+
+/**
+ * Persiste PDF Anexo 8A. Incrementa versión si ya estaba GENERADO (antes de firma).
+ * No altera matriz económica ni ganador.
+ */
+export async function guardarPdfCuadro(cuadroId, payload = {}, usuario = '') {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+  if (!curRows.length) throw new Error('Cuadro no encontrado');
+  const cur = curRows[0];
+  const estado = String(cur.estado || '').toUpperCase();
+  if (estado === 'FIRMADO') {
+    throw new Error('Cuadro firmado: no se puede regenerar el PDF sin anular la versión');
+  }
+  if (['DERIVADO_CCP', 'ANULADO'].includes(estado)) {
+    throw new Error(`El cuadro en estado ${estado} no admite generación de PDF`);
+  }
+  if (!['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR'].includes(estado)) {
+    throw new Error('Debe adjudicar el cuadro antes de generar el Anexo 8A');
+  }
+
+  const base64 = payload.pdf_contenido || payload.base64 || payload.contenido_base64;
+  if (!base64) throw new Error('PDF vacío');
+  const nombre = String(payload.pdf_nombre || payload.nombre || 'Anexo_08A.pdf').slice(0, 300);
+  const user = String(usuario || '').slice(0, 150);
+  const datos = parseJson(cur.datos_json, {});
+  const hist = Array.isArray(datos.pdf_versiones) ? [...datos.pdf_versiones] : [];
+  if (cur.pdf_nombre || cur.pdf_contenido) {
+    hist.push({
+      version: cur.version,
+      pdf_nombre: cur.pdf_nombre,
+      generado_at: cur.actualizado_at,
+      generado_por: cur.actualizado_por,
+    });
+  }
+  // No guardar base64 histórico completo (solo metadata); vigente en columnas
+  datos.pdf_versiones = hist.slice(-20);
+  datos.pdf_meta = {
+    nombre,
+    generado_at: new Date().toISOString(),
+    generado_por: user,
+    vigente: true,
+  };
+
+  const bumpVersion = estado === 'GENERADO' || estado === 'GENERADO_PRELIMINAR';
+  const nextVersion = bumpVersion ? Number(cur.version || 1) + 1 : Number(cur.version || 1);
+
+  const { rows } = await query(`
+    UPDATE cuadros_comparativos
+    SET pdf_nombre = $2,
+        pdf_contenido = $3,
+        datos_json = $4::jsonb,
+        estado = 'GENERADO',
+        version = $5,
+        actualizado_por = $6,
+        actualizado_at = NOW()
+    WHERE id = $1
+    RETURNING id, solicitud_id, tipo, version, estado, pdf_nombre,
+      proveedor_ganador_id, criterio_seleccion, valor_adjudicado,
+      creado_por, actualizado_por, creado_at, actualizado_at
+  `, [id, nombre, base64, JSON.stringify(datos), nextVersion, user]);
+
+  await registrarTrazaPortal({
+    solicitud_id: cur.solicitud_id,
+    proveedor_id: cur.proveedor_ganador_id || null,
+    evento: 'CUADRO_COMPARATIVO_GENERADO',
+    detalle: JSON.stringify({
+      cuadro_id: id,
+      pdf_nombre: nombre,
+      version: nextVersion,
+      usuario: user,
+      fecha: new Date().toISOString(),
+    }).slice(0, 2000),
+    usuario: user,
+  });
+
+  return {
+    cuadro: mapCuadroRow({ ...rows[0], datos_json: datos, pdf_contenido: undefined }),
+    pdf_nombre: nombre,
+    version: nextVersion,
+    estado: 'GENERADO',
+    saved: true,
+  };
+}
+
+export async function resolverPdfCuadro(cuadroId) {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  const { rows } = await query(`
+    SELECT id, pdf_nombre, pdf_contenido, estado, version
+    FROM cuadros_comparativos WHERE id = $1
+  `, [id]);
+  if (!rows.length) throw new Error('Cuadro no encontrado');
+  const row = rows[0];
+  if (!row.pdf_contenido) throw new Error('PDF del Anexo 8A no encontrado');
+  return {
+    nombre_archivo: row.pdf_nombre || 'Anexo_08A.pdf',
+    mime_type: 'application/pdf',
+    contenido_base64: row.pdf_contenido,
+    version: row.version,
+    estado: row.estado,
+  };
 }
 

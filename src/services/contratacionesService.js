@@ -194,6 +194,15 @@ export const contratacionesService = {
   async listCuadroVersiones(solicitudId) {
     return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/versiones`);
   },
+  async getCuadroPdfData(cuadroId) {
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/pdf-data`);
+  },
+  async guardarCuadroPdf(cuadroId, body = {}) {
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/pdf`, body);
+  },
+  async getCuadroPdfUrl(cuadroId, inline = true) {
+    return `/api/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/pdf${inline ? '?inline=1' : ''}`;
+  },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');
   },

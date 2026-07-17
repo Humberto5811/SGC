@@ -47,6 +47,9 @@ import {
   guardarBorradorCuadro,
   guardarAdjudicacionCuadro,
   listarVersionesCuadro,
+  obtenerDatosPdfCuadro,
+  guardarPdfCuadro,
+  resolverPdfCuadro,
 } from '../lib/cuadroComparativo.js';
 import {
   getSolicitudDetalleProveedor,
@@ -522,5 +525,32 @@ portalAnalistaRouter.get('/cuadro-comparativo/:solicitudId/versiones', async (re
   try {
     const data = await listarVersionesCuadro(req.params.solicitudId);
     res.json({ data });
+  } catch (err) { next(err); }
+});
+
+/** RC8.4 — Anexo 8A PDF */
+portalAnalistaRouter.get('/cuadro-comparativo/cuadro/:cuadroId/pdf-data', async (req, res, next) => {
+  try {
+    const data = await obtenerDatosPdfCuadro(req.params.cuadroId);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/pdf', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await guardarPdfCuadro(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cuadro-comparativo/cuadro/:cuadroId/pdf', async (req, res, next) => {
+  try {
+    const adj = await resolverPdfCuadro(req.params.cuadroId);
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    const inline = req.query.inline === '1';
+    res.setHeader('Content-Type', adj.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(adj.nombre_archivo || 'Anexo_08A.pdf')}"`);
+    res.send(buf);
   } catch (err) { next(err); }
 });
