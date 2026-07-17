@@ -1,5 +1,5 @@
 /**
- * Modal Validar — RC7.7A.1 (compactación, tabla proveedores, derivar corregido).
+ * Modal Validar — RC7.7A + RC7.7B (formatos institucionales Bienes/Servicios).
  */
 import { contratacionesService } from '../services/contratacionesService.js';
 import { authService } from '../services/authService.js';
@@ -13,6 +13,12 @@ import {
   formatFaltantesHtml,
   resolverDestinoCliente,
 } from './validacionesDerivarLogic.js';
+import {
+  renderMatrizValidacion,
+  collectMatrizFromDom,
+  bindMatrizUi,
+} from './validacionMatrizUi.js';
+import { buildValidationReportData } from './validacionReportData.js';
 
 export { canDerivarValidacion, buildExpedienteLineaCompacta, formatFaltantesHtml, resolverDestinoCliente };
 
@@ -143,11 +149,34 @@ function renderExpedienteLinea(d) {
     </div>`;
 }
 
-function renderProveedoresTable(filas, selectedKey) {
+function renderProveedoresTable(filas, viewingKey) {
   if (!filas?.length) {
     return '<div class="alert alert-light border small mb-0">No hay empresas en validación para esta solicitud.</div>';
   }
   return `
+    <style>
+      .val-prov-table tr.val-prov-viewing > td,
+      .val-prov-table tr.val-prov-viewing > th {
+        background-color: #cff4fc !important;
+        --bs-table-bg: #cff4fc;
+        --bs-table-bg-state: #cff4fc;
+        --bs-table-accent-bg: #cff4fc;
+      }
+      .val-prov-table tr.val-prov-viewing:hover > td {
+        background-color: #b6effb !important;
+      }
+      .val-prov-table .val-prov-desc {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        max-width: 100%;
+      }
+      .val-prov-table .val-prov-badge {
+        display: inline-block;
+        margin-top: .2rem;
+      }
+    </style>
     <div class="table-responsive val-prov-scroll" style="max-height:280px">
       <table class="table table-sm table-hover table-bordered align-middle mb-0 val-prov-table">
         <thead class="table-light sticky-top">
@@ -157,24 +186,26 @@ function renderProveedoresTable(filas, selectedKey) {
             <th style="width:12%">Requerimiento</th>
             <th style="width:32%">Descripción</th>
             <th style="width:10%">Centro</th>
-            <th style="width:14%">Acción</th>
+            <th style="width:14%">Documentos</th>
           </tr>
         </thead>
         <tbody>
           ${filas.map((p) => {
             const key = `${p.cotizacion_id}:${p.requerimiento_id || ''}`;
-            const sel = key === selectedKey;
+            const viewing = key === viewingKey;
             const desc = p.descripcion || '—';
             return `
-              <tr class="${sel ? 'table-primary' : ''}" data-row-key="${esc(key)}"
+              <tr class="${viewing ? 'val-prov-viewing table-info' : ''}" data-row-key="${esc(key)}"
                 data-cot-id="${p.cotizacion_id}" data-req-id="${p.requerimiento_id || ''}"
-                data-req-codigo="${esc(p.requerimiento_codigo || '')}">
-                <td class="small fw-semibold">${esc(p.razon_social || '—')}</td>
+                data-req-codigo="${esc(p.requerimiento_codigo || '')}"
+                data-viewing="${viewing ? '1' : '0'}">
+                <td class="small fw-semibold">${esc(p.razon_social || '—')}
+                  ${viewing ? '<span class="badge bg-info-subtle text-info border val-prov-badge">Documentos en vista</span>' : ''}
+                </td>
                 <td class="small">${esc(p.ruc || '—')}</td>
                 <td class="small">${esc(p.requerimiento_codigo || '—')}</td>
-                <td class="small" title="${esc(desc)}"
-                  style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
-                  ${esc(desc)}
+                <td class="small" title="${esc(desc)}">
+                  <div class="val-prov-desc">${esc(desc)}</div>
                 </td>
                 <td class="small">${esc(p.centro || '—')}</td>
                 <td>
@@ -183,7 +214,8 @@ function renderProveedoresTable(filas, selectedKey) {
                     data-req-id="${p.requerimiento_id || ''}"
                     data-req-codigo="${esc(p.requerimiento_codigo || '')}"
                     data-razon="${esc(p.razon_social || '')}"
-                    data-ruc="${esc(p.ruc || '')}">
+                    data-ruc="${esc(p.ruc || '')}"
+                    title="Solo visualiza documentos; no selecciona ganador">
                     <i class="bi bi-eye"></i> Ver documentos
                   </button>
                 </td>
@@ -196,42 +228,42 @@ function renderProveedoresTable(filas, selectedKey) {
 
 function renderDocsPanel(meta, docsCot, docsReq) {
   const rows = [
-    ...(docsCot || []).map((d) => ({ ...d, _kind: 'cot' })),
-    ...(docsReq || []).map((d) => ({ ...d, _kind: 'req' })),
+    ...(docsCot || []).map((d) => ({ ...d, _kind: 'cot', _cat: 'Técnico proveedor' })),
+    ...(docsReq || []).map((d) => ({ ...d, _kind: 'req', _cat: 'Requerimiento' })),
   ];
   return `
-    <div class="border rounded p-2 mt-3" id="valDocsPanel">
-      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <div class="border rounded p-2 mt-2" id="valDocsPanel">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
         <div class="small">
-          <span class="badge bg-primary-subtle text-primary border me-1">Proveedor seleccionado</span>
+          <span class="badge bg-info-subtle text-info border me-1">En visualización</span>
           <strong>${esc(meta.razon_social)}</strong>
           <span class="text-muted"> · RUC ${esc(meta.ruc)}</span>
           <span class="text-muted"> · ${esc(meta.requerimiento_codigo || '—')}</span>
         </div>
-        <button type="button" class="btn btn-sm btn-outline-secondary" data-val-ui="cerrar-docs">Cerrar panel</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-val-ui="cerrar-docs">Cerrar documentos</button>
       </div>
       ${!rows.length
         ? '<div class="alert alert-warning small py-2 mb-0">No hay documentos para este proveedor y requerimiento.</div>'
-        : `<div class="table-responsive">
+        : `<div class="table-responsive val-docs-scroll" style="max-height:min(52vh,420px);overflow:auto">
             <table class="table table-sm table-bordered align-middle mb-0">
-              <thead class="table-light">
+              <thead class="table-light sticky-top">
                 <tr>
-                  <th>Documento</th><th>Tipo</th><th>Fecha</th><th>Tamaño</th><th>Estado</th><th style="width:140px">Acciones</th>
+                  <th>Documento</th><th>Categoría</th><th>Tipo</th><th>Fecha</th><th>Estado</th><th style="width:150px">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 ${rows.map((d) => {
                   const isReq = d._kind === 'req' || d.fuente === 'Requerimiento' || String(d.ref || '').startsWith('req_adj_');
                   const actions = isReq
-                    ? `<button type="button" class="btn btn-sm btn-outline-secondary val-req-ver" data-adj-id="${d.id}" data-nombre="${esc(d.nombre)}">Ver</button>
+                    ? `<button type="button" class="btn btn-sm btn-outline-secondary val-req-ver" data-adj-id="${d.id}" data-nombre="${esc(d.nombre)}" data-mime="${esc(d.mime_type || '')}">Ver</button>
                        <button type="button" class="btn btn-sm btn-outline-primary val-req-dl" data-adj-id="${d.id}" data-nombre="${esc(d.nombre)}">Descargar</button>`
                     : `<button type="button" class="btn btn-sm btn-outline-secondary val-cot-ver" data-cot-id="${meta.cotizacion_id}" data-ref="${esc(d.ref)}">Ver</button>
                        <button type="button" class="btn btn-sm btn-outline-primary val-cot-dl" data-cot-id="${meta.cotizacion_id}" data-ref="${esc(d.ref)}">Descargar</button>`;
                   return `<tr>
                     <td class="small">${esc(d.nombre)}</td>
-                    <td class="small">${esc(d.tipo || d.grupo || d.fuente || '—')}</td>
+                    <td class="small">${esc(d._cat)}</td>
+                    <td class="small">${esc(d.tipo || d.grupo || d.mime_type || d.fuente || '—')}</td>
                     <td class="small">${esc(fmtFecha(d.fecha || d.created_at))}</td>
-                    <td class="small">${esc(fmtBytes(d.tamaño_bytes))}</td>
                     <td class="small"><span class="badge bg-secondary">${esc(d.estado || 'Presentado')}</span></td>
                     <td><div class="btn-group btn-group-sm">${actions}</div></td>
                   </tr>`;
@@ -292,8 +324,10 @@ function collectFormulario(prefix, baseForm) {
     profesional: baseForm.profesional || '',
     producto_adquisicion: baseForm.producto_adquisicion,
     resultado_global: document.getElementById(`${prefix}_resGlobal`)?.value || '',
-    observacion_global: document.getElementById(`${prefix}_obsGlobal`)?.value || '',
-    sustento: document.getElementById(`${prefix}_sustento`)?.value || '',
+    observacion_global: document.getElementById(`${prefix}_obsGlobal`)?.value
+      || (baseForm.items || []).map((it) => it.obs_validacion).filter(Boolean).join(' | ')
+      || '',
+    sustento: '',
     cumple: document.getElementById(`${prefix}_cumple`)?.value || '',
   };
 }
@@ -343,7 +377,7 @@ function bindDocButtons(container, onErr) {
   container.querySelectorAll('.val-req-ver').forEach((btn) => {
     btn.onclick = async () => {
       try { await openReqAdjunto(btn.dataset.adjId, btn.dataset.nombre, true); }
-      catch (err) { onErr(err.message); }
+      catch (err) { onErr(err.message || 'No se pudo previsualizar'); }
     };
   });
   container.querySelectorAll('.val-req-dl').forEach((btn) => {
@@ -546,6 +580,9 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
     estadoValidacion: '',
     derivado: false,
     destinoOficial: null,
+    matriz_v2: null,
+    tipoFormato: null,
+    checkMatriz: null,
     esAdmin,
     selectedKey: '',
     cacheDetalle: new Map(),
@@ -556,8 +593,21 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
   const footerMsg = () => document.getElementById(`${id}_footerMsg`);
 
   const syncStateFromForm = () => {
-    const f = state.detalle?.formulario_07a;
-    state.formulario = f ? collectFormulario(id, f) : state.formulario;
+    if (state.matriz_v2?.filas) {
+      const collected = collectMatrizFromDom(id, state.matriz_v2);
+      state.matriz_v2 = collected.matriz_v2;
+      state.formulario = {
+        ...collected.formulario_07a,
+        producto_adquisicion: state.detalle?.descripcion || state.detalle?.denominacion || '',
+        profesional: collected.formulario_07a.profesional
+          || state.detalle?.formulario_07a?.profesional
+          || state.usuarioActual,
+      };
+      state.checkMatriz = collected.checkCompleta;
+    } else {
+      const f = state.detalle?.formulario_07a;
+      state.formulario = f ? collectFormulario(id, f) : state.formulario;
+    }
     if (state.formulario) {
       state.resultado = state.formulario.resultado_global || '';
       state.observaciones = state.formulario.observacion_global || '';
@@ -639,10 +689,16 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
     const host = document.getElementById(`${id}_docsHost`);
     if (!host || !state.detalle) return;
     const filas = state.detalle.proveedores_solicitud || [];
+    const hayVista = !!state.selectedKey;
     host.innerHTML = `
-      <h6 class="fw-semibold mb-2">Empresas que presentaron cotización</h6>
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+        <h6 class="fw-semibold mb-0">Empresas que presentaron cotización</h6>
+        <span class="small text-muted">Pulse <strong>Ver documentos</strong> para revisar la documentación de cada proveedor</span>
+      </div>
       ${renderProveedoresTable(filas, state.selectedKey)}
-      <div id="${id}_docsPanelHost"></div>`;
+      <div id="${id}_docsPanelHost" class="mt-2">
+        ${hayVista ? '' : '<p class="small text-muted mb-0 mt-2">No hay documentación abierta. Seleccione un proveedor con el botón Ver documentos.</p>'}
+      </div>`;
   };
 
   async function loadProveedorDocs(btn) {
@@ -677,6 +733,7 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
         razon_social: btn.dataset.razon || detalle.razon_social,
         ruc: btn.dataset.ruc || detalle.ruc,
         requerimiento_codigo: reqCodigo || detalle.requerimientos,
+        viewing_only: true,
       }, docsCot, docsReq);
       bindDocButtons(panelHost, (msg) => showErr(id, msg));
       panelHost.querySelector('[data-val-ui="cerrar-docs"]')?.addEventListener('click', () => {
@@ -695,13 +752,40 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
 
   async function renderBody() {
     const d = state.detalle;
-    const f = d.formulario_07a;
+    const f = d.formulario_07a || {};
     const readonly = !d.puede_editar || !!d.ya_derivado;
+    state.matriz_v2 = d.matriz_v2 || state.matriz_v2;
+    state.tipoFormato = d.tipo_formato || state.tipoFormato;
+
+    const matrizHtml = renderMatrizValidacion({
+      prefix: id,
+      matriz_v2: state.matriz_v2,
+      tipoFormato: state.tipoFormato || d.tipo_contratacion,
+      readonly,
+      meta: {
+        fecha: f.fecha || new Date().toLocaleDateString('es-PE'),
+        profesional: f.profesional || state.usuarioActual,
+        sustento: f.sustento || '',
+        observacion_global: f.observacion_global || '',
+      },
+    });
+
+    const obsRet = d.observacion_retorno;
+    const obsBanner = obsRet?.texto
+      ? `<div class="alert alert-warning small py-2 mb-2">
+          <i class="bi bi-exclamation-triangle"></i>
+          <strong>Observación del analista</strong>
+          (${esc(obsRet.usuario || '—')} · ${esc(fmtFecha(obsRet.fecha))}):
+          ${esc(obsRet.texto)}
+          ${obsRet.estado_anterior ? `<span class="text-muted"> · Estado previo: ${esc(obsRet.estado_anterior)}</span>` : ''}
+        </div>`
+      : '';
 
     body.innerHTML = `
       <div class="alert alert-info small py-2 mb-2">
         <i class="bi bi-info-circle"></i> Solo evaluación técnica. La propuesta económica no está disponible para el área usuaria.
       </div>
+      ${obsBanner}
       <ul class="nav nav-tabs mb-2" role="tablist">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#${id}_tabDocs" type="button">Revisión de documentos</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#${id}_tabReg" type="button">Registro validación</button></li>
@@ -712,41 +796,7 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
           <div id="${id}_docsHost"></div>
         </div>
         <div class="tab-pane fade" id="${id}_tabReg">
-          <h6 class="fw-semibold">Registro de Validación</h6>
-          <div class="table-responsive mb-2" id="${id}_form">
-            <table class="table table-bordered table-sm mb-0" style="font-size:0.75rem">
-              <thead class="table-primary text-center align-middle">
-                <tr>
-                  <th>Ítem</th><th>Nº REQ</th><th>Descripción</th><th>Cant.</th>
-                  <th>Marca</th><th>Proced.</th><th>Inserto</th><th>Cert.</th><th>Obs.rec.</th>
-                  <th>Doc.oblig.</th><th>Vigencia</th><th>Plazo</th><th>Resultado</th><th>Obs.valid.</th>
-                </tr>
-              </thead>
-              <tbody>${(f.items || []).map((it, idx) => renderFormRow(it, idx, readonly)).join('')}</tbody>
-            </table>
-          </div>
-          <div class="row g-2">
-            <div class="col-md-4">
-              <label class="form-label small fw-semibold">Resultado de validación</label>
-              <select class="form-select form-select-sm" id="${id}_resGlobal" ${readonly ? 'disabled' : ''}>
-                ${RESULTADO_OPTS.map((o) => `<option value="${esc(o)}"${o === f.resultado_global ? ' selected' : ''}>${esc(o || 'Seleccione…')}</option>`).join('')}
-              </select>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label small fw-semibold">Cumple / No cumple</label>
-              <select class="form-select form-select-sm" id="${id}_cumple" ${readonly ? 'disabled' : ''}>
-                ${CUMPLE_GLOBAL_OPTS.map((o) => `<option value="${esc(o)}"${o === f.cumple ? ' selected' : ''}>${esc(o || 'Seleccione…')}</option>`).join('')}
-              </select>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label small fw-semibold">Sustento</label>
-              <input class="form-control form-control-sm" id="${id}_sustento" value="${esc(f.sustento)}" ${readonly ? 'readonly' : ''}>
-            </div>
-            <div class="col-12">
-              <label class="form-label small fw-semibold">Observaciones técnicas</label>
-              <textarea class="form-control form-control-sm" id="${id}_obsGlobal" rows="2" ${readonly ? 'readonly' : ''}>${esc(f.observacion_global)}</textarea>
-            </div>
-          </div>
+          <div id="${id}_form">${matrizHtml}</div>
           <div id="${id}_pdfInfo" class="small mt-2 text-muted">Sin PDF firmado adjunto aún.</div>
           ${d.ya_derivado && d.destino_salida
             ? `<p class="small text-success mt-2 mb-0"><i class="bi bi-check2-circle"></i> ${esc(d.destino_salida.estado_bandeja || d.estado_bandeja)}</p>`
@@ -758,18 +808,28 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
 
     setFooterEnabled(!readonly);
     paintPdf();
+    // Solo lista de proveedores; documentos se cargan al pulsar "Ver documentos"
+    state.selectedKey = '';
     paintProveedores();
 
-    // Delegación única en docsHost
     document.getElementById(`${id}_docsHost`)?.addEventListener('click', (ev) => {
       const btn = ev.target.closest('.val-ver-docs');
       if (btn) loadProveedorDocs(btn);
     });
 
-    body.querySelectorAll('select,input,textarea').forEach((el2) => {
-      el2.addEventListener('change', () => { hideFooterMsg(); syncDerivarBtn(); });
-      el2.addEventListener('input', () => { syncDerivarBtn(); });
+    bindMatrizUi(id, {
+      readonly,
+      onChange: () => { hideFooterMsg(); syncDerivarBtn(); },
+      onDocsClick: (btn) => {
+        const tabBtn = body.querySelector(`[data-bs-target="#${id}_tabDocs"]`);
+        if (tabBtn && window.bootstrap?.Tab) {
+          window.bootstrap.Tab.getOrCreateInstance(tabBtn).show();
+        }
+        loadProveedorDocs(btn);
+      },
     });
+
+    syncStateFromForm();
     syncDerivarBtn();
   }
 
@@ -783,6 +843,12 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
     if (state.derivando) return;
 
     syncStateFromForm();
+    if (state.checkMatriz && !state.checkMatriz.ok) {
+      const msg = `No se puede derivar el expediente.<ul class="mb-0 mt-1">${(state.checkMatriz.errores || []).map((e) => `<li>${esc(e)}</li>`).join('')}</ul>`;
+      showFooterMsg(msg, true);
+      showErr(id, (state.checkMatriz.errores || []).join(' '));
+      return;
+    }
     const check = canDerivarValidacion(state);
     if (!check.ok) {
       showFooterMsg(formatFaltantesHtml(check), true);
@@ -807,6 +873,7 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
           try {
             const resp = await contratacionesService.enviarValidacion(cotizacionId, {
               formulario_07a: form,
+              matriz_v2: state.matriz_v2,
               pdf_firmado: state.pdfAdjunto || state.documentoFirmado,
               resultado: form.resultado_global || state.resultado,
               observacion: form.observacion_global || state.observaciones,
@@ -882,7 +949,28 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
     if (act === 'pdf') {
       hideErr(id);
       try {
-        downloadAnexo07A({ solicitud: state.detalle, formulario: syncStateFromForm() });
+        const form = syncStateFromForm();
+        const report = buildValidationReportData(state.detalle || {}, {
+          matriz_v2: state.matriz_v2,
+          formulario_07a: form,
+        });
+        downloadAnexo07A({
+          solicitud: {
+            ...state.detalle,
+            tipo_formato: report.tipoKey,
+            tipo_contratacion: state.detalle?.tipo_contratacion || report.cabecera.tipo_label,
+            area_usuaria: report.cabecera.area_usuaria,
+            requerimientos: report.cabecera.requerimientos,
+            descripcion: report.cabecera.descripcion,
+            razon_social: report.cabecera.proveedor,
+            ruc: report.cabecera.ruc,
+          },
+          formulario: {
+            ...report.formulario_07a,
+            lugar: 'Chorrillos',
+          },
+          matriz_v2: { ...report.matriz_v2, tipo: report.tipoKey },
+        });
       } catch (err) { showErr(id, err.message); showFooterMsg(esc(err.message)); }
       return;
     }
@@ -909,6 +997,7 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
         const form = syncStateFromForm();
         await contratacionesService.guardarValidacionParcial(state.cotId, {
           formulario_07a: form,
+          matriz_v2: state.matriz_v2,
           pdf_firmado: state.pdfAdjunto?.base64 ? state.pdfAdjunto : undefined,
         }, esAdmin);
         showOk(id, 'Avance guardado correctamente.');
@@ -924,6 +1013,8 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
     state.detalle = resp.data;
     state.pdfAdjunto = resp.data.pdf_firmado || null;
     state.documentoFirmado = state.pdfAdjunto;
+    state.matriz_v2 = resp.data.matriz_v2 || null;
+    state.tipoFormato = resp.data.tipo_formato || null;
     state.cotizacionId = resp.data.id || cotIdInicial;
     state.cotId = state.cotizacionId;
     state.solicitudId = resp.data.solicitud_id || null;

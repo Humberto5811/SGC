@@ -29,14 +29,20 @@ export function resolverDestinoCliente(resultado, cumple) {
   return { code: 'RECEPCION_COTIZACIONES', label: 'Recepción de Cotizaciones', estado };
 }
 
+function obsDesdeMatriz(matriz) {
+  return (matriz?.filas || [])
+    .map((f) => String(f?.evaluacion?.observaciones || f?.observaciones || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+}
+
 const LABEL_FALTANTE = {
   cotizacionId: 'Falta identificador de cotización.',
   expediente: 'Expediente no cargado.',
   autorizacion: 'Usuario no autorizado para derivar.',
   ya_derivado: 'El expediente ya fue derivado anteriormente.',
   resultado: 'Falta registrar el resultado.',
-  observaciones: 'Falta completar observaciones.',
-  sustento: 'Falta completar observaciones o sustento.',
+  observaciones: 'Falta completar observaciones en la matriz (resultado negativo).',
   pdf_firmado: 'Falta adjuntar el PDF firmado.',
   destino: 'No se pudo resolver el destino oficial.',
 };
@@ -69,17 +75,19 @@ export function canDerivarValidacion(state) {
 
   const form = state.formulario || {};
   const resultado = state.resultado ?? form.resultado_global ?? '';
-  const observaciones = state.observaciones ?? form.observacion_global ?? '';
   const cumple = state.cumple ?? form.cumple ?? '';
-  const sustento = state.sustento ?? form.sustento ?? '';
+  const observaciones = state.observaciones
+    || form.observacion_global
+    || obsDesdeMatriz(state.matriz_v2)
+    || '';
 
   if (!resultado) missing.push('resultado');
-  if (!String(observaciones || '').trim()) missing.push('observaciones');
 
   const noCumple = String(cumple || '').toLowerCase().includes('no')
     || /no\s*válid/i.test(String(resultado || ''));
-  if (noCumple && !String(sustento || '').trim() && !String(observaciones || '').trim()) {
-    if (!missing.includes('observaciones')) missing.push('sustento');
+  // Observaciones solo obligatorias cuando el resultado es negativo (columnas de la matriz)
+  if (noCumple && !String(observaciones || '').trim()) {
+    missing.push('observaciones');
   }
 
   const pdf = state.documentoFirmado || state.pdfAdjunto;

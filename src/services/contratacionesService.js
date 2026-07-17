@@ -157,6 +157,9 @@ export const contratacionesService = {
   async derivarValidacion(id, body) {
     return api.post(`/contrataciones/portal-analista/validaciones/${id}/derivar`, body);
   },
+  async devolverValidacion(id, body) {
+    return api.post(`/contrataciones/portal-analista/validaciones/${id}/devolver`, body);
+  },
   async getValidacionTrabajo(id, esAdmin = false) {
     return api.get(`/contrataciones/portal-analista/validaciones/${id}/trabajo${esAdmin ? '?admin=1' : ''}`);
   },
@@ -168,6 +171,13 @@ export const contratacionesService = {
   },
   async listCuadroComparativo() {
     return api.get('/contrataciones/portal-analista/cuadro-comparativo');
+  },
+  /** RC8.1 — bandeja agrupada por Solicitud de Cotización */
+  async listCuadroComparativoExpedientes() {
+    return api.get('/contrataciones/portal-analista/cuadro-comparativo/expedientes');
+  },
+  async getCuadroComparativoExpediente(solicitudId) {
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/expedientes/${solicitudId}`);
   },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');

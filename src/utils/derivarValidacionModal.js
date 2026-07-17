@@ -151,6 +151,11 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
             <option value="">Seleccione área usuaria primero…</option>
           </select>
         </div>
+        <div class="col-12">
+          <label class="form-label fw-semibold">Observación ${opts.requireObservacion ? '(obligatoria)' : '(opcional al devolver)'}</label>
+          <textarea class="form-control form-control-sm" id="${id}_obs" rows="2"
+            placeholder="Motivo de devolución / observación para el Área Usuaria"></textarea>
+        </div>
       </div>
       <div id="${id}_err" class="alert alert-danger d-none py-2 mt-2 mb-0"></div>`;
     bindDocButtons(body);
@@ -186,7 +191,13 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
     btnEnviar.onclick = async () => {
       const sub = submodulos.find((s) => s.code === selSub.value);
       const u = usuarios.find((x) => String(x.id) === String(selResp.value));
+      const obs = String(document.getElementById(`${id}_obs`)?.value || '').trim();
       if (!sub || !u) return;
+      if (opts.requireObservacion && !obs) {
+        errBox.textContent = 'Indique la observación para devolver al Área Usuaria';
+        errBox.classList.remove('d-none');
+        return;
+      }
       btnEnviar.disabled = true;
       errBox.classList.add('d-none');
       try {
@@ -195,6 +206,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
           submodulo_label: sub.label,
           responsable_id: u.id,
           responsable_nombre: u.nombre,
+          observacion: obs,
           usuario: getUserDisplayName(authService.getCurrentUser()),
         });
         modal.hide();

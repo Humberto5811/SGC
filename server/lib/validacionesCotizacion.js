@@ -7,6 +7,17 @@ import {
   parseCotizacionAnexos,
 } from './portalDocumentos.js';
 import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
+import {
+  normalizeTipoValidacion,
+  legacyItemToEvaluacion,
+  filasV2ToLegacyItems,
+  calcularResultadoCotizacion,
+  validarMatrizCompleta,
+} from './validacionFormatos.js';
+import {
+  resolveValidationCentro,
+  consolidateCentros,
+} from '../../shared/validacionCentro.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'REGISTRO_REQUERIMIENTO', label: 'Registro de Requerimiento' },
@@ -277,7 +288,16 @@ function normalizeTipoContratacion(tipo) {
 
 async function loadRequerimientosSolicitud(solicitudId) {
   const { rows } = await query(`
-    SELECT r.id, r.codigo, r.denominacion, r.area, r.cmn
+    SELECT r.id, r.codigo, r.denominacion, r.area, r.cmn, r.payload,
+      COALESCE(
+        NULLIF(TRIM(r.cmn), ''),
+        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'cmn'), ''),
+        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro'), ''),
+        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_costo'), ''),
+        NULLIF(TRIM(r.area), ''),
+        ''
+      ) AS centro,
+      NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_costo'), '') AS centro_costo
     FROM solicitud_requerimientos sr
     JOIN requerimientos r ON r.id = sr.requerimiento_id
     WHERE sr.solicitud_id = $1
@@ -319,7 +339,14 @@ export function estadoDisplayRecepcion(validacionEstado) {
 
 export function puedeEnviarAValidacion(validacionEstado) {
   const v = String(validacionEstado || '').toUpperCase();
-  return !v || v === 'PENDIENTE';
+  // Primera derivación o devolución del analista (APTO/NO_APTO/OBSERVADO con observación).
+  return !v || v === 'PENDIENTE' || v === 'OBSERVADO' || v === 'NO_APTO' || v === 'APTO';
+}
+
+/** Estados en los que el Área Usuaria puede editar/guardar. */
+export function esEstadoEditableValidacion(validacionEstado) {
+  const v = String(validacionEstado || '').toUpperCase();
+  return ['DERIVADA', 'EN_PROCESO'].includes(v);
 }
 
 export function getSubmodulosValidacion() {
@@ -417,7 +444,7 @@ export async function listarProveedoresSolicitudValidacion(solicitudId, usuario,
         requerimiento_codigo: req.codigo || '',
         requerimientos: req.codigo || '',
         descripcion: req.denominacion || r.denominacion || r.objeto || '',
-        centro: req.cmn || req.area || '',
+        centro: req.centro || req.cmn || req.area || '',
         puede_validar: perm.puedeValidar,
         puede_ver: perm.puedeVer,
         sin_asignacion: perm.sinAsignacion,
@@ -487,11 +514,13 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
       AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
     ORDER BY
-      CASE cot.validacion_estado
-        WHEN 'DERIVADA' THEN 1 WHEN 'EN_PROCESO' THEN 2
-        WHEN 'OBSERVADO' THEN 3 WHEN 'NO_APTO' THEN 4 ELSE 5
-      END,
-      cot.updated_at DESC
+      COALESCE(
+        NULLIF(cot.validacion_informe->'derivacion'->>'derivado_at', '')::timestamptz,
+        cot.updated_at,
+        cot.fecha_presentacion,
+        cot.created_at
+      ) DESC NULLS LAST,
+      cot.id DESC
   `);
   const esAdmin = !!opts.esAdmin;
   const authOpts = { esAdmin, usuarioNombre: usuario };
@@ -538,60 +567,252 @@ export async function getPreviewDerivacionValidacion(cotizacionId) {
   };
 }
 
-async function buildItemsFormulario07a(cot) {
+async function loadReqMetaMap(solicitudId) {
+  const reqs = await loadRequerimientosSolicitud(solicitudId);
+  const map = new Map();
+  reqs.forEach((r) => {
+    map.set(r.id, {
+      codigo: r.codigo,
+      denominacion: r.denominacion,
+      centro: r.centro || r.cmn || r.area || '',
+      centro_costo: r.centro_costo || '',
+      cmn: r.cmn || '',
+      area: r.area || '',
+    });
+  });
+  return map;
+}
+
+/** Centros de pedidos SIGAMEF vinculados a requerimientos de la solicitud. */
+async function loadPedidosCentroByReq(solicitudId) {
+  const { rows } = await query(`
+    SELECT rp.requerimiento_id,
+      NULLIF(TRIM(p.centro), '') AS centro,
+      NULLIF(TRIM(p.centro_costo), '') AS centro_costo,
+      NULLIF(TRIM(COALESCE(p.codigo_sigamef, '')), '') AS codigo_sigamef,
+      NULLIF(TRIM(COALESCE(p.pedido_sigamef, '')), '') AS pedido_sigamef
+    FROM solicitud_requerimientos sr
+    JOIN requerimiento_pedidos rp ON rp.requerimiento_id = sr.requerimiento_id
+    JOIN pedidos_sigamef p ON p.id = rp.pedido_sigamef_id
+    WHERE sr.solicitud_id = $1
+  `, [solicitudId]);
+  const byReq = new Map();
+  const byCodigo = new Map();
+  for (const r of rows) {
+    const entry = {
+      centro: r.centro || '',
+      centro_costo: r.centro_costo || '',
+      pedido_sigamef: r.pedido_sigamef || '',
+      codigo_sigamef: r.codigo_sigamef || '',
+    };
+    if (r.requerimiento_id) {
+      const prev = byReq.get(r.requerimiento_id);
+      if (!prev?.centro && entry.centro) byReq.set(r.requerimiento_id, entry);
+      else if (!prev) byReq.set(r.requerimiento_id, entry);
+    }
+    if (entry.codigo_sigamef && entry.centro && !byCodigo.has(entry.codigo_sigamef)) {
+      byCodigo.set(entry.codigo_sigamef, entry);
+    }
+  }
+  return { byReq, byCodigo };
+}
+
+/**
+ * Construye items legacy + matriz_v2 (RC7.7B) para una cotización/proveedor.
+ */
+async function buildMatrizValidacion(cot) {
   const items = parseJson(cot.detalle_items, []);
   const propItems = parseJson(cot.propuesta_tecnica, {}).items || [];
+  const tipoKey = normalizeTipoValidacion(cot.solicitud_tipo) || 'BIENES';
   const { rows: countRows } = await query(`
     SELECT COUNT(*)::int AS total FROM cotizaciones_proveedor
     WHERE solicitud_id = $1 AND estado = 'COTIZACION_PRESENTADA'
   `, [cot.solicitud_id]);
   const cantCot = countRows[0]?.total || 1;
+  const reqMeta = await loadReqMetaMap(cot.solicitud_id);
+  const pedidosCentro = await loadPedidosCentroByReq(cot.solicitud_id);
   const inf = parseInforme(cot);
-  const saved = inf.formulario_07a?.items || [];
+  const savedLegacy = inf.formulario_07a?.items || [];
+  const savedFilas = inf.matriz_v2?.filas || [];
+  const cabeceraCentro = String(
+    inf.cabecera_centro
+    || inf.formulario_07a?.centro
+    || '',
+  ).trim();
 
-  return items.map((it, idx) => {
+  const list = (items.length ? items : [{ requerimiento_id: cot.requerimiento_id, item_index: 0, cantidad: 1 }]);
+
+  const filas = list.map((it, idx) => {
     const itemKey = `${it.requerimiento_id}-${it.item_index ?? idx}`;
     const prop = propItems.find((p) => p.item_key === itemKey) || propItems[idx] || {};
-    const prev = saved.find((s) => s.item_key === itemKey) || {};
-    return {
-      item_key: itemKey,
+    const prevLegacy = savedLegacy.find((s) => s.item_key === itemKey) || {};
+    const prevFila = savedFilas.find((s) => s.item_key === itemKey) || {};
+    const meta = reqMeta.get(it.requerimiento_id) || {};
+    const nroReq = it.requerimiento_codigo || it.codigo || meta.codigo || '';
+    const codigoSiga = it.codigo_sigamef || it.codigo_siga || it.cmn || '';
+    const cantidad = it.cantidad != null && it.cantidad !== '' ? it.cantidad : (tipoKey === 'SERVICIOS' ? 1 : 1);
+    const um = it.unidad_medida || it.um || 'UND';
+    const ped = pedidosCentro.byReq.get(it.requerimiento_id)
+      || (codigoSiga ? pedidosCentro.byCodigo.get(String(codigoSiga)) : null)
+      || {};
+    const resolved = resolveValidationCentro({
+      requerimientoCentro: meta.centro || meta.cmn || meta.area || '',
+      pedidoCentro: ped.centro || '',
+      cabeceraCentro,
+      informeCentro: prevFila.automaticos?.centro || prevLegacy.centro || '',
+      itemCentro: it.centro || it.cmn || prop.centro || '',
+      centroCosto: meta.centro_costo || ped.centro_costo || prevFila.automaticos?.centro_costo || it.centro_costo || '',
+    });
+    if (resolved.warning) {
+      // Advertencia técnica (sin rutas ni datos sensibles)
+      console.warn('[validaciones] centro_no_resuelto', {
+        cotizacion_id: cot.id,
+        item_key: itemKey,
+        tiene_requerimiento_id: !!it.requerimiento_id,
+      });
+    }
+    const automaticos = {
       item: idx + 1,
-      nro_req: it.requerimiento_codigo || it.codigo || '',
-      codigo_sigamef: it.codigo_sigamef || it.cmn || '',
-      descripcion: it.descripcion || it.denominacion || '',
-      cantidad: it.cantidad ?? 1,
-      um: it.unidad_medida || it.um || 'UND',
+      nro_req: nroReq,
+      centro: resolved.centro,
+      centro_costo: resolved.centro_costo,
+      centro_fuente: resolved.fuente || '',
+      pedido_sigamef: ped.pedido_sigamef || it.pedido_sigamef || '',
+      codigo_siga: codigoSiga,
+      descripcion: it.descripcion || it.denominacion || meta.denominacion || '',
+      cantidad,
+      um,
       cant_cotizaciones: cantCot,
-      razon_social: cot.razon_social,
-      marca: prev.marca ?? prop.marca ?? '',
-      procedencia: prev.procedencia ?? prop.pais ?? '',
-      inserto: prev.inserto ?? '',
-      certificado: prev.certificado ?? '',
-      obs_specs: prev.obs_specs ?? '',
-      acredita_doc: prev.acredita_doc ?? '',
-      vigencia_minima_val: prev.vigencia_minima_val ?? '',
-      plazos_entrega_val: prev.plazos_entrega_val ?? '',
-      resultado: prev.resultado ?? '',
-      obs_validacion: prev.obs_validacion ?? '',
+      razon_social: cot.razon_social || '',
+      marca: prevFila.automaticos?.marca ?? prevLegacy.marca ?? prop.marca ?? '',
+      procedencia: prevFila.automaticos?.procedencia ?? prevLegacy.procedencia ?? prop.pais ?? prop.procedencia ?? '',
+    };
+    const evaluacion = prevFila.evaluacion
+      || legacyItemToEvaluacion(prevLegacy, tipoKey)
+      || {};
+    return {
+      cotizacion_id: cot.id,
+      proveedor_id: cot.proveedor_id,
+      requerimiento_id: it.requerimiento_id || null,
+      requerimiento_codigo: nroReq,
+      item_key: itemKey,
+      tipo: tipoKey,
+      automaticos,
+      evaluacion: {
+        ...emptyEvaluacion(tipoKey),
+        ...evaluacion,
+      },
+      resultado: evaluacion.resultado || '',
+      observaciones: evaluacion.observaciones || '',
     };
   });
+
+  // Items legacy (compat RC7.7)
+  const legacyItems = filasV2ToLegacyItems(filas, tipoKey).map((it, idx) => {
+    const f = filas[idx];
+    return {
+      ...it,
+      marca: f.automaticos.marca,
+      procedencia: f.automaticos.procedencia,
+      centro: f.automaticos.centro,
+      codigo_sigamef: f.automaticos.codigo_siga,
+    };
+  });
+
+  return {
+    tipoKey,
+    legacyItems,
+    matriz_v2: {
+      version: 2,
+      tipo: tipoKey,
+      cotizacion_id: cot.id,
+      proveedor_id: cot.proveedor_id,
+      solicitud_id: cot.solicitud_id,
+      filas,
+    },
+  };
+}
+
+function emptyEvaluacion(tipoKey) {
+  if (tipoKey === 'SERVICIOS') {
+    return {
+      plazo_ejecucion: '',
+      formacion_academica: '',
+      capacitacion_personal: '',
+      experiencia_personal: '',
+      experiencia_facturacion: '',
+      canal_autorizado: '',
+      resultado: '',
+      observaciones: '',
+    };
+  }
+  return {
+    inserto: '',
+    certificado: '',
+    obs_specs: '',
+    acredita_doc: '',
+    vigencia_minima: '',
+    plazos_entrega: '',
+    resultado: '',
+    observaciones: '',
+  };
+}
+
+async function buildItemsFormulario07a(cot) {
+  const built = await buildMatrizValidacion(cot);
+  return built.legacyItems;
 }
 
 export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOperador) {
-  const { submodulo, submodulo_label, responsable_id, responsable_nombre } = body || {};
+  const {
+    submodulo,
+    submodulo_label,
+    responsable_id,
+    responsable_nombre,
+    observacion,
+  } = body || {};
   if (!submodulo || !responsable_id || !responsable_nombre) {
     throw new Error('Submódulo y responsable son obligatorios');
   }
   const cot = await loadCotizacionFull(cotizacionId);
   if (String(cot.estado) !== 'COTIZACION_PRESENTADA') throw new Error('La cotización no está presentada');
-  const estadoActual = String(cot.validacion_estado || '');
-  if (estadoActual && !['', 'PENDIENTE'].includes(estadoActual)) {
+  const estadoActual = String(cot.validacion_estado || '').toUpperCase();
+  const esReapertura = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(estadoActual);
+  const obsTextoPre = String(observacion || body?.observacion_retorno || '').trim();
+
+  // Idempotencia: ya reabierto / en AU → no duplicar historial ni movimiento
+  if (['DERIVADA', 'EN_PROCESO'].includes(estadoActual)) {
+    return {
+      ...mapCotizacionRow({
+        ...cot,
+        ruc: cot.ruc,
+        razon_social: cot.razon_social,
+        solicitud_codigo: cot.solicitud_codigo,
+        denominacion: cot.denominacion,
+        objeto: cot.objeto,
+      }),
+      idempotente: true,
+      ya_en_validacion: true,
+      ok: true,
+    };
+  }
+
+  if (esReapertura && !obsTextoPre) {
+    throw new Error('La observación es obligatoria para devolver la validación al Área Usuaria');
+  }
+  if (estadoActual && !['', 'PENDIENTE', 'OBSERVADO', 'NO_APTO', 'APTO'].includes(estadoActual)) {
     throw new Error('La cotización ya fue derivada o validada');
   }
   const documentos = buildManifiestoCotizacionTecnica(cot);
   const sub = SUBMODULOS_VALIDACION.find((s) => s.code === submodulo) || { code: submodulo, label: submodulo_label || submodulo };
+  const prevInf = parseInforme(cot);
+  const obsTexto = obsTextoPre;
   const informe = {
-    ...parseInforme(cot),
+    ...prevInf,
+    // Conservar matriz/formulario previos al reabrir; limpiar solo salida.
+    derivacion_salida: null,
+    enviado_at: null,
+    enviado_por: null,
     derivacion: {
       submodulo: sub.code,
       submodulo_label: sub.label,
@@ -600,8 +821,31 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
       documentos_tecnicos: documentos,
       derivado_por: usuarioOperador,
       derivado_at: new Date().toISOString(),
+      reapertura: esReapertura,
     },
+    ...(esReapertura && obsTexto ? {
+      observacion_retorno: {
+        texto: obsTexto,
+        usuario: usuarioOperador,
+        fecha: new Date().toISOString(),
+        estado_anterior: estadoActual,
+        estado_nuevo: 'DERIVADA',
+      },
+    } : (esReapertura ? {} : { observacion_retorno: null })),
   };
+  const histEntry = {
+    tipo: esReapertura ? 'validacion_reapertura' : 'derivacion_validacion',
+    submodulo: sub.code,
+    responsable: responsable_nombre,
+    usuario: usuarioOperador,
+    observacion: obsTexto || undefined,
+    estado_anterior: estadoActual || 'PENDIENTE',
+    estado_nuevo: 'DERIVADA',
+    fecha: new Date().toISOString(),
+  };
+  const estadosPermitidos = esReapertura
+    ? ['OBSERVADO', 'NO_APTO', 'APTO']
+    : ['', 'PENDIENTE'];
   const { rows } = await query(`
     UPDATE cotizaciones_proveedor SET
       validacion_estado = 'DERIVADA',
@@ -609,32 +853,106 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
       validacion_informe = $3::jsonb,
       historial = historial || $4::jsonb,
       updated_at = NOW()
-    WHERE id = $1 RETURNING *
+    WHERE id = $1
+      AND COALESCE(UPPER(TRIM(validacion_estado)), '') = ANY($5::text[])
+    RETURNING *
   `, [
     cotizacionId,
     responsable_nombre,
     JSON.stringify(informe),
-    JSON.stringify([{ tipo: 'derivacion_validacion', submodulo: sub.code, responsable: responsable_nombre, usuario: usuarioOperador, fecha: new Date().toISOString() }]),
+    JSON.stringify([histEntry]),
+    estadosPermitidos.map((e) => String(e).toUpperCase()),
   ]);
+
+  // Condición de carrera / doble clic: otro proceso ya dejó el expediente en AU
+  if (!rows.length) {
+    const again = await loadCotizacionFull(cotizacionId);
+    const est = String(again.validacion_estado || '').toUpperCase();
+    if (['DERIVADA', 'EN_PROCESO'].includes(est)) {
+      return {
+        ...mapCotizacionRow({
+          ...again,
+          ruc: again.ruc,
+          razon_social: again.razon_social,
+          solicitud_codigo: again.solicitud_codigo,
+          denominacion: again.denominacion,
+          objeto: again.objeto,
+        }),
+        idempotente: true,
+        ya_en_validacion: true,
+        ok: true,
+      };
+    }
+    throw new Error('No se pudo derivar/devolver la validación (estado no permitido)');
+  }
+
   const updated = rows[0];
   await registrarTrazaPortal({
     solicitud_id: updated.solicitud_id,
     proveedor_id: updated.proveedor_id,
     requerimiento_id: updated.requerimiento_id,
-    evento: 'COTIZACION_ENVIADA_VALIDACION_AU',
-    detalle: `Cotización enviada a validación AU — ${sub.label} → ${responsable_nombre}`,
+    evento: esReapertura ? 'VALIDACION_DEVUELTA_AU' : 'COTIZACION_ENVIADA_VALIDACION_AU',
+    detalle: esReapertura
+      ? `Validación observada/devuelta a AU — ${responsable_nombre}${obsTexto ? `: ${obsTexto.slice(0, 160)}` : ''}`
+      : `Cotización enviada a validación AU — ${sub.label} → ${responsable_nombre}`,
     usuario: usuarioOperador,
   });
 
   await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
     etapaDestino: 'VALIDACION_USUARIO',
     usuario: usuarioOperador,
-    observacion: `Cotización enviada a validación AU — ${responsable_nombre}`,
+    observacion: esReapertura
+      ? (obsTexto || `Validación devuelta a Área Usuaria — ${responsable_nombre}`)
+      : `Cotización enviada a validación AU — ${responsable_nombre}`,
     etapaEjecutor: 'RECEPCION_COTIZACIONES',
     responsable: responsable_nombre,
   });
 
-  return mapCotizacionRow({ ...updated, ruc: cot.ruc, razon_social: cot.razon_social, solicitud_codigo: cot.solicitud_codigo, denominacion: cot.denominacion, objeto: cot.objeto });
+  return mapCotizacionRow({
+    ...updated,
+    ruc: cot.ruc,
+    razon_social: cot.razon_social,
+    solicitud_codigo: cot.solicitud_codigo,
+    denominacion: cot.denominacion,
+    objeto: cot.objeto,
+  });
+}
+
+/**
+ * Analista (Recepción/Invitaciones) observa y devuelve la validación al Área Usuaria.
+ * Reutiliza el estado oficial DERIVADA (editable) sin crear estados nuevos.
+ */
+export async function devolverValidacionAAreaUsuaria(cotizacionId, body, usuarioOperador) {
+  const {
+    observacion,
+    responsable_id,
+    responsable_nombre,
+    submodulo,
+    submodulo_label,
+  } = body || {};
+  const obs = String(observacion || '').trim();
+  if (!obs) throw new Error('La observación es obligatoria para devolver la validación');
+
+  const cot = await loadCotizacionFull(cotizacionId);
+  const estadoActual = String(cot.validacion_estado || '').toUpperCase();
+  if (!['OBSERVADO', 'NO_APTO', 'APTO'].includes(estadoActual)) {
+    throw new Error('Solo se puede devolver una validación ya remitida (APTO, NO_APTO u OBSERVADO)');
+  }
+  // APTO solo se reabre con observación explícita del analista (flujo de corrección).
+  const prevInf = parseInforme(cot);
+  const respNombre = String(responsable_nombre || cot.validacion_responsable || prevInf.derivacion?.responsable_nombre || '').trim();
+  const respId = parseInt(responsable_id || prevInf.derivacion?.responsable_id, 10);
+  if (!respNombre || !Number.isFinite(respId)) {
+    throw new Error('No hay responsable de Área Usuaria para reabrir la validación');
+  }
+
+  return derivarValidacionCotizacion(cotizacionId, {
+    submodulo: submodulo || prevInf.derivacion?.submodulo || 'REGISTRO_REQUERIMIENTO',
+    submodulo_label: submodulo_label || prevInf.derivacion?.submodulo_label,
+    responsable_id: respId,
+    responsable_nombre: respNombre,
+    observacion: obs,
+  }, usuarioOperador);
 }
 
 export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId, opts = {}) {
@@ -649,7 +967,8 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
     throw new Error(perm.sinAsignacion ? 'Pendiente de asignación de responsable' : 'No tiene asignada esta validación');
   }
   const inf = parseInforme(cot);
-  const items = await buildItemsFormulario07a(cot);
+  const built = await buildMatrizValidacion(cot);
+  const items = built.legacyItems;
   const requerimientos = await loadRequerimientosSolicitud(cot.solicitud_id);
   const reqIdsVinculados = new Set(requerimientos.map((r) => r.id));
   if (cot.requerimiento_id) reqIdsVinculados.add(cot.requerimiento_id);
@@ -679,11 +998,19 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
     ? resolverDestinoSalidaValidacion(estado)
     : null;
   const fechaAuto = new Date().toLocaleDateString('es-PE');
+  const calc = calcularResultadoCotizacion(built.tipoKey, built.matriz_v2.filas);
+  const centrosConsolidados = consolidateCentros(
+    (built.matriz_v2.filas || []).map((f) => f.automaticos?.centro),
+  );
   return {
     ...mapCotizacionRow(cot),
     requerimientos: reqCodes || mapCotizacionRow(cot).requerimientos || '',
     tipo_contratacion: normalizeTipoContratacion(cot.solicitud_tipo),
+    tipo_formato: built.tipoKey,
     area_usuaria: areaUsuaria,
+    centro: centrosConsolidados.display,
+    centro_multiple: centrosConsolidados.multiple,
+    centro_label: centrosConsolidados.label,
     descripcion: cot.denominacion || cot.objeto || '',
     requerimientos_detalle: requerimientos.map((r) => ({
       id: r.id,
@@ -691,24 +1018,27 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
       denominacion: r.denominacion,
       area: r.area,
       cmn: r.cmn,
-      centro: r.cmn || r.area || '',
+      centro: r.centro || r.cmn || r.area || '',
+      centro_costo: r.centro_costo || '',
     })),
+    observacion_retorno: inf.observacion_retorno || null,
     documentos_tecnicos: docsTecnicos,
     documentos_requerimiento,
     documentos_cotizacion: docsTecnicos,
     propuesta_tecnica: resumenPropuestaTecnica(cot),
     excluye_economica: true,
     proveedores_solicitud: proveedoresSolicitud,
+    matriz_v2: built.matriz_v2,
     formulario_07a: {
       items,
       lugar: inf.formulario_07a?.lugar || 'Chorrillos',
       fecha: inf.formulario_07a?.fecha || fechaAuto,
       profesional: inf.formulario_07a?.profesional || responsableNombreDeCot(cot) || usuario,
       producto_adquisicion: cot.denominacion || cot.objeto || '',
-      resultado_global: inf.formulario_07a?.resultado_global || '',
+      resultado_global: inf.formulario_07a?.resultado_global || calc.resultado_global || '',
       observacion_global: inf.formulario_07a?.observacion_global || '',
       sustento: inf.formulario_07a?.sustento || '',
-      cumple: inf.formulario_07a?.cumple || '',
+      cumple: inf.formulario_07a?.cumple || calc.cumple || '',
     },
     pdf_firmado: inf.pdf_firmado
       ? {
@@ -731,7 +1061,7 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
 }
 
 export async function guardarValidacionParcial(cotizacionId, body, usuario, userId, opts = {}) {
-  const { formulario_07a, pdf_firmado, quitar_pdf } = body || {};
+  const { formulario_07a, pdf_firmado, quitar_pdf, matriz_v2 } = body || {};
   const cot = await loadCotizacionFull(cotizacionId);
   const esAdmin = !!opts.esAdmin;
   const estado = String(cot.validacion_estado || '');
@@ -743,17 +1073,48 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
   }
 
   const inf = parseInforme(cot);
+  const tipoKey = normalizeTipoValidacion(cot.solicitud_tipo)
+    || matriz_v2?.tipo
+    || inf.matriz_v2?.tipo
+    || 'BIENES';
+
+  let formFromMatriz = formulario_07a;
+  let matrizPersist = null;
+  if (matriz_v2?.filas) {
+    const calc = calcularResultadoCotizacion(tipoKey, matriz_v2.filas);
+    formFromMatriz = {
+      ...(formulario_07a || {}),
+      items: filasV2ToLegacyItems(matriz_v2.filas, tipoKey),
+      resultado_global: formulario_07a?.resultado_global || calc.resultado_global,
+      cumple: formulario_07a?.cumple || calc.cumple,
+    };
+    matrizPersist = {
+      version: 2,
+      tipo: tipoKey,
+      cotizacion_id: cot.id,
+      proveedor_id: cot.proveedor_id,
+      solicitud_id: cot.solicitud_id,
+      filas: matriz_v2.filas,
+      updated_at: new Date().toISOString(),
+      updated_by: usuario,
+    };
+  }
+
   const formMerged = {
     ...inf.formulario_07a,
-    ...formulario_07a,
-    // Fecha/responsable de trazabilidad (no campos manuales en UI RC7.7A)
+    ...formFromMatriz,
+    // Fecha/responsable de trazabilidad (no campos manuales en UI)
     fecha: new Date().toLocaleDateString('es-PE'),
-    profesional: formulario_07a?.profesional
+    profesional: formFromMatriz?.profesional
       || inf.formulario_07a?.profesional
       || responsableNombreDeCot(cot)
       || usuario,
   };
-  const informe = { ...inf, formulario_07a: formMerged };
+  const informe = {
+    ...inf,
+    formulario_07a: formMerged,
+    ...(matrizPersist ? { matriz_v2: matrizPersist } : {}),
+  };
   if (quitar_pdf) {
     informe.pdf_firmado = null;
   } else if (pdf_firmado?.base64) {
@@ -779,6 +1140,22 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
       usuario,
     });
   }
+  if (inf.observacion_retorno?.texto) {
+    historialExtra.push({
+      tipo: 'validacion_subsanacion_borrador',
+      usuario,
+      fecha: new Date().toISOString(),
+      observacion_retorno: inf.observacion_retorno.texto,
+    });
+  }
+
+  // Merge parcial: no reemplazar matriz/form con null/undefined omitidos
+  if (!matrizPersist && inf.matriz_v2) {
+    informe.matriz_v2 = inf.matriz_v2;
+  }
+  if (!formFromMatriz && !formulario_07a) {
+    informe.formulario_07a = inf.formulario_07a;
+  }
 
   const { rows } = await query(`
     UPDATE cotizaciones_proveedor SET
@@ -786,8 +1163,11 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
       validacion_informe = $2::jsonb,
       historial = historial || $3::jsonb,
       updated_at = NOW()
-    WHERE id = $1 RETURNING *
+    WHERE id = $1
+      AND validacion_estado IN ('DERIVADA', 'EN_PROCESO')
+    RETURNING *
   `, [cotizacionId, JSON.stringify(informe), JSON.stringify(historialExtra)]);
+  if (!rows.length) throw new Error('No se pudo guardar: la validación no está editable');
 
   return mapCotizacionRow({ ...rows[0], ruc: cot.ruc, razon_social: cot.razon_social, solicitud_codigo: cot.solicitud_codigo, denominacion: cot.denominacion, objeto: cot.objeto });
 }
@@ -804,7 +1184,7 @@ function mapResultadoFormulario(resultado, cumple) {
 
 export async function enviarValidacionUsuario(cotizacionId, body, usuario, userId, opts = {}) {
   const {
-    formulario_07a,
+    formulario_07a: formIn,
     pdf_firmado,
     resultado,
     observacion,
@@ -812,11 +1192,15 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     responsable_destino_id,
     responsable_destino_nombre,
     observacion_derivacion,
+    matriz_v2,
   } = body || {};
 
   const cot = await loadCotizacionFull(cotizacionId);
   const esAdmin = !!opts.esAdmin;
   const estadoActual = String(cot.validacion_estado || '').toUpperCase();
+  const tipoKey = normalizeTipoValidacion(cot.solicitud_tipo)
+    || matriz_v2?.tipo
+    || 'BIENES';
 
   // Idempotencia: si ya fue derivado, no repetir evento ni cambiar responsable.
   if (['APTO', 'NO_APTO', 'OBSERVADO'].includes(estadoActual)) {
@@ -833,12 +1217,37 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
       ya_derivado: true,
       idempotente: true,
       destino_salida: resolverDestinoSalidaValidacion(estadoActual),
+      ok: true,
     };
   }
 
   if (!matchResponsableParaEdicion(cot, usuario, userId, { esAdmin, usuarioNombre: usuario })) {
     throw new Error('No tiene permiso para derivar esta validación');
   }
+
+  let formulario_07a = formIn;
+  let matrizPersist = null;
+  if (matriz_v2?.filas?.length) {
+    const check = validarMatrizCompleta(tipoKey, matriz_v2.filas);
+    if (!check.ok) throw new Error(check.errores.join(' '));
+    const calc = calcularResultadoCotizacion(tipoKey, matriz_v2.filas);
+    formulario_07a = {
+      ...(formIn || {}),
+      items: filasV2ToLegacyItems(matriz_v2.filas, tipoKey),
+      resultado_global: formIn?.resultado_global || calc.resultado_global,
+      cumple: formIn?.cumple || calc.cumple,
+    };
+    matrizPersist = {
+      version: 2,
+      tipo: tipoKey,
+      cotizacion_id: cot.id,
+      proveedor_id: cot.proveedor_id,
+      solicitud_id: cot.solicitud_id,
+      filas: matriz_v2.filas,
+      enviado_at: new Date().toISOString(),
+    };
+  }
+
   if (!formulario_07a?.items?.length) throw new Error('Complete el formulario de validación');
   if (!pdf_firmado?.base64) throw new Error('Adjunte el PDF firmado de la validación');
 
@@ -857,10 +1266,27 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     throw new Error('Seleccione el usuario responsable del submódulo destino');
   }
 
-  const obs = String(observacion || formulario_07a.observacion_global || '').trim();
+  const obsMatriz = (matriz_v2?.filas || matrizPersist?.filas || [])
+    .map((f) => String(f?.evaluacion?.observaciones || f?.observaciones || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+  const obs = String(
+    observacion
+    || formulario_07a.observacion_global
+    || obsMatriz
+    || formulario_07a.resultado_global
+    || '',
+  ).trim();
   if (!obs) throw new Error('Las observaciones de la validación son obligatorias');
-  if (String(estadoVal) !== 'APTO' && !String(formulario_07a.sustento || '').trim() && !obs) {
-    throw new Error('Indique sustento u observación para el resultado');
+  if (String(estadoVal) !== 'APTO' && !obsMatriz && !String(formulario_07a.observacion_global || '').trim()) {
+    // Resultado negativo: exige observación en la matriz (columna OBSERVACIONES)
+    const tieneNegativa = (matriz_v2?.filas || []).some((f) => {
+      const r = String(f?.evaluacion?.resultado || f?.resultado || '');
+      return /NO\s*V[ÁA]LID/i.test(r);
+    });
+    if (tieneNegativa) {
+      throw new Error('Indique observaciones en la matriz cuando el resultado sea negativo');
+    }
   }
 
   const fechaAuto = new Date().toLocaleDateString('es-PE');
@@ -870,11 +1296,14 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     profesional: formulario_07a.profesional || responsableNombreDeCot(cot) || usuario,
   };
 
+  const prevInfEnvio = parseInforme(cot);
+  const esSubsanacion = !!prevInfEnvio.observacion_retorno?.texto;
   const informe = {
-    ...parseInforme(cot),
+    ...prevInfEnvio,
     formulario_07a: formPersist,
+    ...(matrizPersist ? { matriz_v2: matrizPersist } : {}),
     pdf_firmado: {
-      nombre: pdf_firmado.nombre || 'Validacion_Anexo_07A.pdf',
+      nombre: pdf_firmado.nombre || 'Validacion_formato.pdf',
       mime_type: pdf_firmado.mime_type || 'application/pdf',
       base64: pdf_firmado.base64,
       tamaño_bytes: pdf_firmado.tamaño_bytes || bytesFromBase64(pdf_firmado.base64),
@@ -894,7 +1323,26 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     },
     enviado_at: new Date().toISOString(),
     enviado_por: usuario,
+    // Conservar última observación del analista para trazabilidad; marcar cierre
+    observacion_retorno: prevInfEnvio.observacion_retorno
+      ? {
+          ...prevInfEnvio.observacion_retorno,
+          subsanada: true,
+          subsanada_por: usuario,
+          subsanada_at: new Date().toISOString(),
+        }
+      : null,
   };
+
+  const histEnvio = [{
+    tipo: esSubsanacion ? 'validacion_subsanada_enviada' : 'validacion_enviada',
+    resultado: estadoVal,
+    destino: destOficial.code,
+    responsable_destino: respDestNombre,
+    usuario,
+    fecha: new Date().toISOString(),
+    observacion_analista: prevInfEnvio.observacion_retorno?.texto || undefined,
+  }];
 
   const { rows } = await query(`
     UPDATE cotizaciones_proveedor SET
@@ -911,14 +1359,7 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     estadoVal,
     obs,
     JSON.stringify(informe),
-    JSON.stringify([{
-      tipo: 'validacion_enviada',
-      resultado: estadoVal,
-      destino: destOficial.code,
-      responsable_destino: respDestNombre,
-      usuario,
-      fecha: new Date().toISOString(),
-    }]),
+    JSON.stringify(histEnvio),
   ]);
 
   // Condición de carrera / doble click: otro proceso ya derivó.
@@ -1017,28 +1458,7 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
   };
 }
 
-export async function listarCuadroComparativo() {
-  const { rows } = await query(`
-    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.estado AS solicitud_estado
-    FROM cotizaciones_proveedor cot
-    JOIN proveedores p ON p.id = cot.proveedor_id
-    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
-    WHERE cot.validacion_estado = 'APTO'
-    ORDER BY sc.codigo ASC, cot.fecha_presentacion DESC NULLS LAST
-  `);
-  return rows.map((r) => {
-    const eco = parseJson(r.propuesta_economica, {});
-    const inf = parseInforme(r);
-    return {
-      ...mapCotizacionRow(r),
-      solicitud_estado: r.solicitud_estado,
-      tiene_pdf_validacion: !!inf.pdf_firmado?.base64,
-      resultado_validacion: inf.formulario_07a?.resultado_global || 'APTO',
-      validado_por: inf.formulario_07a?.profesional || r.validacion_responsable,
-      validado_at: inf.enviado_at || r.updated_at,
-    };
-  });
-}
+/** listarCuadroComparativo movido a server/lib/cuadroComparativo.js (RC8.1). */
 
 export async function resolverPdfValidacionFirmada(cotizacionId) {
   const cot = await loadCotizacionFull(cotizacionId);

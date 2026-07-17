@@ -47,7 +47,7 @@ try {
   assert(/Ver documentos/.test(modalSrc), '4. acción clara Ver documentos presente');
 
   // 5: tabla lineal
-  assert(/Empresas que presentaron cotización/.test(modalSrc), '5. título tabla proveedores');
+  assert(/Empresas (que presentaron cotización|y documentos técnicos)/.test(modalSrc), '5. título tabla proveedores');
   assert(/val-prov-table/.test(modalSrc) && /Requerimiento/.test(modalSrc) && /Centro/.test(modalSrc), '5. tabla lineal con columnas');
 
   // 8–9: canDerivarValidacion

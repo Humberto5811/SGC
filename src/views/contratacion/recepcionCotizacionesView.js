@@ -376,7 +376,15 @@ async function loadCotizaciones(resetPage = false) {
     bindActionMenus(cont, {
       verPropuesta: (id) => showCotizacionDetalleModal(id),
       enviarValidar: (id) => {
-        showEnviarValidarModal(id, { onSuccess: () => loadCotizaciones(true) });
+        const row = (cotizacionesCache || []).find((r) => String(r.id) === String(id));
+        const v = String(row?.validacion_estado || '').toUpperCase();
+        const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
+        showEnviarValidarModal(id, {
+          title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
+          submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
+          requireObservacion: esDevolucion,
+          onSuccess: () => loadCotizaciones(true),
+        });
       },
     });
     recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));

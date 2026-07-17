@@ -28,6 +28,7 @@ import {
   listarValidacionesExpedientes,
   getPreviewDerivacionValidacion,
   derivarValidacionCotizacion,
+  devolverValidacionAAreaUsuaria,
   getValidacionTrabajoDetalle,
   guardarValidacionParcial,
   enviarValidacionUsuario,
@@ -35,9 +36,13 @@ import {
   getSubmodulosValidacion,
   listarProveedoresSolicitudValidacion,
   getDestinosSalidaPorResultado,
-  listarCuadroComparativo,
   resolverPdfValidacionFirmada,
 } from '../lib/validacionesCotizacion.js';
+import {
+  listarCuadroComparativo,
+  listarCuadroComparativoExpedientes,
+  getCuadroComparativoExpediente,
+} from '../lib/cuadroComparativo.js';
 import {
   getSolicitudDetalleProveedor,
   getCotizacionWorkspace,
@@ -330,9 +335,47 @@ portalAnalistaRouter.get('/validaciones/:id/preview-derivacion', async (req, res
 portalAnalistaRouter.post('/validaciones/:id/derivar', async (req, res, next) => {
   try {
     const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    if (!usuario) return res.status(401).json({ error: 'No autenticado' });
     const row = await derivarValidacionCotizacion(req.params.id, req.body, usuario);
-    res.json({ success: true, cotizacion: row });
-  } catch (err) { next(err); }
+    res.json({
+      success: true,
+      cotizacion: row,
+      idempotente: !!row?.idempotente,
+      ok: true,
+    });
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (/obligatoria|obligatorios|no está presentada|ya fue|ya está|no permitido/i.test(msg)) {
+      return res.status(409).json({ error: msg });
+    }
+    next(err);
+  }
+});
+
+portalAnalistaRouter.post('/validaciones/:id/devolver', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    if (!usuario) return res.status(401).json({ error: 'No autenticado' });
+    const row = await devolverValidacionAAreaUsuaria(req.params.id, req.body, usuario);
+    res.json({
+      success: true,
+      cotizacion: row,
+      idempotente: !!row?.idempotente,
+      ok: true,
+    });
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (/obligatoria|Solo se puede|responsable|no permitido/i.test(msg)) {
+      return res.status(400).json({ error: msg });
+    }
+    if (/permiso|No tiene/i.test(msg)) {
+      return res.status(403).json({ error: msg });
+    }
+    if (/ya está|ya fue/i.test(msg)) {
+      return res.status(409).json({ error: msg });
+    }
+    next(err);
+  }
 });
 
 portalAnalistaRouter.get('/validaciones/:id/trabajo', async (req, res, next) => {
@@ -403,6 +446,21 @@ portalAnalistaRouter.post('/solicitud/:id/ampliar-plazo', async (req, res, next)
 portalAnalistaRouter.get('/cuadro-comparativo', async (_req, res, next) => {
   try {
     const data = await listarCuadroComparativo();
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+/** RC8.1 — bandeja por Solicitud de Cotización */
+portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (_req, res, next) => {
+  try {
+    const data = await listarCuadroComparativoExpedientes();
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cuadro-comparativo/expedientes/:solicitudId', async (req, res, next) => {
+  try {
+    const data = await getCuadroComparativoExpediente(req.params.solicitudId);
     res.json({ data });
   } catch (err) { next(err); }
 });

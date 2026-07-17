@@ -221,9 +221,17 @@ export function recepcionCotizacionesMenuItems(c) {
     { act: 'verPropuesta', label: 'Ver propuesta', icon: 'bi-eye' },
   ];
   const v = String(c?.validacion_estado || '').toUpperCase();
-  const puedeEnviar = c?.estado === 'COTIZACION_PRESENTADA' && (!v || v === 'PENDIENTE');
+  const presentada = c?.estado === 'COTIZACION_PRESENTADA';
+  const puedeEnviar = presentada && (!v || v === 'PENDIENTE');
+  const puedeDevolver = presentada && (v === 'OBSERVADO' || v === 'NO_APTO' || v === 'APTO');
   if (puedeEnviar) {
     items.push({ act: 'enviarValidar', label: 'Enviar a validar', icon: 'bi-send' });
+  } else if (puedeDevolver) {
+    items.push({
+      act: 'enviarValidar',
+      label: 'Devolver a Validación AU',
+      icon: 'bi-arrow-counterclockwise',
+    });
   }
   return items;
 }

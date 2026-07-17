@@ -51,6 +51,11 @@ function matchAdjuntoPorNombre(adjuntos, nombre) {
 function guessMime(nombre) {
   const n = String(nombre || '').toLowerCase();
   if (n.endsWith('.pdf')) return 'application/pdf';
+  if (n.endsWith('.png')) return 'image/png';
+  if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
+  if (n.endsWith('.webp')) return 'image/webp';
+  if (n.endsWith('.gif')) return 'image/gif';
+  if (n.endsWith('.txt')) return 'text/plain';
   if (n.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (n.endsWith('.doc')) return 'application/msword';
   if (n.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
