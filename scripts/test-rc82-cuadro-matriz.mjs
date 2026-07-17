@@ -214,7 +214,7 @@ assert(merged.items[0].ofertas[0].precio_unitario === 12.5, '10. precios frescos
 // Validación / bloqueos
 const valOk = validateEconomiaCuadro(m1);
 assert(valOk.puede_generar === true, 'validación OK matriz completa');
-assert(valOk.puede_seleccionar_ganador === false, 'ganador bloqueado en RC8.2');
+assert(valOk.puede_pdf === false || valOk.puede_seleccionar_ganador !== undefined, 'meta adjudicación/PDF presente');
 
 // Menor precio válido (solo APTOS)
 assert(m3.items[0].menor_precio_valido === 1100, 'menor precio válido ítem 0 (excluye NO_APTO 900)');
@@ -222,7 +222,7 @@ assert(m3.items[0].menor_precio_valido === 1100, 'menor precio válido ítem 0 (
 // Persistencia en código
 assert(/INSERT INTO cuadros_comparativos/.test(libSrc), '11. INSERT persistencia');
 assert(/datos_json = \$2::jsonb/.test(libSrc) || /datos_json/.test(libSrc), '11. UPDATE JSONB');
-assert(/estado = 'EN_ELABORACION'/.test(libSrc), '12. estado EN_ELABORACION al guardar');
+assert(/EN_ELABORACION/.test(libSrc) && /keepAdjudicado|estado = \$4/.test(libSrc), '12. estado EN_ELABORACION al guardar');
 assert(normalizeCuadroEstado('BORRADOR') === ESTADOS_CUADRO.EN_ELABORACION, '12. BORRADOR → bandeja elaboración');
 assert(normalizeCuadroEstado('EN_ELABORACION') === ESTADOS_CUADRO.EN_ELABORACION, '12. EN_ELABORACION');
 

@@ -9,6 +9,13 @@ import {
   mergeObservacionesCuadro,
   stripArchivosFromDatosJson,
 } from './cuadroComparativoMapper.js';
+import {
+  aplicarRecomendacionesMatriz,
+  mergeAdjudicacionCuadro,
+  aplicarAdjudicacionMatriz,
+  MODALIDAD_ADJUDICACION,
+} from './cuadroComparativoAdjudicacion.js';
+import { registrarTrazaPortal } from './invitaciones.js';
 
 /** Estados documentales del cuadro (independientes de la etapa Workflow). */
 export const ESTADOS_CUADRO = Object.freeze({
@@ -16,6 +23,9 @@ export const ESTADOS_CUADRO = Object.freeze({
   BORRADOR: 'BORRADOR',
   EN_ELABORACION: 'EN_ELABORACION',
   GENERADO: 'GENERADO',
+  GENERADO_PRELIMINAR: 'GENERADO_PRELIMINAR',
+  ADJUDICADO: 'ADJUDICADO',
+  OBSERVADO: 'OBSERVADO',
   FIRMADO: 'FIRMADO',
   DERIVADO_CCP: 'DERIVADO_CCP',
   ANULADO: 'ANULADO',
@@ -26,6 +36,9 @@ export const ESTADOS_CUADRO_LABEL = Object.freeze({
   [ESTADOS_CUADRO.BORRADOR]: 'En elaboración',
   [ESTADOS_CUADRO.EN_ELABORACION]: 'En elaboración',
   [ESTADOS_CUADRO.GENERADO]: 'Generado',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Generado preliminar',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'Adjudicado',
+  [ESTADOS_CUADRO.OBSERVADO]: 'Observado',
   [ESTADOS_CUADRO.FIRMADO]: 'Firmado',
   [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
   [ESTADOS_CUADRO.ANULADO]: 'Anulado',
@@ -60,6 +73,9 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'BORRADOR') return ESTADOS_CUADRO.EN_ELABORACION;
   if (s === 'EN_ELABORACION' || s === 'ELABORACION') return ESTADOS_CUADRO.EN_ELABORACION;
   if (s === 'GENERADO' || s === 'GENERADA') return ESTADOS_CUADRO.GENERADO;
+  if (s === 'GENERADO_PRELIMINAR') return ESTADOS_CUADRO.GENERADO_PRELIMINAR;
+  if (s === 'ADJUDICADO') return ESTADOS_CUADRO.ADJUDICADO;
+  if (s === 'OBSERVADO') return ESTADOS_CUADRO.OBSERVADO;
   if (s === 'FIRMADO' || s === 'FIRMADA') return ESTADOS_CUADRO.FIRMADO;
   if (s === 'DERIVADO_CCP' || s === 'DERIVADO_A_CCP' || s === 'CCP') return ESTADOS_CUADRO.DERIVADO_CCP;
   if (s === 'ANULADO') return ESTADOS_CUADRO.ANULADO;
@@ -110,7 +126,9 @@ function badgeClassCuadro(estadoCode) {
   const e = normalizeCuadroEstado(estadoCode);
   if (e === ESTADOS_CUADRO.PENDIENTE_ELABORAR) return 'warning';
   if (e === ESTADOS_CUADRO.EN_ELABORACION) return 'info';
-  if (e === ESTADOS_CUADRO.GENERADO) return 'primary';
+  if (e === ESTADOS_CUADRO.GENERADO || e === ESTADOS_CUADRO.GENERADO_PRELIMINAR) return 'primary';
+  if (e === ESTADOS_CUADRO.ADJUDICADO) return 'success';
+  if (e === ESTADOS_CUADRO.OBSERVADO) return 'warning';
   if (e === ESTADOS_CUADRO.FIRMADO) return 'success';
   if (e === ESTADOS_CUADRO.DERIVADO_CCP) return 'secondary';
   return 'secondary';
@@ -313,7 +331,9 @@ export async function listarCuadroComparativoExpedientes() {
       solicitud_estado: r.solicitud_estado || '',
       puede_elaborar: estadoCode === ESTADOS_CUADRO.PENDIENTE_ELABORAR
         || estadoCode === ESTADOS_CUADRO.EN_ELABORACION
-        || estadoCode === ESTADOS_CUADRO.BORRADOR,
+        || estadoCode === ESTADOS_CUADRO.BORRADOR
+        || estadoCode === ESTADOS_CUADRO.ADJUDICADO
+        || estadoCode === ESTADOS_CUADRO.OBSERVADO,
       search_text: [
         r.solicitud_codigo,
         reqTexto,
@@ -428,7 +448,7 @@ function assertTipoBienes(tipoRaw) {
 }
 
 function buildMatrizFromSources(sc, cotizaciones, requerimientos) {
-  return buildMatrizComparativaBienes({
+  const base = buildMatrizComparativaBienes({
     solicitud: {
       id: sc.id,
       codigo: sc.codigo,
@@ -440,6 +460,7 @@ function buildMatrizFromSources(sc, cotizaciones, requerimientos) {
     cotizaciones,
     requerimientos,
   });
+  return aplicarRecomendacionesMatriz(base);
 }
 
 function mapCuadroRow(row) {
@@ -456,6 +477,10 @@ function mapCuadroRow(row) {
     proveedor_ganador_id: row.proveedor_ganador_id,
     criterio_seleccion: row.criterio_seleccion,
     sustento_decision: row.sustento_decision,
+    valor_adjudicado: row.valor_adjudicado != null ? Number(row.valor_adjudicado) : null,
+    usuario_adjudicacion: row.usuario_adjudicacion || '',
+    fecha_adjudicacion: row.fecha_adjudicacion || null,
+    modalidad_adjudicacion: row.modalidad_adjudicacion || MODALIDAD_ADJUDICACION,
     creado_por: row.creado_por,
     actualizado_por: row.actualizado_por,
     creado_at: row.creado_at,
@@ -497,9 +522,15 @@ export async function obtenerDetalleCuadro(solicitudId) {
   if (cuadro?.datos_json) {
     const saved = parseJson(cuadro.datos_json, {});
     matriz = mergeObservacionesCuadro(matriz, saved);
-    // Recalcular meta sobre matriz fusionada
+    matriz = mergeAdjudicacionCuadro(matriz, saved);
     const val = validateEconomiaCuadro(matriz);
-    matriz.meta = { ...matriz.meta, ...val, puede_seleccionar_ganador: false };
+    matriz.meta = {
+      ...matriz.meta,
+      ...val,
+      puede_seleccionar_ganador: val.items_incompletos === 0 && (matriz.items || []).length > 0,
+    };
+  } else {
+    matriz = aplicarRecomendacionesMatriz(matriz);
   }
 
   const bandeja = (await listarCuadroComparativoExpedientes())
@@ -578,7 +609,7 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
   const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
-  if (['GENERADO', 'FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(String(cur.estado))) {
+  if (['FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(String(cur.estado))) {
     throw new Error(`El cuadro en estado ${cur.estado} no admite edición de borrador`);
   }
 
@@ -605,29 +636,155 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
     items: incoming.items,
     notas_internas: incoming.notas_internas ?? payload.notas_internas ?? '',
   });
+  matriz = mergeAdjudicacionCuadro(matriz, {
+    ...incoming,
+    adjudicacion: parseJson(cur.datos_json, {}).adjudicacion,
+    historial_adjudicacion: parseJson(cur.datos_json, {}).historial_adjudicacion,
+  });
   if (payload.notas_internas != null) matriz.notas_internas = String(payload.notas_internas);
   else if (incoming.notas_internas != null) matriz.notas_internas = String(incoming.notas_internas);
 
   const val = validateEconomiaCuadro(matriz);
-  matriz.meta = { ...matriz.meta, ...val, puede_seleccionar_ganador: false };
+  matriz.meta = {
+    ...matriz.meta,
+    ...val,
+    puede_seleccionar_ganador: val.items_incompletos === 0 && (matriz.items || []).length > 0,
+  };
   const datos = stripArchivosFromDatosJson(matriz);
   const user = String(usuario || '').slice(0, 150);
+  const keepAdjudicado = String(cur.estado) === 'ADJUDICADO';
 
   const { rows } = await query(`
     UPDATE cuadros_comparativos
     SET datos_json = $2::jsonb,
-        estado = 'EN_ELABORACION',
+        estado = $4,
         actualizado_por = $3,
         actualizado_at = NOW()
     WHERE id = $1
     RETURNING *
-  `, [id, JSON.stringify(datos), user]);
+  `, [id, JSON.stringify(datos), user, keepAdjudicado ? 'ADJUDICADO' : 'EN_ELABORACION']);
 
   return {
     cuadro: mapCuadroRow(rows[0]),
     matriz: datos,
     validacion: val,
     saved: true,
+  };
+}
+
+/**
+ * Guarda adjudicación por ítem. No deriva a CCP ni altera Workflow/precios.
+ */
+export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario = '') {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+
+  const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+  if (!curRows.length) throw new Error('Cuadro no encontrado');
+  const cur = curRows[0];
+  if (['FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(String(cur.estado))) {
+    throw new Error(`El cuadro en estado ${cur.estado} no admite adjudicación`);
+  }
+
+  const clientUpdated = payload.actualizado_at || payload.updated_at || null;
+  if (clientUpdated) {
+    const serverTs = new Date(cur.actualizado_at).getTime();
+    const clientTs = new Date(clientUpdated).getTime();
+    if (Number.isFinite(clientTs) && Number.isFinite(serverTs) && clientTs < serverTs) {
+      const err = new Error('Existe una versión más reciente del cuadro. Recargue antes de guardar.');
+      err.code = 'CONFLICT_VERSION';
+      err.status = 409;
+      throw err;
+    }
+  }
+
+  const sc = await loadSolicitudRow(cur.solicitud_id);
+  const cotizaciones = await loadCotizacionesPresentadas(cur.solicitud_id);
+  const reqMap = await loadRequerimientosPorSolicitudes([cur.solicitud_id]);
+  let matriz = buildMatrizFromSources(sc, cotizaciones, reqMap.get(cur.solicitud_id) || []);
+  const saved = parseJson(cur.datos_json, {});
+  matriz = mergeObservacionesCuadro(matriz, saved);
+  matriz = mergeAdjudicacionCuadro(matriz, saved);
+
+  const incoming = payload.datos_json || {};
+  if (incoming.notas_internas != null) matriz.notas_internas = String(incoming.notas_internas);
+  // Aplicar selecciones desde payload
+  const selecciones = Array.isArray(payload.selecciones)
+    ? payload.selecciones
+    : (matriz.items || []).map((it) => {
+      const fromDom = (incoming.items || []).find((x) => x.item_key === it.item_key);
+      return {
+        item_key: it.item_key,
+        proveedor_adjudicado_id: fromDom?.proveedor_adjudicado_id ?? it.proveedor_adjudicado_id,
+      };
+    });
+
+  matriz = aplicarAdjudicacionMatriz(matriz, {
+    ...payload,
+    selecciones,
+    criterio_seleccion: payload.criterio_seleccion,
+    sustento_decision: payload.sustento_decision,
+    observacion_analista: payload.observacion_analista,
+    observacion_area_usuaria: payload.observacion_area_usuaria,
+  }, usuario);
+
+  const adj = matriz.adjudicacion || {};
+  const datos = stripArchivosFromDatosJson(matriz);
+  const user = String(usuario || '').slice(0, 150);
+
+  const { rows } = await query(`
+    UPDATE cuadros_comparativos
+    SET datos_json = $2::jsonb,
+        estado = 'ADJUDICADO',
+        proveedor_ganador_id = $3,
+        criterio_seleccion = $4,
+        sustento_decision = $5,
+        valor_adjudicado = $6,
+        usuario_adjudicacion = $7,
+        fecha_adjudicacion = NOW(),
+        modalidad_adjudicacion = $8,
+        actualizado_por = $7,
+        actualizado_at = NOW()
+    WHERE id = $1
+    RETURNING *
+  `, [
+    id,
+    JSON.stringify(datos),
+    adj.proveedor_ganador_id,
+    adj.criterio_seleccion || '',
+    adj.sustento_decision || '',
+    adj.valor_adjudicado,
+    user,
+    MODALIDAD_ADJUDICACION,
+  ]);
+
+  const ganador = (adj.resumen_proveedores || [])[0];
+  await registrarTrazaPortal({
+    solicitud_id: cur.solicitud_id,
+    proveedor_id: adj.proveedor_ganador_id || null,
+    evento: 'CUADRO_COMPARATIVO_ADJUDICADO',
+    detalle: JSON.stringify({
+      cuadro_id: id,
+      solicitud_codigo: sc.codigo,
+      ganador_id: adj.proveedor_ganador_id,
+      ganador_ruc: ganador?.ruc || '',
+      ganador_razon_social: ganador?.razon_social || '',
+      valor: adj.valor_adjudicado,
+      criterio: adj.criterio_seleccion,
+      modalidad: MODALIDAD_ADJUDICACION,
+      usuario: user,
+      fecha: adj.fecha_adjudicacion,
+      no_deriva_ccp: true,
+    }).slice(0, 2000),
+    usuario: user,
+  });
+
+  return {
+    cuadro: mapCuadroRow(rows[0]),
+    matriz: datos,
+    adjudicacion: adj,
+    saved: true,
+    derivado_ccp: false,
   };
 }
 

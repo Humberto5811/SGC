@@ -6,6 +6,9 @@ export const ESTADOS_CUADRO = Object.freeze({
   PENDIENTE_ELABORAR: 'PENDIENTE_ELABORAR',
   EN_ELABORACION: 'EN_ELABORACION',
   GENERADO: 'GENERADO',
+  GENERADO_PRELIMINAR: 'GENERADO_PRELIMINAR',
+  ADJUDICADO: 'ADJUDICADO',
+  OBSERVADO: 'OBSERVADO',
   FIRMADO: 'FIRMADO',
   DERIVADO_CCP: 'DERIVADO_CCP',
 });
@@ -14,6 +17,9 @@ export const ESTADOS_CUADRO_LABEL = Object.freeze({
   [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Pendiente de elaborar',
   [ESTADOS_CUADRO.EN_ELABORACION]: 'En elaboración',
   [ESTADOS_CUADRO.GENERADO]: 'Generado',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Generado preliminar',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'Adjudicado',
+  [ESTADOS_CUADRO.OBSERVADO]: 'Observado',
   [ESTADOS_CUADRO.FIRMADO]: 'Firmado',
   [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
 });
@@ -27,6 +33,9 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'BORRADOR') return ESTADOS_CUADRO.EN_ELABORACION;
   if (s === 'EN_ELABORACION' || s === 'ELABORACION') return ESTADOS_CUADRO.EN_ELABORACION;
   if (s === 'GENERADO' || s === 'GENERADA') return ESTADOS_CUADRO.GENERADO;
+  if (s === 'GENERADO_PRELIMINAR') return ESTADOS_CUADRO.GENERADO_PRELIMINAR;
+  if (s === 'ADJUDICADO') return ESTADOS_CUADRO.ADJUDICADO;
+  if (s === 'OBSERVADO') return ESTADOS_CUADRO.OBSERVADO;
   if (s === 'FIRMADO' || s === 'FIRMADA') return ESTADOS_CUADRO.FIRMADO;
   if (s === 'DERIVADO_CCP' || s === 'DERIVADO_A_CCP' || s === 'CCP') return ESTADOS_CUADRO.DERIVADO_CCP;
   if (ESTADOS_CUADRO_LABEL[s]) return s;
@@ -42,7 +51,9 @@ export function badgeClassCuadro(code) {
   const e = normalizeCuadroEstado(code);
   if (e === ESTADOS_CUADRO.PENDIENTE_ELABORAR) return 'warning';
   if (e === ESTADOS_CUADRO.EN_ELABORACION) return 'info';
-  if (e === ESTADOS_CUADRO.GENERADO) return 'primary';
+  if (e === ESTADOS_CUADRO.GENERADO || e === ESTADOS_CUADRO.GENERADO_PRELIMINAR) return 'primary';
+  if (e === ESTADOS_CUADRO.ADJUDICADO) return 'success';
+  if (e === ESTADOS_CUADRO.OBSERVADO) return 'warning';
   if (e === ESTADOS_CUADRO.FIRMADO) return 'success';
   if (e === ESTADOS_CUADRO.DERIVADO_CCP) return 'secondary';
   return 'secondary';
@@ -81,7 +92,9 @@ export function buildCuadroStats(rows = []) {
     const e = normalizeCuadroEstado(r.estado_cuadro);
     if (e === ESTADOS_CUADRO.PENDIENTE_ELABORAR) pendientes += 1;
     else if (e === ESTADOS_CUADRO.EN_ELABORACION) elaboracion += 1;
-    else if (e === ESTADOS_CUADRO.GENERADO || e === ESTADOS_CUADRO.FIRMADO || e === ESTADOS_CUADRO.DERIVADO_CCP) {
+    else if (e === ESTADOS_CUADRO.GENERADO || e === ESTADOS_CUADRO.GENERADO_PRELIMINAR
+      || e === ESTADOS_CUADRO.ADJUDICADO || e === ESTADOS_CUADRO.FIRMADO
+      || e === ESTADOS_CUADRO.DERIVADO_CCP) {
       generados += 1;
     }
   });

@@ -304,8 +304,8 @@ export function buildMatrizComparativaBienes(opts = {}) {
       items_incompletos: validation.items_incompletos,
       items_validos: validation.items_validos,
       puede_generar: validation.puede_generar,
-      puede_seleccionar_ganador: false,
-      puede_pdf: validation.puede_generar,
+      puede_seleccionar_ganador: validation.items_incompletos === 0 && items.length > 0,
+      puede_pdf: false,
     },
   };
 }
@@ -358,12 +358,19 @@ export function mergeObservacionesCuadro(matrizFresh, datosGuardados) {
         observacion_analista: po?.observacion_analista || of.observacion_analista || '',
       };
     });
-    return { ...it, ofertas };
+    return {
+      ...it,
+      ofertas,
+      proveedor_adjudicado_id: prev.proveedor_adjudicado_id ?? it.proveedor_adjudicado_id,
+      valor_adjudicado_item: prev.valor_adjudicado_item,
+    };
   });
   return {
     ...matrizFresh,
     items,
     notas_internas: datosGuardados.notas_internas || matrizFresh.notas_internas || '',
+    adjudicacion: datosGuardados.adjudicacion || matrizFresh.adjudicacion,
+    historial_adjudicacion: datosGuardados.historial_adjudicacion || matrizFresh.historial_adjudicacion,
   };
 }
 

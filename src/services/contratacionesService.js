@@ -188,6 +188,9 @@ export const contratacionesService = {
   async guardarCuadroBorrador(cuadroId, body = {}) {
     return api.put(`/contrataciones/portal-analista/cuadro-comparativo/${cuadroId}/borrador`, body);
   },
+  async guardarCuadroAdjudicacion(cuadroId, body = {}) {
+    return api.put(`/contrataciones/portal-analista/cuadro-comparativo/${cuadroId}/adjudicacion`, body);
+  },
   async listCuadroVersiones(solicitudId) {
     return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/versiones`);
   },

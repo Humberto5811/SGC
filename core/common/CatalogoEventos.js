@@ -72,6 +72,8 @@ export const EVENTOS_FUNCIONALES = Object.freeze({
   VALIDACION_REGISTRADA: { codigo: 'VALIDACION_REGISTRADA', label: 'Validación registrada', categoria: 'VALIDACION', tipoEvento: 'ETAPA' },
   VALIDACION_APROBADA: { codigo: 'VALIDACION_APROBADA', label: 'Validación aprobada', categoria: 'VALIDACION', tipoEvento: 'ETAPA' },
   VALIDACION_OBSERVADA: { codigo: 'VALIDACION_OBSERVADA', label: 'Validación observada', categoria: 'VALIDACION', tipoEvento: 'OBSERVACION' },
+  CUADRO_COMPARATIVO_GENERADO: { codigo: 'CUADRO_COMPARATIVO_GENERADO', label: 'Cuadro Comparativo generado', categoria: 'APROBACION', tipoEvento: 'ETAPA' },
+  CUADRO_COMPARATIVO_ADJUDICADO: { codigo: 'CUADRO_COMPARATIVO_ADJUDICADO', label: 'Cuadro Comparativo adjudicado', categoria: 'APROBACION', tipoEvento: 'ETAPA' },
 
   // Módulo / workflow
   RECIBIDO: { codigo: 'RECIBIDO', label: 'Recibido', categoria: 'ETAPA', tipoEvento: 'ETAPA' },

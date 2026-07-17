@@ -45,6 +45,7 @@ import {
   obtenerDetalleCuadro,
   crearOBuscarBorrador,
   guardarBorradorCuadro,
+  guardarAdjudicacionCuadro,
   listarVersionesCuadro,
 } from '../lib/cuadroComparativo.js';
 import {
@@ -493,6 +494,24 @@ portalAnalistaRouter.put('/cuadro-comparativo/:cuadroId/borrador', async (req, r
   } catch (err) {
     if (err?.code === 'CONFLICT_VERSION' || err?.status === 409) {
       res.status(409).json({ error: err.message, code: 'CONFLICT_VERSION' });
+      return;
+    }
+    next(err);
+  }
+});
+
+portalAnalistaRouter.put('/cuadro-comparativo/:cuadroId/adjudicacion', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await guardarAdjudicacionCuadro(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data, derivado_ccp: false });
+  } catch (err) {
+    if (err?.code === 'CONFLICT_VERSION' || err?.status === 409) {
+      res.status(409).json({ error: err.message, code: 'CONFLICT_VERSION' });
+      return;
+    }
+    if (err?.code === 'ADJUDICACION_INVALIDA') {
+      res.status(400).json({ error: err.message, code: err.code, errors: err.errors || [] });
       return;
     }
     next(err);
