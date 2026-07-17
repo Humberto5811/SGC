@@ -190,7 +190,10 @@ assert(/CUADRO_COMPARATIVO_ADJUDICADO/.test(libSrc), '10. evento en guardar');
 assert(EVENTOS.CUADRO_COMPARATIVO_ADJUDICADO === 'CUADRO_COMPARATIVO_ADJUDICADO', '10. EventCatalog');
 assert(!!EVENTOS_FUNCIONALES.CUADRO_COMPARATIVO_ADJUDICADO, '10. CatalogoEventos');
 assert(/no_deriva_ccp:\s*true/.test(libSrc) || /derivado_ccp:\s*false/.test(libSrc), '11. no deriva CCP');
-assert(!/syncRequerimientosSolicitudWorkflow/.test(libSrc), '11. no toca Workflow sync');
+// RC8.5: sync solo en derivarCuadroACcp; adjudicación no debe mover Workflow.
+assert(!/syncRequerimientosSolicitudWorkflow/.test(
+  libSrc.match(/export async function guardarAdjudicacionCuadro[\s\S]*?(?=\nexport async function)/)?.[0] || '',
+), '11. no toca Workflow sync');
 assert(/CUADRO_COMPARATIVO[\s\S]*CCP/.test(wfSrc), '11. transición Workflow intacta');
 
 // UI

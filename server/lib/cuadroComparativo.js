@@ -661,7 +661,9 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
   const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
-  if (['FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(String(cur.estado))) {
+  const estadoCur = String(cur.estado || '').toUpperCase();
+  // Tras generar PDF / firmar / derivar no se edita borrador (evita degradar GENERADO → EN_ELABORACION).
+  if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(estadoCur)) {
     throw new Error(`El cuadro en estado ${cur.estado} no admite edición de borrador`);
   }
 
@@ -704,7 +706,9 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
   };
   const datos = stripArchivosFromDatosJson(matriz);
   const user = String(usuario || '').slice(0, 150);
-  const keepAdjudicado = String(cur.estado) === 'ADJUDICADO';
+  const nextEstado = estadoCur === 'ADJUDICADO'
+    ? 'ADJUDICADO'
+    : (estadoCur === 'OBSERVADO' ? 'OBSERVADO' : 'EN_ELABORACION');
 
   const { rows } = await query(`
     UPDATE cuadros_comparativos
@@ -714,7 +718,7 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
         actualizado_at = NOW()
     WHERE id = $1
     RETURNING *
-  `, [id, JSON.stringify(datos), user, keepAdjudicado ? 'ADJUDICADO' : 'EN_ELABORACION']);
+  `, [id, JSON.stringify(datos), user, nextEstado]);
 
   return {
     cuadro: mapCuadroRow(rows[0]),
@@ -734,7 +738,8 @@ export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario 
   const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
-  if (['FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(String(cur.estado))) {
+  const estadoAdj = String(cur.estado || '').toUpperCase();
+  if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(estadoAdj)) {
     throw new Error(`El cuadro en estado ${cur.estado} no admite adjudicación`);
   }
 

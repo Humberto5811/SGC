@@ -222,7 +222,7 @@ assert(m3.items[0].menor_precio_valido === 1100, 'menor precio válido ítem 0 (
 // Persistencia en código
 assert(/INSERT INTO cuadros_comparativos/.test(libSrc), '11. INSERT persistencia');
 assert(/datos_json = \$2::jsonb/.test(libSrc) || /datos_json/.test(libSrc), '11. UPDATE JSONB');
-assert(/EN_ELABORACION/.test(libSrc) && /keepAdjudicado|estado = \$4/.test(libSrc), '12. estado EN_ELABORACION al guardar');
+assert(/EN_ELABORACION/.test(libSrc) && /nextEstado|keepAdjudicado|estado = \$4/.test(libSrc), '12. estado EN_ELABORACION al guardar');
 assert(normalizeCuadroEstado('BORRADOR') === ESTADOS_CUADRO.EN_ELABORACION, '12. BORRADOR → bandeja elaboración');
 assert(normalizeCuadroEstado('EN_ELABORACION') === ESTADOS_CUADRO.EN_ELABORACION, '12. EN_ELABORACION');
 
@@ -234,7 +234,23 @@ assert(/showElaborarCuadroModal/.test(viewSrc), 'vista cablea elaborar');
 assert(/crearCuadroBorrador/.test(svcSrc) && /guardarCuadroBorrador/.test(svcSrc), 'service cliente');
 
 // No tocar Workflow / módulos prohibidos
-assert(!/syncRequerimientosSolicitudWorkflow/.test(libSrc), '14. cuadro no sincroniza Workflow');
+// RC8.5: sync Workflow solo en derivarCuadroACcp (no en borrador/matriz/PDF/adjudicación).
+const syncOnlyDerivar = (() => {
+  const m = libSrc.match(/export async function derivarCuadroACcp[\s\S]*?(?=\nexport async function|\nexport function|\n\/\/ RC8|$)/);
+  const derivarBody = m?.[0] || '';
+  const hasInDerivar = /syncRequerimientosSolicitudWorkflow/.test(derivarBody);
+  const hasInBorrador = /syncRequerimientosSolicitudWorkflow/.test(
+    libSrc.match(/export async function guardarBorradorCuadro[\s\S]*?(?=\nexport async function)/)?.[0] || '',
+  );
+  const hasInAdj = /syncRequerimientosSolicitudWorkflow/.test(
+    libSrc.match(/export async function guardarAdjudicacionCuadro[\s\S]*?(?=\nexport async function)/)?.[0] || '',
+  );
+  const hasInPdf = /syncRequerimientosSolicitudWorkflow/.test(
+    libSrc.match(/export async function guardarPdfCuadro[\s\S]*?(?=\nexport async function)/)?.[0] || '',
+  );
+  return hasInDerivar && !hasInBorrador && !hasInAdj && !hasInPdf;
+})();
+assert(syncOnlyDerivar, '14. cuadro no sincroniza Workflow');
 assert(/VALIDACION_USUARIO[\s\S]*CUADRO_COMPARATIVO/.test(wfSrc), '14. transición Workflow intacta');
 assert(/DESTINOS_SALIDA_VALIDACION/.test(valSrc), '14. Validaciones intactas');
 assert(/presentarCotizacion/.test(portalProvSrc), '14. Portal intacto (presentarCotizacion sigue)');

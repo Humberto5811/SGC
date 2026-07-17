@@ -361,7 +361,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     setDis('#ccBtnGuardar', readonly || derivado);
     setDis('#ccBtnAdjudicar', readonly || derivado || e === 'GENERADO' || e === 'GENERADO_PRELIMINAR');
     setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || e === 'ANULADO');
-    setDis('#ccBtnDerivarCcp', !(e === 'FIRMADO' && (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre)) || derivado);
+    const puedeDerivar = cuadro?.puede_derivar_ccp === true
+      || (e === 'FIRMADO' && !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) && !derivado);
+    setDis('#ccBtnDerivarCcp', !puedeDerivar);
 
     const firmaHost = el.querySelector('#ccFirmaHost');
     if (firmaHost) firmaHost.innerHTML = renderPanelFirma(cuadro);
