@@ -203,6 +203,18 @@ export const contratacionesService = {
   async getCuadroPdfUrl(cuadroId, inline = true) {
     return `/api/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/pdf${inline ? '?inline=1' : ''}`;
   },
+  async adjuntarCuadroPdfFirmado(cuadroId, body = {}) {
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado`, body);
+  },
+  async eliminarCuadroPdfFirmado(cuadroId) {
+    return api.del(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado`);
+  },
+  async getCuadroPdfFirmadoUrl(cuadroId, inline = true) {
+    return `/api/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado${inline ? '?inline=1' : ''}`;
+  },
+  async derivarCuadroACcp(cuadroId, body = {}) {
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/derivar-ccp`, body);
+  },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');
   },

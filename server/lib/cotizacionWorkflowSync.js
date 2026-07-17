@@ -16,6 +16,8 @@ const ESTADO_NEGOCIO_ETAPA = {
 
   CUADRO_COMPARATIVO: 'En Cuadro Comparativo',
 
+  CCP: 'En CCP',
+
 };
 
 

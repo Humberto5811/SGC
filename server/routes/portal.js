@@ -50,6 +50,10 @@ import {
   obtenerDatosPdfCuadro,
   guardarPdfCuadro,
   resolverPdfCuadro,
+  adjuntarPdfFirmadoCuadro,
+  eliminarPdfFirmadoCuadro,
+  resolverPdfFirmadoCuadro,
+  derivarCuadroACcp,
 } from '../lib/cuadroComparativo.js';
 import {
   getSolicitudDetalleProveedor,
@@ -552,5 +556,41 @@ portalAnalistaRouter.get('/cuadro-comparativo/cuadro/:cuadroId/pdf', async (req,
     res.setHeader('Content-Type', adj.mime_type || 'application/pdf');
     res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(adj.nombre_archivo || 'Anexo_08A.pdf')}"`);
     res.send(buf);
+  } catch (err) { next(err); }
+});
+
+/** RC8.5 — PDF firmado + derivación a CCP */
+portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/firmado', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await adjuntarPdfFirmadoCuadro(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.delete('/cuadro-comparativo/cuadro/:cuadroId/firmado', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.query?.usuario || '';
+    const data = await eliminarPdfFirmadoCuadro(req.params.cuadroId, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cuadro-comparativo/cuadro/:cuadroId/firmado', async (req, res, next) => {
+  try {
+    const adj = await resolverPdfFirmadoCuadro(req.params.cuadroId);
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    const inline = req.query.inline === '1';
+    res.setHeader('Content-Type', adj.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(adj.nombre_archivo || 'Anexo_08A_firmado.pdf')}"`);
+    res.send(buf);
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/derivar-ccp', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await derivarCuadroACcp(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data });
   } catch (err) { next(err); }
 });

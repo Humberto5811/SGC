@@ -128,14 +128,18 @@ export function updateCuadroStatsDom(rows, containerId = 'cuadroCompStats') {
 }
 
 export function cuadroComparativoMenuItems(row = {}) {
+  const e = normalizeCuadroEstado(row.estado_cuadro);
+  const verSolo = e === ESTADOS_CUADRO.DERIVADO_CCP || e === ESTADOS_CUADRO.FIRMADO;
+  const label = row.accion_cuadro_label
+    || (verSolo ? 'Ver cuadro' : 'Elaborar cuadro');
   return [
     { act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' },
     { act: 'verValidaciones', label: 'Ver validaciones', icon: 'bi-file-earmark-check' },
     {
       act: 'elaborarCuadro',
-      label: 'Elaborar cuadro',
-      icon: 'bi-table',
-      disabled: row.puede_elaborar === false,
+      label,
+      icon: verSolo ? 'bi-eye' : 'bi-table',
+      disabled: e === ESTADOS_CUADRO.ANULADO || row.puede_elaborar === false,
     },
   ];
 }

@@ -1,6 +1,7 @@
 /**
- * Cuadro Comparativo (RC8.1/RC8.2) — bandeja + matriz Bienes + persistencia.
+ * Cuadro Comparativo (RC8.1–RC8.5) — bandeja + matriz + Anexo 8A + firma + CCP.
  * La salida APTO → CUADRO_COMPARATIVO permanece en validacionesCotizacion.js.
+ * Derivación a CCP usa Workflow oficial (CUADRO_COMPARATIVO → CCP).
  */
 import { query } from '../db.js';
 import {
@@ -16,6 +17,25 @@ import {
   MODALIDAD_ADJUDICACION,
 } from './cuadroComparativoAdjudicacion.js';
 import { registrarTrazaPortal } from './invitaciones.js';
+import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
+import { TRANSICIONES_POR_ACCION } from '../../core/workflowEngine/WorkflowTransitions.js';
+import { ETAPAS } from '../../core/workflowEngine/WorkflowState.js';
+
+/** Destino oficial de salida del Cuadro (catálogo Workflow APROBAR). */
+export const DESTINO_SALIDA_CUADRO = Object.freeze({
+  code: ETAPAS.CCP || 'CCP',
+  label: 'CCP',
+  etapa_ejecutor: ETAPAS.CUADRO_COMPARATIVO || 'CUADRO_COMPARATIVO',
+});
+
+const MAX_PDF_FIRMADO_BYTES = 10 * 1024 * 1024;
+
+function bytesFromBase64(b64) {
+  if (!b64) return null;
+  const s = String(b64);
+  const padding = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((s.length * 3) / 4) - padding);
+}
 
 /** Estados documentales del cuadro (independientes de la etapa Workflow). */
 export const ESTADOS_CUADRO = Object.freeze({
@@ -329,11 +349,14 @@ export async function listarCuadroComparativoExpedientes() {
       estado_cuadro_badge: badgeClassCuadro(estadoCode),
       cuadro_id: persisted?.cuadro_id || null,
       solicitud_estado: r.solicitud_estado || '',
-      puede_elaborar: estadoCode === ESTADOS_CUADRO.PENDIENTE_ELABORAR
-        || estadoCode === ESTADOS_CUADRO.EN_ELABORACION
-        || estadoCode === ESTADOS_CUADRO.BORRADOR
-        || estadoCode === ESTADOS_CUADRO.ADJUDICADO
-        || estadoCode === ESTADOS_CUADRO.OBSERVADO,
+      // Abrir siempre (excepto anulado); post-firma/derivación es «Ver cuadro».
+      puede_elaborar: estadoCode !== ESTADOS_CUADRO.ANULADO,
+      solo_lectura: estadoCode === ESTADOS_CUADRO.DERIVADO_CCP
+        || estadoCode === ESTADOS_CUADRO.FIRMADO,
+      accion_cuadro_label: (estadoCode === ESTADOS_CUADRO.DERIVADO_CCP
+        || estadoCode === ESTADOS_CUADRO.FIRMADO)
+        ? 'Ver cuadro'
+        : 'Elaborar cuadro',
       search_text: [
         r.solicitud_codigo,
         reqTexto,
@@ -465,6 +488,13 @@ function buildMatrizFromSources(sc, cotizaciones, requerimientos) {
 
 function mapCuadroRow(row) {
   if (!row) return null;
+  const estado = String(row.estado || '').toUpperCase();
+  const tienePdf = !!(row.pdf_contenido || row.tiene_pdf || row.pdf_nombre);
+  const tieneFirmado = !!(row.firmado_contenido || row.tiene_pdf_firmado || row.firmado_nombre);
+  const derivado = estado === ESTADOS_CUADRO.DERIVADO_CCP;
+  const soloLectura = derivado
+    || estado === ESTADOS_CUADRO.FIRMADO
+    || estado === ESTADOS_CUADRO.ANULADO;
   return {
     id: row.id,
     solicitud_id: row.solicitud_id,
@@ -481,11 +511,33 @@ function mapCuadroRow(row) {
     usuario_adjudicacion: row.usuario_adjudicacion || '',
     fecha_adjudicacion: row.fecha_adjudicacion || null,
     modalidad_adjudicacion: row.modalidad_adjudicacion || MODALIDAD_ADJUDICACION,
+    pdf_nombre: row.pdf_nombre || '',
+    tiene_pdf: tienePdf,
+    firmado_nombre: row.firmado_nombre || '',
+    tiene_pdf_firmado: tieneFirmado,
+    firmado_por: row.firmado_por || '',
+    firmado_at: row.firmado_at || null,
     creado_por: row.creado_por,
     actualizado_por: row.actualizado_por,
     creado_at: row.creado_at,
     actualizado_at: row.actualizado_at,
     derivado_at: row.derivado_at,
+    derivado_por: row.derivado_por || '',
+    responsable_ccp_id: row.responsable_ccp_id != null ? Number(row.responsable_ccp_id) : null,
+    responsable_ccp_nombre: row.responsable_ccp_nombre || '',
+    solo_lectura: soloLectura,
+    puede_adjuntar_firmado: !derivado
+      && (estado === ESTADOS_CUADRO.GENERADO || estado === ESTADOS_CUADRO.FIRMADO)
+      && tienePdf,
+    puede_eliminar_firmado: !derivado && tieneFirmado && estado === ESTADOS_CUADRO.FIRMADO,
+    puede_derivar_ccp: !derivado
+      && estado === ESTADOS_CUADRO.FIRMADO
+      && tienePdf
+      && tieneFirmado,
+    puede_regenerar_pdf: !derivado
+      && estado !== ESTADOS_CUADRO.FIRMADO
+      && estado !== ESTADOS_CUADRO.ANULADO
+      && ['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR'].includes(estado),
   };
 }
 
@@ -945,6 +997,305 @@ export async function resolverPdfCuadro(cuadroId) {
     contenido_base64: row.pdf_contenido,
     version: row.version,
     estado: row.estado,
+  };
+}
+
+/**
+ * Adjunta Anexo 8A firmado. Pasa a FIRMADO. No altera Workflow.
+ */
+export async function adjuntarPdfFirmadoCuadro(cuadroId, payload = {}, usuario = '') {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+  if (!curRows.length) throw new Error('Cuadro no encontrado');
+  const cur = curRows[0];
+  const estado = String(cur.estado || '').toUpperCase();
+  if (estado === 'DERIVADO_CCP') {
+    throw new Error('Cuadro derivado a CCP: no se puede reemplazar el PDF firmado');
+  }
+  if (estado === 'ANULADO') throw new Error('Cuadro anulado');
+  if (!['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO'].includes(estado)) {
+    throw new Error('Debe generar el Anexo 8A antes de adjuntar el PDF firmado');
+  }
+  if (!cur.pdf_contenido) throw new Error('No hay PDF generado del Anexo 8A');
+
+  const base64 = payload.pdf_firmado?.base64 || payload.base64 || payload.firmado_contenido || payload.contenido_base64;
+  if (!base64) throw new Error('PDF firmado obligatorio');
+  const mime = String(payload.pdf_firmado?.mime_type || payload.mime_type || 'application/pdf').toLowerCase();
+  const nombre = String(payload.pdf_firmado?.nombre || payload.nombre || payload.firmado_nombre || 'Anexo_08A_firmado.pdf').slice(0, 300);
+  if (mime && mime !== 'application/pdf' && !/\.pdf$/i.test(nombre)) {
+    throw new Error('Solo se aceptan archivos PDF');
+  }
+  const size = payload.pdf_firmado?.tamaño_bytes || payload.tamaño_bytes || bytesFromBase64(base64);
+  if (size != null && size > MAX_PDF_FIRMADO_BYTES) {
+    throw new Error('El PDF supera el tamaño máximo permitido (10 MB)');
+  }
+
+  const user = String(usuario || '').slice(0, 150);
+  const { rows } = await query(`
+    UPDATE cuadros_comparativos
+    SET firmado_nombre = $2,
+        firmado_contenido = $3,
+        firmado_por = $4,
+        firmado_at = NOW(),
+        estado = 'FIRMADO',
+        actualizado_por = $4,
+        actualizado_at = NOW()
+    WHERE id = $1
+    RETURNING id, solicitud_id, tipo, version, estado, pdf_nombre, firmado_nombre,
+      firmado_por, firmado_at, proveedor_ganador_id, criterio_seleccion, valor_adjudicado,
+      creado_por, actualizado_por, creado_at, actualizado_at, derivado_at,
+      derivado_por, responsable_ccp_id, responsable_ccp_nombre, datos_json,
+      usuario_adjudicacion, fecha_adjudicacion, modalidad_adjudicacion, sustento_decision
+  `, [id, nombre, base64, user]);
+
+  await registrarTrazaPortal({
+    solicitud_id: cur.solicitud_id,
+    proveedor_id: cur.proveedor_ganador_id || null,
+    evento: 'CUADRO_COMPARATIVO_FIRMADO',
+    detalle: JSON.stringify({
+      cuadro_id: id,
+      firmado_nombre: nombre,
+      version: cur.version,
+      usuario: user,
+      fecha: new Date().toISOString(),
+    }).slice(0, 2000),
+    usuario: user,
+  });
+
+  return {
+    cuadro: mapCuadroRow({
+      ...rows[0],
+      tiene_pdf: true,
+      tiene_pdf_firmado: true,
+      firmado_contenido: undefined,
+      pdf_contenido: undefined,
+    }),
+    pdf_firmado: {
+      nombre,
+      mime_type: 'application/pdf',
+      tamaño_bytes: size,
+      uploaded_at: rows[0].firmado_at,
+    },
+    estado: 'FIRMADO',
+    saved: true,
+  };
+}
+
+/** Elimina PDF firmado solo antes de derivar; vuelve a GENERADO. */
+export async function eliminarPdfFirmadoCuadro(cuadroId, usuario = '') {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+  if (!curRows.length) throw new Error('Cuadro no encontrado');
+  const cur = curRows[0];
+  const estado = String(cur.estado || '').toUpperCase();
+  if (estado === 'DERIVADO_CCP') {
+    throw new Error('Cuadro derivado a CCP: no se puede eliminar el PDF firmado');
+  }
+  if (estado !== 'FIRMADO') throw new Error('Solo se elimina el firmado en estado FIRMADO');
+  if (!cur.firmado_contenido && !cur.firmado_nombre) throw new Error('No hay PDF firmado');
+
+  const user = String(usuario || '').slice(0, 150);
+  const { rows } = await query(`
+    UPDATE cuadros_comparativos
+    SET firmado_nombre = NULL,
+        firmado_contenido = NULL,
+        firmado_por = NULL,
+        firmado_at = NULL,
+        estado = 'GENERADO',
+        actualizado_por = $2,
+        actualizado_at = NOW()
+    WHERE id = $1
+    RETURNING id, solicitud_id, tipo, version, estado, pdf_nombre, firmado_nombre,
+      firmado_por, firmado_at, proveedor_ganador_id, criterio_seleccion, valor_adjudicado,
+      creado_por, actualizado_por, creado_at, actualizado_at, derivado_at,
+      derivado_por, responsable_ccp_id, responsable_ccp_nombre, datos_json,
+      usuario_adjudicacion, fecha_adjudicacion, modalidad_adjudicacion, sustento_decision
+  `, [id, user]);
+
+  return {
+    cuadro: mapCuadroRow({
+      ...rows[0],
+      tiene_pdf: !!cur.pdf_contenido || !!cur.pdf_nombre,
+      tiene_pdf_firmado: false,
+    }),
+    estado: 'GENERADO',
+    removed: true,
+  };
+}
+
+export async function resolverPdfFirmadoCuadro(cuadroId) {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  const { rows } = await query(`
+    SELECT id, firmado_nombre, firmado_contenido, estado, version, firmado_por, firmado_at
+    FROM cuadros_comparativos WHERE id = $1
+  `, [id]);
+  if (!rows.length) throw new Error('Cuadro no encontrado');
+  const row = rows[0];
+  if (!row.firmado_contenido) throw new Error('PDF firmado no encontrado');
+  return {
+    nombre_archivo: row.firmado_nombre || 'Anexo_08A_firmado.pdf',
+    mime_type: 'application/pdf',
+    contenido_base64: row.firmado_contenido,
+    version: row.version,
+    estado: row.estado,
+    firmado_por: row.firmado_por || '',
+    firmado_at: row.firmado_at,
+  };
+}
+
+/**
+ * Deriva cuadro FIRMADO a CCP vía Workflow oficial (registrarMovimiento).
+ * Idempotente si ya está DERIVADO_CCP.
+ */
+export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
+  const id = parseInt(cuadroId, 10);
+  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+
+  const destinoOficial = TRANSICIONES_POR_ACCION.APROBAR?.[ETAPAS.CUADRO_COMPARATIVO]
+    || DESTINO_SALIDA_CUADRO.code;
+  if (String(destinoOficial).toUpperCase() !== 'CCP') {
+    throw new Error('Transición Workflow CUADRO_COMPARATIVO → CCP no disponible en catálogo');
+  }
+
+  const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+  if (!curRows.length) throw new Error('Cuadro no encontrado');
+  const cur = curRows[0];
+  const estado = String(cur.estado || '').toUpperCase();
+  const user = String(usuario || '').slice(0, 150);
+
+  if (estado === 'DERIVADO_CCP') {
+    return {
+      ok: true,
+      idempotente: true,
+      cuadro: mapCuadroRow({
+        ...cur,
+        tiene_pdf: !!cur.pdf_contenido || !!cur.pdf_nombre,
+        tiene_pdf_firmado: !!cur.firmado_contenido || !!cur.firmado_nombre,
+        firmado_contenido: undefined,
+        pdf_contenido: undefined,
+      }),
+      destino: DESTINO_SALIDA_CUADRO,
+      responsable: {
+        id: cur.responsable_ccp_id,
+        nombre: cur.responsable_ccp_nombre || '',
+      },
+      workflow: {
+        etapaDestino: DESTINO_SALIDA_CUADRO.code,
+        etapaEjecutor: DESTINO_SALIDA_CUADRO.etapa_ejecutor,
+      },
+    };
+  }
+
+  if (estado !== 'FIRMADO') {
+    throw new Error('El cuadro debe estar FIRMADO para derivar a CCP');
+  }
+  if (!cur.pdf_contenido) throw new Error('Falta el PDF generado del Anexo 8A');
+  if (!cur.firmado_contenido) throw new Error('Adjunte el PDF firmado del Anexo 8A antes de derivar');
+  if (cur.valor_adjudicado == null && !cur.proveedor_ganador_id) {
+    const datos = parseJson(cur.datos_json, {});
+    const items = Array.isArray(datos.items) ? datos.items : [];
+    const sinAdj = items.some((it) => it.proveedor_adjudicado_id == null);
+    if (sinAdj || !items.length) throw new Error('El cuadro debe estar adjudicado antes de derivar');
+  }
+
+  const respId = parseInt(body.responsable_destino_id || body.responsable_id || body.responsable_ccp_id, 10);
+  const respNombre = String(
+    body.responsable_destino_nombre || body.responsable_nombre || body.responsable_ccp_nombre || '',
+  ).trim();
+  if (!Number.isFinite(respId) || respId <= 0) {
+    throw new Error('Seleccione el usuario responsable de CCP');
+  }
+  if (!respNombre) {
+    throw new Error('Nombre del responsable CCP es obligatorio');
+  }
+
+  const observacion = String(body.observacion_derivacion || body.observacion || '').trim()
+    || 'Cuadro Comparativo firmado derivado a CCP';
+
+  const { rows } = await query(`
+    UPDATE cuadros_comparativos
+    SET estado = 'DERIVADO_CCP',
+        derivado_at = NOW(),
+        derivado_por = $2,
+        responsable_ccp_id = $3,
+        responsable_ccp_nombre = $4,
+        actualizado_por = $2,
+        actualizado_at = NOW()
+    WHERE id = $1 AND estado = 'FIRMADO'
+    RETURNING id, solicitud_id, tipo, version, estado, pdf_nombre, firmado_nombre,
+      firmado_por, firmado_at, proveedor_ganador_id, criterio_seleccion, valor_adjudicado,
+      creado_por, actualizado_por, creado_at, actualizado_at, derivado_at,
+      derivado_por, responsable_ccp_id, responsable_ccp_nombre, datos_json,
+      usuario_adjudicacion, fecha_adjudicacion, modalidad_adjudicacion, sustento_decision
+  `, [id, user, respId, respNombre.slice(0, 200)]);
+
+  if (!rows.length) {
+    // Carrera: otro proceso derivó
+    const { rows: again } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+    if (String(again[0]?.estado || '').toUpperCase() === 'DERIVADO_CCP') {
+      return derivarCuadroACcp(id, body, usuario);
+    }
+    throw new Error('No se pudo derivar el cuadro (estado no editable)');
+  }
+
+  const updated = rows[0];
+
+  await query(`
+    UPDATE solicitudes_cotizacion SET estado = 'EN_CCP', updated_at = NOW()
+    WHERE id = $1 AND estado NOT IN ('CERRADA')
+  `, [cur.solicitud_id]);
+
+  const sync = await syncRequerimientosSolicitudWorkflow(cur.solicitud_id, {
+    etapaDestino: DESTINO_SALIDA_CUADRO.code,
+    usuario: user,
+    observacion,
+    etapaEjecutor: DESTINO_SALIDA_CUADRO.etapa_ejecutor,
+    responsable: respNombre,
+  });
+
+  await registrarTrazaPortal({
+    solicitud_id: cur.solicitud_id,
+    proveedor_id: cur.proveedor_ganador_id || null,
+    evento: 'CUADRO_COMPARATIVO_DERIVADO',
+    detalle: JSON.stringify({
+      cuadro_id: id,
+      destino: DESTINO_SALIDA_CUADRO.code,
+      responsable_id: respId,
+      responsable: respNombre,
+      usuario: user,
+      fecha: new Date().toISOString(),
+      workflow_actualizados: sync?.actualizados,
+    }).slice(0, 2000),
+    usuario: user,
+  });
+
+  await registrarTrazaPortal({
+    solicitud_id: cur.solicitud_id,
+    proveedor_id: cur.proveedor_ganador_id || null,
+    evento: 'DERIVADO_A_CCP',
+    detalle: `Expediente derivado desde Cuadro Comparativo → CCP (${respNombre})`,
+    usuario: user,
+  });
+
+  return {
+    ok: true,
+    idempotente: false,
+    cuadro: mapCuadroRow({
+      ...updated,
+      tiene_pdf: true,
+      tiene_pdf_firmado: true,
+    }),
+    destino: DESTINO_SALIDA_CUADRO,
+    responsable: { id: respId, nombre: respNombre },
+    workflow: {
+      etapaDestino: DESTINO_SALIDA_CUADRO.code,
+      etapaEjecutor: DESTINO_SALIDA_CUADRO.etapa_ejecutor,
+      sync,
+    },
+    estado: 'DERIVADO_CCP',
   };
 }
 
