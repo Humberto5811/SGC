@@ -1,5 +1,5 @@
 /**
- * Modal Elaborar / Ver Cuadro Comparativo — Bienes (RC8.2–RC8.5).
+ * Modal Elaborar / Ver Cuadro Comparativo — Bienes (RC8.2–RC8.5 / RC8.3.1 Anexo 8A).
  */
 import { contratacionesService } from '../services/contratacionesService.js';
 import { api } from '../services/apiService.js';
@@ -10,17 +10,21 @@ import {
   renderAdvertenciasAdjudicacion,
   renderResumenAdjudicacion,
   renderHistorialAdjudicacion,
+  renderInfoAdicionalFuentes,
+  renderAccionesAdministrativas,
+  renderPanelSegundaFuente,
   collectObservacionesFromDom,
   collectSeleccionesFromDom,
+  TIPOS_SEGUNDA_FUENTE,
 } from './cuadroComparativoMatriz.js';
 import { labelCuadroEstado, badgeClassCuadro } from './cuadroComparativoUtils.js';
 import {
   previewAnexo8APdf,
   downloadAnexo8APdf,
-  generateAnexo8APdf,
   validateCuadroParaAnexo8A,
 } from './cuadroComparativoPdf.js';
 import { triggerPdfUpload } from './validacionAnexo07aPdf.js';
+import { normalizeSegundaFuente, calcPrecioActualizado } from './cuadroComparativoFuentes.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -63,20 +67,25 @@ function isDerivado(cuadro) {
 function renderPanelSustento(matriz, readonly) {
   const adj = matriz?.adjudicacion || {};
   const opts = CRITERIOS.map((c) => `
-    <option value="${c.v}" ${adj.criterio_seleccion === c.v ? 'selected' : ''}>${esc(c.l)}</option>`).join('');
+    <option value="${c.v}" ${(adj.metodologia || adj.criterio_seleccion) === c.v ? 'selected' : ''}>${esc(c.l)}</option>`).join('');
   const dis = readonly ? 'disabled' : '';
   return `
     <div class="card border mb-3" id="ccPanelAdjudicacion">
       <div class="card-body py-3">
-        <h6 class="fw-bold mb-2">Adjudicación y sustento</h6>
+        <h6 class="fw-bold mb-2">Valor adjudicado — procedimiento / metodología</h6>
         <div class="row g-2">
           <div class="col-md-4">
-            <label class="form-label small mb-0">Criterio de selección</label>
+            <label class="form-label small mb-0">Procedimiento / metodología</label>
             <select class="form-select form-select-sm" id="ccCriterio" ${dis}>${opts}</select>
           </div>
           <div class="col-md-8">
-            <label class="form-label small mb-0">Sustento de selección</label>
+            <label class="form-label small mb-0">Sustento de la metodología</label>
             <textarea class="form-control form-control-sm" id="ccSustento" rows="2" ${dis}>${esc(adj.sustento_decision || '')}</textarea>
+          </div>
+          <div class="col-12">
+            <label class="form-label small mb-0">Procedimiento y/o metodología utilizada (texto amplio)</label>
+            <textarea class="form-control form-control-sm" id="ccMetodologiaTexto" rows="2" ${dis}
+              placeholder="Describa cómo se determinó el valor adjudicado">${esc(adj.metodologia_texto || '')}</textarea>
           </div>
           <div class="col-md-6">
             <label class="form-label small mb-0">Observación del analista</label>
@@ -87,7 +96,7 @@ function renderPanelSustento(matriz, readonly) {
             <textarea class="form-control form-control-sm" id="ccObsAU" rows="2" ${dis}>${esc(adj.observacion_area_usuaria || '')}</textarea>
           </div>
         </div>
-        <p class="small text-muted mb-0 mt-2">Modalidad: adjudicación por ítem. «Otro» y casos de empate / menos de 3 / distinto al recomendado exigen sustento.</p>
+        <p class="small text-muted mb-0 mt-2">Seleccione la fuente adjudicada por ítem en la matriz. «Otra» exige sustento. PDF oficial bloqueado (RC8.3.1).</p>
       </div>
     </div>`;
 }
@@ -132,11 +141,161 @@ function renderPanelFirma(cuadro) {
 
 function refreshMatrizHost(el, matriz, editable) {
   const host = el.querySelector('#ccMatrizHost');
-  if (host) host.innerHTML = renderMatrizBienesHtml(matriz, { editable });
+  if (host) {
+    host.innerHTML = renderMatrizBienesHtml(matriz, { editable })
+      + renderInfoAdicionalFuentes(matriz)
+      + renderAccionesAdministrativas(matriz, { editable });
+  }
+  const sf = el.querySelector('#ccSegundaFuenteHost');
+  if (sf) sf.innerHTML = renderPanelSegundaFuente(matriz, { editable });
   const adv = el.querySelector('#ccAdvHost');
   if (adv) adv.innerHTML = renderAdvertenciasAdjudicacion(matriz);
   const res = el.querySelector('#ccResumenAdjHost');
   if (res) res.innerHTML = renderResumenAdjudicacion(matriz) + renderHistorialAdjudicacion(matriz.historial_adjudicacion);
+}
+
+function showConfirmSgc({ title, message, confirmLabel = 'Confirmar' }) {
+  return new Promise((resolve) => {
+    const { el, modal } = showBootstrapModal(`
+      <div class="modal fade" tabindex="-1">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">${esc(title)}</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body"><p class="mb-0">${esc(message)}</p></div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-cc="no">Cancelar</button>
+              <button type="button" class="btn btn-danger" data-cc="yes">${esc(confirmLabel)}</button>
+            </div>
+          </div>
+        </div>
+      </div>`);
+    el.querySelector('[data-cc="yes"]').onclick = () => { modal?.hide(); resolve(true); };
+    el.querySelector('[data-cc="no"]').onclick = () => { modal?.hide(); resolve(false); };
+    el.addEventListener('hidden.bs.modal', () => resolve(false), { once: true });
+  });
+}
+
+function showSegundaFuenteFormModal({ items = [], fuente = null }) {
+  return new Promise((resolve) => {
+    const tipoOpts = TIPOS_SEGUNDA_FUENTE.map((t) => `
+      <option value="${t.code}" ${fuente?.tipo_fuente === t.code ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
+    const precioRows = items.map((it) => {
+      const pr = (fuente?.precios_por_item || {})[it.item_key] || {};
+      return `
+        <tr>
+          <td class="small">${esc(it.descripcion || it.item_key)}</td>
+          <td><input type="number" step="0.01" class="form-control form-control-sm cc-sf-pu" data-item-key="${esc(it.item_key)}"
+            value="${pr.precio_unitario != null ? esc(pr.precio_unitario) : ''}"></td>
+          <td><input type="number" step="0.01" class="form-control form-control-sm cc-sf-factor" data-item-key="${esc(it.item_key)}"
+            value="${pr.factor_ajuste != null ? esc(pr.factor_ajuste) : (fuente?.factor_ajuste ?? 1)}"></td>
+          <td class="small text-end cc-sf-act" data-item-key="${esc(it.item_key)}">—</td>
+        </tr>`;
+    }).join('');
+    const { el, modal } = showBootstrapModal(`
+      <div class="modal fade" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">${fuente ? 'Editar' : 'Agregar'} segunda fuente</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="row g-2 mb-2">
+                <div class="col-md-6"><label class="form-label small">Tipo</label>
+                  <select class="form-select form-select-sm" id="sfTipo">${tipoOpts}</select></div>
+                <div class="col-md-6"><label class="form-label small">Denominación</label>
+                  <input class="form-control form-control-sm" id="sfDenom" value="${esc(fuente?.denominacion || '')}"></div>
+                <div class="col-md-6"><label class="form-label small">Entidad / proveedor</label>
+                  <input class="form-control form-control-sm" id="sfEntidad" value="${esc(fuente?.entidad || '')}"></div>
+                <div class="col-md-3"><label class="form-label small">RUC</label>
+                  <input class="form-control form-control-sm" id="sfRuc" value="${esc(fuente?.ruc || '')}"></div>
+                <div class="col-md-3"><label class="form-label small">Año</label>
+                  <input class="form-control form-control-sm" id="sfAnio" value="${esc(fuente?.anio || '')}"></div>
+                <div class="col-md-6"><label class="form-label small">Referencia (N.° orden/contrato)</label>
+                  <input class="form-control form-control-sm" id="sfRef" value="${esc(fuente?.referencia || '')}"></div>
+                <div class="col-md-6"><label class="form-label small">URL</label>
+                  <input class="form-control form-control-sm" id="sfUrl" value="${esc(fuente?.url || '')}"></div>
+                <div class="col-md-4"><label class="form-label small">Fecha consulta</label>
+                  <input type="date" class="form-control form-control-sm" id="sfFecha" value="${esc(String(fuente?.fecha_consulta || '').slice(0, 10))}"></div>
+                <div class="col-md-4"><label class="form-label small">Moneda</label>
+                  <input class="form-control form-control-sm" id="sfMoneda" value="${esc(fuente?.moneda || 'PEN')}"></div>
+                <div class="col-md-4"><label class="form-label small">Factor ajuste global</label>
+                  <input type="number" step="0.01" class="form-control form-control-sm" id="sfFactor" value="${esc(fuente?.factor_ajuste ?? 1)}"></div>
+                <div class="col-12"><label class="form-label small">Observación</label>
+                  <textarea class="form-control form-control-sm" id="sfObs" rows="2">${esc(fuente?.observacion || '')}</textarea></div>
+              </div>
+              <h6 class="small fw-bold">Precios por ítem</h6>
+              <table class="table table-sm table-bordered"><thead class="table-light"><tr>
+                <th>Ítem</th><th>P. unit. original</th><th>Factor</th><th>P. actualizado</th>
+              </tr></thead><tbody>${precioRows || '<tr><td colspan="4" class="text-muted">Sin ítems</td></tr>'}</tbody></table>
+              <div id="sfErr" class="alert alert-danger d-none py-2 small"></div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+              <button type="button" class="btn btn-primary" id="sfOk">Guardar fuente</button>
+            </div>
+          </div>
+        </div>
+      </div>`);
+
+    const recalc = () => {
+      el.querySelectorAll('.cc-sf-pu').forEach((inp) => {
+        const key = inp.dataset.itemKey;
+        const factorEl = el.querySelector(`.cc-sf-factor[data-item-key="${key}"]`);
+        const out = el.querySelector(`.cc-sf-act[data-item-key="${key}"]`);
+        const act = calcPrecioActualizado(inp.value, factorEl?.value);
+        if (out) out.textContent = act != null ? act.toFixed(2) : '—';
+      });
+    };
+    el.querySelectorAll('.cc-sf-pu, .cc-sf-factor, #sfFactor').forEach((n) => {
+      n.addEventListener('input', () => {
+        if (n.id === 'sfFactor') {
+          const g = n.value;
+          el.querySelectorAll('.cc-sf-factor').forEach((f) => { f.value = g; });
+        }
+        recalc();
+      });
+    });
+    recalc();
+
+    el.querySelector('#sfOk').onclick = () => {
+      const denom = el.querySelector('#sfDenom')?.value?.trim();
+      const err = el.querySelector('#sfErr');
+      if (!denom) {
+        err.textContent = 'La denominación es obligatoria.';
+        err.classList.remove('d-none');
+        return;
+      }
+      const precios_por_item = {};
+      el.querySelectorAll('.cc-sf-pu').forEach((inp) => {
+        const key = inp.dataset.itemKey;
+        const factor = Number(el.querySelector(`.cc-sf-factor[data-item-key="${key}"]`)?.value || 1);
+        precios_por_item[key] = {
+          precio_unitario: inp.value === '' ? null : Number(inp.value),
+          factor_ajuste: factor,
+        };
+      });
+      const raw = {
+        ...(fuente || {}),
+        tipo_fuente: el.querySelector('#sfTipo')?.value,
+        denominacion: denom,
+        entidad: el.querySelector('#sfEntidad')?.value || '',
+        ruc: el.querySelector('#sfRuc')?.value || '',
+        anio: el.querySelector('#sfAnio')?.value || '',
+        referencia: el.querySelector('#sfRef')?.value || '',
+        url: el.querySelector('#sfUrl')?.value || '',
+        fecha_consulta: el.querySelector('#sfFecha')?.value || null,
+        moneda: el.querySelector('#sfMoneda')?.value || 'PEN',
+        factor_ajuste: Number(el.querySelector('#sfFactor')?.value || 1),
+        observacion: el.querySelector('#sfObs')?.value || '',
+        precios_por_item,
+      };
+      modal?.hide();
+      resolve(normalizeSegundaFuente(raw, 0, items));
+    };
+    el.addEventListener('hidden.bs.modal', () => resolve(null), { once: true });
+  });
 }
 
 function showDerivarCcpPanel({ onConfirm }) {
@@ -309,8 +468,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
             ${renderInconsistencias(matriz?.inconsistencias || [])}
             <div id="ccAdvHost">${renderAdvertenciasAdjudicacion(matriz)}</div>
             <div id="ccResumenAdjHost">${renderResumenAdjudicacion(matriz)}${renderHistorialAdjudicacion(matriz?.historial_adjudicacion)}</div>
-            <h6 class="fw-bold">Matriz comparativa (Bienes)</h6>
-            <div id="ccMatrizHost">${renderMatrizBienesHtml(matriz, { editable: !readonly })}</div>
+            <div id="ccSegundaFuenteHost">${renderPanelSegundaFuente(matriz, { editable: !readonly })}</div>
+            <h6 class="fw-bold">Matriz comparativa — Anexo 8A (columnas por fuente)</h6>
+            <div id="ccMatrizHost">${renderMatrizBienesHtml(matriz, { editable: !readonly })}${renderInfoAdicionalFuentes(matriz)}${renderAccionesAdministrativas(matriz, { editable: !readonly })}</div>
             <div class="mt-3">
               <label class="form-label small mb-1">Notas internas del cuadro</label>
               <textarea class="form-control form-control-sm" id="ccNotasInternas" rows="2"
@@ -330,10 +490,10 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
             <button type="button" class="btn btn-success" id="ccBtnAdjudicar">
               <i class="bi bi-award"></i> Guardar adjudicación
             </button>
-            <button type="button" class="btn btn-outline-dark" id="ccBtnPreview8a" title="Requiere adjudicación">
-              <i class="bi bi-eye"></i> Previsualizar Anexo 8A
+            <button type="button" class="btn btn-outline-dark" id="ccBtnPreview8a" title="Previsualización BORRADOR">
+              <i class="bi bi-eye"></i> Previsualizar (borrador)
             </button>
-            <button type="button" class="btn btn-dark" id="ccBtnGenerar8a" title="Genera y persiste PDF">
+            <button type="button" class="btn btn-dark" id="ccBtnGenerar8a" title="PDF oficial bloqueado en RC8.3.1" disabled>
               <i class="bi bi-file-earmark-pdf"></i> Generar Anexo 8A
             </button>
             <button type="button" class="btn btn-outline-dark" id="ccBtnDescargar8a">
@@ -360,7 +520,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     };
     setDis('#ccBtnGuardar', readonly || derivado);
     setDis('#ccBtnAdjudicar', readonly || derivado || e === 'GENERADO' || e === 'GENERADO_PRELIMINAR');
-    setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || e === 'ANULADO');
+    // RC8.3.1: PDF oficial bloqueado hasta estabilizar matriz Anexo 8A
+    setDis('#ccBtnGenerar8a', true);
     const puedeDerivar = cuadro?.puede_derivar_ccp === true
       || (e === 'FIRMADO' && !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) && !derivado);
     setDis('#ccBtnDerivarCcp', !puedeDerivar);
@@ -368,6 +529,48 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     const firmaHost = el.querySelector('#ccFirmaHost');
     if (firmaHost) firmaHost.innerHTML = renderPanelFirma(cuadro);
     bindFirmaActions();
+    bindSegundaFuente();
+  }
+
+  function bindSegundaFuente() {
+    const editable = !readonly && !isDerivado(cuadro);
+    el.querySelector('#ccBtnAddSegundaFuente')?.addEventListener('click', async () => {
+      if (!editable) return;
+      const created = await showSegundaFuenteFormModal({ items: matriz.items || [] });
+      if (!created) return;
+      matriz.segunda_fuente = [...(matriz.segunda_fuente || []), created];
+      refreshMatrizHost(el, matriz, editable);
+      bindSegundaFuente();
+    });
+    el.querySelectorAll('.cc-sf-edit').forEach((btn) => {
+      btn.onclick = async () => {
+        if (!editable) return;
+        const id = btn.dataset.id;
+        const cur = (matriz.segunda_fuente || []).find((f) => String(f.id_fuente || f.id) === String(id));
+        const updated = await showSegundaFuenteFormModal({ items: matriz.items || [], fuente: cur });
+        if (!updated) return;
+        matriz.segunda_fuente = (matriz.segunda_fuente || []).map((f) => (
+          String(f.id_fuente || f.id) === String(id) ? updated : f
+        ));
+        refreshMatrizHost(el, matriz, editable);
+        bindSegundaFuente();
+      };
+    });
+    el.querySelectorAll('.cc-sf-del').forEach((btn) => {
+      btn.onclick = async () => {
+        if (!editable) return;
+        const ok = await showConfirmSgc({
+          title: 'Eliminar segunda fuente',
+          message: '¿Eliminar esta referencia de segunda fuente?',
+          confirmLabel: 'Eliminar',
+        });
+        if (!ok) return;
+        const id = btn.dataset.id;
+        matriz.segunda_fuente = (matriz.segunda_fuente || []).filter((f) => String(f.id_fuente || f.id) !== String(id));
+        refreshMatrizHost(el, matriz, editable);
+        bindSegundaFuente();
+      };
+    });
   }
 
   function openFirmadoUrl(inline) {
@@ -579,6 +782,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   el.querySelector('#ccBtnPreview8a').onclick = async () => {
     try {
       const persistido = await buildPersistidoParaPdf();
+      persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'BORRADOR', puede_pdf_oficial: false };
+      persistido.borrador_no_oficial = true;
       const val = validateCuadroParaAnexo8A(persistido);
       if (!val.ok) {
         alert(`No se puede previsualizar:\n- ${val.faltantes.join('\n- ')}`);
@@ -591,39 +796,18 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   };
 
   el.querySelector('#ccBtnGenerar8a').onclick = async () => {
-    if (!cuadro?.id) return alert('No hay cuadro persistido');
-    if (String(cuadro.estado || '').toUpperCase() === 'FIRMADO' || isDerivado(cuadro)) {
-      return alert('Cuadro firmado o derivado: no se puede regenerar sin anular la versión.');
-    }
-    const btn = el.querySelector('#ccBtnGenerar8a');
-    btn.disabled = true;
-    try {
-      const persistido = await buildPersistidoParaPdf();
-      const val = validateCuadroParaAnexo8A(persistido);
-      if (!val.ok) {
-        alert(`No se puede generar el Anexo 8A:\n- ${val.faltantes.join('\n- ')}`);
-        return;
-      }
-      const { base64, filename, report } = generateAnexo8APdf(persistido);
-      const resp = await contratacionesService.guardarCuadroPdf(cuadro.id, {
-        pdf_contenido: base64,
-        pdf_nombre: filename,
-        version_report: report.meta.version,
-      });
-      const data = resp.data || resp;
-      cuadro = data.cuadro || { ...cuadro, estado: 'GENERADO', version: data.version, tiene_pdf: true };
-      const badge = el.querySelector('#ccEstadoBadge');
-      if (badge) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
-      }
-      alert(`Anexo 8A generado y guardado (v${data.version || cuadro.version}). Estado: GENERADO.`);
-      if (typeof onSaved === 'function') onSaved();
-    } catch (err) {
-      alert(err.message || 'No se pudo generar el Anexo');
-    } finally {
-      syncUiLocks();
-    }
+    // RC8.3.1 — PDF oficial bloqueado hasta alinear Anexo 8A con schema v2
+    const { el: msgEl, modal: msgModal } = showBootstrapModal(`
+      <div class="modal fade" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Generación oficial bloqueada</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <p class="mb-2">La matriz se rediseñó al formato Anexo 8A (schema v2).</p>
+          <p class="mb-0 small text-muted">Use <strong>Previsualizar (borrador)</strong>. La generación oficial, firma y derivación a CCP se habilitarán cuando RC8.4 adapte el PDF al schema v2.</p>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-primary" data-bs-dismiss="modal">Entendido</button></div>
+      </div></div></div>`);
+    void msgEl; void msgModal;
   };
 
   el.querySelector('#ccBtnDescargar8a').onclick = async () => {

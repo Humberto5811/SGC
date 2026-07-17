@@ -197,7 +197,8 @@ assert(!/syncRequerimientosSolicitudWorkflow/.test(
 assert(/CUADRO_COMPARATIVO[\s\S]*CCP/.test(wfSrc), '11. transición Workflow intacta');
 
 // UI
-assert(/cc-adj-radio/.test(mtxSrc) && /Recomendado/.test(mtxSrc), 'UI radio + recomendado');
+assert(/cc-adj-fuente|cc-adj-radio/.test(mtxSrc), 'UI selección adjudicado (fuente/radio)');
+assert(/recomendado|Recomendado|VALOR ADJUDICADO/i.test(mtxSrc), 'UI marca recomendación / valor adjudicado');
 assert(/Guardar adjudicación/.test(modalSrc), 'UI botón adjudicación');
 assert(/adjudicacion/.test(routeSrc), 'ruta PUT adjudicacion');
 

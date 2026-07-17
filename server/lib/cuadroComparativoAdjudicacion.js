@@ -380,5 +380,7 @@ export function mergeAdjudicacionCuadro(matrizFresh, datosGuardados) {
     notas_internas: datosGuardados.notas_internas || matrizFresh.notas_internas || '',
     adjudicacion: datosGuardados.adjudicacion || null,
     historial_adjudicacion: datosGuardados.historial_adjudicacion || [],
+    segunda_fuente: datosGuardados.segunda_fuente || matrizFresh.segunda_fuente || [],
+    primera_fuente: matrizFresh.primera_fuente,
   });
 }

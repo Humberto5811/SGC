@@ -159,8 +159,15 @@ export function buildCuadroComparativoReportData(persistido = {}) {
   const ganadorPrincipal = (adj.resumen_proveedores || [])[0]
     || proveedoresOrdenados.find((p) => Number(p.proveedor_id) === Number(cuadro.proveedor_ganador_id || adj.proveedor_ganador_id));
 
+  const borrador = !!(persistido.borrador_no_oficial || datos.meta?.pdf_modo === 'BORRADOR'
+    || persistido.meta?.pdf_modo === 'BORRADOR' || !datos.meta?.puede_pdf_oficial);
   const report = {
-    anexo: { ...ANEXO_8A },
+    anexo: {
+      ...ANEXO_8A,
+      subtitulo: borrador
+        ? `${ANEXO_8A.subtitulo} — BORRADOR — NO OFICIAL`
+        : ANEXO_8A.subtitulo,
+    },
     entidad: {
       nombre: optField(entidad.nombre, '—'),
       siglas: optField(entidad.siglas, '—'),

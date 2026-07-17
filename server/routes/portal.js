@@ -463,11 +463,17 @@ portalAnalistaRouter.get('/cuadro-comparativo', async (_req, res, next) => {
 });
 
 /** RC8.1 — bandeja por Solicitud de Cotización */
-portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (_req, res, next) => {
+portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (_req, res) => {
   try {
     const data = await listarCuadroComparativoExpedientes();
     res.json({ data });
-  } catch (err) { next(err); }
+  } catch (err) {
+    console.error('[cuadro-comparativo/expedientes]', err?.stack || err);
+    res.status(500).json({
+      error: 'No se pudo cargar la bandeja de Cuadro Comparativo',
+      code: 'CUADRO_LIST_ERROR',
+    });
+  }
 });
 
 portalAnalistaRouter.get('/cuadro-comparativo/expedientes/:solicitudId', async (req, res, next) => {

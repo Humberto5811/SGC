@@ -1,9 +1,16 @@
 /**
- * Normalización económica / matriz Cuadro Comparativo — Bienes (RC8.2).
+ * Normalización económica / matriz Cuadro Comparativo — Bienes (RC8.2 / RC8.3.1).
  * No inventa precios; documenta inconsistencias.
  */
+import {
+  VERSION_SCHEMA_V2,
+  buildPrimeraFuenteFromMatriz,
+  mergeFuentesCuadro,
+} from './cuadroComparativoSchema.js';
 
 const TOLERANCIA_TOTAL = 0.02;
+
+export { migrateCuadroSchemaV1ToV2, mergeFuentesCuadro, TIPOS_SEGUNDA_FUENTE } from './cuadroComparativoSchema.js';
 
 export function parseJsonSafe(val, fallback = {}) {
   if (Array.isArray(val)) return val;
@@ -146,8 +153,10 @@ export function normalizeOfertaProveedor(cotizacionRow, itemNorm, propTecItem = 
     marca: pickText(tec, 'marca'),
     modelo: pickText(tec, 'modelo'),
     procedencia: pickText(tec, 'pais', 'procedencia', 'origen'),
+    anio_fabricacion: pickText(tec, 'anio_fabricacion', 'año_fabricacion', 'anio', 'year'),
     garantia: pickText(tec, 'garantia', 'garantía'),
     plazo_entrega: pickText(tec, 'plazo_entrega', 'plazoEntrega', 'plazo'),
+    forma_pago: pickText(tec, 'forma_pago', 'formaPago', 'pago'),
     observaciones: pickText(tec, 'observaciones', 'observacion', 'notas') || '',
     observacion_analista: '',
     inconsistencias: ecoMap.inconsistencias,
@@ -279,8 +288,8 @@ export function buildMatrizComparativaBienes(opts = {}) {
 
   const validation = validateEconomiaCuadro({ items, inconsistencias, resumen_proveedores });
 
-  return {
-    version_schema: 1,
+  const base = {
+    version_schema: VERSION_SCHEMA_V2,
     solicitud: {
       id: solicitud.id,
       codigo: solicitud.codigo || solicitud.solicitud_codigo || '',
@@ -299,6 +308,7 @@ export function buildMatrizComparativaBienes(opts = {}) {
     resumen_proveedores,
     inconsistencias,
     notas_internas: '',
+    segunda_fuente: [],
     meta: {
       items_count: items.length,
       items_incompletos: validation.items_incompletos,
@@ -306,8 +316,12 @@ export function buildMatrizComparativaBienes(opts = {}) {
       puede_generar: validation.puede_generar,
       puede_seleccionar_ganador: validation.items_incompletos === 0 && items.length > 0,
       puede_pdf: false,
+      puede_pdf_oficial: false,
+      pdf_modo: 'BORRADOR',
     },
   };
+  base.primera_fuente = buildPrimeraFuenteFromMatriz(base, cotizaciones);
+  return base;
 }
 
 export function validateEconomiaCuadro(payload = {}) {
@@ -365,12 +379,29 @@ export function mergeObservacionesCuadro(matrizFresh, datosGuardados) {
       valor_adjudicado_item: prev.valor_adjudicado_item,
     };
   });
-  return {
+  const merged = {
     ...matrizFresh,
     items,
     notas_internas: datosGuardados.notas_internas || matrizFresh.notas_internas || '',
     adjudicacion: datosGuardados.adjudicacion || matrizFresh.adjudicacion,
     historial_adjudicacion: datosGuardados.historial_adjudicacion || matrizFresh.historial_adjudicacion,
+    segunda_fuente: datosGuardados.segunda_fuente,
+  };
+  return mergeFuentesCuadro(merged, datosGuardados);
+}
+
+/** Reconstruye primera_fuente con filas de cotización (contacto, fechas). */
+export function attachPrimeraFuenteFromCotizaciones(matriz, cotizaciones = []) {
+  if (!matriz || typeof matriz !== 'object') return matriz;
+  return {
+    ...matriz,
+    version_schema: VERSION_SCHEMA_V2,
+    primera_fuente: buildPrimeraFuenteFromMatriz(matriz, cotizaciones),
+    meta: {
+      ...(matriz.meta || {}),
+      puede_pdf_oficial: false,
+      pdf_modo: 'BORRADOR',
+    },
   };
 }
 
@@ -381,5 +412,19 @@ export function stripArchivosFromDatosJson(datos) {
   delete clone.pdf_contenido;
   delete clone.firmado;
   delete clone.archivos;
+  // Conservar metadata de documentos de segunda fuente; quitar base64 pesado
+  if (Array.isArray(clone.segunda_fuente)) {
+    clone.segunda_fuente = clone.segunda_fuente.map((f) => ({
+      ...f,
+      documentos: (f.documentos || []).map((d) => ({
+        nombre: d.nombre,
+        mime_type: d.mime_type,
+        tamaño_bytes: d.tamaño_bytes,
+        uploaded_at: d.uploaded_at,
+        // base64 opcional: si es muy grande se omite en borrador liviano
+        ...(d.base64 && String(d.base64).length < 500000 ? { base64: d.base64 } : {}),
+      })),
+    }));
+  }
   return clone;
 }

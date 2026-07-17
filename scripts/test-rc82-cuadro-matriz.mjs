@@ -228,7 +228,8 @@ assert(normalizeCuadroEstado('EN_ELABORACION') === ESTADOS_CUADRO.EN_ELABORACION
 
 // UI no edita precios
 assert(/solo lectura|Solo se editan observaciones/i.test(mtxSrc), '13. copy solo lectura precios');
-assert(/cc-obs-analista/.test(mtxSrc) && !/type="number".*precio/i.test(mtxSrc), '13. sin inputs de precio');
+assert(/cc-adj-fuente|Cotización N\.°/.test(mtxSrc), '13. matriz por columnas de fuente');
+assert(!/cc-precio-edit|name="precio_unitario"/.test(mtxSrc), '13. sin inputs de precio de cotización editable');
 assert(/Guardar borrador/.test(modalSrc), 'guardar borrador en modal');
 assert(/showElaborarCuadroModal/.test(viewSrc), 'vista cablea elaborar');
 assert(/crearCuadroBorrador/.test(svcSrc) && /guardarCuadroBorrador/.test(svcSrc), 'service cliente');
@@ -254,7 +255,7 @@ assert(syncOnlyDerivar, '14. cuadro no sincroniza Workflow');
 assert(/VALIDACION_USUARIO[\s\S]*CUADRO_COMPARATIVO/.test(wfSrc), '14. transición Workflow intacta');
 assert(/DESTINOS_SALIDA_VALIDACION/.test(valSrc), '14. Validaciones intactas');
 assert(/presentarCotizacion/.test(portalProvSrc), '14. Portal intacto (presentarCotizacion sigue)');
-assert(/version_schema:\s*1/.test(mapSrc), 'schema version_schema 1');
+assert(/version_schema:\s*[12]|VERSION_SCHEMA_V2/.test(mapSrc), 'schema version_schema 1|2');
 
 // Oferta normalize
 const of = normalizeOfertaProveedor(cotApto, normalizeCuadroItem(detalle[0], 0), cotApto.propuesta_tecnica.items[0]);

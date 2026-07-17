@@ -10,7 +10,9 @@ import {
   normalizeCuadroEstado,
   labelCuadroEstado,
   listarCuadroComparativo,
+  listarCuadroComparativoExpedientes,
 } from '../server/lib/cuadroComparativo.js';
+import { query } from '../server/db.js';
 import {
   formatRequerimientosCuadro,
   buildCuadroStats,
@@ -182,6 +184,57 @@ assert(/Solicitud/.test(tableBlock) && /Requerimientos/.test(tableBlock), '15. c
 assert(!/<th>Proveedor<\/th>/.test(tableBlock), '15. columnas de bandeja sin Proveedor');
 assert(/Prov\. APTO|proveedores_aptos/.test(viewSrc), '15. contador APTO en bandeja');
 
+// 16) RC8.1.1 — no usar operador JSON sobre payload TEXT
+const listFn = libSrc.match(/export async function listarCuadroComparativoExpedientes[\s\S]*?(?=\nexport async function)/)?.[0] || '';
+assert(listFn.length > 100, '16. cuerpo listarCuadroComparativoExpedientes');
+assert(!/payload\s*->/.test(listFn) && !/payload\s*->>/.test(listFn), '16. ninguna expresión payload-> / payload->>');
+assert(!/propuesta_economica/.test(listFn), '16. bandeja no carga propuesta_economica');
+assert(!/detalle_items/.test(listFn), '16. bandeja no carga detalle_items');
+assert(/validacion_informe->>'enviado_at'/.test(listFn), '16. validacion_informe (jsonb) solo para fecha');
+assert(/CUADRO_LIST_ERROR/.test(routeSrc), '16. error controlado CUADRO_LIST_ERROR');
+assert(/No se pudo cargar la bandeja de Cuadro Comparativo/.test(routeSrc), '16. mensaje de error controlado');
+
+// 17) Compatibilidad histórica + endpoint real (DB)
+async function runDbCases() {
+  let data;
+  try {
+    data = await listarCuadroComparativoExpedientes();
+    assert(Array.isArray(data), '17. listado HTTP 200 (array)');
+    assert(data.every((e) => Number(e.proveedores_aptos) >= 1), '17. solo SC con ≥1 APTO');
+    assert(data.every((e) => e.solicitud_id && e.solicitud_codigo), '17. campos esenciales presentes');
+    console.log(`INFO expedientes APTO en BD: ${data.length}`);
+  } catch (err) {
+    assert(false, `17. listarCuadroComparativoExpedientes no debe fallar: ${err.message}`);
+  }
+  const { rows: payloadRows } = await query(`
+    SELECT id, payload FROM requerimientos
+    WHERE payload IS NULL OR TRIM(COALESCE(payload, '')) = '' OR TRIM(payload) = '{}'
+    LIMIT 5
+  `);
+  assert(Array.isArray(payloadRows), '17. payload NULL/vacío/{} consultable');
+  const { rows: typeRows } = await query(`
+    SELECT data_type FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'requerimientos' AND column_name = 'payload'
+  `);
+  assert(typeRows[0]?.data_type === 'text', '17. payload es TEXT (no JSONB)');
+  const { rows: ecoTypes } = await query(`
+    SELECT column_name, data_type FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'cotizaciones_proveedor'
+      AND column_name IN ('propuesta_economica', 'validacion_informe')
+  `);
+  const byCol = Object.fromEntries(ecoTypes.map((r) => [r.column_name, r.data_type]));
+  assert(byCol.propuesta_economica === 'jsonb', '17. propuesta_economica es jsonb (no usada en bandeja)');
+  assert(byCol.validacion_informe === 'jsonb', '17. validacion_informe es jsonb');
+  const { rows: detTypes } = await query(`
+    SELECT data_type FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'solicitudes_cotizacion'
+      AND column_name = 'detalle_items'
+  `);
+  assert(detTypes[0]?.data_type === 'jsonb', '17. detalle_items es jsonb (no usado en bandeja)');
+}
+
+await runDbCases();
+
 const failed = tests.filter((t) => !t.ok);
 console.log(`\nRC8.1 bandeja: ${tests.length - failed.length}/${tests.length} OK`);
 if (failed.length) {
@@ -189,3 +242,4 @@ if (failed.length) {
   process.exit(1);
 }
 console.log('RC8.1 Cuadro Comparativo bandeja: PASS\n');
+process.exit(0);

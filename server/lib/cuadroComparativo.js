@@ -9,6 +9,7 @@ import {
   validateEconomiaCuadro,
   mergeObservacionesCuadro,
   stripArchivosFromDatosJson,
+  attachPrimeraFuenteFromCotizaciones,
 } from './cuadroComparativoMapper.js';
 import {
   aplicarRecomendacionesMatriz,
@@ -156,16 +157,9 @@ function badgeClassCuadro(estadoCode) {
 
 async function loadRequerimientosPorSolicitudes(solicitudIds) {
   if (!solicitudIds.length) return new Map();
+  // payload es TEXT (no JSONB): no usar -> / ->> en SQL; parsear en Node.
   const { rows } = await query(`
-    SELECT sr.solicitud_id, r.id, r.codigo, r.denominacion, r.area, r.cmn, r.estado, r.payload,
-      COALESCE(
-        NULLIF(TRIM(r.cmn), ''),
-        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'cmn'), ''),
-        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro'), ''),
-        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_costo'), ''),
-        NULLIF(TRIM(r.area), ''),
-        ''
-      ) AS centro
+    SELECT sr.solicitud_id, r.id, r.codigo, r.denominacion, r.area, r.cmn, r.estado, r.payload
     FROM solicitud_requerimientos sr
     JOIN requerimientos r ON r.id = sr.requerimiento_id
     WHERE sr.solicitud_id = ANY($1::int[])
@@ -173,15 +167,24 @@ async function loadRequerimientosPorSolicitudes(solicitudIds) {
   `, [solicitudIds]);
   const map = new Map();
   for (const r of rows) {
+    const payload = parseJson(r.payload, {});
+    const centro = String(
+      r.cmn
+      || payload.cmn
+      || payload.centro
+      || payload.centro_costo
+      || r.area
+      || '',
+    ).trim();
     const list = map.get(r.solicitud_id) || [];
     list.push({
       id: r.id,
       codigo: r.codigo || '',
       descripcion: r.denominacion || '',
-      centro: r.centro || '',
+      centro,
       area_usuaria: r.area || '',
       estado: r.estado || '',
-      etapa_workflow: parseJson(r.payload)?.workflowSnapshot?.etapaActual || '',
+      etapa_workflow: payload?.workflowSnapshot?.etapaActual || '',
     });
     map.set(r.solicitud_id, list);
   }
@@ -241,7 +244,9 @@ export async function listarCuadroComparativo() {
 
 /**
  * Bandeja RC8.1: una fila por Solicitud de Cotización.
- * Inclusión: al menos una cotización APTO (y/o etapa/estado oficial de cuadro).
+ * Inclusión operativa: ≥1 cotización APTO.
+ * No extrae JSON de requerimientos.payload (TEXT): evita "text -> unknown".
+ * Tampoco carga propuesta_economica / detalle_items (eso es RC8.2).
  */
 export async function listarCuadroComparativoExpedientes() {
   const { rows } = await query(`
@@ -277,26 +282,16 @@ export async function listarCuadroComparativoExpedientes() {
         END
       ) AS fecha_ingreso_cuadro,
       STRING_AGG(DISTINCT p.razon_social, ' | ' ORDER BY p.razon_social) AS proveedores_nombres,
-      STRING_AGG(DISTINCT p.ruc, ' | ' ORDER BY p.ruc) AS proveedores_rucs,
-      BOOL_OR(
-        COALESCE(r.estado, '') ILIKE '%Cuadro Comp%'
-        OR COALESCE(r.payload->'workflowSnapshot'->>'etapaActual', '') = 'CUADRO_COMPARATIVO'
-      ) AS req_en_cuadro
+      STRING_AGG(DISTINCT p.ruc, ' | ' ORDER BY p.ruc) AS proveedores_rucs
     FROM solicitudes_cotizacion sc
     JOIN cotizaciones_proveedor cot ON cot.solicitud_id = sc.id
     JOIN proveedores p ON p.id = cot.proveedor_id
-    LEFT JOIN solicitud_requerimientos sr ON sr.solicitud_id = sc.id
-    LEFT JOIN requerimientos r ON r.id = sr.requerimiento_id
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
     GROUP BY sc.id, sc.codigo, sc.denominacion, sc.objeto, sc.tipo, sc.estado,
       sc.area_usuaria, sc.updated_at
     HAVING
       COUNT(DISTINCT cot.proveedor_id) FILTER (WHERE cot.validacion_estado = 'APTO') >= 1
       OR sc.estado = 'EN_CUADRO_COMPARATIVO'
-      OR BOOL_OR(
-        COALESCE(r.estado, '') ILIKE '%Cuadro Comp%'
-        OR COALESCE(r.payload->'workflowSnapshot'->>'etapaActual', '') = 'CUADRO_COMPARATIVO'
-      )
     ORDER BY
       MIN(
         CASE WHEN cot.validacion_estado = 'APTO' THEN
@@ -436,7 +431,8 @@ async function loadCotizacionesPresentadas(solicitudId) {
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.validacion_estado,
       cot.propuesta_tecnica, cot.propuesta_economica, cot.validacion_informe,
       cot.fecha_presentacion, cot.updated_at,
-      p.ruc, p.razon_social
+      p.ruc, p.razon_social,
+      p.telefono, p.correo, p.persona_contacto, p.emails
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     WHERE cot.solicitud_id = $1
@@ -483,7 +479,8 @@ function buildMatrizFromSources(sc, cotizaciones, requerimientos) {
     cotizaciones,
     requerimientos,
   });
-  return aplicarRecomendacionesMatriz(base);
+  const withRec = aplicarRecomendacionesMatriz(base);
+  return attachPrimeraFuenteFromCotizaciones(withRec, cotizaciones);
 }
 
 function mapCuadroRow(row) {
@@ -575,14 +572,15 @@ export async function obtenerDetalleCuadro(solicitudId) {
     const saved = parseJson(cuadro.datos_json, {});
     matriz = mergeObservacionesCuadro(matriz, saved);
     matriz = mergeAdjudicacionCuadro(matriz, saved);
+    matriz = attachPrimeraFuenteFromCotizaciones(matriz, cotizaciones);
     const val = validateEconomiaCuadro(matriz);
     matriz.meta = {
       ...matriz.meta,
       ...val,
       puede_seleccionar_ganador: val.items_incompletos === 0 && (matriz.items || []).length > 0,
+      puede_pdf_oficial: false,
+      pdf_modo: 'BORRADOR',
     };
-  } else {
-    matriz = aplicarRecomendacionesMatriz(matriz);
   }
 
   const bandeja = (await listarCuadroComparativoExpedientes())
