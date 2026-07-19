@@ -1,5 +1,5 @@
 /**
- * Modal Elaborar / Ver Cuadro Comparativo — Bienes (RC8.2–RC8.5 / RC8.3.1 Anexo 8A).
+ * Modal Elaborar / Ver Cuadro Comparativo — Bienes 08-A / Servicios 08-B (RC8.2–RC8.5).
  */
 import { contratacionesService } from '../services/contratacionesService.js';
 import { api } from '../services/apiService.js';
@@ -10,25 +10,58 @@ import {
   renderAdvertenciasAdjudicacion,
   renderResumenAdjudicacion,
   renderHistorialAdjudicacion,
-  renderInfoAdicionalFuentes,
-  renderAccionesAdministrativas,
   renderPanelSegundaFuente,
   collectObservacionesFromDom,
   collectSeleccionesFromDom,
+  bindAdjProveedorLiveUpdate,
   TIPOS_SEGUNDA_FUENTE,
+  isCuadroServicios,
 } from './cuadroComparativoMatriz.js';
 import { labelCuadroEstado, badgeClassCuadro } from './cuadroComparativoUtils.js';
 import {
+  generateAnexo8APdf,
   previewAnexo8APdf,
   downloadAnexo8APdf,
   validateCuadroParaAnexo8A,
 } from './cuadroComparativoPdf.js';
 import { triggerPdfUpload } from './validacionAnexo07aPdf.js';
 import { normalizeSegundaFuente, calcPrecioActualizado } from './cuadroComparativoFuentes.js';
+import {
+  isModoCoordinador8Uit,
+  renderPanelCoordinador,
+  showObservarCoordinadorModal,
+} from './cuadroComparativoCoordinador.js';
+import {
+  isModoDec,
+  renderPanelDec,
+  showObservarDecModal,
+} from './cuadroComparativoDec.js';
+import {
+  renderPanelVersionado,
+  collectRespuestaObservaciones,
+  isCuadroObservadoEditable,
+} from './cuadroComparativoVersionado.js';
+import {
+  isModoGeneracionCcp,
+  renderPanelGeneracionCcp,
+  evaluarGatesCcpCliente,
+} from './cuadroComparativoCcp.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Etiquetas UI según Bienes (8A) o Servicios (8B). */
+function anexoUiLabels(matriz, cuadro) {
+  const serv = isCuadroServicios(matriz)
+    || String(cuadro?.tipo || '').toUpperCase().includes('SERV');
+  return {
+    short: serv ? '8B' : '8A',
+    titulo: serv ? 'Anexo N.° 08-B' : 'Anexo N.° 08-A',
+    firmado: serv ? 'Anexo 8B firmado' : 'Anexo 8A firmado',
+    adjuntar: serv ? 'Adjuntar Anexo 8B firmado' : 'Adjuntar Anexo 8A firmado',
+  };
 }
 
 function showBootstrapModal(html) {
@@ -47,17 +80,24 @@ function showBootstrapModal(html) {
 }
 
 const CRITERIOS = [
+  { v: 'VALOR_POR_DINERO', l: 'Valor por dinero' },
   { v: 'MENOR_PRECIO_VALIDO', l: 'Menor precio válido' },
   { v: 'CUMPLIMIENTO_INTEGRAL', l: 'Cumplimiento integral' },
   { v: 'EMPATE', l: 'Empate' },
   { v: 'MENOS_DE_TRES_COTIZACIONES', l: 'Menos de tres cotizaciones' },
-  { v: 'DISTINTO_MENOR_PRECIO', l: 'Selección distinta al menor precio' },
   { v: 'OTRO', l: 'Otro' },
 ];
 
+function currentUser() {
+  try { return JSON.parse(localStorage.getItem('currentUser') || '{}'); } catch (_) { return {}; }
+}
+
 function isReadonlyEstado(cuadro) {
   const e = String(cuadro?.estado || cuadro?.estado_cuadro || '').toUpperCase();
-  return e === 'FIRMADO' || e === 'DERIVADO_CCP' || e === 'ANULADO' || !!cuadro?.solo_lectura;
+  if (e === 'FIRMADO' || e === 'DERIVADO_CCP' || e === 'ANULADO' || !!cuadro?.solo_lectura) return true;
+  // RC8.5: Coordinador — sin edición económica mientras está pendiente
+  if (['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'].includes(e)) return true;
+  return false;
 }
 
 function isDerivado(cuadro) {
@@ -70,38 +110,22 @@ function renderPanelSustento(matriz, readonly) {
     <option value="${c.v}" ${(adj.metodologia || adj.criterio_seleccion) === c.v ? 'selected' : ''}>${esc(c.l)}</option>`).join('');
   const dis = readonly ? 'disabled' : '';
   return `
-    <div class="card border mb-3" id="ccPanelAdjudicacion">
-      <div class="card-body py-3">
-        <h6 class="fw-bold mb-2">Valor adjudicado — procedimiento / metodología</h6>
-        <div class="row g-2">
-          <div class="col-md-4">
-            <label class="form-label small mb-0">Procedimiento / metodología</label>
-            <select class="form-select form-select-sm" id="ccCriterio" ${dis}>${opts}</select>
-          </div>
-          <div class="col-md-8">
-            <label class="form-label small mb-0">Sustento de la metodología</label>
-            <textarea class="form-control form-control-sm" id="ccSustento" rows="2" ${dis}>${esc(adj.sustento_decision || '')}</textarea>
-          </div>
-          <div class="col-12">
-            <label class="form-label small mb-0">Procedimiento y/o metodología utilizada (texto amplio)</label>
-            <textarea class="form-control form-control-sm" id="ccMetodologiaTexto" rows="2" ${dis}
-              placeholder="Describa cómo se determinó el valor adjudicado">${esc(adj.metodologia_texto || '')}</textarea>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label small mb-0">Observación del analista</label>
-            <textarea class="form-control form-control-sm" id="ccObsAnalista" rows="2" ${dis}>${esc(adj.observacion_analista || '')}</textarea>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label small mb-0">Observación del Área Usuaria</label>
-            <textarea class="form-control form-control-sm" id="ccObsAU" rows="2" ${dis}>${esc(adj.observacion_area_usuaria || '')}</textarea>
-          </div>
+    <div class="border rounded p-3 mb-3" id="ccPanelAdjudicacion">
+      <h6 class="fw-bold mb-2">Procedimiento / metodología</h6>
+      <div class="row g-2">
+        <div class="col-md-4">
+          <label class="form-label small mb-0">Procedimiento / metodología</label>
+          <select class="form-select form-select-sm" id="ccCriterio" ${dis}>${opts}</select>
         </div>
-        <p class="small text-muted mb-0 mt-2">Seleccione la fuente adjudicada por ítem en la matriz. «Otra» exige sustento. PDF oficial bloqueado (RC8.3.1).</p>
+        <div class="col-md-8">
+          <label class="form-label small mb-0">Sustento de la metodología</label>
+          <textarea class="form-control form-control-sm" id="ccSustento" rows="2" ${dis}>${esc(adj.sustento_decision || '')}</textarea>
+        </div>
       </div>
     </div>`;
 }
 
-function renderPanelFirma(cuadro) {
+function renderPanelFirma(cuadro, matriz = null) {
   const derivado = isDerivado(cuadro);
   const tiene = !!cuadro?.tiene_pdf_firmado || !!cuadro?.firmado_nombre;
   const nombre = cuadro?.firmado_nombre || '';
@@ -118,16 +142,17 @@ function renderPanelFirma(cuadro) {
         ${cuadro.derivado_por ? ` · Por: ${esc(cuadro.derivado_por)}` : ''}
       </div>`
     : '';
+  const anexoLbl = anexoUiLabels(matriz, cuadro);
   return `
     <div class="card border mb-3" id="ccPanelFirma">
       <div class="card-body py-3">
-        <h6 class="fw-bold mb-2">Anexo 8A firmado</h6>
+        <h6 class="fw-bold mb-2">${esc(anexoLbl.firmado)}</h6>
         ${infoDeriv}
         ${meta}
         <div class="d-flex flex-wrap gap-2" id="ccFirmaActions">
           ${!derivado ? `
             <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnAdjuntarFirmado">
-              <i class="bi bi-paperclip"></i> Adjuntar Anexo 8A firmado
+              <i class="bi bi-paperclip"></i> ${esc(anexoLbl.adjuntar)}
             </button>` : ''}
           ${tiene ? `
             <button type="button" class="btn btn-sm btn-outline-secondary" id="ccBtnVerFirmado"><i class="bi bi-eye"></i> Ver</button>
@@ -142,9 +167,8 @@ function renderPanelFirma(cuadro) {
 function refreshMatrizHost(el, matriz, editable) {
   const host = el.querySelector('#ccMatrizHost');
   if (host) {
-    host.innerHTML = renderMatrizBienesHtml(matriz, { editable })
-      + renderInfoAdicionalFuentes(matriz)
-      + renderAccionesAdministrativas(matriz, { editable });
+    host.innerHTML = renderMatrizBienesHtml(matriz, { editable });
+    if (editable) bindAdjProveedorLiveUpdate(host);
   }
   const sf = el.querySelector('#ccSegundaFuenteHost');
   if (sf) sf.innerHTML = renderPanelSegundaFuente(matriz, { editable });
@@ -176,22 +200,44 @@ function showConfirmSgc({ title, message, confirmLabel = 'Confirmar' }) {
   });
 }
 
+function buildRequerimientosOpciones(items = []) {
+  const map = new Map();
+  items.forEach((it) => {
+    const id = it.requerimiento_id != null && it.requerimiento_id !== ''
+      ? String(it.requerimiento_id)
+      : `cod:${it.requerimiento_codigo || it.item_key}`;
+    if (!map.has(id)) {
+      map.set(id, {
+        key: id,
+        requerimiento_id: it.requerimiento_id ?? null,
+        codigo: it.requerimiento_codigo || String(it.requerimiento_id || 'REQ'),
+      });
+    }
+  });
+  return [...map.values()];
+}
+
 function showSegundaFuenteFormModal({ items = [], fuente = null }) {
   return new Promise((resolve) => {
     const tipoOpts = TIPOS_SEGUNDA_FUENTE.map((t) => `
       <option value="${t.code}" ${fuente?.tipo_fuente === t.code ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
-    const precioRows = items.map((it) => {
-      const pr = (fuente?.precios_por_item || {})[it.item_key] || {};
-      return `
-        <tr>
-          <td class="small">${esc(it.descripcion || it.item_key)}</td>
-          <td><input type="number" step="0.01" class="form-control form-control-sm cc-sf-pu" data-item-key="${esc(it.item_key)}"
-            value="${pr.precio_unitario != null ? esc(pr.precio_unitario) : ''}"></td>
-          <td><input type="number" step="0.01" class="form-control form-control-sm cc-sf-factor" data-item-key="${esc(it.item_key)}"
-            value="${pr.factor_ajuste != null ? esc(pr.factor_ajuste) : (fuente?.factor_ajuste ?? 1)}"></td>
-          <td class="small text-end cc-sf-act" data-item-key="${esc(it.item_key)}">—</td>
-        </tr>`;
-    }).join('');
+    const reqOpts = buildRequerimientosOpciones(items);
+    const selectedReqKey = (() => {
+      if (fuente?.requerimiento_id != null && fuente.requerimiento_id !== '') {
+        return String(fuente.requerimiento_id);
+      }
+      if (fuente?.requerimiento_codigo) {
+        const hit = reqOpts.find((r) => r.codigo === fuente.requerimiento_codigo);
+        return hit?.key || '';
+      }
+      return reqOpts.length === 1 ? reqOpts[0].key : '';
+    })();
+    const reqSelectHtml = reqOpts.map((r) => `
+      <option value="${esc(r.key)}" data-req-id="${esc(r.requerimiento_id ?? '')}"
+        data-req-codigo="${esc(r.codigo)}" ${r.key === selectedReqKey ? 'selected' : ''}>
+        ${esc(r.codigo)}
+      </option>`).join('');
+
     const { el, modal } = showBootstrapModal(`
       <div class="modal fade" tabindex="-1">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -206,6 +252,15 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
                   <select class="form-select form-select-sm" id="sfTipo">${tipoOpts}</select></div>
                 <div class="col-md-6"><label class="form-label small">Denominación</label>
                   <input class="form-control form-control-sm" id="sfDenom" value="${esc(fuente?.denominacion || '')}"></div>
+                <div class="col-md-6"><label class="form-label small">Requerimiento asociado</label>
+                  <select class="form-select form-select-sm" id="sfReq">
+                    <option value="">— Seleccione requerimiento —</option>
+                    ${reqSelectHtml}
+                  </select>
+                </div>
+                <div class="col-md-6"><label class="form-label small">Ítems asociados</label>
+                  <div class="border rounded p-2 small" id="sfItemsHost" style="max-height:140px;overflow:auto"></div>
+                </div>
                 <div class="col-md-6"><label class="form-label small">Entidad / proveedor</label>
                   <input class="form-control form-control-sm" id="sfEntidad" value="${esc(fuente?.entidad || '')}"></div>
                 <div class="col-md-3"><label class="form-label small">RUC</label>
@@ -213,7 +268,8 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
                 <div class="col-md-3"><label class="form-label small">Año</label>
                   <input class="form-control form-control-sm" id="sfAnio" value="${esc(fuente?.anio || '')}"></div>
                 <div class="col-md-6"><label class="form-label small">Referencia (N.° orden/contrato)</label>
-                  <input class="form-control form-control-sm" id="sfRef" value="${esc(fuente?.referencia || '')}"></div>
+                  <input class="form-control form-control-sm" id="sfRef" value="${esc(fuente?.referencia || '')}"
+                    placeholder="Ej. OC-262-2024"></div>
                 <div class="col-md-6"><label class="form-label small">URL</label>
                   <input class="form-control form-control-sm" id="sfUrl" value="${esc(fuente?.url || '')}"></div>
                 <div class="col-md-4"><label class="form-label small">Fecha consulta</label>
@@ -225,10 +281,10 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
                 <div class="col-12"><label class="form-label small">Observación</label>
                   <textarea class="form-control form-control-sm" id="sfObs" rows="2">${esc(fuente?.observacion || '')}</textarea></div>
               </div>
-              <h6 class="small fw-bold">Precios por ítem</h6>
+              <h6 class="small fw-bold">Precios por ítem asociado</h6>
               <table class="table table-sm table-bordered"><thead class="table-light"><tr>
                 <th>Ítem</th><th>P. unit. original</th><th>Factor</th><th>P. actualizado</th>
-              </tr></thead><tbody>${precioRows || '<tr><td colspan="4" class="text-muted">Sin ítems</td></tr>'}</tbody></table>
+              </tr></thead><tbody id="sfPreciosBody"></tbody></table>
               <div id="sfErr" class="alert alert-danger d-none py-2 small"></div>
             </div>
             <div class="modal-footer">
@@ -239,6 +295,72 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
         </div>
       </div>`);
 
+    const itemsDelReq = () => {
+      const opt = el.querySelector('#sfReq')?.selectedOptions?.[0];
+      if (!opt?.value) return [];
+      const reqId = opt.dataset.reqId;
+      const codigo = opt.dataset.reqCodigo;
+      return items.filter((it) => {
+        if (reqId) return String(it.requerimiento_id) === String(reqId);
+        return String(it.requerimiento_codigo || '') === String(codigo);
+      });
+    };
+
+    let itemsHostPrimed = false;
+    const renderItemsCheckboxes = () => {
+      const host = el.querySelector('#sfItemsHost');
+      const list = itemsDelReq();
+      let prevKeys;
+      if (!itemsHostPrimed && Array.isArray(fuente?.item_keys) && fuente.item_keys.length) {
+        prevKeys = new Set(fuente.item_keys.map(String));
+      } else {
+        prevKeys = new Set(list.map((it) => String(it.item_key)));
+      }
+      itemsHostPrimed = true;
+      if (!list.length) {
+        host.innerHTML = '<span class="text-muted">Seleccione un requerimiento.</span>';
+        return;
+      }
+      host.innerHTML = list.map((it) => `
+        <label class="d-block mb-1">
+          <input type="checkbox" class="form-check-input me-1 cc-sf-item" value="${esc(it.item_key)}"
+            ${prevKeys.has(String(it.item_key)) ? 'checked' : ''}>
+          ${esc(it.descripcion || it.item_key)}
+          <span class="text-muted">(${esc(it.item_key)})</span>
+        </label>`).join('');
+      host.querySelectorAll('.cc-sf-item').forEach((cb) => {
+        cb.addEventListener('change', renderPreciosRows);
+      });
+    };
+
+    const selectedItemKeys = () => [...el.querySelectorAll('.cc-sf-item:checked')].map((c) => c.value);
+
+    const renderPreciosRows = () => {
+      const body = el.querySelector('#sfPreciosBody');
+      const keys = new Set(selectedItemKeys());
+      const rows = items.filter((it) => keys.has(String(it.item_key)));
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="4" class="text-muted">Seleccione al menos un ítem asociado.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map((it) => {
+        const pr = (fuente?.precios_por_item || {})[it.item_key] || {};
+        return `
+          <tr>
+            <td class="small">${esc(it.descripcion || it.item_key)}</td>
+            <td><input type="number" step="0.01" class="form-control form-control-sm cc-sf-pu" data-item-key="${esc(it.item_key)}"
+              value="${pr.precio_unitario != null ? esc(pr.precio_unitario) : ''}"></td>
+            <td><input type="number" step="0.01" class="form-control form-control-sm cc-sf-factor" data-item-key="${esc(it.item_key)}"
+              value="${pr.factor_ajuste != null ? esc(pr.factor_ajuste) : (fuente?.factor_ajuste ?? 1)}"></td>
+            <td class="small text-end cc-sf-act" data-item-key="${esc(it.item_key)}">—</td>
+          </tr>`;
+      }).join('');
+      el.querySelectorAll('.cc-sf-pu, .cc-sf-factor').forEach((n) => {
+        n.addEventListener('input', recalc);
+      });
+      recalc();
+    };
+
     const recalc = () => {
       el.querySelectorAll('.cc-sf-pu').forEach((inp) => {
         const key = inp.dataset.itemKey;
@@ -248,22 +370,37 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
         if (out) out.textContent = act != null ? act.toFixed(2) : '—';
       });
     };
-    el.querySelectorAll('.cc-sf-pu, .cc-sf-factor, #sfFactor').forEach((n) => {
-      n.addEventListener('input', () => {
-        if (n.id === 'sfFactor') {
-          const g = n.value;
-          el.querySelectorAll('.cc-sf-factor').forEach((f) => { f.value = g; });
-        }
-        recalc();
-      });
+
+    el.querySelector('#sfFactor')?.addEventListener('input', () => {
+      const g = el.querySelector('#sfFactor')?.value;
+      el.querySelectorAll('.cc-sf-factor').forEach((f) => { f.value = g; });
+      recalc();
     });
-    recalc();
+    el.querySelector('#sfReq')?.addEventListener('change', () => {
+      renderItemsCheckboxes();
+      renderPreciosRows();
+    });
+
+    renderItemsCheckboxes();
+    renderPreciosRows();
 
     el.querySelector('#sfOk').onclick = () => {
       const denom = el.querySelector('#sfDenom')?.value?.trim();
       const err = el.querySelector('#sfErr');
+      const reqOpt = el.querySelector('#sfReq')?.selectedOptions?.[0];
+      const item_keys = selectedItemKeys();
       if (!denom) {
         err.textContent = 'La denominación es obligatoria.';
+        err.classList.remove('d-none');
+        return;
+      }
+      if (!reqOpt?.value) {
+        err.textContent = 'Seleccione el requerimiento asociado.';
+        err.classList.remove('d-none');
+        return;
+      }
+      if (!item_keys.length) {
+        err.textContent = 'Seleccione al menos un ítem asociado.';
         err.classList.remove('d-none');
         return;
       }
@@ -289,6 +426,9 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
         moneda: el.querySelector('#sfMoneda')?.value || 'PEN',
         factor_ajuste: Number(el.querySelector('#sfFactor')?.value || 1),
         observacion: el.querySelector('#sfObs')?.value || '',
+        requerimiento_id: reqOpt.dataset.reqId || null,
+        requerimiento_codigo: reqOpt.dataset.reqCodigo || '',
+        item_keys,
         precios_por_item,
       };
       modal?.hide();
@@ -433,6 +573,12 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
   let matriz = state.matriz;
   let cuadro = state.cuadro;
+  let versiones = [];
+  try {
+    const vResp = await contratacionesService.listCuadroVersiones(solicitudId);
+    versiones = (vResp.data || vResp || []);
+    if (!Array.isArray(versiones)) versiones = [];
+  } catch (_) { versiones = []; }
   const validacion = state.validacion || matriz?.meta || {};
   const sol = matriz?.solicitud || {};
   let readonly = isReadonlyEstado(cuadro)
@@ -441,6 +587,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   const titleVerb = isDerivado(cuadro) || String(cuadro?.estado || '').toUpperCase() === 'FIRMADO'
     ? 'Ver cuadro'
     : 'Elaborar cuadro';
+  const anexoLbl = anexoUiLabels(matriz, cuadro);
 
   const { el, modal } = showBootstrapModal(`
     <div class="modal fade" tabindex="-1">
@@ -458,26 +605,25 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
               <span class="badge bg-${esc(badgeClassCuadro(cuadro?.estado_cuadro || cuadro?.estado))}" id="ccEstadoBadge">
                 ${esc(cuadro?.estado_cuadro_label || labelCuadroEstado(cuadro?.estado))}
               </span>
-              <span class="small text-muted">v${esc(cuadro?.version || 1)} · id ${esc(cuadro?.id || '—')}</span>
+              <span class="small text-muted" id="ccVersionLabel">v${esc(cuadro?.version || 1)} · id ${esc(cuadro?.id || '—')}</span>
               ${validacion.puede_generar === false && (matriz?.meta?.items_incompletos > 0)
     ? '<span class="badge bg-warning text-dark">Ofertas incompletas</span>'
     : '<span class="badge bg-success">Matriz lista para adjudicación</span>'}
             </div>
+            <div id="ccVersionHost">${renderPanelVersionado(cuadro, versiones)}</div>
             <h6 class="fw-bold">Proveedores</h6>
             ${renderResumenProveedores(matriz?.resumen_proveedores || [])}
             ${renderInconsistencias(matriz?.inconsistencias || [])}
             <div id="ccAdvHost">${renderAdvertenciasAdjudicacion(matriz)}</div>
             <div id="ccResumenAdjHost">${renderResumenAdjudicacion(matriz)}${renderHistorialAdjudicacion(matriz?.historial_adjudicacion)}</div>
+            <div id="ccCoordHost">${isModoCoordinador8Uit(currentUser(), cuadro) ? renderPanelCoordinador(cuadro, matriz) : ''}</div>
+            <div id="ccDecHost">${isModoDec(currentUser(), cuadro) ? renderPanelDec(cuadro) : ''}</div>
+            <div id="ccCcpHost">${(!isModoCoordinador8Uit(currentUser(), cuadro) && !isModoDec(currentUser(), cuadro) && isModoGeneracionCcp(cuadro)) ? renderPanelGeneracionCcp(cuadro) : ''}</div>
             <div id="ccSegundaFuenteHost">${renderPanelSegundaFuente(matriz, { editable: !readonly })}</div>
-            <h6 class="fw-bold">Matriz comparativa — Anexo 8A (columnas por fuente)</h6>
-            <div id="ccMatrizHost">${renderMatrizBienesHtml(matriz, { editable: !readonly })}${renderInfoAdicionalFuentes(matriz)}${renderAccionesAdministrativas(matriz, { editable: !readonly })}</div>
-            <div class="mt-3">
-              <label class="form-label small mb-1">Notas internas del cuadro</label>
-              <textarea class="form-control form-control-sm" id="ccNotasInternas" rows="2"
-                ${readonly ? 'disabled' : ''}>${esc(matriz?.notas_internas || '')}</textarea>
-            </div>
+            <h6 class="fw-bold">Matriz comparativa — ${esc(anexoLbl.titulo)}</h6>
+            <div id="ccMatrizHost">${renderMatrizBienesHtml(matriz, { editable: !readonly })}</div>
             ${renderPanelSustento(matriz, readonly)}
-            <div id="ccFirmaHost">${renderPanelFirma(cuadro)}</div>
+            <div id="ccFirmaHost">${(isModoCoordinador8Uit(currentUser(), cuadro) || isModoDec(currentUser(), cuadro)) ? '' : renderPanelFirma(cuadro, matriz)}</div>
           </div>
           <div class="modal-footer flex-wrap gap-2">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
@@ -490,17 +636,35 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
             <button type="button" class="btn btn-success" id="ccBtnAdjudicar">
               <i class="bi bi-award"></i> Guardar adjudicación
             </button>
-            <button type="button" class="btn btn-outline-dark" id="ccBtnPreview8a" title="Previsualización BORRADOR">
-              <i class="bi bi-eye"></i> Previsualizar (borrador)
+            <button type="button" class="btn btn-outline-dark" id="ccBtnPreview8a" title="Previsualizar ${esc(anexoLbl.titulo)}">
+              <i class="bi bi-eye"></i> Previsualizar Anexo ${esc(anexoLbl.short)}
             </button>
-            <button type="button" class="btn btn-dark" id="ccBtnGenerar8a" title="PDF oficial bloqueado en RC8.3.1" disabled>
-              <i class="bi bi-file-earmark-pdf"></i> Generar Anexo 8A
+            <button type="button" class="btn btn-dark" id="ccBtnGenerar8a" title="Genera y persiste PDF ${esc(anexoLbl.titulo)}">
+              <i class="bi bi-file-earmark-pdf"></i> Generar Anexo ${esc(anexoLbl.short)}
             </button>
             <button type="button" class="btn btn-outline-dark" id="ccBtnDescargar8a">
-              <i class="bi bi-download"></i> Descargar
+              <i class="bi bi-download"></i> Descargar Cuadro Final
+            </button>
+            <button type="button" class="btn btn-outline-warning" id="ccBtnDerivarCoord">
+              <i class="bi bi-person-check"></i> Derivar Coordinador
+            </button>
+            <button type="button" class="btn btn-outline-success" id="ccBtnAprobarCoord">
+              <i class="bi bi-check2"></i> Aprobar Coordinador
+            </button>
+            <button type="button" class="btn btn-outline-danger" id="ccBtnObservarCoord">
+              <i class="bi bi-exclamation-triangle"></i> Observar Coordinador
+            </button>
+            <button type="button" class="btn btn-outline-success" id="ccBtnAprobarDec">
+              <i class="bi bi-check2-all"></i> Aprobar DEC
+            </button>
+            <button type="button" class="btn btn-outline-danger" id="ccBtnObservarDec">
+              <i class="bi bi-exclamation-triangle"></i> Observar DEC
+            </button>
+            <button type="button" class="btn btn-success" id="ccBtnGenerarCcp">
+              <i class="bi bi-file-earmark-plus"></i> Generar CCP
             </button>
             <button type="button" class="btn btn-primary" id="ccBtnDerivarCcp">
-              <i class="bi bi-send"></i> Derivar a CCP
+              <i class="bi bi-send"></i> Derivar CCP
             </button>
           </div>
         </div>
@@ -510,26 +674,406 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   const body = el.querySelector('#ccElaborarBody');
 
   function syncUiLocks() {
+    const user = currentUser();
+    const modoCoord = isModoCoordinador8Uit(user, cuadro);
+    const modoDec = isModoDec(user, cuadro);
     readonly = isReadonlyEstado(cuadro)
-      || ['GENERADO', 'GENERADO_PRELIMINAR'].includes(String(cuadro?.estado || '').toUpperCase());
+      || ['GENERADO', 'GENERADO_PRELIMINAR', 'PENDIENTE_COORDINADOR', 'PENDIENTE_DEC', 'FIRMADO_COORDINADOR']
+        .includes(String(cuadro?.estado || '').toUpperCase())
+      || modoCoord
+      || modoDec;
     const derivado = isDerivado(cuadro);
     const e = String(cuadro?.estado || '').toUpperCase();
     const setDis = (sel, dis) => {
       const b = el.querySelector(sel);
       if (b) b.disabled = !!dis;
     };
+    const setHide = (sel, hide) => {
+      const b = el.querySelector(sel);
+      if (b) b.classList.toggle('d-none', !!hide);
+    };
+
+    // RC8.5/8.6: Coordinador/DEC — solo lectura económica; acciones en su panel
+    const hideAnalista = modoCoord || modoDec;
+    setHide('#ccBtnGuardar', hideAnalista);
+    setHide('#ccBtnAdjudicar', hideAnalista);
+    setHide('#ccBtnGenerar8a', hideAnalista);
+    setHide('#ccBtnDerivarCoord', hideAnalista);
+    setHide('#ccBtnAprobarCoord', true);
+    setHide('#ccBtnObservarCoord', true);
+    setHide('#ccBtnAprobarDec', true);
+    setHide('#ccBtnObservarDec', true);
+    setHide('#ccBtnGenerarCcp', hideAnalista);
+    setHide('#ccBtnDerivarCcp', hideAnalista);
+
     setDis('#ccBtnGuardar', readonly || derivado);
     setDis('#ccBtnAdjudicar', readonly || derivado || e === 'GENERADO' || e === 'GENERADO_PRELIMINAR');
-    // RC8.3.1: PDF oficial bloqueado hasta estabilizar matriz Anexo 8A
-    setDis('#ccBtnGenerar8a', true);
-    const puedeDerivar = cuadro?.puede_derivar_ccp === true
-      || (e === 'FIRMADO' && !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) && !derivado);
+    setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || !cuadro?.id);
+    const puedeDerivarCoord = !!cuadro?.id && !derivado && [
+      'CUADRO_BORRADOR', 'EN_ELABORACION', 'GENERADO', 'GENERADO_PRELIMINAR', 'ADJUDICADO', 'FIRMADO',
+      'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC',
+    ].includes(e) && !!(cuadro?.tiene_pdf || cuadro?.pdf_nombre);
+    setDis('#ccBtnDerivarCoord', !puedeDerivarCoord);
+    const gatesCcp = evaluarGatesCcpCliente(cuadro);
+    const puedeGenerar = !derivado && e === 'APROBADO_DEC'
+      && (cuadro?.puede_generar_ccp === true || gatesCcp.ok);
+    const puedeDerivar = !derivado
+      && ['APROBADO_DEC', 'PENDIENTE_CCP'].includes(e)
+      && (cuadro?.puede_derivar_ccp === true || gatesCcp.ok);
+    setDis('#ccBtnGenerarCcp', !puedeGenerar);
     setDis('#ccBtnDerivarCcp', !puedeDerivar);
 
+    const coordHost = el.querySelector('#ccCoordHost');
+    if (coordHost) {
+      coordHost.innerHTML = modoCoord ? renderPanelCoordinador(cuadro, matriz) : '';
+      if (modoCoord) bindCoordinadorActions();
+    }
+
+    const decHost = el.querySelector('#ccDecHost');
+    if (decHost) {
+      decHost.innerHTML = modoDec ? renderPanelDec(cuadro) : '';
+      if (modoDec) bindDecActions();
+    }
+
+    const ccpHost = el.querySelector('#ccCcpHost');
+    if (ccpHost) {
+      const showCcp = !modoCoord && !modoDec && (isModoGeneracionCcp(cuadro) || e === 'DERIVADO_CCP');
+      ccpHost.innerHTML = showCcp ? renderPanelGeneracionCcp(cuadro) : '';
+      if (showCcp) bindCcpActions();
+    }
+
     const firmaHost = el.querySelector('#ccFirmaHost');
-    if (firmaHost) firmaHost.innerHTML = renderPanelFirma(cuadro);
-    bindFirmaActions();
+    if (firmaHost) {
+      firmaHost.innerHTML = (modoCoord || modoDec) ? '' : renderPanelFirma(cuadro, matriz);
+      if (!modoCoord && !modoDec) bindFirmaActions();
+    }
     bindSegundaFuente();
+    refreshMatrizHost(el, matriz, !readonly && !derivado && !modoCoord && !modoDec);
+    const sustentoHost = el.querySelector('#ccPanelAdjudicacion');
+    if (sustentoHost && (readonly || modoCoord || modoDec)) {
+      sustentoHost.querySelectorAll('select, textarea, input').forEach((n) => { n.disabled = true; });
+    }
+
+    const verHost = el.querySelector('#ccVersionHost');
+    if (verHost) verHost.innerHTML = renderPanelVersionado(cuadro, versiones);
+    const verLbl = el.querySelector('#ccVersionLabel');
+    if (verLbl) verLbl.textContent = `v${cuadro?.version || 1} · id ${cuadro?.id || '—'}`;
+  }
+
+  async function refreshVersiones() {
+    try {
+      const vResp = await contratacionesService.listCuadroVersiones(solicitudId);
+      versiones = (vResp.data || vResp || []);
+      if (!Array.isArray(versiones)) versiones = [];
+    } catch (_) { /* keep previous */ }
+    const verHost = el.querySelector('#ccVersionHost');
+    if (verHost) verHost.innerHTML = renderPanelVersionado(cuadro, versiones);
+  }
+
+  function bindCoordinadorActions() {
+    el.querySelector('#ccBtnCoordDescargar')?.addEventListener('click', async () => {
+      try {
+        const persistido = await buildPersistidoParaPdf();
+        persistido.borrador_no_oficial = false;
+        downloadAnexo8APdf(persistido);
+      } catch (err) {
+        alert(err.message || 'No se pudo descargar el Anexo');
+      }
+    });
+
+    el.querySelector('#ccBtnCoordAdjuntar')?.addEventListener('click', () => {
+      triggerPdfUpload(async (meta) => {
+        try {
+          const resp = await contratacionesService.adjuntarCuadroPdfFirmado(cuadro.id, {
+            pdf_firmado: {
+              nombre: meta.nombre,
+              mime_type: meta.mime_type || 'application/pdf',
+              base64: meta.base64,
+              tamaño_bytes: meta.tamaño_bytes,
+            },
+          });
+          const data = resp.data || resp;
+          cuadro = data.cuadro || {
+            ...cuadro,
+            tiene_pdf_firmado: true,
+            firmado_nombre: meta.nombre,
+          };
+          syncUiLocks();
+          alert('PDF firmado adjuntado. Puede registrar conformidad y derivar al DEC.');
+          if (typeof onSaved === 'function') onSaved();
+        } catch (err) {
+          alert(err.message || 'No se pudo adjuntar el PDF firmado');
+        }
+      }, { onError: (msg) => alert(msg) });
+    });
+
+    el.querySelector('#ccBtnCoordVerFirmado')?.addEventListener('click', () => openFirmadoUrl(true));
+    el.querySelector('#ccBtnCoordEliminarFirmado')?.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar el PDF firmado? Deberá adjuntarlo nuevamente antes de derivar al DEC.')) return;
+      try {
+        const resp = await contratacionesService.eliminarCuadroPdfFirmado(cuadro.id);
+        const data = resp.data || resp;
+        cuadro = data.cuadro || { ...cuadro, tiene_pdf_firmado: false, firmado_nombre: '', conformidad_coordinador: false };
+        syncUiLocks();
+        if (typeof onSaved === 'function') onSaved();
+      } catch (err) {
+        alert(err.message || 'No se pudo eliminar');
+      }
+    });
+
+    el.querySelector('#ccBtnCoordConformidad')?.addEventListener('click', async () => {
+      if (!cuadro?.tiene_pdf_firmado && !cuadro?.firmado_nombre) {
+        if (!confirm('Aún no hay PDF firmado adjunto. ¿Registrar conformidad de todas formas? (Para derivar al DEC sí será obligatorio el PDF)')) {
+          return;
+        }
+      }
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'CONFORMIDAD_COORDINADOR',
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || { ...cuadro, conformidad_coordinador: true, estado: 'FIRMADO_COORDINADOR' };
+        const badge = el.querySelector('#ccEstadoBadge');
+        if (badge && cuadro) {
+          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        }
+        syncUiLocks();
+        alert('Conformidad del Coordinador registrada.');
+        if (typeof onSaved === 'function') onSaved();
+      } catch (err) {
+        alert(err.message || 'No se pudo registrar la conformidad');
+      }
+    });
+
+    el.querySelector('#ccBtnCoordObservar')?.addEventListener('click', async () => {
+      const obs = await showObservarCoordinadorModal();
+      if (!obs) return;
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'OBSERVAR_COORDINADOR',
+          motivo: obs.motivo,
+          descripcion: obs.descripcion,
+          observacion: obs.observacion,
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || cuadro;
+        const badge = el.querySelector('#ccEstadoBadge');
+        if (badge && cuadro) {
+          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        }
+        await refreshVersiones();
+        alert(data.versionado
+          ? `Cuadro observado. Se creó la versión v${data.version_nueva || cuadro.version} para corrección del Analista.`
+          : 'Cuadro observado y devuelto al Analista.');
+        if (typeof onSaved === 'function') onSaved();
+        syncUiLocks();
+      } catch (err) {
+        alert(err.message || 'No se pudo observar');
+      }
+    });
+
+    el.querySelector('#ccBtnCoordDerivarDec')?.addEventListener('click', async () => {
+      if (!cuadro?.conformidad_coordinador && !cuadro?.revision_coordinador?.conformidad) {
+        return alert('Debe registrar la conformidad antes de derivar al DEC.');
+      }
+      if (!cuadro?.tiene_pdf_firmado && !cuadro?.firmado_nombre) {
+        return alert('Debe adjuntar el PDF firmado antes de derivar al DEC.');
+      }
+      if (!confirm('¿Derivar el cuadro al DEC?')) return;
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'DERIVAR_DEC',
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || cuadro;
+        const badge = el.querySelector('#ccEstadoBadge');
+        if (badge && cuadro) {
+          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        }
+        alert('Cuadro derivado al DEC.');
+        if (typeof onSaved === 'function') onSaved();
+        syncUiLocks();
+      } catch (err) {
+        alert(err.message || 'No se pudo derivar al DEC');
+      }
+    });
+  }
+
+  function bindDecActions() {
+    el.querySelector('#ccBtnDecDescargarFirmado')?.addEventListener('click', () => openFirmadoUrl(false));
+
+    el.querySelector('#ccBtnDecAdjuntar')?.addEventListener('click', () => {
+      triggerPdfUpload(async (meta) => {
+        try {
+          const resp = await contratacionesService.adjuntarCuadroPdfFirmadoDec(cuadro.id, {
+            pdf_firmado: {
+              nombre: meta.nombre,
+              mime_type: meta.mime_type || 'application/pdf',
+              base64: meta.base64,
+              tamaño_bytes: meta.tamaño_bytes,
+            },
+          });
+          const data = resp.data || resp;
+          cuadro = data.cuadro || {
+            ...cuadro,
+            tiene_pdf_firmado_dec: true,
+            firmado_dec_nombre: meta.nombre,
+          };
+          syncUiLocks();
+          alert('Firma DEC adjuntada. Registre conformidad para derivar al Analista.');
+          if (typeof onSaved === 'function') onSaved();
+        } catch (err) {
+          alert(err.message || 'No se pudo adjuntar la firma DEC');
+        }
+      }, { onError: (msg) => alert(msg) });
+    });
+
+    el.querySelector('#ccBtnDecVerFirmado')?.addEventListener('click', () => openFirmadoDecUrl(true));
+    el.querySelector('#ccBtnDecEliminarFirmado')?.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar la firma DEC? Deberá adjuntarla nuevamente antes de derivar al Analista.')) return;
+      try {
+        const resp = await contratacionesService.eliminarCuadroPdfFirmadoDec(cuadro.id);
+        const data = resp.data || resp;
+        cuadro = data.cuadro || {
+          ...cuadro,
+          tiene_pdf_firmado_dec: false,
+          firmado_dec_nombre: '',
+          conformidad_dec: false,
+        };
+        syncUiLocks();
+        if (typeof onSaved === 'function') onSaved();
+      } catch (err) {
+        alert(err.message || 'No se pudo eliminar la firma DEC');
+      }
+    });
+
+    el.querySelector('#ccBtnDecConformidad')?.addEventListener('click', async () => {
+      if (!cuadro?.tiene_pdf_firmado && !cuadro?.firmado_nombre) {
+        return alert('Debe existir el PDF firmado por el Coordinador.');
+      }
+      if (!cuadro?.tiene_pdf_firmado_dec && !cuadro?.firmado_dec_nombre) {
+        return alert('Debe adjuntar el PDF firmado por el DEC.');
+      }
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'CONFORMIDAD_DEC',
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || { ...cuadro, conformidad_dec: true };
+        syncUiLocks();
+        alert('Conformidad del DEC registrada.');
+        if (typeof onSaved === 'function') onSaved();
+      } catch (err) {
+        alert(err.message || 'No se pudo registrar la conformidad');
+      }
+    });
+
+    el.querySelector('#ccBtnDecObservar')?.addEventListener('click', async () => {
+      const obs = await showObservarDecModal();
+      if (!obs) return;
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'OBSERVAR_DEC',
+          motivo: obs.motivo,
+          observacion: obs.observacion,
+          comentario: obs.comentario,
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || cuadro;
+        const badge = el.querySelector('#ccEstadoBadge');
+        if (badge && cuadro) {
+          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        }
+        await refreshVersiones();
+        alert(data.versionado
+          ? `Cuadro observado. Se creó la versión v${data.version_nueva || cuadro.version} para corrección del Analista.`
+          : 'Cuadro observado y devuelto al Analista para corrección.');
+        if (typeof onSaved === 'function') onSaved();
+        syncUiLocks();
+      } catch (err) {
+        alert(err.message || 'No se pudo observar');
+      }
+    });
+
+    el.querySelector('#ccBtnDecDerivarAnalista')?.addEventListener('click', async () => {
+      if (!cuadro?.conformidad_dec && !cuadro?.revision_dec?.conformidad) {
+        return alert('Debe registrar la conformidad antes de derivar al Analista.');
+      }
+      if (!cuadro?.tiene_pdf_firmado && !cuadro?.firmado_nombre) {
+        return alert('Debe existir el PDF firmado por el Coordinador.');
+      }
+      if (!cuadro?.tiene_pdf_firmado_dec && !cuadro?.firmado_dec_nombre) {
+        return alert('Debe adjuntar el PDF firmado por el DEC.');
+      }
+      if (!confirm('¿Derivar el cuadro al Analista para Generación CCP?')) return;
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'DERIVAR_ANALISTA',
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || cuadro;
+        const badge = el.querySelector('#ccEstadoBadge');
+        if (badge && cuadro) {
+          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        }
+        alert('Cuadro aprobado y derivado al Analista (Generación CCP).');
+        if (typeof onSaved === 'function') onSaved();
+        syncUiLocks();
+      } catch (err) {
+        alert(err.message || 'No se pudo derivar al Analista');
+      }
+    });
+  }
+
+  async function openFirmadoDecUrl(inline) {
+    if (!cuadro?.id) return;
+    try {
+      const blob = await contratacionesService.fetchCuadroPdfFirmadoDec(cuadro.id, !!inline);
+      const url = URL.createObjectURL(blob);
+      if (inline) window.open(url, '_blank');
+      else {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = cuadro.firmado_dec_nombre || 'Anexo_08A_firmado_DEC.pdf';
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      alert(err.message || 'No se pudo abrir el PDF firmado DEC');
+    }
+  }
+
+  async function runRevision(accion, pedirObs = false) {
+    if (!cuadro?.id) return;
+    let observacion = '';
+    if (pedirObs) {
+      observacion = window.prompt('Indique la observación (obligatoria):', '') || '';
+      if (!String(observacion).trim()) {
+        alert('La observación es obligatoria');
+        return;
+      }
+    }
+    try {
+      const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, { accion, observacion });
+      const data = resp.data || resp;
+      cuadro = data.cuadro || cuadro;
+      const badge = el.querySelector('#ccEstadoBadge');
+      if (badge && cuadro) {
+        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+      }
+      alert(`Revisión: ${accion} → ${cuadro.estado_cuadro_label || cuadro.estado}`);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err) {
+      alert(err.message || 'No se pudo completar la revisión');
+    } finally {
+      syncUiLocks();
+    }
   }
 
   function bindSegundaFuente() {
@@ -573,10 +1117,28 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     });
   }
 
-  function openFirmadoUrl(inline) {
+  async function openFirmadoUrl(inline) {
     if (!cuadro?.id) return;
-    const url = contratacionesService.getCuadroPdfFirmadoUrl(cuadro.id, inline);
-    window.open(url, '_blank', 'noopener');
+    try {
+      const { blob } = await contratacionesService.fetchCuadroPdfFirmado(cuadro.id, inline);
+      const pdfBlob = blob.type === 'application/pdf'
+        ? blob
+        : new Blob([blob], { type: 'application/pdf' });
+      const url = URL.createObjectURL(pdfBlob);
+      if (inline) {
+        window.open(url, '_blank', 'noopener');
+      } else {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = cuadro.firmado_nombre || 'Anexo_08A_firmado.pdf';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
+    } catch (err) {
+      alert(err.message || 'No se pudo abrir el PDF firmado');
+    }
   }
 
   function bindFirmaActions() {
@@ -599,7 +1161,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
             badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
           }
           syncUiLocks();
-          alert('Anexo 8A firmado adjuntado. Estado: FIRMADO.');
+          alert(`${anexoUiLabels(matriz, cuadro).firmado} adjuntado. Estado: FIRMADO.`);
           if (typeof onSaved === 'function') onSaved();
         } catch (err) {
           alert(err.message || 'No se pudo adjuntar el PDF firmado');
@@ -640,11 +1202,6 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       readonly = isReadonlyEstado(cuadro)
         || ['GENERADO', 'GENERADO_PRELIMINAR'].includes(String(cuadro?.estado || '').toUpperCase());
       refreshMatrizHost(el, matriz, !readonly);
-      const notas = el.querySelector('#ccNotasInternas');
-      if (notas) {
-        notas.value = matriz?.notas_internas || '';
-        notas.disabled = readonly;
-      }
       const panel = el.querySelector('#ccPanelAdjudicacion');
       if (panel) panel.outerHTML = renderPanelSustento(matriz, readonly);
       const badge = el.querySelector('#ccEstadoBadge');
@@ -667,6 +1224,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     }
     if (isReadonlyEstado(cuadro)) return alert('Cuadro en solo lectura');
     const datos = collectObservacionesFromDom(body, matriz);
+    const respuestaObs = collectRespuestaObservaciones(el);
+    if (respuestaObs) datos.respuesta_observaciones = respuestaObs;
     const btn = el.querySelector('#ccBtnGuardar');
     btn.disabled = true;
     try {
@@ -674,10 +1233,12 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         datos_json: datos,
         actualizado_at: cuadro.actualizado_at,
         notas_internas: datos.notas_internas,
+        respuesta_observaciones: respuestaObs,
       });
       const data = resp.data || resp;
       cuadro = data.cuadro || cuadro;
       matriz = data.matriz || datos;
+      refreshMatrizHost(el, matriz, !isReadonlyEstado(cuadro));
       alert('Borrador guardado.');
       if (typeof onSaved === 'function') onSaved();
     } catch (err) {
@@ -722,8 +1283,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         selecciones,
         criterio_seleccion: criterio,
         sustento_decision: sustento,
-        observacion_analista: el.querySelector('#ccObsAnalista')?.value || '',
-        observacion_area_usuaria: el.querySelector('#ccObsAU')?.value || '',
+        observacion_analista: '',
+        observacion_area_usuaria: '',
         actualizado_at: cuadro.actualizado_at,
       });
       const data = resp.data || resp;
@@ -764,6 +1325,30 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     if (!cuadro?.id) throw new Error('No hay cuadro persistido');
     const resp = await contratacionesService.getCuadroPdfData(cuadro.id);
     const data = resp.data || resp;
+    const servidor = data.datos_json || data.matriz || {};
+    // AA frescas del servidor (invitaciones/recepción); overlay de lo editado en pantalla
+    const live = matriz || {};
+    const primera = (Array.isArray(servidor.primera_fuente) ? servidor.primera_fuente : [])
+      .map((f) => {
+        const liveF = (live.primera_fuente || []).find((x) => Number(x.proveedor_id) === Number(f.proveedor_id)
+          || String(x.id || x.id_fuente) === String(f.id || f.id_fuente));
+        if (liveF?.acciones_administrativas?.dedicado_objeto == null) return f;
+        return {
+          ...f,
+          acciones_administrativas: {
+            ...(f.acciones_administrativas || {}),
+            dedicado_objeto: liveF.acciones_administrativas.dedicado_objeto,
+          },
+        };
+      });
+    const datos_json = {
+      ...servidor,
+      items: live.items || servidor.items,
+      adjudicacion: live.adjudicacion || servidor.adjudicacion,
+      segunda_fuente: live.segunda_fuente || servidor.segunda_fuente,
+      primera_fuente: primera.length ? primera : (live.primera_fuente || servidor.primera_fuente),
+      historial_adjudicacion: live.historial_adjudicacion || servidor.historial_adjudicacion,
+    };
     const inst = await loadInstitucional();
     let elaborado = '';
     try {
@@ -773,6 +1358,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     } catch (_) { /* noop */ }
     return {
       ...data,
+      datos_json,
+      matriz: datos_json,
+      adjudicacion: datos_json.adjudicacion || null,
       entidad: inst.entidad,
       logo_data_url: inst.logo_data_url,
       elaborado_por: elaborado,
@@ -782,8 +1370,15 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   el.querySelector('#ccBtnPreview8a').onclick = async () => {
     try {
       const persistido = await buildPersistidoParaPdf();
-      persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'BORRADOR', puede_pdf_oficial: false };
-      persistido.borrador_no_oficial = true;
+      persistido.borrador_no_oficial = false;
+      persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'OFICIAL', puede_pdf_oficial: true };
+      if (persistido.datos_json?.meta) {
+        persistido.datos_json.meta = {
+          ...persistido.datos_json.meta,
+          pdf_modo: 'OFICIAL',
+          puede_pdf_oficial: true,
+        };
+      }
       const val = validateCuadroParaAnexo8A(persistido);
       if (!val.ok) {
         alert(`No se puede previsualizar:\n- ${val.faltantes.join('\n- ')}`);
@@ -796,34 +1391,197 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   };
 
   el.querySelector('#ccBtnGenerar8a').onclick = async () => {
-    // RC8.3.1 — PDF oficial bloqueado hasta alinear Anexo 8A con schema v2
-    const { el: msgEl, modal: msgModal } = showBootstrapModal(`
-      <div class="modal fade" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">Generación oficial bloqueada</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-          <p class="mb-2">La matriz se rediseñó al formato Anexo 8A (schema v2).</p>
-          <p class="mb-0 small text-muted">Use <strong>Previsualizar (borrador)</strong>. La generación oficial, firma y derivación a CCP se habilitarán cuando RC8.4 adapte el PDF al schema v2.</p>
-        </div>
-        <div class="modal-footer"><button type="button" class="btn btn-primary" data-bs-dismiss="modal">Entendido</button></div>
-      </div></div></div>`);
-    void msgEl; void msgModal;
+    if (!cuadro?.id) return alert('No hay cuadro persistido');
+    if (String(cuadro.estado || '').toUpperCase() === 'FIRMADO') {
+      return alert('Cuadro firmado: no se puede regenerar sin anular la versión.');
+    }
+    const btn = el.querySelector('#ccBtnGenerar8a');
+    btn.disabled = true;
+    try {
+      const persistido = await buildPersistidoParaPdf();
+      persistido.borrador_no_oficial = false;
+      persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'OFICIAL', puede_pdf_oficial: true };
+      if (persistido.datos_json?.meta) {
+        persistido.datos_json.meta = {
+          ...persistido.datos_json.meta,
+          pdf_modo: 'OFICIAL',
+          puede_pdf_oficial: true,
+        };
+      }
+      const val = validateCuadroParaAnexo8A(persistido);
+      if (!val.ok) {
+        alert(`No se puede generar el ${anexoLbl.titulo}:\n- ${val.faltantes.join('\n- ')}`);
+        return;
+      }
+      const { base64, filename, report } = generateAnexo8APdf(persistido);
+      const resp = await contratacionesService.guardarCuadroPdf(cuadro.id, {
+        pdf_contenido: base64,
+        pdf_nombre: filename,
+        version_report: report.meta.version,
+      });
+      const data = resp.data || resp;
+      cuadro = data.cuadro || { ...cuadro, estado: 'GENERADO', version: data.version };
+      const badge = el.querySelector('#ccEstadoBadge');
+      if (badge) {
+        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+      }
+      alert(`${anexoLbl.titulo} generado y guardado (v${data.version || cuadro.version}). Estado: GENERADO.`);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err) {
+      alert(err.message || 'No se pudo generar el Anexo');
+    } finally {
+      btn.disabled = false;
+      syncUiLocks();
+    }
   };
 
   el.querySelector('#ccBtnDescargar8a').onclick = async () => {
     try {
       const persistido = await buildPersistidoParaPdf();
+      persistido.borrador_no_oficial = false;
+      persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'OFICIAL', puede_pdf_oficial: true };
+      if (persistido.datos_json?.meta) {
+        persistido.datos_json.meta = {
+          ...persistido.datos_json.meta,
+          pdf_modo: 'OFICIAL',
+          puede_pdf_oficial: true,
+        };
+      }
       downloadAnexo8APdf(persistido);
     } catch (err) {
       alert(err.message || 'No se pudo descargar');
     }
   };
 
-  el.querySelector('#ccBtnDerivarCcp').onclick = async () => {
+  el.querySelector('#ccBtnDerivarCoord').onclick = async () => {
     if (!cuadro?.id) return;
-    if (String(cuadro.estado || '').toUpperCase() !== 'FIRMADO' || !cuadro.tiene_pdf_firmado) {
-      alert('Para derivar a CCP se requiere: adjudicación, PDF generado y PDF firmado.');
-      return;
+    const respuestaObs = collectRespuestaObservaciones(el)
+      || String(cuadro?.respuesta_observaciones || '').trim();
+    if (isCuadroObservadoEditable(cuadro) && !respuestaObs) {
+      return alert('Debe registrar la respuesta a las observaciones antes de derivar al Coordinador.');
+    }
+    if (!confirm('¿Derivar al Coordinador 8 UIT? (Tras observación no se deriva al DEC)')) return;
+    try {
+      // Persistir respuesta si hay observación pendiente
+      if (respuestaObs && isCuadroObservadoEditable(cuadro)) {
+        const datos = collectObservacionesFromDom(body, matriz);
+        datos.respuesta_observaciones = respuestaObs;
+        await contratacionesService.guardarCuadroBorrador(cuadro.id, {
+          datos_json: datos,
+          actualizado_at: cuadro.actualizado_at,
+          respuesta_observaciones: respuestaObs,
+        });
+      }
+      const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+        accion: 'DERIVAR_COORDINADOR',
+        respuesta_observaciones: respuestaObs,
+      });
+      const data = resp.data || resp;
+      cuadro = data.cuadro || cuadro;
+      const badge = el.querySelector('#ccEstadoBadge');
+      if (badge && cuadro) {
+        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+      }
+      await refreshVersiones();
+      alert('Cuadro derivado al Coordinador 8 UIT.');
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err) {
+      alert(err.message || 'No se pudo derivar al Coordinador');
+    } finally {
+      syncUiLocks();
+    }
+  };
+  el.querySelector('#ccBtnAprobarCoord')?.classList.add('d-none');
+  el.querySelector('#ccBtnObservarCoord')?.classList.add('d-none');
+  el.querySelector('#ccBtnAprobarDec')?.classList.add('d-none');
+  el.querySelector('#ccBtnObservarDec')?.classList.add('d-none');
+
+  function bindCcpActions() {
+    el.querySelector('#ccBtnCcpDescargarFinal')?.addEventListener('click', async () => {
+      try {
+        if (cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre) {
+          await openFirmadoDecUrl(false);
+        } else if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
+          await openFirmadoUrl(false);
+        } else {
+          const persistido = await buildPersistidoParaPdf();
+          persistido.borrador_no_oficial = false;
+          downloadAnexo8APdf(persistido);
+        }
+      } catch (err) {
+        alert(err.message || 'No se pudo descargar el Cuadro Final');
+      }
+    });
+
+    el.querySelector('#ccBtnCcpVerFirmas')?.addEventListener('click', async () => {
+      try {
+        if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
+          await openFirmadoUrl(true);
+        }
+        if (cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre) {
+          await openFirmadoDecUrl(true);
+        }
+        if (!cuadro?.tiene_pdf_firmado && !cuadro?.tiene_pdf_firmado_dec) {
+          alert('No hay PDFs firmados adjuntos.');
+        }
+      } catch (err) {
+        alert(err.message || 'No se pudieron abrir las firmas');
+      }
+    });
+
+    el.querySelector('#ccBtnCcpGenerar')?.addEventListener('click', () => generarCcpAction());
+    el.querySelector('#ccBtnCcpDerivar')?.addEventListener('click', () => derivarCcpAction());
+  }
+
+  async function generarCcpAction() {
+    if (!cuadro?.id) return;
+    const gates = evaluarGatesCcpCliente(cuadro);
+    if (!gates.ok) {
+      return alert(`No se puede Generar CCP: falta ${gates.faltantes.join(', ')}.`);
+    }
+    if (!confirm('¿Generar CCP? El cuadro debe estar completamente aprobado.')) return;
+    try {
+      const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+        accion: 'GENERAR_CCP',
+      });
+      const data = resp.data || resp;
+      cuadro = data.cuadro || { ...cuadro, estado: 'PENDIENTE_CCP' };
+      const badge = el.querySelector('#ccEstadoBadge');
+      if (badge && cuadro) {
+        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+      }
+      syncUiLocks();
+      alert('CCP generado. Puede derivarlo al responsable CCP.');
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err) {
+      alert(err.message || 'No se pudo generar el CCP');
+    }
+  }
+
+  async function derivarCcpAction() {
+    if (!cuadro?.id) return;
+    const gates = evaluarGatesCcpCliente(cuadro);
+    if (!gates.ok) {
+      return alert(`No se puede Derivar CCP: falta ${gates.faltantes.join(', ')}.`);
+    }
+    const est = String(cuadro.estado || '').toUpperCase();
+    if (!['APROBADO_DEC', 'PENDIENTE_CCP'].includes(est)) {
+      return alert('El cuadro debe estar APROBADO_DEC o PENDIENTE_CCP.');
+    }
+    // Si aún no se generó, generar primero
+    if (est === 'APROBADO_DEC') {
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
+          accion: 'GENERAR_CCP',
+        });
+        const data = resp.data || resp;
+        cuadro = data.cuadro || { ...cuadro, estado: 'PENDIENTE_CCP' };
+      } catch (err) {
+        return alert(err.message || 'No se pudo generar el CCP antes de derivar');
+      }
     }
     await showDerivarCcpPanel({
       onConfirm: async (dest) => {
@@ -837,11 +1595,14 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         }
         refreshMatrizHost(el, matriz, false);
         syncUiLocks();
-        alert(`Expediente derivado a CCP. Responsable: ${data.responsable?.nombre || dest.responsable_nombre || '—'}`);
+        alert(`CCP derivado. Responsable: ${data.responsable?.nombre || dest.responsable_nombre || '—'}`);
         if (typeof onSaved === 'function') onSaved();
       },
     });
-  };
+  }
+
+  el.querySelector('#ccBtnGenerarCcp').onclick = () => generarCcpAction();
+  el.querySelector('#ccBtnDerivarCcp').onclick = () => derivarCcpAction();
 
   syncUiLocks();
   return { el, modal, getState: () => ({ matriz, cuadro }) };

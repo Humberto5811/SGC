@@ -81,52 +81,8 @@ export function dismissProveedorModal(modalEl) {
   setTimeout(cleanupModalBackdrop, 300);
 }
 
-/** Permite arrastrar un modal Bootstrap desde su cabecera. */
-export function makeModalDraggable(modalEl) {
-  const dialog = modalEl?.querySelector('.modal-dialog');
-  const header = modalEl?.querySelector('.modal-header');
-  if (!dialog || !header || header.dataset.draggableBound) return;
-  header.dataset.draggableBound = '1';
-  header.style.cursor = 'move';
-  header.classList.add('user-select-none');
-
-  let dragging = false;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  const onMove = (e) => {
-    if (!dragging) return;
-    dialog.style.left = `${Math.max(0, e.clientX - offsetX)}px`;
-    dialog.style.top = `${Math.max(0, e.clientY - offsetY)}px`;
-  };
-  const onUp = () => { dragging = false; };
-
-  header.addEventListener('mousedown', (e) => {
-    if (e.button !== 0 || e.target.closest('.btn-close')) return;
-    dragging = true;
-    const rect = dialog.getBoundingClientRect();
-    offsetX = e.clientX - rect.left;
-    offsetY = e.clientY - rect.top;
-    dialog.style.margin = '0';
-    dialog.style.position = 'fixed';
-    dialog.style.left = `${rect.left}px`;
-    dialog.style.top = `${rect.top}px`;
-    dialog.style.transform = 'none';
-    e.preventDefault();
-  });
-
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
-
-  modalEl.addEventListener('hidden.bs.modal', () => {
-    dragging = false;
-    dialog.style.position = '';
-    dialog.style.left = '';
-    dialog.style.top = '';
-    dialog.style.margin = '';
-    dialog.style.transform = '';
-  });
-}
+/** Permite arrastrar un modal Bootstrap desde su cabecera (API global SGC). */
+export { makeModalDraggable } from './modalDraggable.js';
 
 export function getProveedorSession() {
   return portalService.getSession();

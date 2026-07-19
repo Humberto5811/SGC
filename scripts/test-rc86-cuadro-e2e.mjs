@@ -98,7 +98,12 @@ assert(EVENTOS.CUADRO_COMPARATIVO_FIRMADO && EVENTOS.CUADRO_COMPARATIVO_DERIVADO
 assert(/Adjuntar Anexo 8A firmado/.test(modalSrc) && /Derivar a CCP/.test(modalSrc), 'F1. acciones firma/derivar');
 assert(/Ver cuadro/.test(read('src/utils/cuadroComparativoUtils.js')), 'F2. menú Ver post-cierre');
 assert(/puede_derivar_ccp/.test(modalSrc), 'F3. UI respeta puede_derivar_ccp');
-assert(/Previsualizar Anexo 8A/.test(modalSrc) && /Generar Anexo 8A/.test(modalSrc), 'F4. PDF acciones');
+assert(
+  /Previsualizar Anexo/.test(modalSrc)
+  && /Generar Anexo/.test(modalSrc)
+  && /anexoLbl\.short|Anexo 8A|Anexo 8B/.test(modalSrc),
+  'F4. PDF acciones',
+);
 
 // —— Bandeja ——
 const stats = buildCuadroStats([
@@ -219,13 +224,13 @@ function oferta(id, total, opts = {}) {
   const matriz = aplicarRecomendacionesMatriz({ items: [item], resumen_proveedores: resumen });
   const sinSustento = validarAdjudicacionCuadro(matriz, {
     selecciones: [{ item_key: 'r1-0', proveedor_adjudicado_id: 2 }],
-    criterio_seleccion: 'DISTINTO_MENOR_PRECIO',
+    criterio_seleccion: 'VALOR_POR_DINERO',
     sustento_decision: '',
   });
-  assert(!sinSustento.ok, 'D8. distinto al recomendado exige sustento');
+  assert(!sinSustento.ok, 'D8. distinto al recomendado / valor por dinero exige sustento');
   const conSustento = validarAdjudicacionCuadro(matriz, {
     selecciones: [{ item_key: 'r1-0', proveedor_adjudicado_id: 2 }],
-    criterio_seleccion: 'DISTINTO_MENOR_PRECIO',
+    criterio_seleccion: 'VALOR_POR_DINERO',
     sustento_decision: 'Mejor marca / garantía',
   });
   assert(conSustento.ok, `D8b. con sustento ok${conSustento.ok ? '' : `: ${conSustento.errors.join('; ')}`}`);
@@ -233,7 +238,7 @@ function oferta(id, total, opts = {}) {
   try {
     const applied = aplicarAdjudicacionMatriz(matriz, {
       selecciones: [{ item_key: 'r1-0', proveedor_adjudicado_id: 2 }],
-      criterio_seleccion: 'DISTINTO_MENOR_PRECIO',
+      criterio_seleccion: 'VALOR_POR_DINERO',
       sustento_decision: 'Mejor marca / garantía',
     }, 'analista');
     appliedOk = applied.items[0].proveedor_adjudicado_id === 2;

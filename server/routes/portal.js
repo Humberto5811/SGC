@@ -53,7 +53,12 @@ import {
   adjuntarPdfFirmadoCuadro,
   eliminarPdfFirmadoCuadro,
   resolverPdfFirmadoCuadro,
+  adjuntarPdfFirmadoDecCuadro,
+  eliminarPdfFirmadoDecCuadro,
+  resolverPdfFirmadoDecCuadro,
   derivarCuadroACcp,
+  transitarRevisionCuadro,
+  filtrarBandejaPorRolRevision,
 } from '../lib/cuadroComparativo.js';
 import {
   getSolicitudDetalleProveedor,
@@ -462,11 +467,19 @@ portalAnalistaRouter.get('/cuadro-comparativo', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-/** RC8.1 — bandeja por Solicitud de Cotización */
-portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (_req, res) => {
+/** RC8.1 / RC8.4 — bandeja por Solicitud; filtrada por rol de revisión */
+portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (req, res) => {
   try {
-    const data = await listarCuadroComparativoExpedientes();
-    res.json({ data });
+    const all = await listarCuadroComparativoExpedientes();
+    const userCtx = {
+      cargo: req.headers['x-user-cargo'] || req.query?.cargo || '',
+      rol: req.headers['x-user-rol'] || req.query?.rol || '',
+      permisos: (() => {
+        try { return JSON.parse(req.headers['x-user-permisos'] || '{}'); } catch (_) { return {}; }
+      })(),
+    };
+    const filtrado = filtrarBandejaPorRolRevision(all, userCtx);
+    res.json({ data: filtrado.data, meta: { rol_revision: filtrado.rol } });
   } catch (err) {
     console.error('[cuadro-comparativo/expedientes]', err?.stack || err);
     res.status(500).json({
@@ -593,10 +606,54 @@ portalAnalistaRouter.get('/cuadro-comparativo/cuadro/:cuadroId/firmado', async (
   } catch (err) { next(err); }
 });
 
+/** RC8.6 — PDF firmado por el DEC */
+portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/firmado-dec', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const data = await adjuntarPdfFirmadoDecCuadro(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.delete('/cuadro-comparativo/cuadro/:cuadroId/firmado-dec', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.query?.usuario || '';
+    const data = await eliminarPdfFirmadoDecCuadro(req.params.cuadroId, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+portalAnalistaRouter.get('/cuadro-comparativo/cuadro/:cuadroId/firmado-dec', async (req, res, next) => {
+  try {
+    const adj = await resolverPdfFirmadoDecCuadro(req.params.cuadroId);
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    const inline = req.query.inline === '1';
+    res.setHeader('Content-Type', adj.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(adj.nombre_archivo || 'Anexo_08A_firmado_DEC.pdf')}"`);
+    res.send(buf);
+  } catch (err) { next(err); }
+});
+
 portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/derivar-ccp', async (req, res, next) => {
   try {
     const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
     const data = await derivarCuadroACcp(req.params.cuadroId, req.body || {}, usuario);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+});
+
+/** RC8.4 — Revisión: Derivar Coordinador / Aprobar-Observar Coordinador-DEC / Generar CCP */
+portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/revision', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    const userCtx = {
+      cargo: req.headers['x-user-cargo'] || req.body?.cargo || '',
+      rol: req.headers['x-user-rol'] || req.body?.rol || '',
+      permisos: req.body?.permisos || (() => {
+        try { return JSON.parse(req.headers['x-user-permisos'] || '{}'); } catch (_) { return {}; }
+      })(),
+    };
+    const data = await transitarRevisionCuadro(req.params.cuadroId, req.body || {}, usuario, userCtx);
     res.json({ success: true, data });
   } catch (err) { next(err); }
 });

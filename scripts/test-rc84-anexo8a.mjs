@@ -30,6 +30,7 @@ const wfSrc = readFileSync(path.join(__dirname, '../core/workflowEngine/Workflow
 console.log('\n=== RC8.4 Anexo 8A ===\n');
 
 assert(ANEXO_8A.codigo === '8A' && /Cuadro Comparativo de Precios/.test(ANEXO_8A.subtitulo), 'título Anexo 8A');
+assert(/08-A|8A/.test(ANEXO_8A.titulo), 'título ANEXO N.° 08-A');
 
 function makePersistido(nProv, nItems = 2, opts = {}) {
   const proveedores = [];
@@ -120,11 +121,12 @@ const r3 = buildCuadroComparativoReportData(makePersistido(3, 2));
 assert(r3.proveedores.length === 3, '2. tres proveedores');
 assert(r3.filas[0].ofertas.length === 3, '2. tres ofertas por fila');
 
-// 3) Cinco proveedores
+// 3) Cinco proveedores — una sola tabla institucional (todas las cotizaciones)
 const r5 = buildCuadroComparativoReportData(makePersistido(5, 1));
 assert(r5.proveedores.length === 5, '3. cinco proveedores');
-assert(r5.meta.proveedores_por_bloque === 3, '3. bloques de 3 para páginas');
-assert(/chunk|bloques|proveedores_por_bloque/.test(pdfSrc), '3. PDF maneja bloques/páginas');
+assert(r5.fuentes.primera.length === 5, '3. fuentes primera = 5 cotizaciones');
+assert(r5.meta.formato === 'ANEXO_08A_INSTITUCIONAL_V2', '3. formato institucional v2');
+assert(/buildMatrizInstitucionalTable|VALOR ADJUDICADO|Información adicional/.test(pdfSrc), '3. PDF matriz institucional');
 
 // 4) Varios ítems
 assert(r3.filas.every((f) => f.descripcion && f.requerimiento_codigo), '4. ítems con datos base');
@@ -169,6 +171,8 @@ assert(/fontSize:\s*6|fontSize:\s*5\.5|fontSize:\s*7/.test(pdfSrc), '12. tipogra
 assert(/rowPageBreak:\s*'avoid'|overflow:\s*'linebreak'/.test(pdfSrc), '12. filas/texto ajustados');
 assert(/Elaborado por|Revisado por|Aprobado por/.test(pdfSrc), '12. espacios de firma');
 assert(/addImage|logo/.test(pdfSrc) && /entidad/.test(reportSrc), '12. logo/entidad');
+assert(/Proveedor adjudicado|Valor Unitario|Valor Total/.test(pdfSrc), '12b. columnas valor adjudicado');
+assert(/Metodología|numeros_orden|Segunda fuente/.test(pdfSrc + reportSrc), '12c. metodología / SF / N.° orden');
 
 // Rutas / UI / no tocar módulos
 assert(/pdf-data/.test(routeSrc) && /cuadro\/:cuadroId\/pdf/.test(routeSrc), 'rutas PDF');

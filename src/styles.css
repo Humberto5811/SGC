@@ -742,3 +742,21 @@ tr:hover {
   font-size: 0.75rem;
   font-weight: 500;
 }
+
+/* ========== MODALES SGC — arrastre por header ========== */
+.modal-header.sgc-modal-drag-handle,
+.modal .modal-header {
+  cursor: grab;
+}
+.modal-header.sgc-modal-drag-handle:active,
+.modal .modal-header:active {
+  cursor: grabbing;
+}
+.modal-header .btn-close,
+.modal-header button,
+.modal-header a,
+.modal-header input,
+.modal-header select,
+.modal-header textarea {
+  cursor: pointer;
+}

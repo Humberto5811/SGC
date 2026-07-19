@@ -11,21 +11,23 @@ import { validateEconomiaCuadro } from './cuadroComparativoMapper.js';
 export const MODALIDAD_ADJUDICACION = 'POR_ITEM';
 
 export const CRITERIOS_SELECCION = Object.freeze([
+  'VALOR_POR_DINERO',
   'MENOR_PRECIO_VALIDO',
   'CUMPLIMIENTO_INTEGRAL',
   'EMPATE',
   'MENOS_DE_TRES_COTIZACIONES',
-  'DISTINTO_MENOR_PRECIO',
   'OTRO',
 ]);
 
 export const CRITERIOS_LABEL = Object.freeze({
+  VALOR_POR_DINERO: 'Valor por dinero',
   MENOR_PRECIO_VALIDO: 'Menor precio válido',
   CUMPLIMIENTO_INTEGRAL: 'Cumplimiento integral',
   EMPATE: 'Empate',
   MENOS_DE_TRES_COTIZACIONES: 'Menos de tres cotizaciones',
-  DISTINTO_MENOR_PRECIO: 'Selección distinta al menor precio',
   OTRO: 'Otro',
+  // Legado (ya no seleccionable en UI)
+  DISTINTO_MENOR_PRECIO: 'Selección distinta al menor precio',
 });
 
 const TOL = 0.02;
@@ -161,7 +163,7 @@ function criterioRequiereSustento(criterio, flags = {}) {
   const c = String(criterio || '').toUpperCase();
   if (!c) return true;
   if (c === 'OTRO') return true;
-  if (c === 'EMPATE' || c === 'MENOS_DE_TRES_COTIZACIONES' || c === 'DISTINTO_MENOR_PRECIO') return true;
+  if (c === 'EMPATE' || c === 'MENOS_DE_TRES_COTIZACIONES' || c === 'VALOR_POR_DINERO') return true;
   if (flags.distintoRecomendado) return true;
   if (flags.menosDeTres) return true;
   if (flags.hayEmpate) return true;
@@ -277,7 +279,8 @@ export function aplicarAdjudicacionMatriz(matriz, payload = {}, usuario = '') {
   const items = (matriz.items || []).map((it) => {
     const pid = selByKey.get(it.item_key);
     const of = (it.ofertas || []).find((o) => Number(o.proveedor_id) === pid);
-    const valor = of ? Number(of.precio_total) : 0;
+    const valorUnitario = of && of.precio_unitario != null ? Number(of.precio_unitario) : null;
+    const valor = of && of.precio_total != null ? Number(of.precio_total) : 0;
     valorTotal += valor;
     if (!porProveedor.has(pid)) {
       porProveedor.set(pid, {
@@ -294,6 +297,9 @@ export function aplicarAdjudicacionMatriz(matriz, payload = {}, usuario = '') {
     return {
       ...it,
       proveedor_adjudicado_id: pid,
+      valor_adjudicado_unitario: valorUnitario != null && Number.isFinite(valorUnitario)
+        ? round2(valorUnitario)
+        : null,
       valor_adjudicado_item: valor,
       adjudicado_ruc: of?.ruc || '',
       adjudicado_razon_social: of?.razon_social || '',
@@ -362,6 +368,7 @@ export function mergeAdjudicacionCuadro(matrizFresh, datosGuardados) {
     return {
       ...it,
       proveedor_adjudicado_id: prev.proveedor_adjudicado_id ?? it.proveedor_adjudicado_id,
+      valor_adjudicado_unitario: prev.valor_adjudicado_unitario ?? it.valor_adjudicado_unitario,
       valor_adjudicado_item: prev.valor_adjudicado_item,
       adjudicado_ruc: prev.adjudicado_ruc,
       adjudicado_razon_social: prev.adjudicado_razon_social,

@@ -127,9 +127,10 @@ export function mapPropuestaEconomicaPorItem(propuestaEconomica, itemKey, cantid
   };
 }
 
-export function normalizeOfertaProveedor(cotizacionRow, itemNorm, propTecItem = {}) {
+export function normalizeOfertaProveedor(cotizacionRow, itemNorm, propTecItem = {}, propTecRoot = {}) {
   const cot = cotizacionRow || {};
   const tec = propTecItem && typeof propTecItem === 'object' ? propTecItem : {};
+  const root = propTecRoot && typeof propTecRoot === 'object' ? propTecRoot : {};
   const valEst = String(cot.validacion_estado || '').toUpperCase();
   const ecoMap = mapPropuestaEconomicaPorItem(
     cot.propuesta_economica,
@@ -150,13 +151,17 @@ export function normalizeOfertaProveedor(cotizacionRow, itemNorm, propTecItem = 
     precio_unitario: ecoMap.precio_unitario,
     precio_total: ecoMap.precio_total,
     moneda: ecoMap.moneda,
-    marca: pickText(tec, 'marca'),
-    modelo: pickText(tec, 'modelo'),
-    procedencia: pickText(tec, 'pais', 'procedencia', 'origen'),
-    anio_fabricacion: pickText(tec, 'anio_fabricacion', 'año_fabricacion', 'anio', 'year'),
-    garantia: pickText(tec, 'garantia', 'garantía'),
-    plazo_entrega: pickText(tec, 'plazo_entrega', 'plazoEntrega', 'plazo'),
-    forma_pago: pickText(tec, 'forma_pago', 'formaPago', 'pago'),
+    marca: pickText(tec, 'marca') || pickText(root, 'marca'),
+    modelo: pickText(tec, 'modelo') || pickText(root, 'modelo'),
+    procedencia: pickText(tec, 'pais', 'procedencia', 'origen') || pickText(root, 'pais', 'procedencia', 'origen'),
+    anio_fabricacion: pickText(tec, 'anio_fabricacion', 'año_fabricacion', 'anio', 'year')
+      || pickText(root, 'anio_fabricacion', 'año_fabricacion', 'anio', 'year'),
+    garantia: pickText(tec, 'garantia', 'garantía') || pickText(root, 'garantia', 'garantía'),
+    // Servicios suelen declarar plazo/forma a nivel raíz (plazo_ejecucion)
+    plazo_entrega: pickText(tec, 'plazo_entrega', 'plazoEntrega', 'plazo', 'plazo_ejecucion', 'plazoEjecucion')
+      || pickText(root, 'plazo_entrega', 'plazoEntrega', 'plazo_ejecucion', 'plazoEjecucion', 'plazo'),
+    forma_pago: pickText(tec, 'forma_pago', 'formaPago', 'pago')
+      || pickText(root, 'forma_pago', 'formaPago', 'pago'),
     observaciones: pickText(tec, 'observaciones', 'observacion', 'notas') || '',
     observacion_analista: '',
     inconsistencias: ecoMap.inconsistencias,
@@ -220,7 +225,7 @@ export function buildMatrizComparativaBienes(opts = {}) {
       const propTecItem = tecItems.find((t) => resolveItemKey(t) === itemNorm.item_key)
         || tecItems.find((t, i) => resolveItemKey(t, i) === itemNorm.item_key)
         || {};
-      const oferta = normalizeOfertaProveedor(cot, itemNorm, propTecItem);
+      const oferta = normalizeOfertaProveedor(cot, itemNorm, propTecItem, tec);
       (oferta.inconsistencias || []).forEach((inc) => inconsistencias.push({
         ...inc,
         proveedor_id: oferta.proveedor_id,
@@ -288,6 +293,11 @@ export function buildMatrizComparativaBienes(opts = {}) {
 
   const validation = validateEconomiaCuadro({ items, inconsistencias, resumen_proveedores });
 
+  const tipoRaw = String(solicitud.tipo_contratacion || solicitud.tipo || 'BIENES');
+  const tipoUp = tipoRaw.toUpperCase();
+  const esServicio = tipoUp.includes('SERV') || tipoUp === 'S';
+  const tipoNorm = esServicio ? 'Servicio' : (tipoUp.includes('LOC') ? 'Locador' : 'Bien');
+
   const base = {
     version_schema: VERSION_SCHEMA_V2,
     solicitud: {
@@ -296,6 +306,7 @@ export function buildMatrizComparativaBienes(opts = {}) {
       denominacion: solicitud.denominacion || '',
       objeto: solicitud.objeto || '',
       tipo: solicitud.tipo || 'BIENES',
+      tipo_contratacion: tipoNorm,
     },
     requerimientos: requerimientos.map((r) => ({
       id: r.id,
@@ -318,6 +329,8 @@ export function buildMatrizComparativaBienes(opts = {}) {
       puede_pdf: false,
       puede_pdf_oficial: false,
       pdf_modo: 'BORRADOR',
+      tipo_contratacion: tipoNorm,
+      anexo_codigo: esServicio ? '8B' : '8A',
     },
   };
   base.primera_fuente = buildPrimeraFuenteFromMatriz(base, cotizaciones);
@@ -376,6 +389,7 @@ export function mergeObservacionesCuadro(matrizFresh, datosGuardados) {
       ...it,
       ofertas,
       proveedor_adjudicado_id: prev.proveedor_adjudicado_id ?? it.proveedor_adjudicado_id,
+      valor_adjudicado_unitario: prev.valor_adjudicado_unitario ?? it.valor_adjudicado_unitario,
       valor_adjudicado_item: prev.valor_adjudicado_item,
     };
   });
@@ -393,10 +407,23 @@ export function mergeObservacionesCuadro(matrizFresh, datosGuardados) {
 /** Reconstruye primera_fuente con filas de cotización (contacto, fechas). */
 export function attachPrimeraFuenteFromCotizaciones(matriz, cotizaciones = []) {
   if (!matriz || typeof matriz !== 'object') return matriz;
+  const prevPrimera = Array.isArray(matriz.primera_fuente) ? matriz.primera_fuente : [];
+  const primera = buildPrimeraFuenteFromMatriz(matriz, cotizaciones);
+  // Conservar «Se dedica al objeto…» elegido por el analista
+  primera.forEach((f) => {
+    const prev = prevPrimera.find((x) => Number(x.proveedor_id) === Number(f.proveedor_id)
+      || Number(x.cotizacion_id) === Number(f.cotizacion_id));
+    if (prev?.acciones_administrativas && prev.acciones_administrativas.dedicado_objeto != null) {
+      f.acciones_administrativas = {
+        ...f.acciones_administrativas,
+        dedicado_objeto: prev.acciones_administrativas.dedicado_objeto,
+      };
+    }
+  });
   return {
     ...matriz,
     version_schema: VERSION_SCHEMA_V2,
-    primera_fuente: buildPrimeraFuenteFromMatriz(matriz, cotizaciones),
+    primera_fuente: primera,
     meta: {
       ...(matriz.meta || {}),
       puede_pdf_oficial: false,

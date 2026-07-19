@@ -477,6 +477,10 @@ function setupDraggableModal(modalEl) {
   const header = modalEl.querySelector('.modal-header');
   if (!dialog || !header) return;
 
+  // Evita doble binding con el drag global SGC
+  header.dataset.sgcDragBound = '1';
+  header.dataset.draggableBound = '1';
+
   modalEl.style.background = 'transparent';
   modalEl.style.pointerEvents = 'none';
   dialog.style.pointerEvents = 'auto';
@@ -491,7 +495,8 @@ function setupDraggableModal(modalEl) {
     modalEl._posInit = true;
   }
 
-  header.style.cursor = 'move';
+  header.style.cursor = 'grab';
+  header.classList.add('sgc-modal-drag-handle');
   header.style.userSelect = 'none';
 
   let dragging = false;
@@ -499,7 +504,7 @@ function setupDraggableModal(modalEl) {
   let offsetY = 0;
 
   const onMouseDown = (e) => {
-    if (e.target.closest('.btn-close')) return;
+    if (e.target.closest('.btn-close, button, a, input, select, textarea')) return;
     dragging = true;
     const rect = dialog.getBoundingClientRect();
     dialog.style.transform = 'none';
@@ -507,6 +512,7 @@ function setupDraggableModal(modalEl) {
     dialog.style.top = `${rect.top}px`;
     offsetX = e.clientX - rect.left;
     offsetY = e.clientY - rect.top;
+    header.style.cursor = 'grabbing';
     e.preventDefault();
   };
   const onMouseMove = (e) => {
@@ -514,7 +520,10 @@ function setupDraggableModal(modalEl) {
     dialog.style.left = `${e.clientX - offsetX}px`;
     dialog.style.top = `${e.clientY - offsetY}px`;
   };
-  const onMouseUp = () => { dragging = false; };
+  const onMouseUp = () => {
+    dragging = false;
+    header.style.cursor = 'grab';
+  };
 
   header.addEventListener('mousedown', onMouseDown);
   document.addEventListener('mousemove', onMouseMove);

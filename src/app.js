@@ -334,6 +334,8 @@ function bootstrap() {
   storageService.initialize();
   authService.restoreSession();
   initRouter(() => renderApp());
+  // Drag & drop global: arrastre de modales Bootstrap desde el header
+  import('./utils/modalDraggable.js').then((m) => m.initSgcModalDragging()).catch(() => {});
   renderApp();
 }
 

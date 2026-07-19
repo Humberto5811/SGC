@@ -13,6 +13,11 @@ function authHeaders() {
       else if (user && (user.nombre || user.username || user.dni)) {
         h['x-user-name'] = String(user.nombre || user.username || user.dni);
       }
+      if (user?.cargo) h['x-user-cargo'] = String(user.cargo);
+      if (user?.rol) h['x-user-rol'] = String(user.rol);
+      if (user?.permisos) {
+        try { h['x-user-permisos'] = JSON.stringify(user.permisos); } catch (_) { /* noop */ }
+      }
       return h;
     }
   } catch (_) { }
@@ -40,8 +45,27 @@ async function request(path, options = {}) {
   }
 }
 
+async function requestBlob(path, options = {}) {
+  const url = BASE + path;
+  const res = await fetch(url, {
+    headers: { ...authHeaders(), ...(options.headers || {}) },
+    ...options,
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || error.error || `Error ${res.status}`);
+  }
+  const blob = await res.blob();
+  return {
+    blob,
+    contentType: res.headers.get('content-type') || blob.type || 'application/octet-stream',
+    contentDisposition: res.headers.get('content-disposition') || '',
+  };
+}
+
 export const api = {
   get: (path) => request(path),
+  getBlob: (path) => requestBlob(path),
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),

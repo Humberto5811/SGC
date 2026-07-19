@@ -113,7 +113,7 @@ const selDiff = validarAdjudicacionCuadro(matriz, {
     { item_key: '10-0', proveedor_adjudicado_id: 102 },
     { item_key: '10-1', proveedor_adjudicado_id: 101 },
   ],
-  criterio_seleccion: 'DISTINTO_MENOR_PRECIO',
+  criterio_seleccion: 'VALOR_POR_DINERO',
   sustento_decision: '',
 });
 assert(!selDiff.ok && selDiff.errors.some((e) => /sustento/i.test(e)), '4. distinto exige sustento');
@@ -123,7 +123,7 @@ const selDiffOk = validarAdjudicacionCuadro(matriz, {
     { item_key: '10-0', proveedor_adjudicado_id: 102 },
     { item_key: '10-1', proveedor_adjudicado_id: 101 },
   ],
-  criterio_seleccion: 'DISTINTO_MENOR_PRECIO',
+  criterio_seleccion: 'VALOR_POR_DINERO',
   sustento_decision: 'Mejor garantía del proveedor 102 en ítem A',
 });
 assert(selDiffOk.ok, '4. distinto con sustento OK');

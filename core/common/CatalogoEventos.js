@@ -76,6 +76,9 @@ export const EVENTOS_FUNCIONALES = Object.freeze({
   CUADRO_COMPARATIVO_ADJUDICADO: { codigo: 'CUADRO_COMPARATIVO_ADJUDICADO', label: 'Cuadro Comparativo adjudicado', categoria: 'APROBACION', tipoEvento: 'ETAPA' },
   CUADRO_COMPARATIVO_FIRMADO: { codigo: 'CUADRO_COMPARATIVO_FIRMADO', label: 'Cuadro Comparativo firmado', categoria: 'APROBACION', tipoEvento: 'ETAPA' },
   CUADRO_COMPARATIVO_DERIVADO: { codigo: 'CUADRO_COMPARATIVO_DERIVADO', label: 'Cuadro Comparativo derivado a CCP', categoria: 'DERIVACION', tipoEvento: 'DERIVACION' },
+  CUADRO_APROBADO_DEC: { codigo: 'CUADRO_APROBADO_DEC', label: 'Cuadro aprobado por DEC', categoria: 'APROBACION', tipoEvento: 'ETAPA' },
+  CCP_GENERADO: { codigo: 'CCP_GENERADO', label: 'CCP generado', categoria: 'APROBACION', tipoEvento: 'ETAPA' },
+  CCP_DERIVADO: { codigo: 'CCP_DERIVADO', label: 'CCP derivado', categoria: 'DERIVACION', tipoEvento: 'DERIVACION' },
 
   // Módulo / workflow
   RECIBIDO: { codigo: 'RECIBIDO', label: 'Recibido', categoria: 'ETAPA', tipoEvento: 'ETAPA' },

@@ -212,8 +212,34 @@ export const contratacionesService = {
   async getCuadroPdfFirmadoUrl(cuadroId, inline = true) {
     return `/api/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado${inline ? '?inline=1' : ''}`;
   },
+  /** Descarga el PDF firmado con autenticación (para Ver / Descargar en blob). */
+  async fetchCuadroPdfFirmado(cuadroId, inline = true) {
+    const q = inline ? '?inline=1' : '';
+    return api.getBlob(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado${q}`);
+  },
+  /** RC8.6 — PDF firmado DEC */
+  async adjuntarCuadroPdfFirmadoDec(cuadroId, body = {}) {
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado-dec`, body);
+  },
+  async eliminarCuadroPdfFirmadoDec(cuadroId) {
+    return api.del(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado-dec`);
+  },
+  async fetchCuadroPdfFirmadoDec(cuadroId, inline = true) {
+    const q = inline ? '?inline=1' : '';
+    return api.getBlob(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado-dec${q}`);
+  },
   async derivarCuadroACcp(cuadroId, body = {}) {
     return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/derivar-ccp`, body);
+  },
+  async transitarRevisionCuadro(cuadroId, body = {}) {
+    let user = {};
+    try { user = JSON.parse(localStorage.getItem('currentUser') || '{}'); } catch (_) { /* noop */ }
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/revision`, {
+      ...body,
+      cargo: body.cargo || user.cargo || '',
+      rol: body.rol || user.rol || '',
+      permisos: body.permisos || user.permisos || {},
+    });
   },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');

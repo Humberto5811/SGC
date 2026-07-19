@@ -1,5 +1,5 @@
 /**
- * Helpers cliente — segunda fuente Anexo 8A (RC8.3.1).
+ * Helpers cliente — segunda fuente Anexo 8A (RC8.3.1 / RC8.3.2-B).
  * Espejo liviano de server/lib/cuadroComparativoSchema.js (sin import Node).
  */
 import { TIPOS_SEGUNDA_FUENTE, labelTipoSegundaFuente } from './cuadroComparativoMatriz.js';
@@ -10,6 +10,12 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function textOrNa(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s || s === '—' || s === '-' || s.toLowerCase() === 'n/a') return 'NO APLICA';
+  return s;
+}
+
 export function calcPrecioActualizado(precioOriginal, factor) {
   const p = toNum(precioOriginal);
   const f = toNum(factor);
@@ -17,11 +23,31 @@ export function calcPrecioActualizado(precioOriginal, factor) {
   return Math.round(p * f * 100) / 100;
 }
 
+/** Resuelve ítems afectados por la segunda fuente (requerimiento / item_keys). */
+export function resolveItemsAsociadosSegundaFuente(raw = {}, items = []) {
+  const all = Array.isArray(items) ? items : [];
+  let keys = Array.isArray(raw.item_keys) ? raw.item_keys.filter(Boolean).map(String) : [];
+  if (keys.length) {
+    return all.filter((it) => keys.includes(String(it.item_key)));
+  }
+  if (raw.requerimiento_id != null && raw.requerimiento_id !== '') {
+    return all.filter((it) => String(it.requerimiento_id) === String(raw.requerimiento_id));
+  }
+  if (raw.requerimiento_codigo) {
+    return all.filter((it) => String(it.requerimiento_codigo || '') === String(raw.requerimiento_codigo));
+  }
+  // Legacy sin asociación: todos los ítems
+  return all;
+}
+
 export function normalizeSegundaFuente(raw = {}, idx = 0, items = []) {
   const id = raw.id_fuente || raw.id || `sf-${Date.now()}-${idx}`;
   const factorGlobal = toNum(raw.factor_ajuste) ?? 1;
+  const asociados = resolveItemsAsociadosSegundaFuente(raw, items);
+  const itemKeys = asociados.map((it) => it.item_key);
+  const reqFromItems = asociados[0] || null;
   const precios = {};
-  (items || []).forEach((it) => {
+  asociados.forEach((it) => {
     const row = (raw.precios_por_item || {})[it.item_key] || {};
     const original = toNum(row.precio_unitario ?? row.precio_original);
     const factor = toNum(row.factor_ajuste) ?? factorGlobal;
@@ -58,20 +84,32 @@ export function normalizeSegundaFuente(raw = {}, idx = 0, items = []) {
     fecha_consulta: raw.fecha_consulta || null,
     moneda: raw.moneda || 'PEN',
     factor_ajuste: factorGlobal,
-    precios_por_item: Object.keys(precios).length ? precios : (raw.precios_por_item || {}),
+    requerimiento_id: raw.requerimiento_id ?? reqFromItems?.requerimiento_id ?? null,
+    requerimiento_codigo: String(
+      raw.requerimiento_codigo || reqFromItems?.requerimiento_codigo || ''
+    ).trim(),
+    item_keys: itemKeys,
+    precios_por_item: Object.keys(precios).length ? precios : {},
     documentos: Array.isArray(raw.documentos) ? raw.documentos : [],
     informacion_adicional: {
-      marca: 'NO APLICA',
-      modelo: 'NO APLICA',
-      procedencia: 'NO APLICA',
-      anio_fabricacion: 'NO APLICA',
-      garantia: 'NO APLICA',
-      plazo_entrega: 'NO APLICA',
-      forma_pago: 'NO APLICA',
-      moneda: raw.moneda || 'PEN',
-      ...(raw.informacion_adicional || {}),
+      marca: textOrNa(raw.informacion_adicional?.marca),
+      modelo: textOrNa(raw.informacion_adicional?.modelo),
+      procedencia: textOrNa(raw.informacion_adicional?.procedencia),
+      anio_fabricacion: textOrNa(raw.informacion_adicional?.anio_fabricacion),
+      garantia: textOrNa(raw.informacion_adicional?.garantia),
+      plazo_entrega: textOrNa(raw.informacion_adicional?.plazo_entrega),
+      forma_pago: textOrNa(raw.informacion_adicional?.forma_pago),
+      moneda: String(raw.moneda || raw.informacion_adicional?.moneda || 'PEN').trim() || 'PEN',
     },
-    acciones_administrativas: raw.acciones_administrativas || {},
+    acciones_administrativas: {
+      fecha_solicitud: 'NO APLICA',
+      reiteraciones: 'NO APLICA',
+      fecha_recepcion: 'NO APLICA',
+      dedicado_objeto: 'NO APLICA',
+      au_participo_rtm: 'NO APLICA',
+      cumple_rtm_o_similar: 'NO APLICA',
+      tomo_valor_referencial: 'NO APLICA',
+    },
     observacion: String(raw.observacion || '').trim(),
     registrado_por: raw.registrado_por || '',
     registrado_at: raw.registrado_at || new Date().toISOString(),

@@ -37,6 +37,11 @@ function authHeaders() {
       if (user?.username || user?.nombre || user?.dni) {
         h['x-user-name'] = String(user.username || user.nombre || user.dni);
       }
+      if (user?.cargo) h['x-user-cargo'] = String(user.cargo);
+      if (user?.rol) h['x-user-rol'] = String(user.rol);
+      if (user?.permisos) {
+        try { h['x-user-permisos'] = JSON.stringify(user.permisos); } catch (_) { /* noop */ }
+      }
       return h;
     }
   } catch (_) { /* noop */ }
@@ -273,8 +278,10 @@ async function showVerValidaciones(solicitudId) {
 async function openElaborarCuadro(solicitudId) {
   const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
   const tipo = String(row?.tipo || '').toLowerCase();
-  if (tipo && tipo !== 'bien' && tipo !== 'bienes') {
-    alert(`RC8.2 elabora solo Bienes. Tipo actual: ${row?.tipo || '—'}. Servicios/Locadores se habilitarán después.`);
+  const esBien = !tipo || tipo === 'bien' || tipo === 'bienes' || tipo === 'b';
+  const esServicio = tipo === 'servicio' || tipo === 'servicios' || tipo === 's';
+  if (tipo && !esBien && !esServicio) {
+    alert(`El cuadro comparativo elabora Bienes (08-A) y Servicios (08-B). Tipo actual: ${row?.tipo || '—'}.`);
     return;
   }
   await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
@@ -297,7 +304,7 @@ async function loadCuadro(resetPage = false) {
 
     cont.innerHTML = `
       <div class="sgc-bandeja-wrap" id="cuadroCompOuter">
-        <p class="small text-muted mb-2">Una fila por Solicitud de Cotización. La matriz económica y el Anexo 8A se elaboran en una etapa posterior.</p>
+        <p class="small text-muted mb-2">Una fila por Solicitud de Cotización. La matriz económica y el Anexo 08-A (Bienes) / 08-B (Servicios) se elaboran aquí.</p>
         <table class="table table-sm table-hover table-bordered mb-0 align-middle">
           <thead class="table-light"><tr>
             <th>Solicitud</th>

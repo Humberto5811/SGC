@@ -1,8 +1,12 @@
 /**
- * RC8.4 — Generación / previsualización / descarga Anexo N.° 8A (jsPDF + autoTable).
+ * RC8.4 / RC8.3.2-C — Generación Anexo N.° 08-A institucional (jsPDF + autoTable).
+ * Una sola tabla: Cotización 1..N | Segunda fuente | Valor adjudicado
+ * + información adicional y acciones administrativas como continuación vertical
+ * (sin celdas bajo Valor adjudicado).
  */
 import {
   ANEXO_8A,
+  ANEXO_8B,
   buildCuadroComparativoReportData,
   validateCuadroParaAnexo8A,
 } from './cuadroComparativoReportData.js';
@@ -14,14 +18,10 @@ function ensureJsPdf() {
 
 const COLOR_HEAD = [10, 66, 117];
 const COLOR_BASE = [207, 232, 245];
-const COLOR_PROV = [232, 245, 233];
-const COLOR_WIN = [255, 243, 205];
-
-function chunk(arr, size) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out.length ? out : [[]];
-}
+const COLOR_COT = [212, 237, 218];
+const COLOR_SF = [255, 243, 205];
+const COLOR_ADJ = [255, 236, 179];
+const COLOR_SECTION = [238, 243, 247];
 
 function drawHeader(doc, report, pageW, margin) {
   let y = 28;
@@ -29,90 +29,202 @@ function drawHeader(doc, report, pageW, margin) {
   if (logo && /^data:image\//i.test(logo)) {
     try {
       const fmt = /png/i.test(logo) ? 'PNG' : 'JPEG';
-      doc.addImage(logo, fmt, margin, 18, 48, 48);
+      doc.addImage(logo, fmt, margin, 16, 46, 46);
     } catch (_) { /* logo opcional */ }
   }
-  const textX = logo ? margin + 56 : margin;
+  const textX = logo ? margin + 54 : margin;
   doc.setFontSize(9);
   doc.setTextColor(...COLOR_HEAD);
   doc.setFont(undefined, 'bold');
   doc.text(report.entidad?.nombre || '—', textX, y);
   doc.setFontSize(11);
-  doc.text(report.anexo.titulo, textX, y + 14);
+  doc.text(report.anexo.titulo, textX, y + 13);
   doc.setFontSize(9);
-  doc.text(report.anexo.subtitulo, textX, y + 26);
+  doc.text(report.anexo.subtitulo, textX, y + 25);
   doc.setFont(undefined, 'normal');
-  doc.setFontSize(8);
+  doc.setFontSize(7.5);
   doc.setTextColor(40);
-  y = 78;
+  y = 72;
   const c = report.cabecera;
+  // Cabecera institucional sin Requerimientos / Área usuaria / CMN / Fuente de financiamiento
   const lines = [
     `Denominación: ${c.denominacion}`,
-    `Solicitud de Cotización: ${c.solicitud_codigo}    Requerimientos: ${c.requerimientos}`,
-    `Área usuaria: ${c.area_usuaria}    CMN: ${c.cmn}    Fuente de financiamiento: ${c.fuente_financiamiento}`,
+    `Solicitud de Cotización: ${c.solicitud_codigo}`,
     `Fecha: ${c.fecha}    Tipo: ${c.tipo}`,
   ];
   lines.forEach((ln) => {
     const wrapped = doc.splitTextToSize(ln, pageW - margin * 2);
     doc.text(wrapped, margin, y);
-    y += wrapped.length * 10 + 2;
+    y += wrapped.length * 9 + 1;
   });
   return y + 4;
 }
 
-function buildTableForProveedorBlock(report, provBlock, blockIndex, totalBlocks) {
-  const baseHeads = ['Ítem', 'N.° REQ', 'Pedido SIGAMEF', 'Cód. SIGAMEF', 'Descripción', 'UM', 'Cant.'];
-  const provSub = ['Razón social / RUC', 'P. unit.', 'P. total', 'Técnico', 'Marca/Modelo', 'Proced./Garantía/Plazo', 'Obs.'];
+function textoCabeceraCotizacionPdf(f) {
+  const nombre = f.razon_social || '—';
+  const ruc = f.ruc || '—';
+  const contacto = f.contacto || '—';
+  const telefono = f.telefono || '—';
+  const correo = f.correo || '—';
+  return [
+    f.label || `Cotización ${f.nro || ''}`,
+    `Proveedor: ${nombre}`,
+    `RUC: ${ruc}`,
+    `Contacto: ${contacto}`,
+    `Teléfono: ${telefono}`,
+    `Correo: ${correo}`,
+  ].join('\n');
+}
+
+/**
+ * Construye cabeceras + cuerpo de la matriz institucional (única tabla).
+ */
+export function buildMatrizInstitucionalTable(report) {
+  const primera = report.fuentes?.primera || report.proveedores || [];
+  const segunda = report.fuentes?.segunda || [];
+  const spanCot = 2;
+  const spanSf = 5;
+  const spanAdj = 3;
+  const baseHeads = ['Ítem N.°', 'N.° REQ', 'Cód. SIGAMEF', 'Descripción', 'UM', 'Cant.'];
+  const nBase = baseHeads.length;
+
   const headTop = [
-    { content: 'DATOS DEL ÍTEM', colSpan: baseHeads.length, styles: { fillColor: COLOR_BASE, textColor: COLOR_HEAD, halign: 'center', fontStyle: 'bold', fontSize: 7 } },
-    ...provBlock.map((p, i) => ({
-      content: `PROVEEDOR ${blockIndex * provBlock.length + i + 1}: ${p.razon_social}`,
-      colSpan: provSub.length,
-      styles: { fillColor: COLOR_PROV, textColor: [21, 87, 36], halign: 'center', fontStyle: 'bold', fontSize: 6.5 },
+    {
+      content: 'DATOS DEL ÍTEM',
+      colSpan: nBase,
+      styles: { fillColor: COLOR_BASE, textColor: COLOR_HEAD, halign: 'center', fontStyle: 'bold', fontSize: 6.5 },
+    },
+    ...primera.map((f) => ({
+      content: textoCabeceraCotizacionPdf(f),
+      colSpan: spanCot,
+      styles: {
+        fillColor: COLOR_COT,
+        textColor: [21, 87, 36],
+        halign: 'left',
+        valign: 'top',
+        fontStyle: 'bold',
+        fontSize: 5,
+      },
     })),
-    { content: 'RESULTADO ÍTEM', colSpan: 2, styles: { fillColor: COLOR_WIN, textColor: COLOR_HEAD, halign: 'center', fontStyle: 'bold', fontSize: 7 } },
-  ];
-  const headCols = [
-    ...baseHeads,
-    ...provBlock.flatMap(() => provSub),
-    'Adjudicado',
-    'Valor',
+    ...segunda.map(() => ({
+      content: 'Segunda fuente\nValor histórico / páginas web',
+      colSpan: spanSf,
+      styles: { fillColor: COLOR_SF, textColor: COLOR_HEAD, halign: 'center', fontStyle: 'bold', fontSize: 5.5 },
+    })),
+    {
+      content: 'VALOR ADJUDICADO',
+      colSpan: spanAdj,
+      styles: { fillColor: COLOR_ADJ, textColor: COLOR_HEAD, halign: 'center', fontStyle: 'bold', fontSize: 6.5 },
+    },
   ];
 
-  const body = report.filas.map((f) => {
+  const headCols = [
+    ...baseHeads,
+    ...primera.flatMap(() => ['P. unit.', 'P. total']),
+    ...segunda.flatMap((f) => [f.referencia_label || 'Referencia', 'P. unit.', 'Factor', 'P. act.', 'P. total']),
+    'Proveedor adjudicado',
+    'Valor Unitario',
+    'Valor Total',
+  ];
+
+  const priceBody = (report.filas || []).map((f) => {
     const base = [
       String(f.item),
       f.requerimiento_codigo,
-      f.pedido_sigamef,
       f.codigo_sigamef,
       f.descripcion,
       f.unidad_medida,
       f.cantidad,
     ];
-    const ofs = provBlock.map((p) => {
-      const of = f.ofertas.find((o) => Number(o.proveedor_id) === Number(p.proveedor_id)) || {};
-      return [
-        `${of.razon_social || '—'}\n${of.ruc || ''}${of.adjudicado ? '\n[ADJUDICADO]' : ''}`,
-        of.precio_unitario || '—',
-        of.precio_total || '—',
-        of.cumplimiento_tecnico || '—',
-        `${of.marca || '—'}\n${of.modelo || '—'}`,
-        `${of.procedencia || '—'}\n${of.garantia || '—'}\n${of.plazo_entrega || '—'}`,
-        of.observaciones || '—',
-      ];
-    }).flat();
-    return [...base, ...ofs, f.proveedor_adjudicado, f.valor_adjudicado_item];
+    const cot = (f.cotizaciones || []).flatMap((c) => [c.precio_unitario, c.precio_total]);
+    const sf = (f.segundas || []).flatMap((s) => [
+      s.referencia, s.precio_unitario, s.factor, s.precio_actualizado, s.precio_total,
+    ]);
+    const adj = [
+      f.adjudicado?.proveedor_label || f.proveedor_adjudicado || '—',
+      f.adjudicado?.valor_unitario || f.valor_adjudicado_unitario || '—',
+      f.adjudicado?.valor_total || f.valor_adjudicado_item || '—',
+    ];
+    return [...base, ...cot, ...sf, ...adj];
   });
 
-  const note = totalBlocks > 1
-    ? `Bloque de proveedores ${blockIndex + 1} de ${totalBlocks}`
-    : '';
-  return { head: [headTop, headCols], body, note };
+  const emptyAdj = Array(spanAdj).fill('');
+  const emptyCot = primera.map(() => ({ content: '', colSpan: spanCot, styles: { fillColor: COLOR_SECTION } }));
+  const emptySf = segunda.map(() => ({ content: '', colSpan: spanSf, styles: { fillColor: COLOR_SECTION } }));
+
+  const sectionRow = (title) => [
+    {
+      content: title,
+      colSpan: nBase,
+      styles: { fillColor: COLOR_SECTION, fontStyle: 'bold', fontSize: 6.5, textColor: COLOR_HEAD },
+    },
+    ...emptyCot,
+    ...emptySf,
+    ...emptyAdj.map((c) => ({ content: c, styles: { fillColor: [250, 250, 250] } })),
+  ];
+
+  const infoBody = (report.info_adicional || []).map((row) => {
+    const cells = [
+      {
+        content: row.label,
+        colSpan: nBase,
+        styles: { fillColor: [248, 249, 250], fontSize: 6 },
+      },
+      ...(row.cotizaciones || []).map((v) => ({
+        content: String(v ?? '—'),
+        colSpan: spanCot,
+        styles: { halign: 'center', fontSize: 5.5 },
+      })),
+      ...(row.segundas || []).map((v) => ({
+        content: String(v ?? 'NO APLICA'),
+        colSpan: spanSf,
+        styles: { halign: 'center', fontSize: 5.5, fillColor: [255, 252, 240] },
+      })),
+      ...emptyAdj.map((c) => ({ content: c, styles: { fillColor: [250, 250, 250] } })),
+    ];
+    return cells;
+  });
+
+  const aaBody = (report.acciones_administrativas || []).map((row) => {
+    const cells = [
+      {
+        content: row.label,
+        colSpan: nBase,
+        styles: { fillColor: [248, 249, 250], fontSize: 6 },
+      },
+      ...(row.cotizaciones || []).map((v) => ({
+        content: String(v ?? '—'),
+        colSpan: spanCot,
+        styles: { halign: 'center', fontSize: 5.5 },
+      })),
+      ...(row.segundas || []).map((v) => ({
+        content: String(v ?? '—'),
+        colSpan: spanSf,
+        styles: { halign: 'center', fontSize: 5.5, fillColor: [255, 252, 240] },
+      })),
+      ...emptyAdj.map((c) => ({ content: c, styles: { fillColor: [250, 250, 250] } })),
+    ];
+    return cells;
+  });
+
+  const body = [
+    ...priceBody,
+    sectionRow('Información adicional'),
+    ...infoBody,
+    sectionRow('Acciones administrativas'),
+    ...aaBody,
+  ];
+
+  return {
+    head: [headTop, headCols],
+    body,
+    colCount: nBase + primera.length * spanCot + segunda.length * spanSf + spanAdj,
+  };
 }
 
-function drawFirmas(doc, report, startY, pageW, pageH, margin) {
+function drawResultadoYFirmas(doc, report, startY, pageW, pageH, margin) {
   let y = startY;
-  if (y > pageH - 110) {
+  if (y > pageH - 130) {
     doc.addPage();
     y = 48;
   }
@@ -125,31 +237,20 @@ function drawFirmas(doc, report, startY, pageW, pageH, margin) {
   doc.setFontSize(8);
   doc.setTextColor(40);
   const r = report.resultado;
+  // Solo hasta Sustento (sin segunda fuente / N.° orden / modalidad / resumen)
   const resLines = [
-    `Proveedor adjudicado (principal): ${r.proveedor_adjudicado} — RUC ${r.ruc_adjudicado}`,
+    `Proveedor ganador: ${r.proveedor_adjudicado} — RUC ${r.ruc_adjudicado}`,
     `Valor adjudicado total: S/ ${r.valor_adjudicado}`,
-    `Criterio: ${r.criterio}`,
+    `Metodología / criterio: ${r.metodologia || r.criterio}`,
     `Sustento: ${r.sustento}`,
-    `Modalidad: ${r.modalidad}`,
   ];
   resLines.forEach((ln) => {
     const w = doc.splitTextToSize(ln, pageW - margin * 2);
     doc.text(w, margin, y);
     y += w.length * 10 + 2;
   });
-  if (r.resumen_por_proveedor?.length) {
-    y += 4;
-    doc.setFont(undefined, 'bold');
-    doc.text('Resumen por proveedor:', margin, y);
-    y += 11;
-    doc.setFont(undefined, 'normal');
-    r.resumen_por_proveedor.forEach((p) => {
-      doc.text(`• ${p.razon_social} (${p.ruc}): ${p.items} ítem(s) — S/ ${p.valor}`, margin + 6, y);
-      y += 10;
-    });
-  }
 
-  y += 18;
+  y += 20;
   if (y > pageH - 90) {
     doc.addPage();
     y = 48;
@@ -166,6 +267,7 @@ function drawFirmas(doc, report, startY, pageW, pageH, margin) {
     doc.line(x + 10, y + 36, x + colW - 20, y + 36);
     doc.setFontSize(7);
     doc.setTextColor(60);
+    doc.setFont(undefined, 'normal');
     doc.text(f.nombre || ' ', x + 10, y + 32);
     doc.setFont(undefined, 'bold');
     doc.text(f.cargo, x + 10, y + 48);
@@ -175,13 +277,14 @@ function drawFirmas(doc, report, startY, pageW, pageH, margin) {
 }
 
 /**
- * Genera jsPDF del Anexo 8A a partir de datos persistidos (+ entidad/logo).
+ * Genera jsPDF del Anexo 08-A / 08-B a partir de datos persistidos (+ entidad/logo).
  * @returns {{ doc, report, blob, base64, filename }}
  */
 export function generateAnexo8APdf(persistido = {}) {
   const report = buildCuadroComparativoReportData(persistido);
   if (!report.meta.validation.ok) {
-    const err = new Error(`No se puede generar el Anexo 8A: ${report.meta.validation.faltantes.join('; ')}`);
+    const codigo = report.anexo?.codigo || '08';
+    const err = new Error(`No se puede generar el Anexo ${codigo}: ${report.meta.validation.faltantes.join('; ')}`);
     err.code = 'ANEXO8A_INCOMPLETO';
     err.faltantes = report.meta.validation.faltantes;
     throw err;
@@ -191,52 +294,51 @@ export function generateAnexo8APdf(persistido = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a3' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const margin = 28;
-  const bloqueSize = report.meta.proveedores_por_bloque || 3;
-  const bloques = chunk(report.proveedores, bloqueSize);
+  const margin = 22;
 
-  bloques.forEach((provBlock, bIdx) => {
-    if (bIdx > 0) doc.addPage();
-    let y = drawHeader(doc, report, pageW, margin);
-    if (bloques.length > 1) {
-      doc.setFontSize(8);
-      doc.setTextColor(80);
-      doc.text(`Continuación de proveedores (${bIdx + 1}/${bloques.length}) — cabeceras repetidas`, margin, y);
-      y += 12;
-    }
-    const { head, body, note } = buildTableForProveedorBlock(report, provBlock, bIdx, bloques.length);
-    if (note) {
+  let y = drawHeader(doc, report, pageW, margin);
+  const { head, body } = buildMatrizInstitucionalTable(report);
+  const usable = pageW - margin * 2;
+
+  doc.autoTable({
+    head,
+    body,
+    startY: y,
+    styles: { fontSize: 5.5, cellPadding: 1.5, overflow: 'linebreak', valign: 'middle', lineColor: [160, 160, 160], lineWidth: 0.3 },
+    headStyles: { fontSize: 5, halign: 'center', valign: 'middle', minCellHeight: 48, fillColor: COLOR_BASE, textColor: COLOR_HEAD },
+    columnStyles: {},
+    margin: { left: margin, right: margin },
+    rowPageBreak: 'avoid',
+    showHead: 'everyPage',
+    tableWidth: usable,
+    didParseCell(data) {
+      // Aislar visualmente VALOR ADJUDICADO en filas de precio
+      if (data.section === 'body' && data.row.index < (report.filas || []).length) {
+        const nBase = 6;
+        const nCot = (report.fuentes?.primera || []).length * 2;
+        const nSf = (report.fuentes?.segunda || []).length * 5;
+        const adjStart = nBase + nCot + nSf;
+        if (data.column.index >= adjStart) {
+          data.cell.styles.fillColor = [255, 252, 235];
+        }
+      }
+    },
+    didDrawPage(data) {
       doc.setFontSize(7);
-      doc.text(note, margin, y);
-      y += 10;
-    }
-    const usable = pageW - margin * 2;
-    doc.autoTable({
-      head,
-      body,
-      startY: y,
-      styles: { fontSize: 6, cellPadding: 2, overflow: 'linebreak', valign: 'top' },
-      headStyles: { fontSize: 5.5, halign: 'center', valign: 'middle', minCellHeight: 28 },
-      margin: { left: margin, right: margin },
-      rowPageBreak: 'avoid',
-      showHead: 'everyPage',
-      tableWidth: usable,
-      didDrawPage(data) {
-        doc.setFontSize(7);
-        doc.setTextColor(100);
-        doc.text(
-          `${ANEXO_8A.titulo} · ${report.cabecera.solicitud_codigo} · pág. ${data.pageNumber}`,
-          margin,
-          pageH - 14,
-        );
-      },
-    });
+      doc.setTextColor(100);
+      doc.text(
+        `${report.anexo?.titulo || ANEXO_8A.titulo} · ${report.cabecera.solicitud_codigo} · pág. ${data.pageNumber}`,
+        margin,
+        pageH - 14,
+      );
+    },
   });
 
-  const finalY = (doc.lastAutoTable?.finalY || 120) + 16;
-  drawFirmas(doc, report, finalY, pageW, pageH, margin);
+  const finalY = (doc.lastAutoTable?.finalY || 120) + 14;
+  drawResultadoYFirmas(doc, report, finalY, pageW, pageH, margin);
 
-  const filename = `${ANEXO_8A.filenamePrefix}_${String(report.cabecera.solicitud_codigo).replace(/\s+/g, '_')}_v${report.meta.version || 1}.pdf`;
+  const prefix = report.anexo?.filenamePrefix || ANEXO_8A.filenamePrefix;
+  const filename = `${prefix}_${String(report.cabecera.solicitud_codigo).replace(/\s+/g, '_')}_v${report.meta.version || 1}.pdf`;
   const blob = doc.output('blob');
   const dataUri = doc.output('datauristring');
   const base64 = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
@@ -258,4 +360,4 @@ export function downloadAnexo8APdf(persistido) {
   return filename;
 }
 
-export { validateCuadroParaAnexo8A, buildCuadroComparativoReportData, ANEXO_8A };
+export { validateCuadroParaAnexo8A, buildCuadroComparativoReportData, ANEXO_8A, ANEXO_8B };

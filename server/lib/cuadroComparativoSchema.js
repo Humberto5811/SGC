@@ -33,6 +33,58 @@ function pick(obj, ...keys) {
   return '';
 }
 
+/** Normaliza fecha a YYYY-MM-DD para Acciones administrativas. */
+function toDateOnly(v) {
+  if (v == null || v === '') return null;
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function parseJsonSafe(v, fallback = {}) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim()) {
+    try {
+      const o = JSON.parse(v);
+      return o && typeof o === 'object' ? o : fallback;
+    } catch (_) { /* noop */ }
+  }
+  return fallback;
+}
+
+/**
+ * Contacto del proveedor desde la propuesta presentada (Recepción → Ver propuesta).
+ * Prioriza propuesta_economica.datos_proveedor / datos; fallback maestro proveedores.
+ */
+function extractDatosContactoCotizacion(cot = {}, resumen = {}) {
+  const eco = parseJsonSafe(cot.propuesta_economica);
+  const tec = parseJsonSafe(cot.propuesta_tecnica);
+  const d = eco.datos_proveedor || eco.datos || tec.datos_proveedor || tec.datos || {};
+  const correoDirect = pick(d, 'correo', 'email')
+    || pick(cot, 'correo', 'email');
+  let correo = correoDirect;
+  if (!correo) {
+    let emails = d.emails ?? cot.emails;
+    if (typeof emails === 'string') {
+      try { emails = JSON.parse(emails); } catch (_) { emails = []; }
+    }
+    if (Array.isArray(emails) && emails.length) {
+      const first = emails[0];
+      correo = typeof first === 'string' ? first : (first?.email || first?.correo || '');
+    }
+  }
+  return {
+    razon_social: pick(d, 'razon_social') || resumen.razon_social || cot.razon_social || '—',
+    ruc: pick(d, 'ruc') || resumen.ruc || cot.ruc || '—',
+    contacto: pick(d, 'persona_contacto', 'contacto') || pick(cot, 'persona_contacto', 'contacto') || '—',
+    telefono: pick(d, 'celular', 'telefono', 'telefono_celular')
+      || pick(cot, 'telefono', 'celular') || '—',
+    correo: correo || '—',
+  };
+}
+
 function toNum(v) {
   if (v == null || v === '') return null;
   const n = Number(String(v).replace(/,/g, ''));
@@ -116,39 +168,40 @@ export function buildPrimeraFuenteFromMatriz(matriz = {}, cotizaciones = []) {
       label: `Cotización N.° ${idx + 1}`,
       cotizacion_id: p.cotizacion_id || cot.id || null,
       proveedor_id: p.proveedor_id,
-      datos_proveedor: {
-        razon_social: p.razon_social || cot.razon_social || '—',
-        ruc: p.ruc || cot.ruc || '—',
-        contacto: pick(cot, 'persona_contacto', 'contacto') || '—',
-        telefono: pick(cot, 'telefono') || '—',
-        correo: (() => {
-          const direct = pick(cot, 'correo', 'email');
-          if (direct) return direct;
-          let emails = cot.emails;
-          if (typeof emails === 'string') {
-            try { emails = JSON.parse(emails); } catch (_) { emails = []; }
-          }
-          if (Array.isArray(emails) && emails.length) {
-            const first = emails[0];
-            return typeof first === 'string' ? first : (first?.email || first?.correo || '');
-          }
-          return '—';
-        })() || '—',
-      },
+      datos_proveedor: extractDatosContactoCotizacion(cot, p),
       validacion_estado: p.validacion_estado || cot.validacion_estado || '',
       cumple_tecnicamente: String(p.validacion_estado || cot.validacion_estado || '').toUpperCase() === 'APTO',
       precios_por_item,
       informacion_adicional,
       info_por_item,
-      acciones_administrativas: {
-        fecha_solicitud: cot.fecha_solicitud || null,
-        reiteraciones: cot.reiteraciones ?? null,
-        fecha_recepcion: cot.fecha_presentacion || cot.updated_at || null,
-        dedicado_objeto: null,
-        au_participo_rtm: null,
-        cumple_rtm_o_similar: String(p.validacion_estado || '').toUpperCase() === 'APTO' ? true : null,
-        tomo_valor_referencial: null,
-      },
+      acciones_administrativas: (() => {
+        const valEst = String(p.validacion_estado || cot.validacion_estado || '').toUpperCase();
+        const apto = valEst === 'APTO';
+        const noApto = valEst === 'NO_APTO';
+        const fechaSol = toDateOnly(
+          cot.fecha_solicitud || cot.fecha_envio_invitacion || cot.fecha_envio || cot.fecha_invitacion,
+        );
+        let reiteraciones = cot.reiteraciones;
+        if (reiteraciones == null || reiteraciones === '') {
+          reiteraciones = cot.n_invitaciones_solicitud ?? cot.cantidad_invitaciones_proveedor
+            ?? cot.cantidad_invitaciones ?? null;
+        }
+        if (reiteraciones != null) reiteraciones = Number(reiteraciones);
+        if (!Number.isFinite(reiteraciones)) reiteraciones = fechaSol ? 1 : null;
+        return {
+          // Invitaciones pestaña 4: fecha_envio + cantidad de invitaciones
+          fecha_solicitud: fechaSol,
+          reiteraciones,
+          // Recepción de cotizaciones
+          fecha_recepcion: toDateOnly(cot.fecha_presentacion || cot.fecha_recepcion),
+          dedicado_objeto: null,
+          // Derivada a validación AU → siempre Sí
+          au_participo_rtm: true,
+          cumple_rtm_o_similar: apto ? true : (noApto ? false : null),
+          // Cotización válida (APTO) → Sí; no válida (NO_APTO) → No
+          tomo_valor_referencial: apto ? true : (noApto ? false : null),
+        };
+      })(),
       readonly: true,
     });
   });
@@ -156,11 +209,27 @@ export function buildPrimeraFuenteFromMatriz(matriz = {}, cotizaciones = []) {
   return sources;
 }
 
+function textOrNaSf(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s || s === '—' || s === '-' || s.toLowerCase() === 'n/a') return 'NO APLICA';
+  return s;
+}
+
 export function normalizeSegundaFuente(raw = {}, idx = 0) {
   const id = raw.id_fuente || raw.id || `sf-${Date.now()}-${idx}`;
-  const precios = raw.precios_por_item && typeof raw.precios_por_item === 'object'
+  const itemKeys = Array.isArray(raw.item_keys)
+    ? raw.item_keys.filter(Boolean).map(String)
+    : [];
+  let precios = raw.precios_por_item && typeof raw.precios_por_item === 'object'
     ? { ...raw.precios_por_item }
     : {};
+  if (itemKeys.length) {
+    const filtered = {};
+    itemKeys.forEach((k) => {
+      if (precios[k] != null) filtered[k] = precios[k];
+    });
+    precios = filtered;
+  }
   Object.keys(precios).forEach((k) => {
     const row = precios[k] || {};
     const original = toNum(row.precio_unitario ?? row.precio_original);
@@ -198,26 +267,29 @@ export function normalizeSegundaFuente(raw = {}, idx = 0) {
     fecha_consulta: raw.fecha_consulta || null,
     moneda: raw.moneda || 'PEN',
     factor_ajuste: toNum(raw.factor_ajuste) ?? 1,
+    requerimiento_id: raw.requerimiento_id ?? null,
+    requerimiento_codigo: String(raw.requerimiento_codigo || '').trim(),
+    item_keys: itemKeys.length ? itemKeys : Object.keys(precios),
     precios_por_item: precios,
     documentos: Array.isArray(raw.documentos) ? raw.documentos : [],
     informacion_adicional: {
-      marca: raw.informacion_adicional?.marca || 'NO APLICA',
-      modelo: raw.informacion_adicional?.modelo || 'NO APLICA',
-      procedencia: raw.informacion_adicional?.procedencia || 'NO APLICA',
-      anio_fabricacion: raw.informacion_adicional?.anio_fabricacion || 'NO APLICA',
-      garantia: raw.informacion_adicional?.garantia || 'NO APLICA',
-      plazo_entrega: raw.informacion_adicional?.plazo_entrega || 'NO APLICA',
-      forma_pago: raw.informacion_adicional?.forma_pago || 'NO APLICA',
-      moneda: raw.moneda || 'PEN',
+      marca: textOrNaSf(raw.informacion_adicional?.marca),
+      modelo: textOrNaSf(raw.informacion_adicional?.modelo),
+      procedencia: textOrNaSf(raw.informacion_adicional?.procedencia),
+      anio_fabricacion: textOrNaSf(raw.informacion_adicional?.anio_fabricacion),
+      garantia: textOrNaSf(raw.informacion_adicional?.garantia),
+      plazo_entrega: textOrNaSf(raw.informacion_adicional?.plazo_entrega),
+      forma_pago: textOrNaSf(raw.informacion_adicional?.forma_pago),
+      moneda: String(raw.moneda || raw.informacion_adicional?.moneda || 'PEN').trim() || 'PEN',
     },
     acciones_administrativas: {
-      fecha_solicitud: raw.acciones_administrativas?.fecha_solicitud || null,
-      reiteraciones: raw.acciones_administrativas?.reiteraciones ?? null,
-      fecha_recepcion: raw.acciones_administrativas?.fecha_recepcion || raw.fecha_consulta || null,
-      dedicado_objeto: raw.acciones_administrativas?.dedicado_objeto ?? null,
-      au_participo_rtm: raw.acciones_administrativas?.au_participo_rtm ?? null,
-      cumple_rtm_o_similar: raw.acciones_administrativas?.cumple_rtm_o_similar ?? null,
-      tomo_valor_referencial: raw.acciones_administrativas?.tomo_valor_referencial ?? null,
+      fecha_solicitud: 'NO APLICA',
+      reiteraciones: 'NO APLICA',
+      fecha_recepcion: 'NO APLICA',
+      dedicado_objeto: 'NO APLICA',
+      au_participo_rtm: 'NO APLICA',
+      cumple_rtm_o_similar: 'NO APLICA',
+      tomo_valor_referencial: 'NO APLICA',
     },
     observacion: String(raw.observacion || '').trim(),
     registrado_por: raw.registrado_por || '',
@@ -299,13 +371,16 @@ export function mergeFuentesCuadro(matrizFresh, datosGuardados = {}) {
   );
   // Reconstruir primera_fuente desde matriz fresca (precios oficiales)
   const primera = buildPrimeraFuenteFromMatriz(matrizFresh, []);
-  // Conservar acciones administrativas guardadas de primera fuente si existen
+  // Conservar selección manual de «Se dedica al objeto…»; el resto AA se recalcula
   const savedPrimera = Array.isArray(datosGuardados.primera_fuente) ? datosGuardados.primera_fuente : [];
   primera.forEach((f) => {
     const prev = savedPrimera.find((x) => Number(x.proveedor_id) === Number(f.proveedor_id)
       || Number(x.cotizacion_id) === Number(f.cotizacion_id));
-    if (prev?.acciones_administrativas) {
-      f.acciones_administrativas = { ...f.acciones_administrativas, ...prev.acciones_administrativas };
+    if (prev?.acciones_administrativas && prev.acciones_administrativas.dedicado_objeto != null) {
+      f.acciones_administrativas = {
+        ...f.acciones_administrativas,
+        dedicado_objeto: prev.acciones_administrativas.dedicado_objeto,
+      };
     }
   });
 

@@ -145,10 +145,21 @@ assert(sf1.informacion_adicional.marca === 'NO APLICA', '7. info adicional NA se
 // UI columnas verticales
 assert(/Cotización N\.°|colspan/.test(mtxSrc), '5. proveedores en columnas (cabecera Cotización)');
 assert(/P\. unit\.|P\. total/.test(mtxSrc), '6. PU/PT en subcabecera');
-assert(/Información adicional de la fuente/.test(mtxSrc), '7. info adicional');
+assert(/Información adicional/.test(mtxSrc), '7. info adicional (continuación vertical)');
+assert(/cc-adj-empty|cc-adj-block/.test(mtxSrc), '7b. VALOR ADJUDICADO sin filas debajo');
+assert(/Segunda fuente/.test(mtxSrc) && /Valor histórico \/ páginas web/.test(mtxSrc), '7c. título segunda fuente');
 assert(/Acciones administrativas/.test(mtxSrc), '8. acciones administrativas');
-assert(/cc-adj-fuente|VALOR ADJUDICADO/.test(mtxSrc), '10. fuente adjudicada en matriz');
+assert(/Proveedor adjudicado/.test(mtxSrc), '10. columna Proveedor adjudicado');
+assert(/Valor Unitario/.test(mtxSrc) && /Valor Total/.test(mtxSrc), '10b. Valor Unitario y Valor Total');
+assert(/razon_social/.test(mtxSrc) && /cc-adj-fuente/.test(mtxSrc), '10c. combo con razón social del proveedor');
+assert(/cc-adj-fuente|VALOR ADJUDICADO/.test(mtxSrc), '10d. combo adjudicación en matriz');
+assert(/bindAdjProveedorLiveUpdate/.test(mtxSrc), '10e. actualización automática VU/VT');
+assert(/fuenteAplicaAItem/.test(mtxSrc), '10f. SF acotada a ítems asociados');
+assert(/labelReferenciaCol/.test(mtxSrc), '10g. columna referencia/orden SF');
 assert(/Agregar segunda fuente/.test(mtxSrc), 'UI botón segunda fuente');
+assert(/Requerimiento asociado/.test(modalSrc), 'UI requerimiento asociado SF');
+assert(/valor_adjudicado_unitario/.test(readFileSync(path.join(__dirname, '../server/lib/cuadroComparativoAdjudicacion.js'), 'utf8')),
+  '10h. servidor persiste valor unitario');
 
 // Compatibilidad v1
 {
@@ -166,10 +177,9 @@ assert(/Agregar segunda fuente/.test(mtxSrc), 'UI botón segunda fuente');
 assert(/segunda_fuente/.test(mapSrc), '12. mapper conoce segunda_fuente');
 assert(/migrateCuadroSchemaV1ToV2|mergeFuentesCuadro/.test(mapSrc), '12. merge/migrate cableado');
 
-// PDF bloqueado
-assert(/PDF oficial bloqueado|Generación oficial bloqueada|puede_pdf_oficial:\s*false/.test(modalSrc + mapSrc),
-  'PDF oficial bloqueado RC8.3.1');
-assert(/Previsualizar \(borrador\)|BORRADOR/.test(modalSrc), 'preview borrador');
+// PDF Anexo 08-A (habilitado en RC8.3.2-C; borrador sigue disponible)
+assert(/generateAnexo8APdf/.test(modalSrc), 'PDF oficial habilitado RC8.3.2-C');
+assert(/Previsualizar Anexo/.test(modalSrc), 'preview Anexo 8A/8B');
 
 // Tipos
 assert(TIPOS_SEGUNDA_FUENTE.length >= 6, 'tipos segunda fuente');

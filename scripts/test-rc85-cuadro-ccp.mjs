@@ -30,12 +30,12 @@ const obsSrc = readFileSync(path.join(__dirname, '../core/workflowEngine/Workflo
 
 console.log('\n=== RC8.5 Firma + Derivación CCP ===\n');
 
-// 1) Sin PDF firmado no deriva
-assert(/firmado_contenido[\s\S]*Adjunte el PDF firmado|Adjunte el PDF firmado/.test(libSrc), '1. sin firmado no deriva');
-assert(/estado !== 'FIRMADO'|estado !== \"FIRMADO\"|debe estar FIRMADO/.test(libSrc), '1. requiere FIRMADO');
+// 1) Sin PDF firmado / sin aprobación completa no deriva (RC8.8 gates)
+assert(/assertCuadroListoParaCcp|PDF firmado Coordinador|aprobación Coordinador/.test(libSrc), '1. gates CCP / firmado');
+assert(/APROBADO_DEC|assertCuadroListoParaCcp/.test(libSrc), '1. requiere APROBADO_DEC');
 
 // 2) Firmado cambia estado
-assert(/estado = 'FIRMADO'/.test(libSrc) && /adjuntarPdfFirmadoCuadro/.test(libSrc), '2. adjuntar → FIRMADO');
+assert(/adjuntarPdfFirmadoCuadro/.test(libSrc) && /'FIRMADO'|\"FIRMADO\"/.test(libSrc), '2. adjuntar → FIRMADO');
 assert(/firmado_por|firmado_at/.test(libSrc) && /firmado_por/.test(migSrc), '2. fecha/usuario firma');
 
 // 3) Responsable obligatorio
@@ -64,7 +64,7 @@ assert(/idempotente:\s*true/.test(libSrc) && /DERIVADO_CCP/.test(libSrc), '7. id
 // 8) Bloqueo post-derivación
 assert(/no se puede reemplazar el PDF firmado|no se puede eliminar el PDF firmado/.test(libSrc), '8. bloqueo PDF post-CCP');
 assert(/solo_lectura|Ver cuadro/.test(utilsSrc) && /Ver cuadro/.test(modalSrc), '8. UI Ver / solo lectura');
-assert(/disabled/.test(modalSrc) && /Derivar a CCP/.test(modalSrc), '8. acciones bloqueables');
+assert(/disabled/.test(modalSrc) && /Derivar CCP/.test(modalSrc), '8. acciones bloqueables');
 
 // 9) Evento de firma
 assert(EVENTOS.CUADRO_COMPARATIVO_FIRMADO === 'CUADRO_COMPARATIVO_FIRMADO', '9. EventCatalog firma');
