@@ -29,13 +29,13 @@ export const ESTADOS_CUADRO_LABEL = Object.freeze({
   [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Generado preliminar',
   [ESTADOS_CUADRO.ADJUDICADO]: 'Adjudicado',
   [ESTADOS_CUADRO.OBSERVADO]: 'Observado',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Pendiente Coordinador 8 UIT',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Observado por Coordinador',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Firmado por Coordinador',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Pendiente DEC',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'C.C. en revisión Coordinador CM',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Observado por Coordinador CM',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Firmado por Coordinador CM',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'C.C. en revisión DEC',
   [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Observado por DEC',
   [ESTADOS_CUADRO.APROBADO_DEC]: 'Aprobado por DEC',
-  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Pendiente CCP',
+  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Listo para CCP',
   [ESTADOS_CUADRO.FIRMADO]: 'Firmado',
   [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
 });
@@ -161,9 +161,69 @@ export function updateCuadroStatsDom(rows, containerId = 'cuadroCompStats') {
   });
 }
 
-export function cuadroComparativoMenuItems(row = {}) {
+/** Estados en revisión externa: Analista no edita (Ver / Descargar / Trazabilidad). */
+export function isCuadroEnRevisionExterna(estado) {
+  const e = normalizeCuadroEstado(estado);
+  return [
+    ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+    ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+    ESTADOS_CUADRO.PENDIENTE_DEC,
+  ].includes(e);
+}
+
+export function cuadroComparativoMenuItems(row = {}, opts = {}) {
   const e = normalizeCuadroEstado(row.estado_cuadro);
-  const verSolo = e === ESTADOS_CUADRO.DERIVADO_CCP || e === ESTADOS_CUADRO.FIRMADO;
+  const rol = String(opts.rol || row.rol_revision || '').toUpperCase();
+
+  // RC8.4B — Coordinador CM: abrir expediente completo (no solo el cuadro)
+  if (rol === 'COORDINADOR_CM') {
+    return [
+      { act: 'abrirExpedienteCoord', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+      { act: 'descargarCuadro', label: 'Descargar Cuadro', icon: 'bi-download', disabled: !row.cuadro_id && !row.tiene_pdf },
+      { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
+    ];
+  }
+
+  // RC8.4C — DEC: mismo expediente operativo
+  if (rol === 'DEC') {
+    return [
+      { act: 'abrirExpedienteDec', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+      { act: 'descargarCuadro', label: 'Descargar Cuadro', icon: 'bi-download', disabled: !row.cuadro_id && !row.tiene_pdf },
+      { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
+    ];
+  }
+
+  // RC8.5-B1 — Administrador: abre según etapa (supervisión); no menú Analista en revisión
+  if (rol === 'ADMINISTRADOR') {
+    if (isCuadroEnRevisionExterna(e) || e === ESTADOS_CUADRO.PENDIENTE_DEC || e === ESTADOS_CUADRO.FIRMADO_COORDINADOR) {
+      return [
+        { act: 'abrirExpedienteAdmin', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+        { act: 'descargarCuadro', label: 'Descargar Cuadro', icon: 'bi-download', disabled: !row.cuadro_id && !row.tiene_pdf },
+        { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
+      ];
+    }
+    return [
+      { act: 'abrirExpedienteAdmin', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+      { act: 'elaborarCuadro', label: 'Ver cuadro', icon: 'bi-eye' },
+      { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
+    ];
+  }
+
+  const enRevision = row.en_revision_externa === true || isCuadroEnRevisionExterna(e);
+  const verSolo = enRevision
+    || e === ESTADOS_CUADRO.DERIVADO_CCP
+    || e === ESTADOS_CUADRO.FIRMADO
+    || row.solo_lectura === true;
+
+  // RC8.4A — Analista en revisión: solo Ver / Descargar / Trazabilidad
+  if (enRevision) {
+    return [
+      { act: 'verCuadro', label: 'Ver', icon: 'bi-eye' },
+      { act: 'descargarCuadro', label: 'Descargar', icon: 'bi-download' },
+      { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
+    ];
+  }
+
   const label = row.accion_cuadro_label
     || (verSolo ? 'Ver cuadro' : 'Elaborar cuadro');
   return [
@@ -175,6 +235,7 @@ export function cuadroComparativoMenuItems(row = {}) {
       icon: verSolo ? 'bi-eye' : 'bi-table',
       disabled: e === ESTADOS_CUADRO.ANULADO || row.puede_elaborar === false,
     },
+    { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
 

@@ -83,7 +83,7 @@ const lib = fs.readFileSync(path.join(root, 'server/lib/cuadroComparativo.js'), 
 assert(/crearNuevaVersionPorObservacion/.test(lib), 'transitar usa versionado');
 assert(/versionado:\s*true|versionado: true/.test(lib), 'respuesta versionado');
 assert(/respuesta_observaciones/.test(lib), 'exige/guarda respuesta');
-assert(/nunca|no directamente al DEC|Coordinador 8 UIT/.test(lib), 'bloquea salto a DEC');
+assert(/nunca|no directamente al DEC|Coordinador CM/.test(lib), 'bloquea salto a DEC');
 
 const verLib = fs.readFileSync(path.join(root, 'server/lib/cuadroComparativoVersionado.js'), 'utf8');
 assert(/estado = 'ANULADO'/.test(verLib), 'archiva versión anterior');

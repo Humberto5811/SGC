@@ -45,6 +45,19 @@ const WORKFLOW_BANDEJA_LABELS = Object.freeze({
   FINALIZADO: 'Finalizado',
 });
 
+/** RC8.4A — Estados documentales de revisión del Cuadro Comparativo */
+export const CUADRO_REVISION_ESTADO_LABELS = Object.freeze({
+  PENDIENTE_COORDINADOR: 'C.C. en revisión Coordinador CM',
+  OBSERVADO_COORDINADOR: 'Observado por Coordinador CM',
+  FIRMADO_COORDINADOR: 'Firmado por Coordinador CM',
+  PENDIENTE_DEC: 'C.C. en revisión DEC',
+  OBSERVADO_DEC: 'Observado por DEC',
+  APROBADO_DEC: 'Aprobado por DEC',
+  PENDIENTE_CCP: 'Listo para CCP',
+  DERIVADO_CCP: 'Derivado a CCP',
+  CUADRO_BORRADOR: 'Cuadro borrador',
+});
+
 function extractWorkflowSnapshot(row) {
   const direct = row?.workflowSnapshot || row?.workflow_snapshot;
   if (direct && typeof direct === 'object') return direct;
@@ -108,6 +121,15 @@ export function buildEstadoVisual(row, opts = {}) {
   const enriched = enrichReqRow(row);
   const workflowActual = resolveWorkflowEtapa(enriched);
   const pendienteReceptor = resolvePendienteReceptor(enriched);
+  const snap = extractWorkflowSnapshot(enriched);
+  const revisionEstado = String(
+    opts.revisionEstado
+    || snap?.revisionEstado
+    || enriched.estado_cuadro
+    || row?.estado_cuadro
+    || '',
+  ).toUpperCase();
+  const labelRevision = CUADRO_REVISION_ESTADO_LABELS[revisionEstado] || '';
 
   const moduloReceptorRaw = pendienteReceptor
     ? String(pendienteReceptor.destino_submodulo || pendienteReceptor.moduloReceptor || pendienteReceptor.moduloDestino || '').trim()
@@ -117,7 +139,8 @@ export function buildEstadoVisual(row, opts = {}) {
     ? (etapaFromSubmodulo(moduloReceptorRaw) || workflowActual)
     : workflowActual;
 
-  const textoPrincipal = labelFromEtapa(etapaMostrada);
+  // RC8.4A: si hay estado documental de revisión del cuadro, prevalece en el badge
+  const textoPrincipal = labelRevision || labelFromEtapa(etapaMostrada);
 
   const moduloResponsable = pendienteReceptor
     ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada) || textoPrincipal)

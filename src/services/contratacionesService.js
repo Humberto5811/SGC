@@ -228,18 +228,20 @@ export const contratacionesService = {
     const q = inline ? '?inline=1' : '';
     return api.getBlob(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado-dec${q}`);
   },
+  async getCuadroPdfFirmadoDecUrl(cuadroId, inline = true) {
+    return `/api/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/firmado-dec${inline ? '?inline=1' : ''}`;
+  },
   async derivarCuadroACcp(cuadroId, body = {}) {
     return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/derivar-ccp`, body);
   },
   async transitarRevisionCuadro(cuadroId, body = {}) {
-    let user = {};
-    try { user = JSON.parse(localStorage.getItem('currentUser') || '{}'); } catch (_) { /* noop */ }
-    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/revision`, {
-      ...body,
-      cargo: body.cargo || user.cargo || '',
-      rol: body.rol || user.rol || '',
-      permisos: body.permisos || user.permisos || {},
-    });
+    // RC8.5-G — no enviar cargo/rol en body (privilegios solo por headers de sesión).
+    // actuar_como solo lo envía el FE en modo prueba Admin; el BE lo valida.
+    const { cargo: _c, rol: _r, permisos: _p, ...safe } = body || {};
+    return api.post(
+      `/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/revision`,
+      safe,
+    );
   },
   async listValidaciones(params = {}) {
     return api.get('/contrataciones/portal-analista/validaciones');

@@ -8,6 +8,31 @@ import { registrarMovimiento, ETAPAS as ETAPAS_TRAZA } from './trazabilidad.js';
 import { getSubModuloMeta } from './movimientos.js';
 import { ETAPAS } from '../../core/workflowEngine/WorkflowState.js';
 import { TRANSICIONES_POR_ACCION } from '../../core/workflowEngine/WorkflowTransitions.js';
+import {
+  ROLES_REVISION,
+  BANDEJA_ESTADOS_POR_ROL,
+  ROLES_ACTUAR_COMO,
+  resolveRolRevision,
+  resolveModoAperturaExpediente,
+  resolveRolEfectivoRevision,
+  normalizeActuarComo,
+  labelRolRevision,
+  puedeMostrarBotonesCcp,
+  isRolSistemaAdmin,
+} from '../../shared/cuadroComparativoRol.js';
+
+export {
+  ROLES_REVISION,
+  BANDEJA_ESTADOS_POR_ROL,
+  ROLES_ACTUAR_COMO,
+  resolveRolRevision,
+  resolveModoAperturaExpediente,
+  resolveRolEfectivoRevision,
+  normalizeActuarComo,
+  labelRolRevision,
+  puedeMostrarBotonesCcp,
+  isRolSistemaAdmin,
+};
 
 /** Estados de revisión (documentales en cuadros_comparativos.estado). */
 export const ESTADOS_REVISION_CUADRO = Object.freeze({
@@ -24,27 +49,19 @@ export const ESTADOS_REVISION_CUADRO = Object.freeze({
 
 export const ESTADOS_REVISION_LABEL = Object.freeze({
   CUADRO_BORRADOR: 'Cuadro borrador',
-  PENDIENTE_COORDINADOR: 'Pendiente Coordinador 8 UIT',
-  OBSERVADO_COORDINADOR: 'Observado por Coordinador',
-  FIRMADO_COORDINADOR: 'Firmado por Coordinador',
-  PENDIENTE_DEC: 'Pendiente DEC',
+  PENDIENTE_COORDINADOR: 'C.C. en revisión Coordinador CM',
+  OBSERVADO_COORDINADOR: 'Observado por Coordinador CM',
+  FIRMADO_COORDINADOR: 'Firmado por Coordinador CM',
+  PENDIENTE_DEC: 'C.C. en revisión DEC',
   OBSERVADO_DEC: 'Observado por DEC',
   APROBADO_DEC: 'Aprobado por DEC',
-  PENDIENTE_CCP: 'Pendiente CCP',
+  PENDIENTE_CCP: 'Listo para CCP',
   DERIVADO_CCP: 'Derivado a CCP',
-});
-
-/** Roles operativos del ciclo de revisión. */
-export const ROLES_REVISION = Object.freeze({
-  ANALISTA: 'ANALISTA',
-  COORDINADOR_8UIT: 'COORDINADOR_8UIT',
-  DEC: 'DEC',
-  CCP: 'CCP',
 });
 
 export const RESPONSABLES_REVISION = Object.freeze({
   ANALISTA: 'Especialista Contrataciones',
-  COORDINADOR_8UIT: 'Coordinador 8 UIT',
+  COORDINADOR_CM: 'Coordinador CM',
   DEC: 'DEC',
   CCP: 'Comité de Compras Públicas',
 });
@@ -65,35 +82,44 @@ export const TRANSICIONES_REVISION_CUADRO = Object.freeze([
       ESTADOS_REVISION_CUADRO.OBSERVADO_DEC,
     ],
     to: ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
-    responsable: RESPONSABLES_REVISION.COORDINADOR_8UIT,
+    responsable: RESPONSABLES_REVISION.COORDINADOR_CM,
   },
-  /** RC8.5 — Dar conformidad (no deriva aún; requiere luego PDF firmado + DERIVAR_DEC) */
+  /**
+   * RC8.5-D — Dar Conformidad: exige PDF firmado y registra conformidad.
+   * Permanece en Coordinador (FIRMADO_COORDINADOR) hasta Derivar a DEC.
+   */
   {
     accion: 'CONFORMIDAD_COORDINADOR',
-    rol: ROLES_REVISION.COORDINADOR_8UIT,
+    rol: ROLES_REVISION.COORDINADOR_CM,
     from: [
       ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
       ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
     ],
     to: ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
-    responsable: RESPONSABLES_REVISION.COORDINADOR_8UIT,
+    responsable: RESPONSABLES_REVISION.COORDINADOR_CM,
+    requireFirmado: true,
     sameStage: true,
   },
-  /** Alias legacy → conformidad */
+  /** Alias: misma conformidad sin derivar */
   {
     accion: 'APROBAR_COORDINADOR',
-    rol: ROLES_REVISION.COORDINADOR_8UIT,
+    rol: ROLES_REVISION.COORDINADOR_CM,
     from: [
       ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
       ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
     ],
     to: ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
-    responsable: RESPONSABLES_REVISION.COORDINADOR_8UIT,
+    responsable: RESPONSABLES_REVISION.COORDINADOR_CM,
+    requireFirmado: true,
     sameStage: true,
   },
+  /**
+   * RC8.5-D — Derivar a DEC (paso explícito tras conformidad).
+   * Gates: PDF firmado + conformidad (versión vigente / sin obs se validan en UI y requireConformidad).
+   */
   {
     accion: 'DERIVAR_DEC',
-    rol: ROLES_REVISION.COORDINADOR_8UIT,
+    rol: ROLES_REVISION.COORDINADOR_CM,
     from: [
       ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
       ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
@@ -106,14 +132,16 @@ export const TRANSICIONES_REVISION_CUADRO = Object.freeze([
   },
   {
     accion: 'OBSERVAR_COORDINADOR',
-    rol: ROLES_REVISION.COORDINADOR_8UIT,
+    rol: ROLES_REVISION.COORDINADOR_CM,
     from: [
       ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
       ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
     ],
     to: ESTADOS_REVISION_CUADRO.OBSERVADO_COORDINADOR,
     responsable: RESPONSABLES_REVISION.ANALISTA,
-    requireObservacionEstructurada: true,
+    /** RC8.5-D1 — Motivo vía componente institucional (no triad propia). */
+    requireObservacionEstructurada: false,
+    requireMotivoInstitucional: true,
   },
   /** RC8.6 — Conformidad DEC (exige PDF Coordinador + PDF DEC; no deriva aún) */
   {
@@ -166,7 +194,9 @@ export const TRANSICIONES_REVISION_CUADRO = Object.freeze([
     ],
     to: ESTADOS_REVISION_CUADRO.OBSERVADO_DEC,
     responsable: RESPONSABLES_REVISION.ANALISTA,
-    requireObservacionDecEstructurada: true,
+    /** RC8.5-D1 — Motivo vía componente institucional (no triad propia). */
+    requireObservacionDecEstructurada: false,
+    requireMotivoInstitucional: true,
   },
   /** RC8.8 — Generar CCP (solo con cuadro plenamente aprobado; no deriva aún) */
   {
@@ -193,46 +223,15 @@ export const EVENTOS_TRAZA_CUADRO_CCP = Object.freeze({
   CCP_DERIVADO: 'CCP_DERIVADO',
 });
 
-/** Estados visibles por rol en la bandeja (sin pantallas nuevas). */
-export const BANDEJA_ESTADOS_POR_ROL = Object.freeze({
-  [ROLES_REVISION.ANALISTA]: [
-    'PENDIENTE_ELABORAR',
-    ESTADOS_REVISION_CUADRO.CUADRO_BORRADOR,
-    'EN_ELABORACION', 'BORRADOR', 'ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO',
-    ESTADOS_REVISION_CUADRO.OBSERVADO_COORDINADOR,
-    ESTADOS_REVISION_CUADRO.OBSERVADO_DEC,
-    ESTADOS_REVISION_CUADRO.APROBADO_DEC,
-    ESTADOS_REVISION_CUADRO.PENDIENTE_CCP,
-    'OBSERVADO',
-  ],
-  [ROLES_REVISION.COORDINADOR_8UIT]: [
-    ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
-    ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
-  ],
-  [ROLES_REVISION.DEC]: [
-    ESTADOS_REVISION_CUADRO.PENDIENTE_DEC,
-    ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
-  ],
-  [ROLES_REVISION.CCP]: [
-    ESTADOS_REVISION_CUADRO.PENDIENTE_CCP,
-    ESTADOS_REVISION_CUADRO.DERIVADO_CCP,
-  ],
-});
-
-export function resolveRolRevision(user = {}) {
-  const cargo = String(user.cargo || user.rol || '').toLowerCase();
-  const permisos = user.permisos || {};
-  const subs = Array.isArray(permisos.submodulos) ? permisos.submodulos.map((s) => String(s).toUpperCase()) : [];
-  if (/coordinador/.test(cargo) && (/8\s*uit/.test(cargo) || /\buit\b/.test(cargo))) {
-    return ROLES_REVISION.COORDINADOR_8UIT;
+/** Responsable de bandeja según estado documental del cuadro. */
+export function responsableBandejaPorEstado(estado) {
+  const e = String(estado || '').toUpperCase();
+  if (['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'].includes(e)) {
+    return RESPONSABLES_REVISION.COORDINADOR_CM;
   }
-  if (/^dec\b|\bdec\b|jefe dec|especialista dec/.test(cargo) || user.rol === 'dec') {
-    return ROLES_REVISION.DEC;
-  }
-  if (subs.includes('CCP') && /comit[eé]|ccp/.test(cargo)) {
-    return ROLES_REVISION.CCP;
-  }
-  return ROLES_REVISION.ANALISTA;
+  if (e === 'PENDIENTE_DEC') return RESPONSABLES_REVISION.DEC;
+  if (e === 'DERIVADO_CCP') return RESPONSABLES_REVISION.CCP;
+  return RESPONSABLES_REVISION.ANALISTA;
 }
 
 export function findTransicionRevision(accion, estadoActual) {

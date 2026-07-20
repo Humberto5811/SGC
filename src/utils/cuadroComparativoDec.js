@@ -17,7 +17,8 @@ export function isModoDec(user, cuadro) {
 }
 
 export function renderPanelDec(cuadro) {
-  const e = String(cuadro?.estado || '').toUpperCase();
+  // UI: estado canónico (misma lectura que Coordinador / bandeja)
+  const e = String(cuadro?.estado || cuadro?.estado_cuadro || '').toUpperCase();
   const firmadoCoord = !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre);
   const firmadoDec = !!(cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre);
   const conformidad = !!(cuadro?.conformidad_dec || cuadro?.revision_dec?.conformidad);
@@ -27,14 +28,14 @@ export function renderPanelDec(cuadro) {
   return `
     <div class="card border border-primary mb-3" id="ccPanelDec">
       <div class="card-body py-3">
-        <h6 class="fw-bold mb-2"><i class="bi bi-shield-check"></i> Revisión final DEC</h6>
-        <p class="small text-muted mb-2">
-          Solo lectura. Descargue la versión firmada por el Coordinador, firme externamente,
-          adjunte la firma DEC y registre conformidad para derivar al Analista (Generación CCP).
+        <h6 class="fw-bold mb-2"><i class="bi bi-shield-check"></i> Revisión DEC</h6>
+        <p class="small text-muted mb-2 mb-0">
+          Secuencia: Descargar → Adjuntar Firma DEC → Ver Firmado → Dar Conformidad → Derivar Analista.
+          Solo lectura económica.
         </p>
         <div class="d-flex flex-wrap gap-2 mt-2 mb-2">
           <span class="badge ${firmadoCoord ? 'bg-success' : 'bg-warning text-dark'}">
-            Firmado Coordinador: ${firmadoCoord ? 'Sí' : 'No'}
+            Firmado Coord: ${firmadoCoord ? 'Sí' : 'No'}
           </span>
           <span class="badge ${firmadoDec ? 'bg-success' : 'bg-warning text-dark'}">
             Firmado DEC: ${firmadoDec ? 'Sí' : 'Pendiente'}
@@ -45,33 +46,39 @@ export function renderPanelDec(cuadro) {
         </div>
         <div class="d-flex flex-wrap gap-2" id="ccDecActions">
           <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnDecDescargarFirmado"
-            ${!firmadoCoord ? 'disabled' : ''}>
-            <i class="bi bi-download"></i> Descargar versión firmada
+            ${!firmadoCoord ? 'disabled' : ''}
+            title="Descargar cuadro firmado por Coordinador">
+            <i class="bi bi-download"></i> Descargar
           </button>
           <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnDecAdjuntar"
-            ${!firmadoCoord ? 'disabled' : ''}>
-            <i class="bi bi-paperclip"></i> Adjuntar firma DEC
+            ${!firmadoCoord ? 'disabled' : ''}
+            title="Adjuntar PDF firmado por DEC">
+            <i class="bi bi-paperclip"></i> Adjuntar Firmado
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="ccBtnDecVerFirmado"
+            ${firmadoDec ? '' : 'disabled'}
+            title="${firmadoDec ? 'Ver firma DEC' : 'Adjuntar Firma DEC primero'}">
+            <i class="bi bi-eye"></i> Ver Firmado
           </button>
           ${firmadoDec ? `
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="ccBtnDecVerFirmado">
-              <i class="bi bi-eye"></i> Ver firma DEC
-            </button>
-            <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnDecEliminarFirmado">
-              <i class="bi bi-trash"></i> Eliminar firma DEC
-            </button>
-          ` : ''}
+            <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnDecEliminarFirmado"
+              title="Eliminar firma DEC">
+              <i class="bi bi-trash"></i> Eliminar firmado
+            </button>` : ''}
           <button type="button" class="btn btn-sm btn-success" id="ccBtnDecConformidad"
             ${conformidad || !firmadoCoord || !firmadoDec ? 'disabled' : ''}
-            title="${firmadoCoord && firmadoDec ? 'Registrar conformidad' : 'Requiere PDF Coordinador y PDF DEC'}">
-            <i class="bi bi-check2-circle"></i> Conforme
-          </button>
-          <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnDecObservar">
-            <i class="bi bi-exclamation-triangle"></i> Observar
+            title="${firmadoCoord && firmadoDec ? 'Registrar conformidad DEC' : 'Requiere PDF Coordinador y PDF DEC'}">
+            <i class="bi bi-check2-circle"></i> Dar Conformidad
           </button>
           <button type="button" class="btn btn-sm btn-warning" id="ccBtnDecDerivarAnalista"
             ${puedeDerivar ? '' : 'disabled'}
             title="${puedeDerivar ? 'Derivar al Analista (Generación CCP)' : 'Requiere conformidad y ambas firmas'}">
-            <i class="bi bi-send"></i> Derivar al Analista
+            <i class="bi bi-send"></i> Derivar Analista
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnDecObservar"
+            ${enDec ? '' : 'disabled'}
+            title="Observar y devolver al Analista">
+            <i class="bi bi-exclamation-triangle"></i> Observar
           </button>
         </div>
         ${cuadro?.firmado_nombre ? `<div class="small text-muted mt-2">Coordinador: <strong>${esc(cuadro.firmado_nombre)}</strong></div>` : ''}
@@ -80,79 +87,8 @@ export function renderPanelDec(cuadro) {
     </div>`;
 }
 
-/**
- * Modal obligatorio Motivo / Observación / Comentario.
- * @returns {Promise<{motivo,observacion,comentario}|null>}
- */
+/** @deprecated RC8.5-D1 — usar observarCuadroConModalInstitucional */
 export function showObservarDecModal() {
-  return new Promise((resolve) => {
-    const wrap = document.createElement('div');
-    wrap.innerHTML = `
-      <div class="modal fade" tabindex="-1">
-        <div class="modal-dialog">
-          <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-              <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Observar cuadro (DEC)</h5>
-              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-              <p class="small text-muted">Todos los campos son obligatorios. El cuadro volverá al Analista para corrección.</p>
-              <div class="mb-2">
-                <label class="form-label small mb-0">Motivo <span class="text-danger">*</span></label>
-                <input type="text" class="form-control form-control-sm" id="ccDecObsMotivo" maxlength="200" required>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small mb-0">Observación <span class="text-danger">*</span></label>
-                <textarea class="form-control form-control-sm" id="ccDecObsTexto" rows="3" required></textarea>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small mb-0">Comentario <span class="text-danger">*</span></label>
-                <textarea class="form-control form-control-sm" id="ccDecObsComentario" rows="2" required></textarea>
-              </div>
-              <div class="alert alert-danger d-none py-2 small" id="ccDecObsErr"></div>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-              <button type="button" class="btn btn-danger" id="ccDecObsOk">Registrar observación</button>
-            </div>
-          </div>
-        </div>
-      </div>`;
-    document.body.appendChild(wrap);
-    const modalEl = wrap.querySelector('.modal');
-    const modal = window.bootstrap?.Modal ? new window.bootstrap.Modal(modalEl) : null;
-    let done = false;
-    const finish = (val) => {
-      if (done) return;
-      done = true;
-      if (modal) modal.hide();
-      else wrap.remove();
-      resolve(val);
-    };
-    modalEl.addEventListener('hidden.bs.modal', () => {
-      wrap.remove();
-      if (!done) resolve(null);
-    });
-    wrap.querySelector('#ccDecObsOk').onclick = () => {
-      const motivo = String(wrap.querySelector('#ccDecObsMotivo')?.value || '').trim();
-      const observacion = String(wrap.querySelector('#ccDecObsTexto')?.value || '').trim();
-      const comentario = String(wrap.querySelector('#ccDecObsComentario')?.value || '').trim();
-      const err = wrap.querySelector('#ccDecObsErr');
-      const faltan = [];
-      if (!motivo) faltan.push('Motivo');
-      if (!observacion) faltan.push('Observación');
-      if (!comentario) faltan.push('Comentario');
-      if (faltan.length) {
-        err.textContent = `Complete: ${faltan.join(', ')}`;
-        err.classList.remove('d-none');
-        return;
-      }
-      finish({ motivo, observacion, comentario });
-    };
-    if (modal) modal.show();
-    else {
-      modalEl.style.display = 'block';
-      modalEl.classList.add('show');
-    }
-  });
+  console.warn('showObservarDecModal eliminado (RC8.5-D1). Use observarCuadroConModalInstitucional.');
+  return Promise.resolve(null);
 }

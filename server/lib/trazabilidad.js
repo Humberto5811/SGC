@@ -8,6 +8,7 @@ import {
   buildMovimientoEntry,
   appendMovimiento,
   movimientosFromHistorialEstados,
+  mergeMovimientos,
   normalizeAccion,
   SUBMODULOS,
 } from './movimientos.js';
@@ -240,7 +241,28 @@ function parsePayload(row) {
   try { return JSON.parse(row?.payload || '{}'); } catch (_) { return {}; }
 }
 
-function getPipelineForEstado(estado) {
+/** Pipeline oficial Workflow hasta la ubicación actual (RC8.5-F). */
+const PIPELINE_OFICIAL = Object.freeze([
+  'REGISTRADO',
+  'EVALUACION',
+  'DEC',
+  'PROGRAMACION',
+  'ACTOS_PREPARATORIOS',
+  'INVITACIONES',
+  'RECEPCION_COTIZACIONES',
+  'VALIDACION_USUARIO',
+  'CUADRO_COMPARATIVO',
+  'CCP',
+  'EJECUCION',
+  'FINALIZADO',
+]);
+
+function getPipelineForEstado(estado, estadoActual = '') {
+  const ubicacion = String(estadoActual || mapEstadoToUbicacion(estado) || 'REGISTRADO').toUpperCase();
+  const idx = PIPELINE_OFICIAL.indexOf(ubicacion);
+  if (idx >= 0) return PIPELINE_OFICIAL.slice(0, idx + 1);
+
+  // Fallback legado por texto de negocio
   const e = String(estado || 'Registrado').trim();
   const stages = ['REGISTRADO'];
   if (e === 'Registrado') return stages;
@@ -252,6 +274,21 @@ function getPipelineForEstado(estado) {
   if (/observado program/i.test(e)) { stages.push('DEC', 'PROGRAMACION'); return stages; }
   if (/aprobad.*program/i.test(e)) { stages.push('DEC', 'PROGRAMACION'); return stages; }
   if (e === 'Programado') { stages.push('DEC', 'PROGRAMACION', 'ACTOS_PREPARATORIOS'); return stages; }
+  if (/invitaci|sol\.?\s*cot/i.test(e)) {
+    return PIPELINE_OFICIAL.slice(0, PIPELINE_OFICIAL.indexOf('INVITACIONES') + 1);
+  }
+  if (/cotizaci/i.test(e)) {
+    return PIPELINE_OFICIAL.slice(0, PIPELINE_OFICIAL.indexOf('RECEPCION_COTIZACIONES') + 1);
+  }
+  if (/valid/i.test(e)) {
+    return PIPELINE_OFICIAL.slice(0, PIPELINE_OFICIAL.indexOf('VALIDACION_USUARIO') + 1);
+  }
+  if (/cuadro/i.test(e)) {
+    return PIPELINE_OFICIAL.slice(0, PIPELINE_OFICIAL.indexOf('CUADRO_COMPARATIVO') + 1);
+  }
+  if (/\bccp\b/i.test(e)) {
+    return PIPELINE_OFICIAL.slice(0, PIPELINE_OFICIAL.indexOf('CCP') + 1);
+  }
   return stages;
 }
 
@@ -391,6 +428,51 @@ function collectRawEvents(row) {
     });
   });
 
+  // Recepción / Validaciones / Cuadro (payload o snapshot Workflow)
+  (payload.historial_cotizaciones || payload.historial_recepcion || []).forEach((h) => {
+    push({
+      fecha: h.fecha || h.at,
+      etapa: 'RECEPCION_COTIZACIONES',
+      usuario: h.usuario || ETAPAS.RECEPCION_COTIZACIONES.responsable,
+      observacion: h.observacion || h.detalle || h.evento || 'Movimiento en Recepción de Cotizaciones',
+      accion: h.accion || (h.tipo === 'observacion' ? 'observado' : 'derivado'),
+      tipoEvento: h.tipo === 'observacion' ? 'observacion' : 'etapa',
+    });
+  });
+  (payload.historial_validaciones || payload.historial_validacion || []).forEach((h) => {
+    push({
+      fecha: h.fecha || h.at,
+      etapa: 'VALIDACION_USUARIO',
+      usuario: h.usuario || ETAPAS.VALIDACION_USUARIO.responsable,
+      observacion: h.observacion || h.resultado || h.detalle || 'Movimiento en Validación de Usuario',
+      accion: h.accion || (String(h.resultado || '').toUpperCase() === 'APTO' ? 'aprobado' : 'actualizado'),
+      tipoEvento: 'etapa',
+    });
+  });
+  (payload.historial_cuadro || payload.historial_cuadro_comparativo || []).forEach((h) => {
+    push({
+      fecha: h.fecha || h.at,
+      etapa: 'CUADRO_COMPARATIVO',
+      usuario: h.usuario || ETAPAS.CUADRO_COMPARATIVO.responsable,
+      observacion: h.observacion || h.detalle || h.accion || 'Movimiento en Cuadro Comparativo',
+      accion: h.accion || 'derivado',
+      tipoEvento: 'etapa',
+      version: h.version || h.version_nueva || null,
+      documento: h.documento || h.pdf_nombre || '',
+    });
+  });
+  const snap = payload.workflowSnapshot || {};
+  if (snap.revisionEstado && snap.fechaEstadoActual) {
+    push({
+      fecha: snap.fechaEstadoActual,
+      etapa: String(snap.etapaActual || 'CUADRO_COMPARATIVO').toUpperCase(),
+      usuario: snap.responsableActual || 'Sistema',
+      observacion: `Revisión cuadro: ${snap.revisionEstado}`,
+      accion: 'derivado',
+      tipoEvento: 'etapa',
+    });
+  }
+
   if (String(row.estado || '') !== 'Registrado') {
     const subsanaciones = events.filter((e) => e.tipoEvento === 'subsanacion').sort((a, b) => a.ts - b.ts);
     const targets = [{ kind: 'initial' }];
@@ -451,7 +533,7 @@ function collectRawEvents(row) {
 }
 
 function inferStageTransitions(row, events) {
-  const pipeline = getPipelineForEstado(row.estado);
+  const pipeline = getPipelineForEstado(row.estado, row.estado_actual || row.estadoActual);
   const created = new Date(row.created_at || Date.now()).getTime();
   const end = new Date(row.fecha_estado_actual || row.updated_at || Date.now()).getTime();
   const span = Math.max(end - created, 3600000);
@@ -541,10 +623,10 @@ export function enrichRequerimientoRow(row) {
   const meta = ETAPAS[ubicacion] || {};
   const dias = calcDiasEnEstado(fechaEstado);
   const estadoTexto = row.sub_modulo_actual || subMeta.subModulo || getEstadoActualTexto(ubicacion);
-  let movimientos = parseMovimientos(row.historial_movimientos);
-  if (!movimientos.length && historial.length) {
-    movimientos = movimientosFromHistorialEstados(historial);
-  }
+  // RC8.5-F — nunca mostrar solo un fragmento (p.ej. Invitaciones): fusionar persistido + reconstruido
+  const storedMovs = parseMovimientos(row.historial_movimientos);
+  const fromHist = movimientosFromHistorialEstados(historial);
+  const movimientos = mergeMovimientos(storedMovs, fromHist);
   const obsMotor = obtenerEstadoObservaciones(row);
   return {
     ...row,
@@ -820,6 +902,106 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
   });
 }
 
+/** Eventos de revisión del Cuadro (tabla existente cuadros_comparativos — sin crear tabla nueva). */
+async function collectCuadroRevisionMovimientos(requerimientoId) {
+  const id = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(id)) return [];
+  try {
+    const { rows } = await query(`
+      SELECT cc.version, cc.estado, cc.datos_json, cc.firmado_at, cc.firmado_dec_at,
+             cc.firmado_por, cc.firmado_dec_por, cc.firmado_nombre, cc.firmado_dec_nombre,
+             cc.pdf_nombre, cc.creado_at, cc.actualizado_at, cc.creado_por, cc.actualizado_por
+      FROM cuadros_comparativos cc
+      WHERE cc.solicitud_id IN (
+        SELECT solicitud_id FROM solicitud_requerimientos WHERE requerimiento_id = $1 AND solicitud_id IS NOT NULL
+        UNION
+        SELECT solicitud_id FROM cotizaciones_proveedor WHERE requerimiento_id = $1 AND solicitud_id IS NOT NULL
+      )
+      ORDER BY cc.version ASC NULLS LAST, cc.id ASC
+    `, [id]);
+    const out = [];
+    rows.forEach((row) => {
+      let datos = {};
+      try {
+        datos = typeof row.datos_json === 'string' ? JSON.parse(row.datos_json || '{}') : (row.datos_json || {});
+      } catch (_) { datos = {}; }
+      const ver = row.version != null ? `v${row.version}` : '';
+      const hist = Array.isArray(datos.historial_revision) ? datos.historial_revision : [];
+      hist.forEach((h) => {
+        out.push(buildMovimientoEntry({
+          fecha: h.at || h.fecha,
+          accion: h.accion || 'DERIVADO',
+          etapa: 'CUADRO_COMPARATIVO',
+          usuario: h.usuario || row.actualizado_por || 'Sistema',
+          responsable: h.usuario || row.actualizado_por || 'Sistema',
+          observacion: [h.observacion, h.motivo, h.descripcion, ver].filter(Boolean).join(' — '),
+        }));
+      });
+      if (row.creado_at) {
+        out.push(buildMovimientoEntry({
+          fecha: row.creado_at,
+          accion: 'CREADO',
+          etapa: 'CUADRO_COMPARATIVO',
+          usuario: row.creado_por || 'Sistema',
+          observacion: `Cuadro Comparativo ${ver}`.trim(),
+        }));
+      }
+      if (row.firmado_at) {
+        out.push(buildMovimientoEntry({
+          fecha: row.firmado_at,
+          accion: 'FIRMADO',
+          etapa: 'CUADRO_COMPARATIVO',
+          usuario: row.firmado_por || 'Coordinador CM',
+          observacion: `Firma Coordinador — ${row.firmado_nombre || 'PDF firmado'} — ${ver}`.trim(),
+        }));
+      }
+      if (row.firmado_dec_at) {
+        out.push(buildMovimientoEntry({
+          fecha: row.firmado_dec_at,
+          accion: 'FIRMADO',
+          etapa: 'CUADRO_COMPARATIVO',
+          usuario: row.firmado_dec_por || 'DEC',
+          observacion: `Firma DEC — ${row.firmado_dec_nombre || 'PDF firmado DEC'} — ${ver}`.trim(),
+        }));
+      }
+      const est = String(row.estado || '').toUpperCase();
+      if (est === 'PENDIENTE_DEC' || est === 'APROBADO_DEC' || est === 'PENDIENTE_CCP' || est === 'DERIVADO_CCP') {
+        out.push(buildMovimientoEntry({
+          fecha: row.actualizado_at || row.firmado_at || row.creado_at,
+          accion: est === 'DERIVADO_CCP' ? 'DERIVADO' : 'DERIVADO',
+          etapa: est === 'DERIVADO_CCP' || est === 'PENDIENTE_CCP' ? 'CCP' : 'CUADRO_COMPARATIVO',
+          usuario: row.actualizado_por || 'Sistema',
+          observacion: `Estado cuadro: ${est}${ver ? ` — ${ver}` : ''}`,
+        }));
+      }
+    });
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+function enrichMovimientoDisplay(m) {
+  const obs = String(m.observacion || '');
+  const verMatch = obs.match(/\bv(\d+)\b/i) || String(m.version || '').match(/(\d+)/);
+  const version = m.version != null ? String(m.version) : (verMatch ? `v${verMatch[1]}` : '');
+  let documento = m.documento || m.pdf_nombre || '';
+  if (!documento) {
+    if (/firma coordinador|firmado coord|anexo/i.test(obs)) documento = 'PDF Cuadro firmado (Coord)';
+    else if (/firma dec/i.test(obs)) documento = 'PDF Cuadro firmado (DEC)';
+    else if (/cuadro comparativo|anexo.?08/i.test(obs)) documento = 'Cuadro Comparativo';
+    else if (/solicitud de cotizaci|convocatoria|invitaci/i.test(obs)) documento = 'Solicitud de Cotización';
+    else if (/validaci/i.test(obs)) documento = 'Validación';
+    else if (/cotizaci/i.test(obs)) documento = 'Cotización';
+  }
+  return {
+    ...m,
+    version: version || '—',
+    documento: documento || '—',
+    estado: m.subModulo || getSubModuloMeta(m.etapa).subModulo || m.etapa || '—',
+  };
+}
+
 export async function obtenerTrazabilidad(requerimientoId) {
   const { rows } = await query(`
     SELECT r.*, COALESCE(c.nombre, '') AS centro_nombre
@@ -840,11 +1022,13 @@ export async function obtenerTrazabilidad(requerimientoId) {
     esActual: idx === historial.length - 1 && !h.fechaSalida,
   }));
   const responsableActual = resolveUsuarioNombreSync(enriched.responsable_actual, usuarioMap);
-  const movimientos = (enriched.historialMovimientos || []).map((m) => ({
-    ...m,
-    usuario: resolveUsuarioNombreSync(m.usuario, usuarioMap),
-    responsable: resolveUsuarioNombreSync(m.responsable, usuarioMap),
-  }));
+  const cuadroMovs = await collectCuadroRevisionMovimientos(requerimientoId);
+  const movimientos = mergeMovimientos(enriched.historialMovimientos || [], cuadroMovs)
+    .map((m) => enrichMovimientoDisplay({
+      ...m,
+      usuario: resolveUsuarioNombreSync(m.usuario, usuarioMap),
+      responsable: resolveUsuarioNombreSync(m.responsable, usuarioMap),
+    }));
   return {
     requerimiento: {
       id: enriched.id,

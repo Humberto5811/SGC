@@ -29,13 +29,13 @@ import { normalizeSegundaFuente, calcPrecioActualizado } from './cuadroComparati
 import {
   isModoCoordinador8Uit,
   renderPanelCoordinador,
-  showObservarCoordinadorModal,
 } from './cuadroComparativoCoordinador.js';
 import {
   isModoDec,
   renderPanelDec,
-  showObservarDecModal,
 } from './cuadroComparativoDec.js';
+import { observarCuadroConModalInstitucional } from './cuadroComparativoObservaciones.js';
+import { ROLES_REVISION } from './cuadroComparativoRevisionUi.js';
 import {
   renderPanelVersionado,
   collectRespuestaObservaciones,
@@ -46,6 +46,7 @@ import {
   renderPanelGeneracionCcp,
   evaluarGatesCcpCliente,
 } from './cuadroComparativoCcp.js';
+import { puedeMostrarBotonesCcp } from './cuadroComparativoRevisionUi.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -695,6 +696,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
     // RC8.5/8.6: Coordinador/DEC — solo lectura económica; acciones en su panel
     const hideAnalista = modoCoord || modoDec;
+    // RC8.5-B1 — CCP solo tras APROBADO_DEC / listo CCP (por estado, no solo por rol)
+    const hideCcpPorEstado = !puedeMostrarBotonesCcp(e);
     setHide('#ccBtnGuardar', hideAnalista);
     setHide('#ccBtnAdjudicar', hideAnalista);
     setHide('#ccBtnGenerar8a', hideAnalista);
@@ -703,8 +706,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     setHide('#ccBtnObservarCoord', true);
     setHide('#ccBtnAprobarDec', true);
     setHide('#ccBtnObservarDec', true);
-    setHide('#ccBtnGenerarCcp', hideAnalista);
-    setHide('#ccBtnDerivarCcp', hideAnalista);
+    setHide('#ccBtnGenerarCcp', hideAnalista || hideCcpPorEstado);
+    setHide('#ccBtnDerivarCcp', hideAnalista || hideCcpPorEstado);
 
     setDis('#ccBtnGuardar', readonly || derivado);
     setDis('#ccBtnAdjudicar', readonly || derivado || e === 'GENERADO' || e === 'GENERADO_PRELIMINAR');
@@ -737,7 +740,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
     const ccpHost = el.querySelector('#ccCcpHost');
     if (ccpHost) {
-      const showCcp = !modoCoord && !modoDec && (isModoGeneracionCcp(cuadro) || e === 'DERIVADO_CCP');
+      const showCcp = !modoCoord && !modoDec && !hideCcpPorEstado
+        && (isModoGeneracionCcp(cuadro) || e === 'DERIVADO_CCP');
       ccpHost.innerHTML = showCcp ? renderPanelGeneracionCcp(cuadro) : '';
       if (showCcp) bindCcpActions();
     }
@@ -823,23 +827,27 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
     el.querySelector('#ccBtnCoordConformidad')?.addEventListener('click', async () => {
       if (!cuadro?.tiene_pdf_firmado && !cuadro?.firmado_nombre) {
-        if (!confirm('Aún no hay PDF firmado adjunto. ¿Registrar conformidad de todas formas? (Para derivar al DEC sí será obligatorio el PDF)')) {
-          return;
-        }
+        return alert('Debe adjuntar el Cuadro Comparativo firmado antes de dar conformidad.');
       }
+      if (!confirm('¿Registrar conformidad del Coordinador CM? Luego podrá Derivar a DEC.')) return;
       try {
         const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
           accion: 'CONFORMIDAD_COORDINADOR',
         });
         const data = resp.data || resp;
-        cuadro = data.cuadro || { ...cuadro, conformidad_coordinador: true, estado: 'FIRMADO_COORDINADOR' };
+        cuadro = data.cuadro || {
+          ...cuadro,
+          conformidad_coordinador: true,
+          estado: 'FIRMADO_COORDINADOR',
+          estado_cuadro: 'FIRMADO_COORDINADOR',
+        };
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
           badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
           badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
         }
         syncUiLocks();
-        alert('Conformidad del Coordinador registrada.');
+        alert('Conformidad registrada. Ahora puede Derivar a DEC.');
         if (typeof onSaved === 'function') onSaved();
       } catch (err) {
         alert(err.message || 'No se pudo registrar la conformidad');
@@ -847,31 +855,37 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     });
 
     el.querySelector('#ccBtnCoordObservar')?.addEventListener('click', async () => {
-      const obs = await showObservarCoordinadorModal();
-      if (!obs) return;
-      try {
-        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
-          accion: 'OBSERVAR_COORDINADOR',
-          motivo: obs.motivo,
-          descripcion: obs.descripcion,
-          observacion: obs.observacion,
-        });
-        const data = resp.data || resp;
-        cuadro = data.cuadro || cuadro;
-        const badge = el.querySelector('#ccEstadoBadge');
-        if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
-        }
-        await refreshVersiones();
-        alert(data.versionado
-          ? `Cuadro observado. Se creó la versión v${data.version_nueva || cuadro.version} para corrección del Analista.`
-          : 'Cuadro observado y devuelto al Analista.');
-        if (typeof onSaved === 'function') onSaved();
-        syncUiLocks();
-      } catch (err) {
-        alert(err.message || 'No se pudo observar');
+      let reqId = matriz?.requerimientos?.[0]?.id
+        || matriz?.meta?.requerimiento_id
+        || matriz?.items?.[0]?.requerimiento_id
+        || null;
+      if (!reqId) {
+        try {
+          const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId);
+          reqId = (expResp.data || expResp)?.requerimientos?.[0]?.id || null;
+        } catch (_) { /* keep */ }
       }
+      await observarCuadroConModalInstitucional({
+        requerimientoId: reqId,
+        cuadroId: cuadro.id,
+        rolRevision: ROLES_REVISION.COORDINADOR_CM,
+        onDone: async () => {
+          try {
+            const det = await contratacionesService.getCuadroComparativoDetalle(solicitudId);
+            const data = det.data || det;
+            cuadro = data.cuadro || cuadro;
+            matriz = data.matriz || matriz;
+          } catch (_) { /* keep */ }
+          const badge = el.querySelector('#ccEstadoBadge');
+          if (badge && cuadro) {
+            badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+            badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          }
+          await refreshVersiones();
+          if (typeof onSaved === 'function') onSaved();
+          syncUiLocks();
+        },
+      });
     });
 
     el.querySelector('#ccBtnCoordDerivarDec')?.addEventListener('click', async () => {
@@ -972,31 +986,37 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     });
 
     el.querySelector('#ccBtnDecObservar')?.addEventListener('click', async () => {
-      const obs = await showObservarDecModal();
-      if (!obs) return;
-      try {
-        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
-          accion: 'OBSERVAR_DEC',
-          motivo: obs.motivo,
-          observacion: obs.observacion,
-          comentario: obs.comentario,
-        });
-        const data = resp.data || resp;
-        cuadro = data.cuadro || cuadro;
-        const badge = el.querySelector('#ccEstadoBadge');
-        if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
-        }
-        await refreshVersiones();
-        alert(data.versionado
-          ? `Cuadro observado. Se creó la versión v${data.version_nueva || cuadro.version} para corrección del Analista.`
-          : 'Cuadro observado y devuelto al Analista para corrección.');
-        if (typeof onSaved === 'function') onSaved();
-        syncUiLocks();
-      } catch (err) {
-        alert(err.message || 'No se pudo observar');
+      let reqId = matriz?.requerimientos?.[0]?.id
+        || matriz?.meta?.requerimiento_id
+        || matriz?.items?.[0]?.requerimiento_id
+        || null;
+      if (!reqId) {
+        try {
+          const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId);
+          reqId = (expResp.data || expResp)?.requerimientos?.[0]?.id || null;
+        } catch (_) { /* keep */ }
       }
+      await observarCuadroConModalInstitucional({
+        requerimientoId: reqId,
+        cuadroId: cuadro.id,
+        rolRevision: ROLES_REVISION.DEC,
+        onDone: async () => {
+          try {
+            const det = await contratacionesService.getCuadroComparativoDetalle(solicitudId);
+            const data = det.data || det;
+            cuadro = data.cuadro || cuadro;
+            matriz = data.matriz || matriz;
+          } catch (_) { /* keep */ }
+          const badge = el.querySelector('#ccEstadoBadge');
+          if (badge && cuadro) {
+            badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
+            badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          }
+          await refreshVersiones();
+          if (typeof onSaved === 'function') onSaved();
+          syncUiLocks();
+        },
+      });
     });
 
     el.querySelector('#ccBtnDecDerivarAnalista')?.addEventListener('click', async () => {
@@ -1461,7 +1481,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     if (isCuadroObservadoEditable(cuadro) && !respuestaObs) {
       return alert('Debe registrar la respuesta a las observaciones antes de derivar al Coordinador.');
     }
-    if (!confirm('¿Derivar al Coordinador 8 UIT? (Tras observación no se deriva al DEC)')) return;
+    if (!confirm('¿Derivar al Coordinador CM? (Tras observación no se deriva al DEC)')) return;
     try {
       // Persistir respuesta si hay observación pendiente
       if (respuestaObs && isCuadroObservadoEditable(cuadro)) {
@@ -1485,7 +1505,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
       }
       await refreshVersiones();
-      alert('Cuadro derivado al Coordinador 8 UIT.');
+      alert('Cuadro derivado al Coordinador CM.');
       if (typeof onSaved === 'function') onSaved();
     } catch (err) {
       alert(err.message || 'No se pudo derivar al Coordinador');

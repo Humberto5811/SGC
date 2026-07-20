@@ -13,8 +13,9 @@ function authHeaders() {
       else if (user && (user.nombre || user.username || user.dni)) {
         h['x-user-name'] = String(user.nombre || user.username || user.dni);
       }
-      if (user?.cargo) h['x-user-cargo'] = String(user.cargo);
-      if (user?.rol) h['x-user-rol'] = String(user.rol);
+      // RC8.5-B1 — cargo/rol reales del usuario autenticado (sin inventar valores).
+      h['x-user-cargo'] = String(user.cargo ?? '');
+      h['x-user-rol'] = String(user.rol || user.role || '');
       if (user?.permisos) {
         try { h['x-user-permisos'] = JSON.stringify(user.permisos); } catch (_) { /* noop */ }
       }

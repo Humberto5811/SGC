@@ -471,9 +471,10 @@ portalAnalistaRouter.get('/cuadro-comparativo', async (_req, res, next) => {
 portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (req, res) => {
   try {
     const all = await listarCuadroComparativoExpedientes();
+    // RC8.5-B1 — rol operativo solo desde cabeceras de sesión (no query libre)
     const userCtx = {
-      cargo: req.headers['x-user-cargo'] || req.query?.cargo || '',
-      rol: req.headers['x-user-rol'] || req.query?.rol || '',
+      cargo: req.headers['x-user-cargo'] || '',
+      rol: req.headers['x-user-rol'] || '',
       permisos: (() => {
         try { return JSON.parse(req.headers['x-user-permisos'] || '{}'); } catch (_) { return {}; }
       })(),
@@ -646,14 +647,27 @@ portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/derivar-ccp', as
 portalAnalistaRouter.post('/cuadro-comparativo/cuadro/:cuadroId/revision', async (req, res, next) => {
   try {
     const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    // RC8.5-B1 — no elevar privilegios con body.cargo/body.rol del navegador
+    // RC8.5-G — actuar_como solo body (ignorar query); validado en lib (solo Admin)
     const userCtx = {
-      cargo: req.headers['x-user-cargo'] || req.body?.cargo || '',
-      rol: req.headers['x-user-rol'] || req.body?.rol || '',
-      permisos: req.body?.permisos || (() => {
+      cargo: req.headers['x-user-cargo'] || '',
+      rol: req.headers['x-user-rol'] || '',
+      permisos: (() => {
         try { return JSON.parse(req.headers['x-user-permisos'] || '{}'); } catch (_) { return {}; }
       })(),
     };
-    const data = await transitarRevisionCuadro(req.params.cuadroId, req.body || {}, usuario, userCtx);
+    const body = { ...(req.body || {}) };
+    // No elevar privilegios ni tomar contexto de prueba desde query/cargo del body
+    delete body.cargo;
+    delete body.rol;
+    delete body.permisos;
+    // actuar_como solo body autenticado; querystring se ignora siempre
+    const data = await transitarRevisionCuadro(req.params.cuadroId, body, usuario, userCtx);
     res.json({ success: true, data });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.code === 'ADMIN_ACTUAR_COMO_FORBIDDEN') {
+      return res.status(403).json({ error: err.message, detail: err.message });
+    }
+    next(err);
+  }
 });

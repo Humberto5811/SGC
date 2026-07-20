@@ -16,8 +16,47 @@ import {
   ESTADOS_CUADRO_LABEL,
 } from '../../utils/cuadroComparativoUtils.js';
 import { showElaborarCuadroModal } from '../../utils/cuadroComparativoModal.js';
+import {
+  showExpedienteCoordinadorModal,
+  showExpedienteDecModal,
+  showExpedienteRevisionModal,
+} from '../../utils/cuadroComparativoCoordModal.js';
+import {
+  resolveRolRevisionCliente,
+  resolveModoAperturaExpediente,
+  ROLES_REVISION,
+} from '../../utils/cuadroComparativoRevisionUi.js';
+import {
+  getActuarComoAdmin,
+  setActuarComoAdmin,
+  resolveActuarComoDesdeUi,
+  renderBannerAdminPrueba,
+} from '../../utils/cuadroComparativoAdminPrueba.js';
+import { showTrazabilidadModal } from '../requerimiento/reqShared.js';
+import { closeBandejaDropdowns } from '../../components/bandejaDetailPanel.js';
 
 const API_BASE = 'http://localhost:3000/api';
+
+function currentUser() {
+  try { return JSON.parse(localStorage.getItem('currentUser') || 'null') || {}; }
+  catch (_) { return {}; }
+}
+
+function rolBandejaActual() {
+  return resolveRolRevisionCliente(currentUser());
+}
+
+function isModoBandejaCoordinador() {
+  return rolBandejaActual() === ROLES_REVISION.COORDINADOR_CM;
+}
+
+function isModoBandejaDec() {
+  return rolBandejaActual() === ROLES_REVISION.DEC;
+}
+
+function isModoBandejaAdmin() {
+  return rolBandejaActual() === ROLES_REVISION.ADMINISTRADOR;
+}
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -58,13 +97,48 @@ async function openPdfValidacion(cotId) {
   setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
 }
 
-const VIEW_CONFIG = {
-  prefix: 'cuadroComp',
-  title: 'Cuadro Comparativo',
-  icon: 'bi-table',
-  description: 'Expedientes con validación técnica APTO — elaborados por Solicitud de Cotización.',
-  listId: 'cuadroCompList',
-};
+function getViewConfig() {
+  if (isModoBandejaCoordinador()) {
+    return {
+      prefix: 'cuadroComp',
+      title: 'Coordinación CM — Cuadro Comparativo',
+      icon: 'bi-person-badge',
+      description: 'Bandeja de revisión del Coordinador CM (ruta Cuadro Comparativo). Las acciones de firma y conformidad están en Abrir expediente.',
+      listId: 'cuadroCompList',
+      modo: 'COORDINADOR_CM',
+    };
+  }
+  if (isModoBandejaDec()) {
+    return {
+      prefix: 'cuadroComp',
+      title: 'DEC — Cuadro Comparativo',
+      icon: 'bi-shield-check',
+      description: 'Bandeja de revisión DEC. Segunda etapa documental tras el Coordinador CM.',
+      listId: 'cuadroCompList',
+      modo: 'DEC',
+    };
+  }
+  if (isModoBandejaAdmin()) {
+    return {
+      prefix: 'cuadroComp',
+      title: 'Cuadro Comparativo — Supervisión',
+      icon: 'bi-shield-lock',
+      description: 'Vista administrativa: todos los expedientes. Abrir expediente usa el modo de la etapa actual (solo visualización en revisión Coord/DEC).',
+      listId: 'cuadroCompList',
+      modo: 'ADMINISTRADOR',
+    };
+  }
+  return {
+    prefix: 'cuadroComp',
+    title: 'Cuadro Comparativo',
+    icon: 'bi-table',
+    description: 'Expedientes con validación técnica APTO. La bandeja y acciones cambian según el rol operativo y la etapa del expediente.',
+    listId: 'cuadroCompList',
+    modo: 'ANALISTA',
+  };
+}
+
+const VIEW_CONFIG = getViewConfig();
 
 let expedientesCache = [];
 
@@ -287,9 +361,83 @@ async function openElaborarCuadro(solicitudId) {
   await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
 }
 
+async function openExpedienteCoordinador(solicitudId) {
+  closeBandejaDropdowns();
+  await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false));
+}
+
+async function openExpedienteDec(solicitudId) {
+  closeBandejaDropdowns();
+  await showExpedienteDecModal(solicitudId, () => loadCuadro(false));
+}
+
+/** Admin RC8.5-G: modo prueba (actuar como) sin cambiar sesión ni rol real. */
+async function openExpedienteAdmin(solicitudId) {
+  closeBandejaDropdowns();
+  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
+  const estado = row?.estado_cuadro || row?.estado || '';
+  const sugerido = resolveModoAperturaExpediente(estado, ROLES_REVISION.ADMINISTRADOR);
+  const actuarComo = resolveActuarComoDesdeUi(getActuarComoAdmin() || sugerido) || sugerido;
+  setActuarComoAdmin(actuarComo);
+
+  if (actuarComo === ROLES_REVISION.ANALISTA && sugerido === ROLES_REVISION.ANALISTA) {
+    await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
+    return;
+  }
+  if (sugerido === ROLES_REVISION.ANALISTA && actuarComo !== ROLES_REVISION.ANALISTA) {
+    // Etapa de elaboración: permitir abrir elaborar; el selector de contexto vive en revisión
+    await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
+    return;
+  }
+  await showExpedienteRevisionModal(solicitudId, () => loadCuadro(false), {
+    modo: sugerido === ROLES_REVISION.DEC ? ROLES_REVISION.DEC : ROLES_REVISION.COORDINADOR_CM,
+    adminPrueba: true,
+    actuarComo: actuarComo === ROLES_REVISION.ANALISTA ? sugerido : actuarComo,
+  });
+}
+
+async function openDescargarCuadro(solicitudId) {
+  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
+  if (!row?.cuadro_id) {
+    return alert('Aún no hay PDF del cuadro para descargar.');
+  }
+  try {
+    const path = await contratacionesService.getCuadroPdfUrl(row.cuadro_id, false);
+    const url = path.startsWith('http') ? path : `http://localhost:3000${path}`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) throw new Error('PDF no disponible');
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = `Cuadro_${row.solicitud_codigo || solicitudId}_v${row.version || 1}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+  } catch (err) {
+    alert(err.message || 'No se pudo descargar el cuadro');
+  }
+}
+
+async function openTrazabilidadCuadro(solicitudId) {
+  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
+  const reqId = row?.requerimientos?.[0]?.id;
+  if (!reqId) {
+    return alert('No hay requerimiento asociado para mostrar trazabilidad.');
+  }
+  await showTrazabilidadModal(reqId);
+}
+
 async function loadCuadro(resetPage = false) {
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
+  const modoCoord = isModoBandejaCoordinador();
+  const modoDec = isModoBandejaDec();
+  const modoAdmin = isModoBandejaAdmin();
+  const rolSesion = rolBandejaActual();
+  const rolUi = modoCoord ? 'COORDINADOR_CM'
+    : (modoDec ? 'DEC' : (modoAdmin ? 'ADMINISTRADOR' : rolSesion));
   try {
     if (resetPage) cuadroPagination.resetPage();
     const result = await cuadroPagination.loadData({}, resetPage);
@@ -298,46 +446,113 @@ async function loadCuadro(resetPage = false) {
     updateCuadroStatsDom(allFiltered, 'cuadroCompStats');
 
     if (!allFiltered.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay solicitudes con cotizaciones APTO para el cuadro comparativo.</div>';
+      cont.innerHTML = modoCoord
+        ? '<div class="alert alert-light border">No hay expedientes derivados al Coordinador CM.</div>'
+        : (modoDec
+          ? '<div class="alert alert-light border">No hay expedientes derivados al DEC.</div>'
+          : '<div class="alert alert-light border">No hay solicitudes con cotizaciones APTO para el cuadro comparativo.</div>');
       return;
     }
 
+    const thead = (modoCoord || modoDec || modoAdmin)
+      ? `<tr>
+            <th>Solicitud</th>
+            <th>Requerimiento</th>
+            <th>Proveedor</th>
+            ${modoCoord ? '<th>Tipo</th>' : ''}
+            <th class="text-center">Versión</th>
+            <th>Estado</th>
+            <th>Responsable</th>
+            <th>Fecha</th>
+            <th>Acciones</th>
+          </tr>`
+      : `<tr>
+            <th>Solicitud</th>
+            <th>Requerimiento</th>
+            <th class="text-center">Versión</th>
+            <th>Estado</th>
+            <th>Responsable actual</th>
+            <th>Fecha</th>
+            <th>Acciones</th>
+          </tr>`;
+
+    const tbody = rows.map((c) => {
+      const menu = cuadroComparativoMenuItems(c, { rol: rolUi || c.rol_revision });
+      if (modoCoord || modoDec || modoAdmin) {
+        return `
+            <tr>
+              <td><strong>${esc(c.solicitud_codigo)}</strong>
+                <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
+              </td>
+              <td>${formatRequerimientosCuadro(c, esc)}</td>
+              <td class="small">${esc(c.proveedor_display || c.proveedores_nombres || '—')}</td>
+              ${modoCoord ? `<td class="small">${esc(c.tipo || '—')}</td>` : ''}
+              <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
+              <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
+              <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
+              <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
+              ${renderActionMenuCell(c.solicitud_id, menu, '')}
+            </tr>`;
+      }
+      return `
+            <tr>
+              <td><strong>${esc(c.solicitud_codigo)}</strong>
+                <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
+              </td>
+              <td>${formatRequerimientosCuadro(c, esc)}</td>
+              <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
+              <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
+              <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
+              <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
+              ${renderActionMenuCell(c.solicitud_id, menu, '')}
+            </tr>`;
+    }).join('');
+
+    const hint = modoCoord
+      ? 'Expedientes derivados desde el Analista. Use Abrir expediente para firmar, observar, dar conformidad y derivar al DEC.'
+      : (modoDec
+        ? 'Expedientes derivados desde el Coordinador CM. Use Abrir expediente para la revisión DEC.'
+        : (modoAdmin
+          ? 'Modo Administrador (pruebas): abra el expediente y use «Actuar como» Analista / Coordinador CM / DEC sin cerrar sesión. El rol real no cambia.'
+          : 'Una fila por Solicitud de Cotización. La bandeja cambia según rol y etapa. En revisión externa: Ver / Descargar / Trazabilidad.'));
+
+    const adminChrome = modoAdmin
+      ? renderBannerAdminPrueba(resolveActuarComoDesdeUi(getActuarComoAdmin()
+        || ROLES_REVISION.COORDINADOR_CM) || ROLES_REVISION.COORDINADOR_CM)
+      : '';
+
     cont.innerHTML = `
       <div class="sgc-bandeja-wrap" id="cuadroCompOuter">
-        <p class="small text-muted mb-2">Una fila por Solicitud de Cotización. La matriz económica y el Anexo 08-A (Bienes) / 08-B (Servicios) se elaboran aquí.</p>
+        ${adminChrome}
+        <p class="small text-muted mb-2">${hint}</p>
         <table class="table table-sm table-hover table-bordered mb-0 align-middle">
-          <thead class="table-light"><tr>
-            <th>Solicitud</th>
-            <th>Requerimientos</th>
-            <th>Denominación</th>
-            <th>Tipo</th>
-            <th>Área usuaria</th>
-            <th class="text-center">Prov. presentados</th>
-            <th class="text-center">Prov. APTO</th>
-            <th>Estado del cuadro</th>
-            <th>Fecha ingreso</th>
-            <th>Acciones</th>
-          </tr></thead>
-          <tbody>${rows.map((c) => `
-            <tr>
-              <td><strong>${esc(c.solicitud_codigo)}</strong></td>
-              <td>${formatRequerimientosCuadro(c, esc)}</td>
-              <td class="small">${esc((c.denominacion || '').slice(0, 80))}</td>
-              <td class="small">${esc(c.tipo || '—')}</td>
-              <td class="small">${esc(c.area_usuaria || '—')}</td>
-              <td class="text-center">${esc(c.total_proveedores)}</td>
-              <td class="text-center"><span class="badge bg-success">${esc(c.proveedores_aptos)}</span></td>
-              <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
-              <td class="small">${esc(fmtFecha(c.fecha_ingreso_cuadro))}</td>
-              ${renderActionMenuCell(c.solicitud_id, cuadroComparativoMenuItems(c), '')}
-            </tr>`).join('')}</tbody>
+          <thead class="table-light">${thead}</thead>
+          <tbody>${tbody}</tbody>
         </table>
       </div>`;
+
+    if (modoAdmin) {
+      cont.querySelector('#ccAdminActuarComo')?.addEventListener('change', (ev) => {
+        setActuarComoAdmin(ev.target.value);
+        loadCuadro(false);
+      });
+    }
 
     bindActionMenus(cont, {
       verExpediente: (id) => showVerExpediente(id),
       verValidaciones: (id) => showVerValidaciones(id),
       elaborarCuadro: (id) => openElaborarCuadro(id),
+      verCuadro: (id) => {
+        if (modoCoord) return openExpedienteCoordinador(id);
+        if (modoDec) return openExpedienteDec(id);
+        if (modoAdmin) return openExpedienteAdmin(id);
+        return openElaborarCuadro(id);
+      },
+      abrirExpedienteCoord: (id) => openExpedienteCoordinador(id),
+      abrirExpedienteDec: (id) => openExpedienteDec(id),
+      abrirExpedienteAdmin: (id) => openExpedienteAdmin(id),
+      descargarCuadro: (id) => openDescargarCuadro(id),
+      trazabilidadCuadro: (id) => openTrazabilidadCuadro(id),
     });
     cuadroPagination.renderControls('cuadroCompOuter', () => loadCuadro(false));
   } catch (err) {
@@ -346,7 +561,9 @@ async function loadCuadro(resetPage = false) {
 }
 
 export function renderCuadroComparativoView() {
-  const { prefix, title, icon, description, listId } = VIEW_CONFIG;
+  const cfg = getViewConfig();
+  Object.assign(VIEW_CONFIG, cfg);
+  const { prefix, title, icon, description, listId } = cfg;
   const statsHtml = renderCuadroStatsHtml(buildCuadroStats([]), 'cuadroCompStats');
   return `
     <div class="container-fluid actos-bandeja-page">

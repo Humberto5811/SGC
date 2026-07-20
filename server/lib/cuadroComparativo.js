@@ -30,14 +30,72 @@ import {
   EVENTOS_TRAZA_CUADRO_CCP,
   accionesDisponiblesRevision,
   resolveRolRevision,
+  resolveRolEfectivoRevision,
+  resolveModoAperturaExpediente,
+  labelRolRevision,
   assertSalidaCcpOficial,
   RESPONSABLES_REVISION,
   BANDEJA_ESTADOS_POR_ROL,
+  responsableBandejaPorEstado,
 } from './cuadroComparativoRevision.js';
 import {
   crearNuevaVersionPorObservacion,
   metaVersionDesdeRow,
 } from './cuadroComparativoVersionado.js';
+import { emitirObservacion } from './observacionesWorkflow.js';
+
+/**
+ * RC8.5-D1 — Persiste observación del cuadro en el historial institucional
+ * (requerimientos.payload.observaciones). Sin tabla nueva.
+ */
+async function registrarObservacionInstitucionalDesdeCuadro(solicitudId, {
+  motivo,
+  usuario,
+  origen_submodulo,
+  destino_submodulo,
+  destino_etapa,
+  destino_persona,
+  observacion_padre_id,
+  accionRevision,
+} = {}) {
+  const sid = parseInt(solicitudId, 10);
+  const texto = String(motivo || '').trim();
+  if (!Number.isFinite(sid) || !texto) return { registrados: 0 };
+
+  const origen = String(origen_submodulo || (
+    String(accionRevision || '').includes('DEC') ? 'DEC' : 'Cuadro Comparativo'
+  )).trim() || 'Cuadro Comparativo';
+
+  const { rows } = await query(`
+    SELECT r.id, r.payload
+    FROM solicitud_requerimientos sr
+    JOIN requerimientos r ON r.id = sr.requerimiento_id
+    WHERE sr.solicitud_id = $1
+    ORDER BY r.id ASC
+  `, [sid]);
+
+  let registrados = 0;
+  for (const row of rows) {
+    let payload = {};
+    try { payload = JSON.parse(row.payload || '{}'); } catch (_) { payload = {}; }
+    emitirObservacion(payload, {
+      motivo: texto,
+      gerente: String(usuario || '').slice(0, 150) || 'Sistema',
+      origen,
+      origen_submodulo: origen,
+      destino_submodulo: String(destino_submodulo || 'Cuadro Comparativo'),
+      destino_etapa: String(destino_etapa || 'CUADRO_COMPARATIVO'),
+      destino_persona: String(destino_persona || ''),
+      observacion_padre_id: observacion_padre_id || null,
+    });
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [
+      row.id,
+      JSON.stringify(payload),
+    ]);
+    registrados += 1;
+  }
+  return { registrados };
+}
 
 /**
  * RC8.8 — Gates para Generar / Derivar CCP.
@@ -472,18 +530,48 @@ export async function listarCuadroComparativoExpedientes() {
       proveedores_aptos: Number(r.proveedores_aptos) || 0,
       proveedores_no_aptos: Number(r.proveedores_no_aptos) || 0,
       proveedores_pendientes: Number(r.proveedores_pendientes) || 0,
+      proveedores_nombres: r.proveedores_nombres || '',
+      proveedor_display: String(r.proveedores_nombres || '')
+        .split('|')
+        .map((s) => s.trim())
+        .filter(Boolean)[0] || '—',
       fecha_ingreso_cuadro: r.fecha_ingreso_cuadro || r.solicitud_updated_at || null,
       estado_cuadro: estadoCode,
       estado_cuadro_label: labelCuadroEstado(estadoCode),
       estado_cuadro_badge: badgeClassCuadro(estadoCode),
       cuadro_id: persisted?.cuadro_id || null,
+      version: persisted?.version != null ? Number(persisted.version) : null,
+      fecha_actualizacion: persisted?.actualizado_at || r.fecha_ingreso_cuadro || null,
+      responsable_actual: responsableBandejaPorEstado(estadoCode),
       solicitud_estado: r.solicitud_estado || '',
-      // Abrir siempre (excepto anulado); post-firma/derivación es «Ver cuadro».
-      puede_elaborar: estadoCode !== ESTADOS_CUADRO.ANULADO,
-      solo_lectura: estadoCode === ESTADOS_CUADRO.DERIVADO_CCP
-        || estadoCode === ESTADOS_CUADRO.FIRMADO,
-      accion_cuadro_label: (estadoCode === ESTADOS_CUADRO.DERIVADO_CCP
-        || estadoCode === ESTADOS_CUADRO.FIRMADO)
+      // RC8.4A: en revisión externa no se edita; Analista solo Ver/Descargar/Trazabilidad
+      puede_elaborar: estadoCode !== ESTADOS_CUADRO.ANULADO
+        && ![
+          ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+          ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+          ESTADOS_CUADRO.PENDIENTE_DEC,
+          ESTADOS_CUADRO.DERIVADO_CCP,
+          ESTADOS_CUADRO.FIRMADO,
+        ].includes(estadoCode),
+      solo_lectura: [
+        ESTADOS_CUADRO.DERIVADO_CCP,
+        ESTADOS_CUADRO.FIRMADO,
+        ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+        ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+        ESTADOS_CUADRO.PENDIENTE_DEC,
+      ].includes(estadoCode),
+      en_revision_externa: [
+        ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+        ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+        ESTADOS_CUADRO.PENDIENTE_DEC,
+      ].includes(estadoCode),
+      accion_cuadro_label: ([
+        ESTADOS_CUADRO.DERIVADO_CCP,
+        ESTADOS_CUADRO.FIRMADO,
+        ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+        ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+        ESTADOS_CUADRO.PENDIENTE_DEC,
+      ].includes(estadoCode))
         ? 'Ver cuadro'
         : 'Elaborar cuadro',
       search_text: [
@@ -494,6 +582,7 @@ export async function listarCuadroComparativoExpedientes() {
         area,
         r.proveedores_nombres,
         r.proveedores_rucs,
+        responsableBandejaPorEstado(estadoCode),
       ].filter(Boolean).join(' ').toLowerCase(),
     };
   });
@@ -736,7 +825,7 @@ function mapCuadroRow(row) {
       && estado !== ESTADOS_CUADRO.FIRMADO
       && estado !== ESTADOS_CUADRO.ANULADO
       && ['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR'].includes(estado),
-    // RC8.5 — Coordinador 8 UIT
+    // RC8.5 — Coordinador CM
     conformidad_coordinador: !!(datosJson.revision_coordinador?.conformidad),
     revision_coordinador: datosJson.revision_coordinador || null,
     puede_derivar_dec: !derivado
@@ -1793,7 +1882,7 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
 }
 
 /**
- * RC8.4 — Transición de revisión (Analista ↔ Coordinador 8 UIT ↔ DEC).
+ * RC8.4 — Transición de revisión (Analista ↔ Coordinador CM ↔ DEC).
  * Actualiza estado documental + responsable/snapshot vía registrarMovimiento.
  * No cambia la etapa Workflow (permanece CUADRO_COMPARATIVO) salvo Generar CCP.
  */
@@ -1807,36 +1896,36 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
   const estado = String(cur.estado || '').toUpperCase();
-  const rol = resolveRolRevision(userCtx);
+  // RC8.5-G — actuar_como solo desde body (nunca query); solo Administrador real (headers)
+  const { rolEfectivo, rolReal, actuarComo, modoPrueba } = resolveRolEfectivoRevision(
+    userCtx,
+    body.actuar_como || body.contexto_rol || '',
+  );
+  const rol = rolEfectivo;
   const tr = findTransicionRevision(accion, estado);
   if (!tr) {
     throw new Error(`Transición ${accion || '—'} no permitida desde estado ${estado}`);
   }
   if (tr.rol !== rol) {
-    throw new Error(`La acción ${accion} corresponde al rol ${tr.rol} (perfil actual: ${rol})`);
+    throw new Error(
+      modoPrueba
+        ? `La acción ${accion} corresponde al rol ${tr.rol} (Administrador actuando como: ${rol})`
+        : `La acción ${accion} corresponde al rol ${tr.rol} (perfil actual: ${rol})`,
+    );
   }
 
-  const motivoObs = String(body.motivo || body.motivo_observacion || '').trim();
-  const descripcionObs = String(body.descripcion || body.descripcion_observacion || '').trim();
-  const comentarioObs = String(body.comentario || body.comentario_observacion || '').trim();
-  const observacion = String(body.observacion || body.sustento || '').trim();
-  if (tr.requireObservacionEstructurada || accion === 'OBSERVAR_COORDINADOR') {
-    const faltan = [];
-    if (!motivoObs) faltan.push('Motivo');
-    if (!descripcionObs) faltan.push('Descripción');
-    if (!observacion) faltan.push('Observación');
-    if (faltan.length) {
-      throw new Error(`Observación incompleta. Obligatorio: ${faltan.join(', ')}`);
+  // RC8.5-D1 — mismo contrato institucional: Motivo (componente unificado)
+  let motivoObs = String(body.motivo || body.motivo_observacion || '').trim();
+  let observacion = String(body.observacion || body.sustento || '').trim();
+  const descripcionObs = String(body.descripcion || body.descripcion_observacion || observacion || motivoObs).trim();
+  const comentarioObs = String(body.comentario || body.comentario_observacion || observacion || motivoObs).trim();
+  if (accion === 'OBSERVAR_COORDINADOR' || accion === 'OBSERVAR_DEC'
+    || tr.requireObservacionEstructurada || tr.requireObservacionDecEstructurada) {
+    if (!motivoObs && !observacion) {
+      throw new Error('Motivo requerido');
     }
-  }
-  if (tr.requireObservacionDecEstructurada || accion === 'OBSERVAR_DEC') {
-    const faltan = [];
-    if (!motivoObs) faltan.push('Motivo');
-    if (!observacion) faltan.push('Observación');
-    if (!comentarioObs) faltan.push('Comentario');
-    if (faltan.length) {
-      throw new Error(`Observación DEC incompleta. Obligatorio: ${faltan.join(', ')}`);
-    }
+    if (!motivoObs) motivoObs = observacion;
+    if (!observacion) observacion = motivoObs;
   }
 
   if (accion === 'DERIVAR_COORDINADOR' && !cur.pdf_contenido) {
@@ -1845,7 +1934,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
 
   // RC8.7 — Tras observación, siempre al Coordinador (nunca directo al DEC)
   if (accion === 'DERIVAR_DEC' && ['OBSERVADO_COORDINADOR', 'OBSERVADO_DEC', 'CUADRO_BORRADOR', 'ADJUDICADO'].includes(estado)) {
-    throw new Error('Tras una observación debe derivar al Coordinador 8 UIT, no directamente al DEC');
+    throw new Error('Tras una observación debe derivar al Coordinador CM, no directamente al DEC');
   }
 
   const datosPrev = parseJson(cur.datos_json, {});
@@ -1887,6 +1976,17 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
       observacion: observacion || `${accion} → ${tr.to} (v${creado.version_nueva})`,
       accion: 'derivado',
     });
+    // RC8.5-D1 — historial general del expediente (payload.observaciones)
+    const histInst = await registrarObservacionInstitucionalDesdeCuadro(cur.solicitud_id, {
+      motivo: motivoObs || observacion,
+      usuario: userObs,
+      origen_submodulo: body.origen_submodulo,
+      destino_submodulo: body.destino_submodulo,
+      destino_etapa: body.destino_etapa,
+      destino_persona: body.destino_persona,
+      observacion_padre_id: body.observacion_padre_id || body.observacionPadreId,
+      accionRevision: accion,
+    });
     await registrarTrazaPortal({
       solicitud_id: cur.solicitud_id,
       proveedor_id: cur.proveedor_ganador_id || null,
@@ -1900,6 +2000,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
         hacia: tr.to,
         motivo: motivoObs,
         observacion,
+        historial_institucional: histInst,
         workflow: sync,
       }).slice(0, 2000),
       usuario: userObs,
@@ -1915,6 +2016,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
       },
       version_nueva: creado.version_nueva,
       observacion: creado.observacion,
+      historial_institucional: histInst,
       revision: {
         accion,
         estado_origen: estado,
@@ -1928,6 +2030,13 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
         sync,
       },
     };
+  }
+
+  // RC8.4C — Dar Conformidad exige PDF firmado (luego auto-deriva al DEC)
+  if (accion === 'CONFORMIDAD_COORDINADOR' || accion === 'APROBAR_COORDINADOR' || tr.autoDerivarDec) {
+    if (!tieneFirmado) {
+      throw new Error('Debe adjuntar el Cuadro Comparativo firmado antes de dar conformidad y derivar al DEC');
+    }
   }
 
   if (accion === 'DERIVAR_DEC' || tr.requireConformidad) {
@@ -2006,6 +2115,19 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   }
 
   const user = String(usuario || '').slice(0, 150);
+  const labelCtx = modoPrueba ? labelRolRevision(actuarComo) : '';
+  const obsAudit = modoPrueba
+    ? [observacion, `[Prueba Admin → ${labelCtx}]`].filter(Boolean).join(' ').trim()
+    : observacion;
+  const histMeta = modoPrueba
+    ? {
+      usuario_real: user,
+      usuario_real_rol: rolReal,
+      contexto: actuarComo,
+      contexto_label: labelCtx,
+      modo_prueba: true,
+    }
+    : {};
   const datos = { ...datosPrev };
   const hist = Array.isArray(datos.historial_revision) ? [...datos.historial_revision] : [];
   if (tr.via) {
@@ -2014,7 +2136,8 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
       usuario: user,
       accion,
       estado: tr.via,
-      observacion: observacion || '',
+      observacion: obsAudit || '',
+      ...histMeta,
     });
   }
   hist.push({
@@ -2022,10 +2145,11 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
     usuario: user,
     accion,
     estado: tr.to,
-    observacion: observacion || '',
+    observacion: obsAudit || '',
     motivo: motivoObs || undefined,
     descripcion: descripcionObs || undefined,
     comentario: comentarioObs || undefined,
+    ...histMeta,
   });
   datos.historial_revision = hist.slice(-40);
 
@@ -2035,6 +2159,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
       conformidad: true,
       conformidad_at: new Date().toISOString(),
       conformidad_por: user,
+      ...(modoPrueba ? { conformidad_contexto: actuarComo, conformidad_usuario_real_rol: rolReal } : {}),
     };
   }
   if (accion === 'CONFORMIDAD_DEC') {
@@ -2043,6 +2168,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
       conformidad: true,
       conformidad_at: new Date().toISOString(),
       conformidad_por: user,
+      ...(modoPrueba ? { conformidad_contexto: actuarComo, conformidad_usuario_real_rol: rolReal } : {}),
     };
   }
   if (accion === 'DERIVAR_COORDINADOR') {
@@ -2077,7 +2203,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
     revisionEstado: tr.to,
     responsable: tr.responsable,
     usuario: user,
-    observacion: observacion || `${accion} → ${tr.to}`,
+    observacion: obsAudit || `${accion} → ${tr.to}`,
     accion: 'derivado',
   });
 
@@ -2120,8 +2246,14 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
     usuario: user,
   });
 
+  const autoDerivoDec = !!(tr.autoDerivarDec || (
+    (accion === 'CONFORMIDAD_COORDINADOR' || accion === 'APROBAR_COORDINADOR')
+    && tr.to === ESTADOS_REVISION_CUADRO.PENDIENTE_DEC
+  ));
+
   return {
     ok: true,
+    derivado_dec: autoDerivoDec || accion === 'DERIVAR_DEC',
     cuadro: mapCuadroRow(rows[0]),
     revision: {
       accion,
@@ -2131,10 +2263,12 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
       responsable: tr.responsable,
       rol,
       acciones: accionesDisponiblesRevision(tr.to, rol),
+      auto_derivado_dec: autoDerivoDec,
     },
     workflow: {
       etapa: ETAPAS.CUADRO_COMPARATIVO,
       sync,
+      flujo: 'Coordinador CM → DEC → Analista',
     },
     trazabilidad: eventoAprob
       ? { evento: EVENTOS_TRAZA_CUADRO_CCP.CUADRO_APROBADO_DEC, ...eventoAprob }
@@ -2152,19 +2286,23 @@ export function filtrarBandejaPorRolRevision(expedientes = [], userCtx = {}) {
     rol,
     data: (expedientes || []).filter((e) => {
       const est = String(e.estado_cuadro || e.estado || '').toUpperCase();
+      // Admin: supervisión de todos los expedientes
+      if (rol === 'ADMINISTRADOR') return true;
       // Analista también ve pendientes de elaborar sin cuadro aún
       if (rol === 'ANALISTA' && (!est || est === 'PENDIENTE_ELABORAR')) return true;
       return allowed.has(est);
-    }).map((e) => ({
-      ...e,
-      rol_revision: rol,
-      acciones_revision: accionesDisponiblesRevision(e.estado_cuadro || e.estado, rol),
-      responsable_revision: RESPONSABLES_REVISION[
-        rol === 'COORDINADOR_8UIT' ? 'COORDINADOR_8UIT'
-          : rol === 'DEC' ? 'DEC'
-            : rol === 'CCP' ? 'CCP' : 'ANALISTA'
-      ],
-    })),
+    }).map((e) => {
+      const est = e.estado_cuadro || e.estado;
+      return {
+        ...e,
+        rol_revision: rol,
+        acciones_revision: accionesDisponiblesRevision(est, rol),
+        // Responsable del expediente (quién tiene la pelota), no el rol del visor
+        responsable_actual: e.responsable_actual || responsableBandejaPorEstado(est),
+        responsable_revision: responsableBandejaPorEstado(est),
+        modo_apertura: resolveModoAperturaExpediente(est, rol),
+      };
+    }),
   };
 }
 

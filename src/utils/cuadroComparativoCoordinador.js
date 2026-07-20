@@ -1,5 +1,5 @@
 /**
- * RC8.5 — Revisión institucional del Coordinador de 8 UIT.
+ * RC8.5 / RC8.5-D — Revisión institucional del Coordinador CM.
  * Solo lectura económica; firma externa; conformidad; observar; derivar DEC.
  */
 import { resolveRolRevisionCliente, ROLES_REVISION } from './cuadroComparativoRevisionUi.js';
@@ -9,136 +9,178 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export function isModoCoordinador8Uit(user, cuadro) {
-  const rol = resolveRolRevisionCliente(user);
-  const e = String(cuadro?.estado || cuadro?.estado_cuadro || '').toUpperCase();
-  return rol === ROLES_REVISION.COORDINADOR_8UIT
-    && ['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'].includes(e);
+const ESTADOS_COORD = Object.freeze(['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR']);
+
+const ESTADOS_CUADRO_CONOCIDOS = Object.freeze(new Set([
+  'PENDIENTE_ELABORAR', 'CUADRO_BORRADOR', 'EN_ELABORACION', 'BORRADOR',
+  'ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO',
+  'PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR',
+  'OBSERVADO_COORDINADOR', 'PENDIENTE_DEC', 'OBSERVADO_DEC',
+  'APROBADO_DEC', 'PENDIENTE_CCP', 'DERIVADO_CCP', 'OBSERVADO', 'ANULADO',
+]));
+
+/** Estado documental canónico (evita labels o campos vacíos). */
+export function getEstadoCuadro(cuadro = {}) {
+  const a = String(cuadro?.estado || '').toUpperCase().trim();
+  const b = String(cuadro?.estado_cuadro || '').toUpperCase().trim();
+  if (ESTADOS_CUADRO_CONOCIDOS.has(a)) return a;
+  if (ESTADOS_CUADRO_CONOCIDOS.has(b)) return b;
+  return a || b;
 }
 
-export function renderPanelCoordinador(cuadro, matriz = {}) {
-  const e = String(cuadro?.estado || '').toUpperCase();
+export function enRevisionCoordinador(cuadro = {}) {
+  return ESTADOS_COORD.includes(getEstadoCuadro(cuadro));
+}
+
+/**
+ * Gates UI Coordinador CM (RC8.5-C2).
+ * En revisión: Descargar / Adjuntar / Ver Firmado / Observar / Conformidad.
+ * Derivar a DEC solo cuando: firma + conformidad + versión vigente + sin obs.
+ */
+export function evaluarAccionesCoordinador(cuadro = {}) {
+  const e = getEstadoCuadro(cuadro);
+  const enCoord = ESTADOS_COORD.includes(e);
   const tienePdf = !!(cuadro?.tiene_pdf || cuadro?.pdf_nombre);
   const tieneFirmado = !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre);
   const conformidad = !!(cuadro?.conformidad_coordinador
-    || cuadro?.revision_coordinador?.conformidad
-    || matriz?.revision_coordinador?.conformidad);
-  const puedeDerivar = conformidad && tieneFirmado
-    && ['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'].includes(e);
+    || cuadro?.revision_coordinador?.conformidad);
+  const vigente = cuadro?.vigente !== false && e !== 'ANULADO';
+  const obs = cuadro?.observacion_pendiente;
+  const sinObservaciones = !obs
+    || !!(obs.respuesta || obs.respondido_at || obs.respondido_por);
+
+  const puedeDescargar = enCoord && !!(cuadro?.id || tienePdf);
+  const puedeAdjuntar = enCoord && tienePdf;
+  const puedeVerFirmado = enCoord && tieneFirmado;
+  const puedeEliminarFirmado = enCoord && tieneFirmado && !conformidad;
+  const puedeConformidad = enCoord && tieneFirmado && !conformidad;
+  const puedeObservar = enCoord;
+  // RC8.5-C2 — Derivar visible solo con todos los gates
+  const puedeDerivar = enCoord && tieneFirmado && conformidad && vigente && sinObservaciones;
+
+  const condicionesDerivar = [
+    { key: 'firma', ok: !!tieneFirmado, label: 'Firma vigente (PDF firmado adjunto)' },
+    { key: 'conformidad', ok: !!conformidad, label: 'Conformidad del Coordinador CM' },
+    { key: 'version', ok: !!vigente, label: 'Versión vigente del cuadro' },
+    { key: 'observaciones', ok: !!sinObservaciones, label: 'Sin observaciones pendientes' },
+    { key: 'estado', ok: !!enCoord, label: 'Expediente en revisión Coordinador CM' },
+  ];
+  const faltantesDerivar = condicionesDerivar.filter((c) => !c.ok).map((c) => c.label);
+  const motivoDerivar = puedeDerivar
+    ? ''
+    : (faltantesDerivar.length
+      ? `Derivar a DEC no disponible. Falta: ${faltantesDerivar.join('; ')}.`
+      : 'Derivar a DEC no disponible.');
+
+  let motivoConformidad = '';
+  if (!enCoord) motivoConformidad = 'Expediente fuera de Coordinador CM';
+  else if (!tieneFirmado) motivoConformidad = 'Adjuntar Cuadro Firmado primero';
+  else if (conformidad) motivoConformidad = 'Conformidad ya registrada';
+
+  return {
+    estado: e,
+    enCoord,
+    tienePdf,
+    tieneFirmado,
+    conformidad,
+    vigente,
+    sinObservaciones,
+    puedeDescargar,
+    puedeAdjuntar,
+    puedeVerFirmado,
+    puedeEliminarFirmado,
+    puedeConformidad,
+    puedeObservar,
+    puedeDerivar,
+    motivoDerivar,
+    motivoConformidad,
+    condicionesDerivar,
+    faltantesDerivar,
+  };
+}
+
+export function isModoCoordinador8Uit(user, cuadro) {
+  return isModoCoordinadorCm(user, cuadro);
+}
+
+export function isModoCoordinadorCm(user, cuadro) {
+  const rol = resolveRolRevisionCliente(user);
+  return rol === ROLES_REVISION.COORDINADOR_CM && enRevisionCoordinador(cuadro);
+}
+
+export function renderPanelCoordinador(cuadro, matriz = {}) {
+  const g = evaluarAccionesCoordinador(cuadro);
+  void matriz;
+  const bloqueDerivar = g.puedeDerivar
+    ? `<button type="button" class="btn btn-sm btn-warning" id="ccBtnCoordDerivarDec"
+            title="Derivar expediente al DEC">
+            <i class="bi bi-send"></i> Derivar a DEC
+          </button>`
+    : (g.enCoord
+      ? `<div class="alert alert-warning py-2 small mb-0 mt-2 w-100" id="ccCoordDerivarBlocked"
+            data-faltantes="${esc(g.faltantesDerivar.join(' | '))}">
+            <strong>Derivar a DEC</strong> no está disponible.<br/>
+            Condición pendiente: <em>${esc(g.faltantesDerivar.join('; ') || 'revisión incompleta')}</em>
+          </div>`
+      : '');
 
   return `
-    <div class="card border border-warning mb-3" id="ccPanelCoordinador">
+    <div class="card border border-warning mb-3" id="ccPanelCoordinador"
+      data-rol-requerido="COORDINADOR_CM" data-estado="${esc(g.estado)}">
       <div class="card-body py-3">
-        <h6 class="fw-bold mb-2"><i class="bi bi-person-badge"></i> Revisión Coordinador 8 UIT</h6>
+        <h6 class="fw-bold mb-2"><i class="bi bi-person-badge"></i> Revisión Coordinador CM</h6>
         <p class="small text-muted mb-2 mb-0">
-          El cuadro está en solo lectura. Descargue el Anexo, fírmelo externamente y adjúntelo.
-          Luego registre conformidad para poder derivar al DEC.
+          Acciones: Descargar Cuadro → Adjuntar Cuadro Firmado → Ver Firmado → Observar / Dar Conformidad.
+          Derivar a DEC aparece solo con firma, conformidad, versión vigente y sin observaciones.
         </p>
         <div class="d-flex flex-wrap gap-2 mt-2 mb-2">
-          <span class="badge ${tienePdf ? 'bg-success' : 'bg-secondary'}">PDF Anexo: ${tienePdf ? 'Sí' : 'No'}</span>
-          <span class="badge ${tieneFirmado ? 'bg-success' : 'bg-warning text-dark'}">PDF firmado: ${tieneFirmado ? 'Sí' : 'Pendiente'}</span>
-          <span class="badge ${conformidad ? 'bg-success' : 'bg-warning text-dark'}">Conformidad: ${conformidad ? 'Sí' : 'Pendiente'}</span>
+          <span class="badge ${g.tienePdf ? 'bg-success' : 'bg-secondary'}">PDF Anexo: ${g.tienePdf ? 'Sí' : 'No'}</span>
+          <span class="badge ${g.tieneFirmado ? 'bg-success' : 'bg-warning text-dark'}">PDF firmado: ${g.tieneFirmado ? 'Sí' : 'Pendiente'}</span>
+          <span class="badge ${g.conformidad ? 'bg-success' : 'bg-warning text-dark'}">Conformidad: ${g.conformidad ? 'Sí' : 'Pendiente'}</span>
+          <span class="badge ${g.vigente ? 'bg-success' : 'bg-danger'}">Versión: ${g.vigente ? 'Vigente' : 'No vigente'}</span>
+          <span class="badge ${g.sinObservaciones ? 'bg-success' : 'bg-danger'}">Obs.: ${g.sinObservaciones ? 'Ninguna pendiente' : 'Pendientes'}</span>
         </div>
         <div class="d-flex flex-wrap gap-2" id="ccCoordActions">
-          <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnCoordDescargar">
-            <i class="bi bi-download"></i> Descargar Anexo 08A
+          <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnCoordDescargar"
+            ${g.puedeDescargar ? '' : 'disabled'}
+            title="${g.puedeDescargar ? 'Descargar Cuadro Comparativo' : 'No hay cuadro para descargar'}">
+            <i class="bi bi-download"></i> Descargar Cuadro
           </button>
-          <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnCoordAdjuntar" ${!tienePdf ? 'disabled' : ''}>
-            <i class="bi bi-paperclip"></i> Adjuntar cuadro firmado
+          <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnCoordAdjuntar"
+            ${g.puedeAdjuntar ? '' : 'disabled'}
+            title="${g.puedeAdjuntar ? 'Adjuntar Cuadro Firmado' : 'Descargue y genere el PDF del Anexo primero'}">
+            <i class="bi bi-paperclip"></i> Adjuntar Cuadro Firmado
           </button>
-          ${tieneFirmado ? `
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="ccBtnCoordVerFirmado"><i class="bi bi-eye"></i> Ver firmado</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordEliminarFirmado"><i class="bi bi-trash"></i> Eliminar firmado</button>
-          ` : ''}
-          <button type="button" class="btn btn-sm btn-success" id="ccBtnCoordConformidad" ${conformidad ? 'disabled' : ''}>
-            <i class="bi bi-check2-circle"></i> Dar conformidad
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="ccBtnCoordVerFirmado"
+            ${g.puedeVerFirmado ? '' : 'disabled'}
+            title="${g.puedeVerFirmado ? 'Ver PDF firmado' : 'Adjuntar Cuadro Firmado primero'}">
+            <i class="bi bi-eye"></i> Ver Firmado
           </button>
-          <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordObservar">
+          <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordObservar"
+            ${g.puedeObservar ? '' : 'disabled'}
+            title="${g.puedeObservar ? 'Observar y devolver al Analista' : 'Fuera de revisión Coordinador'}">
             <i class="bi bi-exclamation-triangle"></i> Observar
           </button>
-          <button type="button" class="btn btn-sm btn-warning" id="ccBtnCoordDerivarDec" ${puedeDerivar ? '' : 'disabled'}
-            title="${puedeDerivar ? 'Derivar al DEC' : 'Requiere conformidad y PDF firmado'}">
-            <i class="bi bi-send"></i> Derivar al DEC
+          <button type="button" class="btn btn-sm btn-success" id="ccBtnCoordConformidad"
+            ${g.puedeConformidad ? '' : 'disabled'}
+            title="${g.puedeConformidad ? 'Registrar conformidad (luego podrá Derivar a DEC)' : esc(g.motivoConformidad)}">
+            <i class="bi bi-check2-circle"></i> Dar Conformidad
           </button>
+          ${g.puedeEliminarFirmado ? `
+            <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordEliminarFirmado"
+              title="Eliminar PDF firmado para volver a adjuntar">
+              <i class="bi bi-trash"></i> Eliminar firmado
+            </button>` : ''}
+          ${bloqueDerivar}
         </div>
         ${cuadro?.firmado_nombre ? `<div class="small text-muted mt-2">Firmado: <strong>${esc(cuadro.firmado_nombre)}</strong></div>` : ''}
+        ${!g.enCoord ? '<div class="small text-danger mt-2">Estado actual no admite acciones de Coordinador CM.</div>' : ''}
       </div>
     </div>`;
 }
 
-/**
- * Modal obligatorio Motivo / Descripción / Observación.
- * @returns {Promise<{motivo,descripcion,observacion}|null>}
- */
+/** @deprecated RC8.5-D1 — usar observarCuadroConModalInstitucional */
 export function showObservarCoordinadorModal() {
-  return new Promise((resolve) => {
-    const wrap = document.createElement('div');
-    wrap.innerHTML = `
-      <div class="modal fade" tabindex="-1">
-        <div class="modal-dialog">
-          <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-              <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Observar cuadro</h5>
-              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-              <p class="small text-muted">Todos los campos son obligatorios. No se permiten observaciones vacías.</p>
-              <div class="mb-2">
-                <label class="form-label small mb-0">Motivo <span class="text-danger">*</span></label>
-                <input type="text" class="form-control form-control-sm" id="ccObsMotivo" maxlength="200" required>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small mb-0">Descripción <span class="text-danger">*</span></label>
-                <textarea class="form-control form-control-sm" id="ccObsDesc" rows="2" required></textarea>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small mb-0">Observación <span class="text-danger">*</span></label>
-                <textarea class="form-control form-control-sm" id="ccObsTexto" rows="3" required></textarea>
-              </div>
-              <div class="alert alert-danger d-none py-2 small" id="ccObsErr"></div>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-              <button type="button" class="btn btn-danger" id="ccObsOk">Registrar observación</button>
-            </div>
-          </div>
-        </div>
-      </div>`;
-    document.body.appendChild(wrap);
-    const modalEl = wrap.querySelector('.modal');
-    const modal = window.bootstrap?.Modal ? new window.bootstrap.Modal(modalEl) : null;
-    let done = false;
-    const finish = (val) => {
-      if (done) return;
-      done = true;
-      if (modal) modal.hide();
-      else wrap.remove();
-      resolve(val);
-    };
-    modalEl.addEventListener('hidden.bs.modal', () => {
-      wrap.remove();
-      if (!done) resolve(null);
-    });
-    wrap.querySelector('#ccObsOk').onclick = () => {
-      const motivo = String(wrap.querySelector('#ccObsMotivo')?.value || '').trim();
-      const descripcion = String(wrap.querySelector('#ccObsDesc')?.value || '').trim();
-      const observacion = String(wrap.querySelector('#ccObsTexto')?.value || '').trim();
-      const err = wrap.querySelector('#ccObsErr');
-      const faltan = [];
-      if (!motivo) faltan.push('Motivo');
-      if (!descripcion) faltan.push('Descripción');
-      if (!observacion) faltan.push('Observación');
-      if (faltan.length) {
-        err.textContent = `Complete: ${faltan.join(', ')}`;
-        err.classList.remove('d-none');
-        return;
-      }
-      finish({ motivo, descripcion, observacion });
-    };
-    if (modal) modal.show();
-    else {
-      modalEl.style.display = 'block';
-      modalEl.classList.add('show');
-    }
-  });
+  console.warn('showObservarCoordinadorModal eliminado (RC8.5-D1). Use observarCuadroConModalInstitucional.');
+  return Promise.resolve(null);
 }

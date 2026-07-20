@@ -397,20 +397,63 @@ export function buildManifiestoCotizacion(cot) {
   const anexos = parseCotizacionAnexos(cot?.anexos);
   (anexos.docs_solicitados || []).forEach((f, i) => {
     const file = fileFromEntry(f, `Documento solicitado ${i + 1}`);
-    if (file) docs.push({ ref: `docs-${i}`, nombre: file.nombre_archivo, grupo: 'Documentos solicitados', mime_type: file.mime_type });
+    if (file) {
+      docs.push({
+        ref: `docs-${i}`,
+        nombre: file.nombre_archivo,
+        grupo: 'Documentos solicitados',
+        mime_type: file.mime_type,
+        key: f?.key || null,
+        disponible: true,
+      });
+    }
   });
   (anexos.requisitos || []).forEach((f, i) => {
     const file = fileFromEntry(f, `Requisito técnico ${i + 1}`);
-    if (file) docs.push({ ref: `req-${i}`, nombre: file.nombre_archivo, grupo: 'Requisitos técnicos', mime_type: file.mime_type });
+    if (file) {
+      docs.push({
+        ref: `req-${i}`,
+        nombre: file.nombre_archivo,
+        grupo: 'Requisitos técnicos',
+        mime_type: file.mime_type,
+        key: f?.key || null,
+        disponible: true,
+      });
+    }
   });
   const a05a = fileFromEntry(anexos.anexo05a_firmado, 'Anexo 05-A firmado');
-  if (a05a) docs.push({ ref: 'anexo05a', nombre: a05a.nombre_archivo, grupo: 'Anexos firmados', mime_type: a05a.mime_type });
+  if (a05a) {
+    docs.push({
+      ref: 'anexo05a',
+      nombre: a05a.nombre_archivo,
+      grupo: 'Anexos firmados',
+      mime_type: a05a.mime_type,
+      disponible: true,
+    });
+  }
   const a05b = fileFromEntry(anexos.anexo05b_firmado, 'Anexo 05-B firmado');
-  if (a05b) docs.push({ ref: 'anexo05b', nombre: a05b.nombre_archivo, grupo: 'Propuesta económica', mime_type: a05b.mime_type, economico: true });
+  if (a05b) {
+    docs.push({
+      ref: 'anexo05b',
+      nombre: a05b.nombre_archivo,
+      grupo: 'Propuesta económica',
+      mime_type: a05b.mime_type,
+      economico: true,
+      disponible: true,
+    });
+  }
   const certs = parseJson(cot?.certificados, []);
   (Array.isArray(certs) ? certs : []).forEach((f, i) => {
     const file = fileFromEntry(f, `Certificado ${i + 1}`);
-    if (file) docs.push({ ref: `cert-${i}`, nombre: file.nombre_archivo, grupo: 'Certificados', mime_type: file.mime_type });
+    if (file) {
+      docs.push({
+        ref: `cert-${i}`,
+        nombre: file.nombre_archivo,
+        grupo: 'Certificados',
+        mime_type: file.mime_type,
+        disponible: true,
+      });
+    }
   });
   return docs;
 }
@@ -424,7 +467,10 @@ export { parseCotizacionAnexos };
 
 export async function getCotizacionRecepcionDetalle(cotizacionId) {
   const { rows } = await query(`
-    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo, sc.detalle_items
+    SELECT cot.*, p.ruc, p.razon_social,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo, sc.detalle_items,
+      sc.docs_solicitados AS sc_docs_solicitados,
+      sc.requisitos_tecnicos AS sc_requisitos_tecnicos
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -435,6 +481,16 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
   const anexos = parseCotizacionAnexos(cot.anexos);
   const propuestaEconomica = parseJson(cot.propuesta_economica, {});
   const datosProveedor = anexos.datos_proveedor || propuestaEconomica.datos_proveedor || {};
+  // RC8.5-C4 — config SC + keys de anexos (sin base64) para relacionar requisito↔archivo
+  const stripFile = (f) => (f && typeof f === 'object'
+    ? {
+      key: f.key || null,
+      nombre: f.nombre || f.nombre_archivo || '',
+      mime_type: f.mime_type || '',
+      size: f.size || f.tamaño_bytes || f.tamano || null,
+      tiene_archivo: !!(f.base64 || f.contenido_base64),
+    }
+    : null);
   return {
     id: cot.id,
     solicitud_id: cot.solicitud_id,
@@ -448,6 +504,7 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     razon_social: cot.razon_social,
     estado: cot.estado,
     validacion_estado: cot.validacion_estado || '',
+    validacion_responsable: cot.validacion_responsable || cot.validado_por || '',
     fecha_presentacion: cot.fecha_presentacion,
     monto: propuestaEconomica.monto ?? null,
     moneda: propuestaEconomica.moneda || 'PEN',
@@ -455,6 +512,16 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     propuesta_economica: propuestaEconomica,
     datos_proveedor: datosProveedor,
     documentos: buildManifiestoCotizacion(cot),
+    docs_solicitados_sc: parseJson(cot.sc_docs_solicitados, []),
+    requisitos_tecnicos_sc: parseJson(cot.sc_requisitos_tecnicos, []),
+    anexos_meta: {
+      docs_solicitados: (anexos.docs_solicitados || []).map(stripFile),
+      requisitos: (anexos.requisitos || []).map(stripFile),
+      tiene_anexo_tecnico: !!(anexos.anexo05a_firmado?.base64 || anexos.anexo05a_firmado?.contenido_base64
+        || anexos.anexo_tecnico_firmado?.base64 || anexos.anexo_tecnico_firmado?.contenido_base64),
+      tiene_anexo_economico: !!(anexos.anexo05b_firmado?.base64 || anexos.anexo05b_firmado?.contenido_base64
+        || anexos.anexo_economico_firmado?.base64 || anexos.anexo_economico_firmado?.contenido_base64),
+    },
   };
 }
 

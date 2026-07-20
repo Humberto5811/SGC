@@ -117,8 +117,33 @@ export function movimientosFromHistorialEstados(historial) {
   }));
 }
 
-export function mergeMovimientos(existing, fromHistorial) {
+/**
+ * Une movimientos persistidos + reconstruidos sin duplicar.
+ * Clave: fecha(~2min) + accion + etapa + observación.
+ */
+export function mergeMovimientos(existing, fromHistorial = []) {
   const a = parseMovimientos(existing);
-  if (a.length >= fromHistorial.length) return a;
-  return fromHistorial;
+  const b = parseMovimientos(fromHistorial);
+  const out = [];
+  const seen = new Set();
+  const keyOf = (m) => {
+    const ts = new Date(m.fecha || 0).getTime();
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120000) : 0;
+    return [
+      bucket,
+      String(m.accion || '').toUpperCase(),
+      String(m.etapa || m.subModulo || '').toUpperCase(),
+      String(m.observacion || '').slice(0, 120).toLowerCase(),
+    ].join('|');
+  };
+  [...a, ...b]
+    .filter((m) => m && (m.fecha || m.accion || m.etapa))
+    .sort((x, y) => new Date(x.fecha || 0) - new Date(y.fecha || 0))
+    .forEach((m) => {
+      const k = keyOf(m);
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(m);
+    });
+  return out.map((m, idx) => ({ ...m, id: m.id || idx + 1 }));
 }

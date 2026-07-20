@@ -41,7 +41,7 @@ assert(
 );
 assert(
   findTransicionRevision('CONFORMIDAD_COORDINADOR', 'PENDIENTE_COORDINADOR')?.to === 'FIRMADO_COORDINADOR',
-  'Coordinador conformidad',
+  'Coordinador conformidad → FIRMADO_COORDINADOR (RC8.5-D)',
 );
 assert(
   findTransicionRevision('DERIVAR_DEC', 'FIRMADO_COORDINADOR')?.to === 'PENDIENTE_DEC',
@@ -75,9 +75,13 @@ assert(
 assert(assertSalidaCcpOficial() === 'CCP', 'salida oficial CUADRO→CCP');
 assert(TRANSICIONES_POR_ACCION.APROBAR[ETAPAS.CUADRO_COMPARATIVO] === ETAPAS.CCP, 'catálogo Workflow intacto');
 
-assert(resolveRolRevision({ cargo: 'Coordinador 8 UIT' }) === 'COORDINADOR_8UIT', 'rol coordinador');
+assert(resolveRolRevision({ cargo: 'Coordinador CM' }) === 'COORDINADOR_CM', 'rol coordinador CM');
+assert(resolveRolRevision({ cargo: 'Coordinación CM' }) === 'COORDINADOR_CM', 'rol coordinación CM');
 assert(resolveRolRevision({ cargo: 'Jefe DEC' }) === 'DEC', 'rol DEC');
 assert(resolveRolRevision({ cargo: 'Especialista Contrataciones' }) === 'ANALISTA', 'rol analista');
+// RC8.5-B1 — rol de sesión `dec` no implica DEC operativo (Analistas también usan rol dec)
+assert(resolveRolRevision({ rol: 'dec', cargo: '' }) === 'ANALISTA', 'rol sistema dec ≠ DEC operativo');
+assert(resolveRolRevision({ rol: 'admin' }) === 'ADMINISTRADOR', 'admin → ADMINISTRADOR');
 
 const sample = [
   { solicitud_id: 1, estado_cuadro: 'PENDIENTE_COORDINADOR' },
@@ -85,13 +89,15 @@ const sample = [
   { solicitud_id: 3, estado_cuadro: 'PENDIENTE_DEC' },
   { solicitud_id: 4, estado_cuadro: 'APROBADO_DEC' },
 ];
-const bCoord = filtrarBandejaPorRolRevision(sample, { cargo: 'Coordinador 8 UIT' });
+const bCoord = filtrarBandejaPorRolRevision(sample, { cargo: 'Coordinador CM' });
 assert(bCoord.data.length === 1 && bCoord.data[0].solicitud_id === 1, 'bandeja coordinador');
 const bDec = filtrarBandejaPorRolRevision(sample, { cargo: 'Especialista DEC' });
 assert(bDec.data.some((x) => x.solicitud_id === 3), 'bandeja DEC');
 const bAn = filtrarBandejaPorRolRevision(sample, { cargo: 'Analista' });
-assert(bAn.data.every((x) => BANDEJA_ESTADOS_POR_ROL.ANALISTA.includes(x.estado_cuadro)
-  || x.estado_cuadro === 'CUADRO_BORRADOR' || x.estado_cuadro === 'APROBADO_DEC'), 'bandeja analista');
+// RC8.4A — Analista ve también PENDIENTE_COORDINADOR / PENDIENTE_DEC
+assert(bAn.data.length === 4, 'bandeja analista ve todos (incluye en revisión)');
+assert(bAn.data.some((x) => x.solicitud_id === 1), 'analista ve PENDIENTE_COORDINADOR');
+assert(BANDEJA_ESTADOS_POR_ROL.ANALISTA.includes('PENDIENTE_COORDINADOR'), 'allow-list analista incluye revisión CM');
 
 const mig = fs.readFileSync(path.join(root, 'server/migrations/023_cuadro_revision_workflow.js'), 'utf8');
 assert(/PENDIENTE_COORDINADOR/.test(mig) && /APROBADO_DEC/.test(mig), 'migración 023 estados');
