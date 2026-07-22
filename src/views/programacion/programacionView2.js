@@ -57,14 +57,75 @@ export function renderProgramacionView() {
       </ul>
       <div id="progTrazaSummaryWrap">${renderSummaryCardsHtml('progTrazaSummary')}</div>
       <div id="progFilterWrap">${renderFilterBarHtml('prog', { hideExecutive: true })}</div>
-      <div id="progContent"><div class="text-muted">Cargando…</div></div>
+      <div id="progContent" class="prog-bandeja-content"><div class="text-muted">Cargando…</div></div>
     </div>
     <style>${bandejaTableStyles()}${actosBandejaStyles()}
-      .prog-bandeja-page { overflow: visible; padding-bottom: 2rem; }
-      .prog-bandeja-wrap .table-responsive { overflow-x: auto; overflow-y: visible; }
-      .prog-bandeja-wrap .req-list-table { table-layout: auto; width: 100%; min-width: 1280px; }
-      .prog-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
-      .prog-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
+      /*
+        Layout exclusivo Programación (flex):
+        - Altura del módulo = viewport menos chrome fijo de app (navbar 56px + padding main 24+24).
+        - Cabecera, pestañas, KPI y filtros ocupan su alto natural (flex-shrink: 0).
+        - La tabla (#progBandejaWrap) toma el espacio restante (flex: 1; min-height: 0) y hace scroll.
+        - La paginación queda fuera del scroll. Sin max-height mágico tipo 340px.
+      */
+      .prog-bandeja-page {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 56px - 48px);
+        max-height: calc(100vh - 56px - 48px);
+        overflow: hidden;
+        box-sizing: border-box;
+        padding-bottom: 0;
+      }
+      .prog-bandeja-page > .d-flex,
+      .prog-bandeja-page > hr,
+      .prog-bandeja-page > #progTabs,
+      .prog-bandeja-page > #progTrazaSummaryWrap,
+      .prog-bandeja-page > #progFilterWrap { flex-shrink: 0; }
+      .prog-bandeja-page #progContent.prog-bandeja-content {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+      .prog-bandeja-page #progContent.prog-bandeja-content:has(#progBandejaOuter) {
+        display: flex;
+        flex-direction: column;
+      }
+      /* Paquetes / Pedidos: scroll en el content, sin tocar esos módulos */
+      .prog-bandeja-page #progContent.prog-bandeja-content:not(:has(#progBandejaOuter)) {
+        overflow: auto;
+      }
+      .prog-bandeja-page #progBandejaOuter.prog-bandeja-shell {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        width: 100%;
+      }
+      .prog-bandeja-page #progBandejaWrap.prog-bandeja-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        width: 100%;
+        overflow-x: auto;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .prog-bandeja-page #progBandejaOuter > .sgc-pagination-controls { flex-shrink: 0; }
+      .prog-bandeja-page #progBandejaWrap .req-list-table {
+        table-layout: auto;
+        width: 100%;
+        min-width: 1280px;
+      }
+      .prog-bandeja-page #progBandejaWrap .actos-col-centro { min-width: 120px; max-width: 180px; }
+      .prog-bandeja-page #progBandejaWrap .actos-col-area { min-width: 120px; max-width: 180px; }
+      .prog-bandeja-page #progBandejaWrap .req-col-acc .dropdown-menu {
+        z-index: 2000;
+        min-width: 220px;
+        max-height: min(70vh, 480px);
+        overflow-y: auto;
+      }
     </style>
   `;
 }
@@ -183,9 +244,11 @@ async function buildPedidosLabelMap() {
 }
 
 async function loadBandeja(sortOverride = {}, resetPage = false) {
+  closeProgActionMenus();
   setTabChrome('bandeja');
   const cont = document.getElementById('progContent');
   if (!cont) return;
+  cont.classList.add('prog-bandeja-content');
   try {
     cont.innerHTML = '<div class="text-muted">Cargando…</div>';
     progListSort = mergeSortParams(progListSort, sortOverride);
@@ -241,8 +304,8 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
     }).join('');
 
     cont.innerHTML = `
-      <div class="sgc-bandeja-wrap" id="progBandejaOuter">
-      <div class="table-responsive prog-bandeja-wrap actos-bandeja-wrap" id="progBandejaWrap">
+      <div class="sgc-bandeja-wrap prog-bandeja-shell" id="progBandejaOuter">
+      <div class="table-responsive prog-bandeja-scroll" id="progBandejaWrap">
         <table class="table table-sm table-hover table-bordered req-list-table mb-0">
           <thead class="table-light"><tr>${programacionBandejaHeaders(progListSort)}</tr></thead>
           <tbody>${tbody}</tbody>
@@ -290,11 +353,67 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
         bandejaPrefix: 'prog',
       }),
     });
+    fixProgDropdownMenus(cont);
     bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
     updateConsolidarBtn();
   } catch (e) {
     cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
   }
+}
+
+function closeProgActionMenus() {
+  const wrap = document.getElementById('progBandejaWrap');
+  if (!wrap || !window.bootstrap?.Dropdown) return;
+  wrap.querySelectorAll('.dropdown-toggle').forEach((btn) => {
+    try { window.bootstrap.Dropdown.getInstance(btn)?.hide(); } catch (_) {}
+  });
+}
+
+/** Menú Acciones de Programación: Popper fixed para no recortarse por overflow de la tabla. */
+function fixProgDropdownMenus(container) {
+  const wrap = container?.querySelector('#progBandejaWrap');
+  if (!wrap || !window.bootstrap?.Dropdown) return;
+
+  if (wrap._progMenuScrollClose) {
+    wrap.removeEventListener('scroll', wrap._progMenuScrollClose);
+    wrap._progMenuScrollClose = null;
+  }
+
+  wrap.querySelectorAll('.req-col-acc .dropdown-toggle').forEach((btn) => {
+    const menu = btn.parentElement?.querySelector(':scope > .dropdown-menu');
+    if (menu) menu.removeAttribute('data-bs-popper');
+
+    try { window.bootstrap.Dropdown.getInstance(btn)?.dispose(); } catch (_) {}
+
+    btn.setAttribute('data-bs-toggle', 'dropdown');
+    btn.removeAttribute('data-bs-display');
+
+    window.bootstrap.Dropdown.getOrCreateInstance(btn, {
+      autoClose: true,
+      popperConfig(defaultConfig) {
+        return {
+          ...defaultConfig,
+          strategy: 'fixed',
+          modifiers: [
+            ...(defaultConfig.modifiers || []),
+            {
+              name: 'preventOverflow',
+              options: { boundary: 'viewport', padding: 8, altAxis: true },
+            },
+            {
+              name: 'flip',
+              options: {
+                fallbackPlacements: ['top-end', 'bottom-end', 'top-start', 'bottom-start'],
+              },
+            },
+          ],
+        };
+      },
+    });
+  });
+
+  wrap._progMenuScrollClose = () => closeProgActionMenus();
+  wrap.addEventListener('scroll', wrap._progMenuScrollClose, { passive: true });
 }
 
 function bindBandejaEvents(cont) {
@@ -955,6 +1074,7 @@ async function eliminarPaquete(id) {
 }
 
 function setTabChrome(tab) {
+  closeProgActionMenus();
   const showBandeja = tab === 'bandeja';
   const summary = document.getElementById('progTrazaSummaryWrap');
   const filters = document.getElementById('progFilterWrap');
