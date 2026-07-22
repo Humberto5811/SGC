@@ -36,12 +36,6 @@ export const MENU_STRUCTURE = [
     submenu: CONTRATACIONES_SUBMENU,
   },
   {
-    label: 'Portal de Proveedores',
-    icon: 'bi-building',
-    roles: ['dec', 'admin', 'au', 'usuario'],
-    path: 'portal-proveedores',
-  },
-  {
     label: 'Ejecución',
     icon: 'bi-graph-up',
     roles: ['dec', 'admin'],
@@ -51,6 +45,12 @@ export const MENU_STRUCTURE = [
       { path: 'ejecucion/ampliacion', label: 'Ampliación Resolución', icon: 'bi-calendar-plus', submoduloId: 'AMPLIACION' },
       { path: 'ejecucion/pago', label: 'Derivación de Pago', icon: 'bi-credit-card', submoduloId: 'TESORERIA' },
     ],
+  },
+  {
+    label: 'Portal de Proveedores',
+    icon: 'bi-building',
+    roles: ['dec', 'admin', 'au', 'usuario'],
+    path: 'portal-proveedores',
   },
   {
     label: 'Mantenimiento',
