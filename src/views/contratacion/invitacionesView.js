@@ -49,6 +49,13 @@ export function renderInvitacionesView() {
         .inv-bandeja-wrap .table-responsive { overflow-x: auto; }
         .inv-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
         .inv-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
+        /* Menú Acciones: mismo criterio visual que Programación (Popper fixed) */
+        .inv-bandeja-page .req-col-acc .dropdown-menu {
+          z-index: 2000;
+          min-width: 240px;
+          max-height: min(70vh, 480px);
+          overflow-y: auto;
+        }
       </style>
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <div>
@@ -229,6 +236,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
       getSort: () => invListSort,
     });
     invPagination.renderControls('invBandejaOuter', () => loadBandeja({}, false));
+    fixInvDropdownMenus(cont, '#invBandejaWrap');
   } catch (err) {
     cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -264,7 +272,7 @@ async function loadSolicitudesTab(resetPage = false) {
     cont.innerHTML = `
       <div class="inv-tab-panel">
         <div class="sgc-bandeja-wrap" id="invSolOuter">
-        <div class="table-responsive inv-bandeja-wrap actos-bandeja-wrap">
+        <div class="table-responsive inv-bandeja-wrap actos-bandeja-wrap" id="invSolBandejaWrap">
         <table class="table table-sm table-hover table-bordered req-list-table mb-0">
           <thead class="table-light"><tr>
             <th>Solicitud de Cotización</th>
@@ -303,6 +311,7 @@ async function loadSolicitudesTab(resetPage = false) {
       eliminar: (id) => handleSolicitudAction('eliminar', rows.find((r) => String(r.id) === String(id))),
       invitar: (id) => handleSolicitudAction('invitar', rows.find((r) => String(r.id) === String(id))),
     });
+    fixInvDropdownMenus(cont, '#invSolBandejaWrap');
   } catch (err) {
     cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -345,6 +354,65 @@ async function handleSolicitudAction(act, s) {
     await showInvitarProveedoresModal(id);
     loadSolicitudesTab();
   }
+}
+
+function closeInvActionMenus(wrapSelector = '#invBandejaWrap, #invSolBandejaWrap') {
+  if (!window.bootstrap?.Dropdown) return;
+  document.querySelectorAll(wrapSelector).forEach((wrap) => {
+    wrap.querySelectorAll('.dropdown-toggle').forEach((btn) => {
+      try { window.bootstrap.Dropdown.getInstance(btn)?.hide(); } catch (_) { /* noop */ }
+    });
+  });
+}
+
+/**
+ * Menú Acciones de Invitaciones: misma estrategia que Programación
+ * (Popper strategy: fixed) para no recortarse por overflow de la tabla.
+ */
+function fixInvDropdownMenus(container, wrapSelector = '#invBandejaWrap') {
+  const wrap = container?.querySelector(wrapSelector);
+  if (!wrap || !window.bootstrap?.Dropdown) return;
+
+  if (wrap._invMenuScrollClose) {
+    wrap.removeEventListener('scroll', wrap._invMenuScrollClose);
+    wrap._invMenuScrollClose = null;
+  }
+
+  wrap.querySelectorAll('.req-col-acc .dropdown-toggle').forEach((btn) => {
+    const menu = btn.parentElement?.querySelector(':scope > .dropdown-menu');
+    if (menu) menu.removeAttribute('data-bs-popper');
+
+    try { window.bootstrap.Dropdown.getInstance(btn)?.dispose(); } catch (_) { /* noop */ }
+
+    btn.setAttribute('data-bs-toggle', 'dropdown');
+    btn.removeAttribute('data-bs-display');
+
+    window.bootstrap.Dropdown.getOrCreateInstance(btn, {
+      autoClose: true,
+      popperConfig(defaultConfig) {
+        return {
+          ...defaultConfig,
+          strategy: 'fixed',
+          modifiers: [
+            ...(defaultConfig.modifiers || []),
+            {
+              name: 'preventOverflow',
+              options: { boundary: 'viewport', padding: 8, altAxis: true },
+            },
+            {
+              name: 'flip',
+              options: {
+                fallbackPlacements: ['top-end', 'bottom-end', 'top-start', 'bottom-start'],
+              },
+            },
+          ],
+        };
+      },
+    });
+  });
+
+  wrap._invMenuScrollClose = () => closeInvActionMenus(wrapSelector);
+  wrap.addEventListener('scroll', wrap._invMenuScrollClose, { passive: true });
 }
 
 function bindBandejaEvents(cont) {
