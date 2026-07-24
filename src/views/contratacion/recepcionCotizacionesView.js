@@ -1,4 +1,4 @@
-// Recepción de Cotizaciones — bandeja analista CM (RC7.6 / RC7.6.3)
+// Recepción de Cotizaciones — bandeja analista CM (RC8.0 refresh no destructivo)
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { bandejaTableStyles, renderActionMenuCell, bindActionMenus } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
@@ -7,8 +7,23 @@ import { showEnviarValidarModal } from '../../utils/derivarValidacionModal.js';
 import { renderPropuestaTecnicaRecepcion, renderPropuestaEconomicaRecepcion } from '../../utils/recepcionPropuestaRows.js';
 import { recepcionCotizacionesMenuItems } from '../../utils/bandejaActions.js';
 import { formatRequerimientosBandeja } from '../../utils/recepcionCotizacionUtils.js';
+import {
+  createViewLifecycle,
+  createRequestSequenceGuard,
+  isAbortError,
+  createBackgroundRefreshIndicator,
+  ensureBandejaTableShell,
+  captureScroll,
+  restoreScroll,
+  setEmptyState,
+} from '../../utils/uiState/index.js';
 
 const API_BASE = 'http://localhost:3000/api';
+const VIEW_ID = 'recepcion-cotizaciones';
+const SCROLL_SEL = '#recepCotWrap';
+const loadGuard = createRequestSequenceGuard();
+let lifecycle = null;
+let refreshIndicator = null;
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -179,9 +194,12 @@ export function renderRecepcionCotizacionesView() {
           <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
           <p class="text-muted mb-0">${esc(description)}</p>
         </div>
-        <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-arrow-clockwise"></i> Actualizar
-        </button>
+        <div class="d-flex gap-2 align-items-center">
+          <span id="recepCotBgRefreshHost"></span>
+          <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-clockwise"></i> Actualizar
+          </button>
+        </div>
       </div>
       ${renderRecepcionSummaryCards(`${prefix}TrazaSummary`)}
       ${renderRecepcionFilterBar(prefix)}
@@ -328,50 +346,79 @@ function buildLoadParams() {
   return params;
 }
 
+const RECEPCION_THEAD = `<tr>
+  <th>Solicitud</th><th>Requerimiento</th><th>Proveedor</th><th>Monto ofertado</th>
+  <th>Fecha recepción</th><th>Estado</th><th>Acciones</th>
+</tr>`;
+
+function buildRecepcionRowHtml(c) {
+  const estadoLabel = labelEstadoRecepcion(c);
+  const responsableHint = c.validacion_responsable && estadoLabel === 'Enviada a validación AU'
+    ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
+  return `
+    <tr data-row-id="${c.id}">
+      <td>
+        <strong>${esc(c.solicitud_codigo)}</strong>
+        <div class="small text-muted">${esc((c.denominacion || c.objeto || '').slice(0, 60))}</div>
+      </td>
+      <td class="small">${formatRequerimientosBandeja(c, esc)}</td>
+      <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
+      <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
+      <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
+      <td>
+        <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(estadoLabel)}</span>
+        ${responsableHint}
+      </td>
+      ${renderActionMenuCell(c.id, recepcionCotizacionesMenuItems(c), '')}
+    </tr>`;
+}
+
 async function loadCotizaciones(resetPage = false) {
+  if (lifecycle && !lifecycle.isActive()) return;
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
+
+  const hadShell = !!document.getElementById('recepCotBody');
+  if (hadShell) captureScroll(VIEW_ID, SCROLL_SEL);
+
+  const shell = ensureBandejaTableShell(cont, {
+    outerId: 'recepCotOuter',
+    wrapId: 'recepCotWrap',
+    theadId: 'recepCotHead',
+    tbodyId: 'recepCotBody',
+    emptyId: 'recepCotEmpty',
+    outerClass: 'sgc-bandeja-wrap',
+    wrapClass: 'table-responsive',
+    tableClass: 'table table-sm table-hover table-bordered mb-0',
+  });
+
+  const request = loadGuard.begin();
+  if (lifecycle) lifecycle.addAbortController(request.controller);
+  const isBg = hadShell && cotizacionesCache.length > 0;
+  if (isBg) refreshIndicator?.show('Actualizando…');
+
   try {
     if (resetPage) recepcionPagination.resetPage();
     const result = await recepcionPagination.loadData(buildLoadParams(), resetPage);
+    if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
+
     const rows = result.data || [];
     cotizacionesCache = result.allData || rows;
     updateRecepcionSummaryCards(cotizacionesCache, `${VIEW_CONFIG.prefix}TrazaSummary`);
 
+    if (!shell?.tbody || !shell?.thead) return;
+
     if (!rows.length && !cotizacionesCache.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay cotizaciones recibidas de proveedores.</div>';
+      shell.thead.innerHTML = RECEPCION_THEAD;
+      shell.tbody.innerHTML = '';
+      setEmptyState(shell, { empty: true, message: 'No hay cotizaciones recibidas de proveedores.' });
+      refreshIndicator?.hide();
       return;
     }
-    cont.innerHTML = `
-      <div class="sgc-bandeja-wrap" id="recepCotOuter">
-        <table class="table table-sm table-hover table-bordered mb-0">
-          <thead class="table-light"><tr>
-            <th>Solicitud</th><th>Requerimiento</th><th>Proveedor</th><th>Monto ofertado</th>
-            <th>Fecha recepción</th><th>Estado</th><th>Acciones</th>
-          </tr></thead>
-          <tbody>${rows.map((c) => {
-            const estadoLabel = labelEstadoRecepcion(c);
-            const responsableHint = c.validacion_responsable && estadoLabel === 'Enviada a validación AU'
-              ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
-            return `
-            <tr>
-              <td>
-                <strong>${esc(c.solicitud_codigo)}</strong>
-                <div class="small text-muted">${esc((c.denominacion || c.objeto || '').slice(0, 60))}</div>
-              </td>
-              <td class="small">${formatRequerimientosBandeja(c, esc)}</td>
-              <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-              <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
-              <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
-              <td>
-                <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(estadoLabel)}</span>
-                ${responsableHint}
-              </td>
-              ${renderActionMenuCell(c.id, recepcionCotizacionesMenuItems(c), '')}
-            </tr>`;
-          }).join('')}</tbody>
-        </table>
-      </div>`;
+
+    setEmptyState(shell, { empty: false });
+    shell.thead.innerHTML = RECEPCION_THEAD;
+    shell.tbody.innerHTML = rows.map(buildRecepcionRowHtml).join('');
 
     bindActionMenus(cont, {
       verPropuesta: (id) => showCotizacionDetalleModal(id),
@@ -388,12 +435,24 @@ async function loadCotizaciones(resetPage = false) {
       },
     });
     recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));
+    restoreScroll(VIEW_ID, SCROLL_SEL);
+    refreshIndicator?.hide();
   } catch (err) {
-    cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    if (isAbortError(err) || !request.isCurrent()) return;
+    if (lifecycle && !lifecycle.isActive()) return;
+    if (hadShell && cotizacionesCache.length) {
+      refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
+    } else {
+      cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    }
   }
 }
 
 export function initRecepcionCotizacionesView() {
+  lifecycle = createViewLifecycle(VIEW_ID);
+  lifecycle.addCleanup(() => loadGuard.abortCurrent());
+  refreshIndicator = createBackgroundRefreshIndicator('#recepCotBgRefreshHost', { id: 'recepCotBgRefresh' });
+
   const { prefix } = VIEW_CONFIG;
   document.getElementById(`${prefix}FiltroBtn`)?.addEventListener('click', () => {
     filtroEstado = document.getElementById(`${prefix}FiltroEstado`)?.value || '';

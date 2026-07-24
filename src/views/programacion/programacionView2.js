@@ -25,13 +25,35 @@ import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { loadPaquetesConsolidacionTab, openPaquetePanel, highlightPedidoInPaquetesMatriz } from './paquetesConsolidacionView.js';
 import { loadPedidosConsolidacionTab, invalidatePedidosMatriz, reloadPedidosConsolidacion } from './pedidosConsolidacionView.js';
 import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
+import {
+  createViewLifecycle,
+  createRequestSequenceGuard,
+  isAbortError,
+  createTableSelectionState,
+  hydrateFilterInputs,
+  createBackgroundRefreshIndicator,
+  ensureBandejaTableShell,
+  captureScroll,
+  restoreScroll,
+  setEmptyState,
+} from '../../utils/uiState/index.js';
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 let allRows = [];
 let pedidosCountMap = {};
-let selectedIds = new Set();
+const selection = createTableSelectionState({
+  normalizeId: (id) => String(parseInt(id, 10)),
+});
+const loadGuard = createRequestSequenceGuard();
+let lifecycle = null;
+let refreshIndicator = null;
+const PROG_VIEW_ID = 'programacion';
+const PROG_SCROLL = '#progBandejaWrap';
 
+function selectedNumericIds() {
+  return selection.values().map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
+}
 // ==================== RENDER ====================
 export function renderProgramacionView() {
   return `
@@ -46,6 +68,7 @@ export function renderProgramacionView() {
             <i class="bi bi-box-seam"></i> Consolidar Requerimientos
           </button>
           <span id="progSeleccionados" class="badge bg-secondary align-self-center">0 seleccionados</span>
+          <span id="progBgRefreshHost"></span>
           <button id="progReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
         </div>
       </div>
@@ -244,13 +267,32 @@ async function buildPedidosLabelMap() {
 }
 
 async function loadBandeja(sortOverride = {}, resetPage = false) {
+  if (lifecycle && !lifecycle.isActive()) return;
   closeProgActionMenus();
   setTabChrome('bandeja');
   const cont = document.getElementById('progContent');
   if (!cont) return;
   cont.classList.add('prog-bandeja-content');
+
+  const hadShell = !!document.getElementById('progBandejaBody');
+  if (hadShell) captureScroll(PROG_VIEW_ID, PROG_SCROLL);
+
+  const shell = ensureBandejaTableShell(cont, {
+    outerId: 'progBandejaOuter',
+    wrapId: 'progBandejaWrap',
+    theadId: 'progBandejaHead',
+    tbodyId: 'progBandejaBody',
+    emptyId: 'progEmptyMsg',
+    outerClass: 'sgc-bandeja-wrap prog-bandeja-shell',
+    wrapClass: 'table-responsive prog-bandeja-scroll',
+  });
+
+  const request = loadGuard.begin();
+  if (lifecycle) lifecycle.addAbortController(request.controller);
+  const isBg = hadShell && allRows.length > 0;
+  if (isBg) refreshIndicator?.show('Actualizando…');
+
   try {
-    cont.innerHTML = '<div class="text-muted">Cargando…</div>';
     progListSort = mergeSortParams(progListSort, sortOverride);
     if (resetPage) progPagination.resetPage();
     const result = await progPagination.loadData({
@@ -258,11 +300,14 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
       sort: progListSort.sort,
       dir: progListSort.dir,
     }, resetPage);
+    if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
+
     let rows = result.data || [];
     let countMap = {};
     let pedidosLabelMap = {};
     try { countMap = await programacionService.getPedidosCount(); } catch (_) {}
     try { pedidosLabelMap = await buildPedidosLabelMap(); } catch (_) {}
+    if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
 
     pedidosCountMap = countMap || {};
 
@@ -281,37 +326,47 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
     allRows = rows;
     updateSummaryCards(rows, 'progTrazaSummary');
 
-    selectedIds = new Set();
-
-    if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay requerimientos que coincidan con los filtros.</div>';
-      return;
-    }
-
-    const tbody = rows.map((r) => {
+    // Conservar selección; reconciliar no elegibles / ausentes
+    const eligible = [];
+    rows.forEach((r) => {
       const pedCnt = pedidosCountMap[r.id] || pedidosCountMap[String(r.id)] || 0;
       const inPaq = !!(r.codigo_paquete);
       const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
       const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
       const enProgramacion = ubicacion === 'PROGRAMACION';
       const canSelect = (esAprobadoDec || enProgramacion) && !inPaq && pedCnt > 0;
+      if (canSelect) eligible.push(r.id);
+    });
+    selection.reconcile(rows.map((r) => r.id), eligible);
+
+    if (!shell?.tbody || !shell?.thead) return;
+
+    if (!rows.length) {
+      shell.thead.innerHTML = `<tr>${programacionBandejaHeaders(progListSort)}</tr>`;
+      shell.tbody.innerHTML = '';
+      setEmptyState(shell, { empty: true, message: 'No hay requerimientos que coincidan con los filtros.' });
+      updateConsolidarBtn();
+      refreshIndicator?.hide();
+      return;
+    }
+
+    setEmptyState(shell, { empty: false });
+    shell.thead.innerHTML = `<tr>${programacionBandejaHeaders(progListSort)}</tr>`;
+    shell.tbody.innerHTML = rows.map((r) => {
+      const pedCnt = pedidosCountMap[r.id] || pedidosCountMap[String(r.id)] || 0;
+      const inPaq = !!(r.codigo_paquete);
+      const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
+      const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
+      const enProgramacion = ubicacion === 'PROGRAMACION';
+      const canSelect = (esAprobadoDec || enProgramacion) && !inPaq && pedCnt > 0;
+      const checked = selection.has(r.id) ? 'checked' : '';
       return `
-        <tr data-req-id="${r.id}">
-          <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" ${canSelect ? '' : 'disabled'} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
+        <tr data-req-id="${r.id}" data-row-id="${r.id}" data-selection-id="${r.id}">
+          <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" data-selection-id="${r.id}" ${canSelect ? '' : 'disabled'} ${checked} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
           ${renderProgramacionRowCells(r, { pedCnt })}
           ${renderActionMenuCell(r.id, progMenuItems(r), progHiddenActions(r))}
         </tr>`;
     }).join('');
-
-    cont.innerHTML = `
-      <div class="sgc-bandeja-wrap prog-bandeja-shell" id="progBandejaOuter">
-      <div class="table-responsive prog-bandeja-scroll" id="progBandejaWrap">
-        <table class="table table-sm table-hover table-bordered req-list-table mb-0">
-          <thead class="table-light"><tr>${programacionBandejaHeaders(progListSort)}</tr></thead>
-          <tbody>${tbody}</tbody>
-        </table>
-      </div>
-      </div>`;
 
     bindBandejaEvents(cont);
     bindSortHandlers(cont.querySelector('#progBandejaWrap'), (p) => loadBandeja(p, true), {
@@ -355,9 +410,17 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
     });
     fixProgDropdownMenus(cont);
     bindRowDetailPanel(cont, allRows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
+    selection.restoreCheckboxes(cont, '.prog-select', (el) => el.dataset.id);
     updateConsolidarBtn();
+    restoreScroll(PROG_VIEW_ID, PROG_SCROLL);
+    refreshIndicator?.hide();
   } catch (e) {
-    cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
+    if (isAbortError(e) || !request.isCurrent()) return;
+    if (hadShell && allRows.length) {
+      refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
+    } else {
+      cont.innerHTML = `<div class="alert alert-danger">Error al cargar: ${esc(e.message)}</div>`;
+    }
   }
 }
 
@@ -421,15 +484,15 @@ function bindBandejaEvents(cont) {
   if (selectAll) selectAll.onchange = () => {
     cont.querySelectorAll('.prog-select:not(:disabled)').forEach((cb) => {
       cb.checked = selectAll.checked;
-      if (cb.checked) selectedIds.add(Number(cb.dataset.id));
-      else selectedIds.delete(Number(cb.dataset.id));
+      if (cb.checked) selection.select(cb.dataset.id);
+      else selection.deselect(cb.dataset.id);
     });
     updateConsolidarBtn();
   };
 
   cont.querySelectorAll('.prog-select').forEach((cb) => cb.onchange = () => {
-    if (cb.checked) selectedIds.add(Number(cb.dataset.id));
-    else selectedIds.delete(Number(cb.dataset.id));
+    if (cb.checked) selection.select(cb.dataset.id);
+    else selection.deselect(cb.dataset.id);
     updateConsolidarBtn();
   });
 
@@ -451,7 +514,7 @@ function bindBandejaEvents(cont) {
 function updateConsolidarBtn() {
   const btn = document.getElementById('progConsolidar');
   const label = document.getElementById('progSeleccionados');
-  const count = selectedIds.size;
+  const count = selection.size;
   if (btn) btn.disabled = count < 2;
   if (label) label.textContent = `${count} seleccionados`;
 }
@@ -893,7 +956,7 @@ async function openVerPedidosModal(requerimientoId) {
 
 // ==================== CONSOLIDAR ====================
 function openConsolidarModal() {
-  const selReqs = allRows.filter((r) => selectedIds.has(r.id));
+  const selReqs = allRows.filter((r) => selection.has(r.id));
   if (selReqs.length < 2) { alert('Seleccione al menos 2 requerimientos.'); return; }
 
   for (const r of selReqs) {
@@ -931,12 +994,13 @@ function openConsolidarModal() {
     try {
       const user = authService.getCurrentUser();
       const resp = await programacionService.crearPaquete({
-        requerimiento_ids: [...selectedIds],
+        requerimiento_ids: selectedNumericIds(),
         usuario: user ? (user.nombre || user.dni || '') : '',
       });
       modal.remove();
       alert(`✅ Paquete ${resp.paquete.codigo_paquete} creado exitosamente.`);
-      selectedIds = new Set();
+      selection.clear();
+      updateConsolidarBtn();
       loadBandeja();
     } catch (e) {
       alert('❌ Error al crear paquete: ' + e.message);
@@ -1164,6 +1228,11 @@ function printPaquete(detail) {
 // ==================== INIT ====================
 export function initProgramacionView() {
   try {
+    lifecycle = createViewLifecycle(PROG_VIEW_ID);
+    lifecycle.addCleanup(() => loadGuard.abortCurrent());
+    refreshIndicator = createBackgroundRefreshIndicator('#progBgRefreshHost', { id: 'progBgRefresh' });
+    hydrateFilterInputs('prog', progListFilters);
+
     const reload = document.getElementById('progReload');
     if (reload) reload.onclick = () => {
       if (currentTab === 'bandeja') loadBandeja();
@@ -1193,6 +1262,7 @@ export function initProgramacionView() {
     });
 
     currentTab = 'bandeja';
+    updateConsolidarBtn();
     loadBandeja();
   } catch (e) {
     const cont = document.getElementById('progContent');

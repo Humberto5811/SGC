@@ -1,4 +1,4 @@
-// Invitaciones — bandeja maestra + pestaña solicitudes (diseño alineado a Programación)
+// Invitaciones — RC8.0: refresh no destructivo, selección persistente, lifecycle/polling limpio
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -17,23 +17,60 @@ import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
 import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 import { showSolicitudCotizacionModal, showInvitarProveedoresModal } from '../../utils/invitacionesModals.js';
 import {
-  bindTrazabilidadButtons, showObservacionDirigidaModal, showTrazabilidadModal,
+  bindTrazabilidadButtons, showTrazabilidadModal,
 } from '../requerimiento/reqShared.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { printRequerimiento, manageAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
+import {
+  createViewLifecycle,
+  createRequestSequenceGuard,
+  isAbortError,
+  createTableSelectionState,
+  captureTableViewState,
+  restoreTableViewState,
+  updateTableViewState,
+  hydrateFilterInputs,
+  createBackgroundRefreshIndicator,
+  startPolling,
+  stopPolling,
+} from '../../utils/uiState/index.js';
+
+const VIEW_ID = 'invitaciones';
+const POLL_ID = 'invitaciones:auto';
+const SCROLL_SEL = '#invBandejaWrap';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 let allRows = [];
-let selectedIds = new Set();
 let listFilters = {};
 let invListSort = { sort: 'created_at', dir: 'desc' };
 const invPagination = usePagination('invitaciones', loadInvitacionesBandeja, { defaultPageSize: 25 });
 const solPagination = usePagination('solicitudes', (params) => contratacionesService.listSolicitudesCotizacion(params), { defaultPageSize: 50, pageSizeOptions: [25, 50, 100] });
 let currentTab = 'bandeja';
+
+/** Selección persistente (no se reinicia en cada load). */
+const selection = createTableSelectionState({
+  normalizeId: (id) => String(parseInt(id, 10)),
+});
+const loadGuard = createRequestSequenceGuard();
+let lifecycle = null;
+let refreshIndicator = null;
+let bandejaShellMounted = false;
+
+function selectedNumericIds() {
+  return selection.values().map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n));
+}
+
+function hasOpenModal() {
+  return !!(
+    document.querySelector('.modal.show')
+    || document.querySelector('.modal.d-block')
+    || document.querySelector('.offcanvas.show')
+  );
+}
 
 function solicitudEstadoBadge(s) {
   const label = s.estado_invitacion || s.estado || '—';
@@ -46,6 +83,7 @@ export function renderInvitacionesView() {
     <div class="container-fluid actos-bandeja-page inv-bandeja-page">
       <style>${bandejaTableStyles()}${actosBandejaStyles()}
         .inv-bandeja-page { overflow: visible; padding-bottom: 2rem; }
+        .inv-bandeja-wrap.table-responsive,
         .inv-bandeja-wrap .table-responsive { overflow-x: auto; }
         .inv-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
         .inv-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
@@ -59,6 +97,7 @@ export function renderInvitacionesView() {
           <button id="invBtnSC" class="btn btn-sm btn-primary" disabled><i class="bi bi-file-earmark-plus"></i> Crear Solicitud de Cotización</button>
           <button id="invBtnInvitar" class="btn btn-sm btn-success" disabled><i class="bi bi-send"></i> INVITAR</button>
           <span id="invSeleccionados" class="badge bg-secondary align-self-center">0 seleccionados</span>
+          <span id="invBgRefreshHost"></span>
         </div>
       </div>
       <hr/>
@@ -68,15 +107,18 @@ export function renderInvitacionesView() {
       </ul>
       <div id="invTrazaSummaryWrap">${renderSummaryCardsHtml('invTrazaSummary')}</div>
       <div id="invFilterWrap">${renderFilterBarHtml('inv', { hideExecutive: true })}</div>
-      <div id="invContent"><div class="text-muted">Cargando…</div></div>
+      <div id="invContent"><div class="text-muted" id="invBootMsg">Cargando…</div></div>
     </div>`;
 }
 
 function setInvTabChrome(tab) {
   const showBandeja = tab === 'bandeja';
-  document.getElementById('invTrazaSummaryWrap').style.display = showBandeja ? '' : 'none';
-  document.getElementById('invFilterWrap').style.display = showBandeja ? '' : 'none';
-  document.getElementById('invToolbar').style.display = showBandeja ? '' : 'none';
+  const summary = document.getElementById('invTrazaSummaryWrap');
+  const filters = document.getElementById('invFilterWrap');
+  const toolbar = document.getElementById('invToolbar');
+  if (summary) summary.style.display = showBandeja ? '' : 'none';
+  if (filters) filters.style.display = showBandeja ? '' : 'none';
+  if (toolbar) toolbar.style.display = showBandeja ? '' : 'none';
 }
 
 function invitacionesBandejaHeaders(sortState = null) {
@@ -168,7 +210,7 @@ function renderInvExtraCells(r) {
 }
 
 function updateSelectionUi() {
-  const n = selectedIds.size;
+  const n = selection.size;
   const badge = document.getElementById('invSeleccionados');
   if (badge) badge.textContent = `${n} seleccionado${n === 1 ? '' : 's'}`;
   const btnInv = document.getElementById('invBtnInvitar');
@@ -177,13 +219,151 @@ function updateSelectionUi() {
   if (btnSc) btnSc.disabled = n === 0;
 }
 
+function buildBandejaRowHtml(r) {
+  const checked = selection.has(r.id) ? 'checked' : '';
+  return `
+    <tr data-req-id="${r.id}" data-row-id="${r.id}" data-selection-id="${r.id}">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="inv-select" data-id="${r.id}" data-selection-id="${r.id}" ${checked}></td>
+      ${renderInvBandejaRowCells(r, { escFn: esc })}
+      ${renderInvExtraCells(r)}
+      ${renderActionMenuCell(r.id, invitacionesMenuItems(r), invitacionesHiddenActions(r))}
+    </tr>`;
+}
+
+function ensureBandejaShell() {
+  const cont = document.getElementById('invContent');
+  if (!cont) return null;
+  let wrap = document.getElementById('invBandejaWrap');
+  if (wrap && document.getElementById('invBandejaBody')) {
+    bandejaShellMounted = true;
+    return cont;
+  }
+  cont.innerHTML = `
+    <div class="inv-tab-panel" id="invBandejaPanel">
+      <div class="sgc-bandeja-wrap" id="invBandejaOuter">
+        <div class="table-responsive inv-bandeja-wrap actos-bandeja-wrap" id="invBandejaWrap">
+          <table class="table table-sm table-hover table-bordered req-list-table mb-0">
+            <thead class="table-light" id="invBandejaHead"><tr>${invitacionesBandejaHeaders(invListSort)}</tr></thead>
+            <tbody id="invBandejaBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="invEmptyMsg" class="alert alert-light border d-none">No hay expedientes en Invitaciones.</div>
+    </div>`;
+  bandejaShellMounted = true;
+  return cont;
+}
+
+function paintBandejaRows(rows) {
+  const head = document.getElementById('invBandejaHead');
+  const body = document.getElementById('invBandejaBody');
+  const empty = document.getElementById('invEmptyMsg');
+  const wrap = document.getElementById('invBandejaWrap');
+  const outer = document.getElementById('invBandejaOuter');
+  if (!body || !head) return;
+
+  head.innerHTML = `<tr>${invitacionesBandejaHeaders(invListSort)}</tr>`;
+
+  if (!rows.length) {
+    body.innerHTML = '';
+    if (wrap) wrap.classList.add('d-none');
+    if (empty) empty.classList.remove('d-none');
+    if (outer) {
+      const pag = outer.querySelector(':scope > .sgc-pagination-controls');
+      if (pag) pag.remove();
+    }
+    return;
+  }
+
+  if (wrap) wrap.classList.remove('d-none');
+  if (empty) empty.classList.add('d-none');
+  body.innerHTML = rows.map(buildBandejaRowHtml).join('');
+}
+
+function bindBandejaShellEvents(cont) {
+  if (!cont) return;
+  bindTrazabilidadButtons(cont);
+  bindRowDetailPanel(cont, allRows);
+  bindActionMenus(cont, {
+    detail: (id) => {
+      openDetailPanel(allRows.find((r) => String(r.id) === String(id)));
+    },
+    obs: (id) => handleObservacion(id),
+    timeline: (id) => cont.querySelector(`.req-traza[data-id="${id}"]`)?.click(),
+    attach: (id) => manageAdjuntos(id, true),
+    download: (id) => printRequerimiento(id),
+    crearSc: (id) => handleCrearSC([parseInt(id, 10)]),
+  });
+
+  bindSortHandlers(cont.querySelector('#invBandejaWrap'), (p) => loadBandeja(p, true), {
+    getSort: () => invListSort,
+  });
+
+  const selectAll = cont.querySelector('#invSelectAll');
+  if (selectAll) {
+    selectAll.onchange = (e) => {
+      cont.querySelectorAll('.inv-select:not(:disabled)').forEach((cb) => {
+        cb.checked = e.target.checked;
+        if (e.target.checked) selection.select(cb.dataset.id);
+        else selection.deselect(cb.dataset.id);
+      });
+      updateSelectionUi();
+      persistViewMeta();
+    };
+  }
+
+  cont.querySelectorAll('.inv-select').forEach((cb) => {
+    cb.onchange = () => {
+      if (cb.checked) selection.select(cb.dataset.id);
+      else selection.deselect(cb.dataset.id);
+      updateSelectionUi();
+      persistViewMeta();
+    };
+  });
+
+  selection.restoreCheckboxes(cont, '.inv-select', (el) => el.dataset.id);
+  updateSelectionUi();
+  invPagination.renderControls('invBandejaOuter', () => loadBandeja({}, false));
+}
+
+function persistViewMeta() {
+  updateTableViewState(VIEW_ID, {
+    filters: { ...listFilters },
+    sortField: invListSort.sort,
+    sortDirection: invListSort.dir,
+    activeTab: currentTab,
+    page: invPagination.state.page,
+    pageSize: invPagination.state.pageSize,
+    selectedIds: selection.values(),
+  });
+}
+
 async function loadBandeja(sortOverride = {}, resetPage = false) {
+  if (lifecycle && !lifecycle.isActive()) return;
   currentTab = 'bandeja';
   setInvTabChrome('bandeja');
-  const cont = document.getElementById('invContent');
-  if (!cont) return;
+
+  const contRoot = document.getElementById('invContent');
+  if (!contRoot) return;
+
+  const hadShell = !!document.getElementById('invBandejaBody');
+  const isBackground = hadShell && allRows.length > 0 && !resetPage && !Object.keys(sortOverride || {}).length;
+
+  if (hadShell) {
+    captureTableViewState(VIEW_ID, { scrollSelector: SCROLL_SEL });
+  }
+
+  ensureBandejaShell();
+  const request = loadGuard.begin();
+  if (lifecycle) lifecycle.addAbortController(request.controller);
+
+  if (isBackground) refreshIndicator?.show('Actualizando…');
+  else if (!hadShell && !allRows.length) {
+    const boot = document.getElementById('invBootMsg');
+    if (boot) boot.textContent = 'Cargando…';
+  }
+
   try {
-    cont.innerHTML = '<div class="text-muted">Cargando…</div>';
     invListSort = mergeSortParams(invListSort, sortOverride);
     if (resetPage) invPagination.resetPage();
     const result = await invPagination.loadData({
@@ -191,46 +371,35 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
       sort: invListSort.sort,
       dir: invListSort.dir,
     }, resetPage);
+
+    if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
+
     let rows = (result.data || []).map(enrichReqRow);
     rows = applyBandejaFilters(rows, listFilters);
     rows = sortBandejaRows(rows, invListSort.sort, invListSort.dir);
     allRows = rows;
     updateSummaryCards(rows, 'invTrazaSummary');
-    selectedIds = new Set();
-    updateSelectionUi();
 
-    if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay expedientes en Invitaciones.</div>';
-      return;
-    }
+    // Conservar selección: solo reconciliar IDs ya no presentes / no elegibles
+    const validIds = rows.map((r) => r.id);
+    selection.reconcile(validIds);
+    // NO: selectedIds = new Set();
 
-    const tbody = rows.map((r) => `
-      <tr data-req-id="${r.id}">
-        <td onclick="event.stopPropagation()"><input type="checkbox" class="inv-select" data-id="${r.id}"></td>
-        ${renderInvBandejaRowCells(r, { escFn: esc })}
-        ${renderInvExtraCells(r)}
-        ${renderActionMenuCell(r.id, invitacionesMenuItems(r), invitacionesHiddenActions(r))}
-      </tr>`).join('');
-
-    cont.innerHTML = `
-      <div class="inv-tab-panel">
-      <div class="sgc-bandeja-wrap" id="invBandejaOuter">
-      <div class="table-responsive inv-bandeja-wrap actos-bandeja-wrap" id="invBandejaWrap">
-        <table class="table table-sm table-hover table-bordered req-list-table mb-0">
-          <thead class="table-light"><tr>${invitacionesBandejaHeaders(invListSort)}</tr></thead>
-          <tbody>${tbody}</tbody>
-        </table>
-      </div>
-      </div>
-      </div>`;
-
-    bindBandejaEvents(cont);
-    bindSortHandlers(cont.querySelector('#invBandejaWrap'), (p) => loadBandeja(p, true), {
-      getSort: () => invListSort,
-    });
-    invPagination.renderControls('invBandejaOuter', () => loadBandeja({}, false));
+    paintBandejaRows(rows);
+    bindBandejaShellEvents(document.getElementById('invContent'));
+    restoreTableViewState(VIEW_ID, { scrollSelector: SCROLL_SEL });
+    persistViewMeta();
+    refreshIndicator?.hide();
   } catch (err) {
-    cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    if (isAbortError(err) || !request.isCurrent()) return;
+    if (lifecycle && !lifecycle.isActive()) return;
+    if (hadShell && allRows.length) {
+      refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
+    } else {
+      const cont = document.getElementById('invContent');
+      if (cont) cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+      bandejaShellMounted = false;
+    }
   }
 }
 
@@ -248,17 +417,32 @@ function switchToSolicitudesTab() {
 }
 
 async function loadSolicitudesTab(resetPage = false) {
+  if (lifecycle && !lifecycle.isActive()) return;
   currentTab = 'solicitudes';
   setInvTabChrome('solicitudes');
+  bandejaShellMounted = false;
   const cont = document.getElementById('invContent');
   if (!cont) return;
-  try {
+
+  const request = loadGuard.begin();
+  if (lifecycle) lifecycle.addAbortController(request.controller);
+
+  const keepPrevious = cont.querySelector('#invSolOuter');
+  if (!keepPrevious) {
     cont.innerHTML = '<div class="text-muted">Cargando solicitudes…</div>';
+  } else {
+    refreshIndicator?.show('Actualizando…');
+  }
+
+  try {
     if (resetPage) solPagination.resetPage();
     const result = await solPagination.loadData({}, resetPage);
+    if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
+
     const rows = result.data || [];
     if (!rows.length) {
       cont.innerHTML = '<div class="alert alert-light border">No hay solicitudes de cotización registradas.</div>';
+      refreshIndicator?.hide();
       return;
     }
     cont.innerHTML = `
@@ -295,7 +479,6 @@ async function loadSolicitudesTab(resetPage = false) {
       </div>`;
 
     solPagination.renderControls('invSolOuter', () => loadSolicitudesTab(false));
-
     bindActionMenus(cont, {
       detalle: (id) => handleSolicitudAction('detalle', rows.find((r) => String(r.id) === String(id))),
       timeline: (id) => handleSolicitudAction('timeline', rows.find((r) => String(r.id) === String(id))),
@@ -303,12 +486,16 @@ async function loadSolicitudesTab(resetPage = false) {
       eliminar: (id) => handleSolicitudAction('eliminar', rows.find((r) => String(r.id) === String(id))),
       invitar: (id) => handleSolicitudAction('invitar', rows.find((r) => String(r.id) === String(id))),
     });
+    persistViewMeta();
+    refreshIndicator?.hide();
   } catch (err) {
-    cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    if (isAbortError(err) || !request.isCurrent()) return;
+    if (keepPrevious) refreshIndicator?.error();
+    else cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
 }
 
-function solicitudesMenuItems(s) {
+function solicitudesMenuItems() {
   return [
     { act: 'detalle', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'timeline', label: 'Timeline', icon: 'bi-clock-history' },
@@ -319,10 +506,11 @@ function solicitudesMenuItems(s) {
 }
 
 async function handleSolicitudAction(act, s) {
+  if (!s) return;
   const id = s.id;
   if (act === 'detalle' || act === 'editar') {
     const reqIds = s.requerimiento_id ? [s.requerimiento_id] : [];
-    await showSolicitudCotizacionModal(reqIds, [], { solicitudId: id, initialTab: act === 'editar' ? 'general' : 'general' });
+    await showSolicitudCotizacionModal(reqIds, [], { solicitudId: id, initialTab: 'general' });
     loadSolicitudesTab();
     return;
   }
@@ -337,7 +525,7 @@ async function handleSolicitudAction(act, s) {
       await contratacionesService.eliminarSolicitudCotizacion(id);
       alert('Solicitud eliminada.');
       loadSolicitudesTab();
-      loadBandeja();
+      // No limpiar selección de bandeja aquí
     } catch (err) { alert(err.message); }
     return;
   }
@@ -345,38 +533,6 @@ async function handleSolicitudAction(act, s) {
     await showInvitarProveedoresModal(id);
     loadSolicitudesTab();
   }
-}
-
-function bindBandejaEvents(cont) {
-  bindTrazabilidadButtons(cont);
-  bindRowDetailPanel(cont, allRows);
-  bindActionMenus(cont, {
-    detail: (id) => {
-      openDetailPanel(allRows.find((r) => String(r.id) === String(id)));
-    },
-    obs: (id) => handleObservacion(id),
-    timeline: (id) => cont.querySelector(`.req-traza[data-id="${id}"]`)?.click(),
-    attach: (id) => manageAdjuntos(id, true),
-    download: (id) => printRequerimiento(id),
-    crearSc: (id) => handleCrearSC([parseInt(id, 10)]),
-  });
-
-  cont.querySelector('#invSelectAll')?.addEventListener('change', (e) => {
-    cont.querySelectorAll('.inv-select:not(:disabled)').forEach((cb) => {
-      cb.checked = e.target.checked;
-      const id = parseInt(cb.dataset.id, 10);
-      if (e.target.checked) selectedIds.add(id); else selectedIds.delete(id);
-    });
-    updateSelectionUi();
-  });
-
-  cont.querySelectorAll('.inv-select').forEach((cb) => {
-    cb.addEventListener('change', () => {
-      const id = parseInt(cb.dataset.id, 10);
-      if (cb.checked) selectedIds.add(id); else selectedIds.delete(id);
-      updateSelectionUi();
-    });
-  });
 }
 
 async function handleObservacion(id) {
@@ -400,16 +556,19 @@ async function handleObservacion(id) {
 }
 
 async function handleCrearSC(ids) {
-  const rows = allRows.filter((r) => ids.includes(r.id));
-  const result = await showSolicitudCotizacionModal(ids, rows);
+  const numIds = (ids || []).map((id) => parseInt(id, 10));
+  const rows = allRows.filter((r) => numIds.includes(r.id));
+  const result = await showSolicitudCotizacionModal(numIds, rows);
   if (!result?.saved) return;
+  selection.removeMany(numIds);
+  updateSelectionUi();
   loadCurrentTab();
   switchToSolicitudesTab();
   window.dispatchEvent(new CustomEvent('sgc:invitaciones-updated'));
 }
 
 async function handleInvitar() {
-  const ids = [...selectedIds];
+  const ids = selectedNumericIds();
   if (!ids.length) return;
   const row = allRows.find((r) => r.id === ids[0]);
   const solicitudId = row?.solicitud_id || null;
@@ -418,28 +577,70 @@ async function handleInvitar() {
     return;
   }
   await showInvitarProveedoresModal(solicitudId);
+  selection.removeMany(ids);
+  updateSelectionUi();
   loadCurrentTab();
   window.dispatchEvent(new CustomEvent('sgc:invitaciones-updated'));
+}
+
+function softRefreshCurrentTab() {
+  if (lifecycle && !lifecycle.isActive()) return;
+  if (!document.querySelector('.inv-bandeja-page')) return;
+  if (hasOpenModal()) {
+    // Actualización en segundo plano sin cerrar modal: solo bandeja si está montada
+    if (currentTab === 'bandeja' && document.getElementById('invBandejaBody')) {
+      loadBandeja({}, false);
+    }
+    return;
+  }
+  loadCurrentTab(false);
 }
 
 export function initInvitacionesView() {
   document.getElementById('invVistaEjecutiva')?.remove();
 
+  lifecycle = createViewLifecycle(VIEW_ID);
+  bandejaShellMounted = false;
+  refreshIndicator = createBackgroundRefreshIndicator('#invBgRefreshHost', { id: 'invBgRefresh' });
+
+  // Rehidratar filtros / tab desde estado persistente del módulo
+  hydrateFilterInputs('inv', listFilters);
+  if (currentTab === 'solicitudes') {
+    document.querySelectorAll('#invTabs .nav-link').forEach((l) => {
+      l.classList.toggle('active', l.dataset.tab === 'solicitudes');
+    });
+  }
+
   bindBandejaToolbar({
     prefix: 'inv',
-    onFilter: () => { listFilters = readFilterParams('inv'); loadCurrentTab(true); },
-    onClear: () => { listFilters = {}; loadCurrentTab(true); },
+    onFilter: () => {
+      listFilters = readFilterParams('inv');
+      persistViewMeta();
+      loadCurrentTab(true);
+    },
+    onClear: () => {
+      listFilters = {};
+      persistViewMeta();
+      loadCurrentTab(true);
+    },
   });
 
-  window.addEventListener('sgc:invitaciones-updated', () => loadCurrentTab());
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') loadCurrentTab();
-  });
-  setInterval(() => {
-    if (document.visibilityState === 'visible' && document.querySelector('.inv-bandeja-page')) loadCurrentTab();
-  }, 45000);
+  const onUpdated = () => softRefreshCurrentTab();
+  lifecycle.addEventListener(window, 'sgc:invitaciones-updated', onUpdated);
 
-  document.getElementById('invBtnSC')?.addEventListener('click', () => handleCrearSC([...selectedIds]));
+  lifecycle.addEventListener(document, 'visibilitychange', () => {
+    if (document.visibilityState === 'visible') softRefreshCurrentTab();
+  });
+
+  stopPolling(POLL_ID);
+  startPolling(POLL_ID, () => softRefreshCurrentTab(), 45000, {
+    containerSelector: '.inv-bandeja-page',
+    skipIfInteracting: () => false,
+  });
+  lifecycle.addCleanup(() => stopPolling(POLL_ID));
+  lifecycle.addCleanup(() => loadGuard.abortCurrent());
+
+  document.getElementById('invBtnSC')?.addEventListener('click', () => handleCrearSC(selectedNumericIds()));
   document.getElementById('invBtnInvitar')?.addEventListener('click', () => handleInvitar());
 
   document.querySelectorAll('#invTabs .nav-link').forEach((link) => {
@@ -447,15 +648,19 @@ export function initInvitacionesView() {
       e.preventDefault();
       document.querySelectorAll('#invTabs .nav-link').forEach((l) => l.classList.remove('active'));
       link.classList.add('active');
+      currentTab = link.dataset.tab || 'bandeja';
+      persistViewMeta();
       loadCurrentTab();
     });
   });
 
+  updateSelectionUi();
   loadCurrentTab();
 }
 
 function loadCurrentTab(resetPage = false) {
-  const active = document.querySelector('#invTabs .nav-link.active')?.dataset?.tab || 'bandeja';
+  const active = document.querySelector('#invTabs .nav-link.active')?.dataset?.tab || currentTab || 'bandeja';
+  currentTab = active;
   if (active === 'solicitudes') loadSolicitudesTab(resetPage);
   else loadBandeja({}, resetPage);
 }

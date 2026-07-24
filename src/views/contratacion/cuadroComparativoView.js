@@ -1,4 +1,4 @@
-// Cuadro Comparativo — bandeja por Solicitud de Cotización (RC8.1)
+// Cuadro Comparativo — bandeja por Solicitud de Cotización (RC8.0 refresh no destructivo)
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { bandejaTableStyles, renderActionMenuCell, bindActionMenus } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
@@ -34,8 +34,23 @@ import {
 } from '../../utils/cuadroComparativoAdminPrueba.js';
 import { showTrazabilidadModal } from '../requerimiento/reqShared.js';
 import { closeBandejaDropdowns } from '../../components/bandejaDetailPanel.js';
+import {
+  createViewLifecycle,
+  createRequestSequenceGuard,
+  isAbortError,
+  createBackgroundRefreshIndicator,
+  ensureBandejaTableShell,
+  captureScroll,
+  restoreScroll,
+  setEmptyState,
+} from '../../utils/uiState/index.js';
 
 const API_BASE = 'http://localhost:3000/api';
+const VIEW_ID = 'cuadro-comparativo';
+const SCROLL_SEL = '#cuadroCompWrap';
+const loadGuard = createRequestSequenceGuard();
+let lifecycle = null;
+let refreshIndicator = null;
 
 function currentUser() {
   try { return JSON.parse(localStorage.getItem('currentUser') || 'null') || {}; }
@@ -429,7 +444,133 @@ async function openTrazabilidadCuadro(solicitudId) {
   await showTrazabilidadModal(reqId);
 }
 
+function buildCuadroTheadHtml({ modoCoord, modoDec, modoAdmin }) {
+  if (modoCoord || modoDec || modoAdmin) {
+    return `<tr>
+      <th>Solicitud</th>
+      <th>Requerimiento</th>
+      <th>Proveedor</th>
+      ${modoCoord ? '<th>Tipo</th>' : ''}
+      <th class="text-center">Versión</th>
+      <th>Estado</th>
+      <th>Responsable</th>
+      <th>Fecha</th>
+      <th>Acciones</th>
+    </tr>`;
+  }
+  return `<tr>
+    <th>Solicitud</th>
+    <th>Requerimiento</th>
+    <th class="text-center">Versión</th>
+    <th>Estado</th>
+    <th>Responsable actual</th>
+    <th>Fecha</th>
+    <th>Acciones</th>
+  </tr>`;
+}
+
+function buildCuadroRowHtml(c, { modoCoord, modoDec, modoAdmin, rolUi }) {
+  const menu = cuadroComparativoMenuItems(c, { rol: rolUi || c.rol_revision });
+  if (modoCoord || modoDec || modoAdmin) {
+    return `
+      <tr data-row-id="${c.solicitud_id}">
+        <td><strong>${esc(c.solicitud_codigo)}</strong>
+          <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
+        </td>
+        <td>${formatRequerimientosCuadro(c, esc)}</td>
+        <td class="small">${esc(c.proveedor_display || c.proveedores_nombres || '—')}</td>
+        ${modoCoord ? `<td class="small">${esc(c.tipo || '—')}</td>` : ''}
+        <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
+        <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
+        <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
+        <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
+        ${renderActionMenuCell(c.solicitud_id, menu, '')}
+      </tr>`;
+  }
+  return `
+    <tr data-row-id="${c.solicitud_id}">
+      <td><strong>${esc(c.solicitud_codigo)}</strong>
+        <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
+      </td>
+      <td>${formatRequerimientosCuadro(c, esc)}</td>
+      <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
+      <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
+      <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
+      <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
+      ${renderActionMenuCell(c.solicitud_id, menu, '')}
+    </tr>`;
+}
+
+function cuadroEmptyMessage({ modoCoord, modoDec }) {
+  if (modoCoord) return 'No hay expedientes derivados al Coordinador CM.';
+  if (modoDec) return 'No hay expedientes derivados al DEC.';
+  return 'No hay solicitudes con cotizaciones APTO para el cuadro comparativo.';
+}
+
+function cuadroHintText({ modoCoord, modoDec, modoAdmin }) {
+  if (modoCoord) {
+    return 'Expedientes derivados desde el Analista. Use Abrir expediente para firmar, observar, dar conformidad y derivar al DEC.';
+  }
+  if (modoDec) {
+    return 'Expedientes derivados desde el Coordinador CM. Use Abrir expediente para la revisión DEC.';
+  }
+  if (modoAdmin) {
+    return 'Modo Administrador (pruebas): abra el expediente y use «Actuar como» Analista / Coordinador CM / DEC sin cerrar sesión. El rol real no cambia.';
+  }
+  return 'Una fila por Solicitud de Cotización. La bandeja cambia según rol y etapa. En revisión externa: Ver / Descargar / Trazabilidad.';
+}
+
+function ensureCuadroChrome(shell, { modoAdmin, adminChrome, hint }) {
+  if (!shell?.outer) return;
+  let chromeHost = document.getElementById('cuadroCompChrome');
+  if (!chromeHost) {
+    chromeHost = document.createElement('div');
+    chromeHost.id = 'cuadroCompChrome';
+    shell.outer.insertBefore(chromeHost, shell.wrap);
+  }
+  if (modoAdmin) {
+    if (!chromeHost.querySelector('#ccAdminActuarComo')) {
+      chromeHost.innerHTML = adminChrome || '';
+      chromeHost.querySelector('#ccAdminActuarComo')?.addEventListener('change', (ev) => {
+        setActuarComoAdmin(ev.target.value);
+        loadCuadro(false);
+      });
+    }
+  } else if (chromeHost.innerHTML) {
+    chromeHost.innerHTML = '';
+  }
+
+  let hintEl = document.getElementById('cuadroCompHint');
+  if (!hintEl) {
+    hintEl = document.createElement('p');
+    hintEl.id = 'cuadroCompHint';
+    hintEl.className = 'small text-muted mb-2';
+    shell.outer.insertBefore(hintEl, shell.wrap);
+  }
+  hintEl.textContent = hint;
+}
+
+function bindCuadroActionMenus(cont, { modoCoord, modoDec, modoAdmin }) {
+  bindActionMenus(cont, {
+    verExpediente: (id) => showVerExpediente(id),
+    verValidaciones: (id) => showVerValidaciones(id),
+    elaborarCuadro: (id) => openElaborarCuadro(id),
+    verCuadro: (id) => {
+      if (modoCoord) return openExpedienteCoordinador(id);
+      if (modoDec) return openExpedienteDec(id);
+      if (modoAdmin) return openExpedienteAdmin(id);
+      return openElaborarCuadro(id);
+    },
+    abrirExpedienteCoord: (id) => openExpedienteCoordinador(id),
+    abrirExpedienteDec: (id) => openExpedienteDec(id),
+    abrirExpedienteAdmin: (id) => openExpedienteAdmin(id),
+    descargarCuadro: (id) => openDescargarCuadro(id),
+    trazabilidadCuadro: (id) => openTrazabilidadCuadro(id),
+  });
+}
+
 async function loadCuadro(resetPage = false) {
+  if (lifecycle && !lifecycle.isActive()) return;
   const cont = document.getElementById(VIEW_CONFIG.listId);
   if (!cont) return;
   const modoCoord = isModoBandejaCoordinador();
@@ -438,125 +579,76 @@ async function loadCuadro(resetPage = false) {
   const rolSesion = rolBandejaActual();
   const rolUi = modoCoord ? 'COORDINADOR_CM'
     : (modoDec ? 'DEC' : (modoAdmin ? 'ADMINISTRADOR' : rolSesion));
+
+  const hadShell = !!document.getElementById('cuadroCompBody');
+  if (hadShell) captureScroll(VIEW_ID, SCROLL_SEL);
+
+  const shell = ensureBandejaTableShell(cont, {
+    outerId: 'cuadroCompOuter',
+    wrapId: 'cuadroCompWrap',
+    theadId: 'cuadroCompHead',
+    tbodyId: 'cuadroCompBody',
+    emptyId: 'cuadroCompEmpty',
+    outerClass: 'sgc-bandeja-wrap',
+    wrapClass: 'table-responsive',
+    tableClass: 'table table-sm table-hover table-bordered mb-0 align-middle',
+  });
+
+  const adminChrome = modoAdmin
+    ? renderBannerAdminPrueba(resolveActuarComoDesdeUi(getActuarComoAdmin()
+      || ROLES_REVISION.COORDINADOR_CM) || ROLES_REVISION.COORDINADOR_CM)
+    : '';
+  ensureCuadroChrome(shell, {
+    modoAdmin,
+    adminChrome,
+    hint: cuadroHintText({ modoCoord, modoDec, modoAdmin }),
+  });
+
+  const request = loadGuard.begin();
+  if (lifecycle) lifecycle.addAbortController(request.controller);
+  const isBg = hadShell && expedientesCache.length > 0;
+  if (isBg) refreshIndicator?.show('Actualizando…');
+
   try {
     if (resetPage) cuadroPagination.resetPage();
     const result = await cuadroPagination.loadData({}, resetPage);
+    if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
+
     const rows = result.data || [];
     const allFiltered = result.allData || rows;
     updateCuadroStatsDom(allFiltered, 'cuadroCompStats');
 
+    if (!shell?.tbody || !shell?.thead) return;
+
     if (!allFiltered.length) {
-      cont.innerHTML = modoCoord
-        ? '<div class="alert alert-light border">No hay expedientes derivados al Coordinador CM.</div>'
-        : (modoDec
-          ? '<div class="alert alert-light border">No hay expedientes derivados al DEC.</div>'
-          : '<div class="alert alert-light border">No hay solicitudes con cotizaciones APTO para el cuadro comparativo.</div>');
+      shell.thead.innerHTML = buildCuadroTheadHtml({ modoCoord, modoDec, modoAdmin });
+      shell.tbody.innerHTML = '';
+      setEmptyState(shell, {
+        empty: true,
+        message: cuadroEmptyMessage({ modoCoord, modoDec }),
+      });
+      refreshIndicator?.hide();
       return;
     }
 
-    const thead = (modoCoord || modoDec || modoAdmin)
-      ? `<tr>
-            <th>Solicitud</th>
-            <th>Requerimiento</th>
-            <th>Proveedor</th>
-            ${modoCoord ? '<th>Tipo</th>' : ''}
-            <th class="text-center">Versión</th>
-            <th>Estado</th>
-            <th>Responsable</th>
-            <th>Fecha</th>
-            <th>Acciones</th>
-          </tr>`
-      : `<tr>
-            <th>Solicitud</th>
-            <th>Requerimiento</th>
-            <th class="text-center">Versión</th>
-            <th>Estado</th>
-            <th>Responsable actual</th>
-            <th>Fecha</th>
-            <th>Acciones</th>
-          </tr>`;
+    setEmptyState(shell, { empty: false });
+    shell.thead.innerHTML = buildCuadroTheadHtml({ modoCoord, modoDec, modoAdmin });
+    shell.tbody.innerHTML = rows.map((c) => buildCuadroRowHtml(c, {
+      modoCoord, modoDec, modoAdmin, rolUi,
+    })).join('');
 
-    const tbody = rows.map((c) => {
-      const menu = cuadroComparativoMenuItems(c, { rol: rolUi || c.rol_revision });
-      if (modoCoord || modoDec || modoAdmin) {
-        return `
-            <tr>
-              <td><strong>${esc(c.solicitud_codigo)}</strong>
-                <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
-              </td>
-              <td>${formatRequerimientosCuadro(c, esc)}</td>
-              <td class="small">${esc(c.proveedor_display || c.proveedores_nombres || '—')}</td>
-              ${modoCoord ? `<td class="small">${esc(c.tipo || '—')}</td>` : ''}
-              <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
-              <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
-              <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
-              <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
-              ${renderActionMenuCell(c.solicitud_id, menu, '')}
-            </tr>`;
-      }
-      return `
-            <tr>
-              <td><strong>${esc(c.solicitud_codigo)}</strong>
-                <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
-              </td>
-              <td>${formatRequerimientosCuadro(c, esc)}</td>
-              <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
-              <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
-              <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
-              <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
-              ${renderActionMenuCell(c.solicitud_id, menu, '')}
-            </tr>`;
-    }).join('');
-
-    const hint = modoCoord
-      ? 'Expedientes derivados desde el Analista. Use Abrir expediente para firmar, observar, dar conformidad y derivar al DEC.'
-      : (modoDec
-        ? 'Expedientes derivados desde el Coordinador CM. Use Abrir expediente para la revisión DEC.'
-        : (modoAdmin
-          ? 'Modo Administrador (pruebas): abra el expediente y use «Actuar como» Analista / Coordinador CM / DEC sin cerrar sesión. El rol real no cambia.'
-          : 'Una fila por Solicitud de Cotización. La bandeja cambia según rol y etapa. En revisión externa: Ver / Descargar / Trazabilidad.'));
-
-    const adminChrome = modoAdmin
-      ? renderBannerAdminPrueba(resolveActuarComoDesdeUi(getActuarComoAdmin()
-        || ROLES_REVISION.COORDINADOR_CM) || ROLES_REVISION.COORDINADOR_CM)
-      : '';
-
-    cont.innerHTML = `
-      <div class="sgc-bandeja-wrap" id="cuadroCompOuter">
-        ${adminChrome}
-        <p class="small text-muted mb-2">${hint}</p>
-        <table class="table table-sm table-hover table-bordered mb-0 align-middle">
-          <thead class="table-light">${thead}</thead>
-          <tbody>${tbody}</tbody>
-        </table>
-      </div>`;
-
-    if (modoAdmin) {
-      cont.querySelector('#ccAdminActuarComo')?.addEventListener('change', (ev) => {
-        setActuarComoAdmin(ev.target.value);
-        loadCuadro(false);
-      });
-    }
-
-    bindActionMenus(cont, {
-      verExpediente: (id) => showVerExpediente(id),
-      verValidaciones: (id) => showVerValidaciones(id),
-      elaborarCuadro: (id) => openElaborarCuadro(id),
-      verCuadro: (id) => {
-        if (modoCoord) return openExpedienteCoordinador(id);
-        if (modoDec) return openExpedienteDec(id);
-        if (modoAdmin) return openExpedienteAdmin(id);
-        return openElaborarCuadro(id);
-      },
-      abrirExpedienteCoord: (id) => openExpedienteCoordinador(id),
-      abrirExpedienteDec: (id) => openExpedienteDec(id),
-      abrirExpedienteAdmin: (id) => openExpedienteAdmin(id),
-      descargarCuadro: (id) => openDescargarCuadro(id),
-      trazabilidadCuadro: (id) => openTrazabilidadCuadro(id),
-    });
+    bindCuadroActionMenus(cont, { modoCoord, modoDec, modoAdmin });
     cuadroPagination.renderControls('cuadroCompOuter', () => loadCuadro(false));
+    restoreScroll(VIEW_ID, SCROLL_SEL);
+    refreshIndicator?.hide();
   } catch (err) {
-    cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    if (isAbortError(err) || !request.isCurrent()) return;
+    if (lifecycle && !lifecycle.isActive()) return;
+    if (hadShell && expedientesCache.length) {
+      refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
+    } else {
+      cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    }
   }
 }
 
@@ -573,9 +665,12 @@ export function renderCuadroComparativoView() {
           <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
           <p class="text-muted mb-0">${esc(description)}</p>
         </div>
-        <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-arrow-clockwise"></i> Actualizar
-        </button>
+        <div class="d-flex gap-2 align-items-center">
+          <span id="cuadroCompBgRefreshHost"></span>
+          <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-clockwise"></i> Actualizar
+          </button>
+        </div>
       </div>
       ${statsHtml}
       ${renderFilterBar(prefix)}
@@ -588,6 +683,10 @@ export function renderCuadroComparativoView() {
 }
 
 export function initCuadroComparativoView() {
+  lifecycle = createViewLifecycle(VIEW_ID);
+  lifecycle.addCleanup(() => loadGuard.abortCurrent());
+  refreshIndicator = createBackgroundRefreshIndicator('#cuadroCompBgRefreshHost', { id: 'cuadroCompBgRefresh' });
+
   bindBandejaToolbar({
     prefix: VIEW_CONFIG.prefix,
     onFilter: () => loadCuadro(true),

@@ -221,14 +221,19 @@ function initRouter(onRouteChange) {
   });
 
   // Inicializar hash si no existe
+  let hashWasSet = false;
   if (!location.hash || location.hash === '#') {
     const currentUser = authService.getCurrentUser();
     if (!currentUser) location.hash = '#/login';
     else if (currentUser.debeCambiarPassword) location.hash = '#/cambio-password';
     else location.hash = '#/dashboard';
+    hashWasSet = true;
   }
 
-  // Verificar acceso a la ruta inicial
+  // Verificar acceso a la ruta inicial.
+  // Si acabamos de asignar el hash, hashchange disparará onRouteChange (evita doble render).
+  if (hashWasSet) return;
+
   const route = getCurrentRoute();
   if (!canAccessRoute(route)) {
     redirectOnDenied(route);

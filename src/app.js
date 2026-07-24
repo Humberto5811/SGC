@@ -10,10 +10,16 @@ import { renderFormatoServiciosView, initFormatoServiciosView } from './views/gl
 import { renderFormatoLocadoresView, initFormatoLocadoresView } from './views/glosasRequerimientos/formatoLocadoresView.js';
 import { renderRegistroRequerimientoView, initRegistroRequerimientoView } from './views/requerimiento/registroRequerimientoView.js';
 import { renderEvaluacionRequerimientoView, initEvaluacionRequerimientoView } from './views/requerimiento/evaluacionRequerimientoView.js';
+import { cleanupCurrentView } from './utils/uiState/viewLifecycle.js';
 
 const appEl = document.getElementById('app');
 
+/** Evita renderApp duplicados (bootstrap + hashchange simultáneos). */
+let renderAppSeq = 0;
+let lastRenderedRoute = null;
+
 async function renderProveedorApp(route) {
+  cleanupCurrentView();
   let content = '';
   const tokenMatch = route.match(/^proveedor\/invitacion\/(.+)$/);
   try {
@@ -74,9 +80,14 @@ async function renderProveedorApp(route) {
 
 async function renderApp() {
   const currentRoute = getCurrentRoute();
+  const mySeq = ++renderAppSeq;
 
   if (isProveedorRoute(currentRoute)) {
     await renderProveedorApp(currentRoute);
+    if (mySeq === renderAppSeq) {
+      lastRenderedRoute = currentRoute;
+      if (appEl) appEl.dataset.sgcRoute = currentRoute;
+    }
     return;
   }
 
@@ -105,6 +116,9 @@ async function renderApp() {
     window.location.hash = '#/login';
     return;
   }
+
+  // RC8.0 — cleanup de la vista anterior antes de destruir #app
+  cleanupCurrentView();
   
   // Cargar vista según la ruta (incluyendo todas las subrutas)
   let content = '';
@@ -269,6 +283,8 @@ else if (currentRoute === 'mantenimiento' ||
     `;
   }
   
+  if (mySeq !== renderAppSeq) return;
+
   const sidebarHtml = isAuthScreen ? '' : renderSidebar(currentRoute);
   const mainMargin = isAuthScreen ? '0' : '280px';
   
@@ -282,10 +298,13 @@ else if (currentRoute === 'mantenimiento' ||
       </div>
     </main>
   `;
+  lastRenderedRoute = currentRoute;
+  appEl.dataset.sgcRoute = currentRoute;
   
   // Inicializar el sidebar (para que funcionen los clics en submenús)
   if (!isAuthScreen) {
     setTimeout(() => {
+      if (mySeq !== renderAppSeq) return;
       if (typeof initSidebar === 'function') {
         initSidebar();
       }
@@ -298,6 +317,7 @@ else if (currentRoute === 'mantenimiento' ||
   if (logoutBtn) {
     logoutBtn.onclick = async () => {
       await authService.logout();
+      lastRenderedRoute = null;
       window.location.hash = '#/login';
       renderApp();
     };
@@ -333,10 +353,10 @@ function highlightActiveMenuItem() {
 function bootstrap() {
   storageService.initialize();
   authService.restoreSession();
+  // RC8.0 — una sola invocación inicial vía initRouter (evita doble renderApp).
   initRouter(() => renderApp());
   // Drag & drop global: arrastre de modales Bootstrap desde el header
   import('./utils/modalDraggable.js').then((m) => m.initSgcModalDragging()).catch(() => {});
-  renderApp();
 }
 
 window.addEventListener('DOMContentLoaded', bootstrap);
