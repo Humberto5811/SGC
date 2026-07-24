@@ -31,10 +31,33 @@ function fmtNum(n) {
   return v.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function labelValidacionResumen(estado) {
+  const raw = String(estado || '').trim();
+  if (!raw) return '—';
+  const v = raw.toUpperCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  if (v === 'APTO' || v === 'VALIDA') return 'APTO';
+  if (
+    v === 'NO_APTO'
+    || v === 'OBSERVADO'
+    || v === 'NO_VALIDA'
+    || v === 'NO VALIDA'
+    || v === 'NO_CUMPLE'
+    || v === 'NO CUMPLE'
+    || /NO\s*VALID/.test(v)
+  ) {
+    return 'NO VÁLIDA';
+  }
+  return raw;
+}
+
+function esNoValidaFuente(f) {
+  return labelValidacionResumen(f?.validacion_estado) === 'NO VÁLIDA';
+}
+
 function badgeVal(estado) {
-  const v = String(estado || '').toUpperCase();
-  if (v === 'APTO') return 'success';
-  if (v === 'NO_APTO' || v === 'OBSERVADO') return 'secondary';
+  const label = labelValidacionResumen(estado);
+  if (label === 'APTO') return 'success';
+  if (label === 'NO VÁLIDA') return 'danger';
   return 'warning';
 }
 
@@ -159,13 +182,14 @@ export function renderResumenProveedores(resumen = []) {
         <th>Cotización</th><th>Proveedor</th><th>RUC</th><th>Validación</th><th>Total ofertado</th>
       </tr></thead>
       <tbody>${resumen.map((p, i) => {
-    const apto = String(p.validacion_estado || '').toUpperCase() === 'APTO';
+    const labelVal = labelValidacionResumen(p.validacion_estado);
+    const apto = labelVal === 'APTO';
     return `
         <tr class="${apto ? '' : 'table-secondary text-muted'}">
           <td class="small">N.° ${i + 1}</td>
           <td class="small">${esc(p.razon_social)}${apto ? '' : ' <span class="badge bg-secondary">No adjudicar</span>'}</td>
           <td class="small">${esc(p.ruc)}</td>
-          <td><span class="badge bg-${badgeVal(p.validacion_estado)}">${esc(p.validacion_estado || '—')}</span></td>
+          <td><span class="badge bg-${badgeVal(p.validacion_estado)}">${esc(labelVal)}</span></td>
           <td class="text-end small">${apto ? fmtNum(p.total_ofertado) : '—'}</td>
         </tr>`;
   }).join('')}</tbody>
@@ -286,6 +310,14 @@ function cellAccionFuente(f, key, type, editable = false) {
       <option value="1" ${val === true ? 'selected' : ''}>Sí</option>
       <option value="0" ${val === false ? 'selected' : ''}>No</option>
     </select>`;
+  }
+
+  // Cotización NO VÁLIDA: RTM y valor referencial muestran la etiqueta institucional
+  if (
+    (key === 'cumple_rtm_o_similar' || key === 'tomo_valor_referencial')
+    && esNoValidaFuente(f)
+  ) {
+    return esc('NO VÁLIDA');
   }
 
   // Resto de AA de cotización: automáticos (solo lectura)

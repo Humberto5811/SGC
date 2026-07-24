@@ -45,6 +45,7 @@ import {
   isModoGeneracionCcp,
   renderPanelGeneracionCcp,
   evaluarGatesCcpCliente,
+  showDerivarCcpPanel,
 } from './cuadroComparativoCcp.js';
 import { puedeMostrarBotonesCcp } from './cuadroComparativoRevisionUi.js';
 
@@ -436,126 +437,6 @@ function showSegundaFuenteFormModal({ items = [], fuente = null }) {
       resolve(normalizeSegundaFuente(raw, 0, items));
     };
     el.addEventListener('hidden.bs.modal', () => resolve(null), { once: true });
-  });
-}
-
-function showDerivarCcpPanel({ onConfirm }) {
-  return new Promise((resolve) => {
-    const id = `ccDestCcp_${Date.now()}`;
-    document.querySelectorAll('.cc-dest-overlay').forEach((n) => n.remove());
-    const overlay = document.createElement('div');
-    overlay.className = 'cc-dest-overlay';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:2000',
-      'background:rgba(15,23,42,.55)', 'display:flex',
-      'align-items:center', 'justify-content:center', 'padding:1rem',
-    ].join(';');
-    overlay.innerHTML = `
-      <div class="card shadow border-0" style="width:min(520px,100%);max-height:90vh;overflow:auto" id="${id}">
-        <div class="card-header bg-light d-flex justify-content-between align-items-center py-2">
-          <strong><i class="bi bi-send"></i> Derivar a CCP</strong>
-          <button type="button" class="btn-close" data-cc-dest="cancel" aria-label="Cerrar"></button>
-        </div>
-        <div class="card-body" id="${id}_body">
-          <div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Cargando destino…</div>
-        </div>
-        <div class="card-footer d-flex justify-content-end gap-2">
-          <button type="button" class="btn btn-secondary" data-cc-dest="cancel">Cancelar</button>
-          <button type="button" class="btn btn-success" data-cc-dest="ok" disabled>Confirmar derivación</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-
-    const body = overlay.querySelector(`#${id}_body`);
-    const btnOk = overlay.querySelector('[data-cc-dest="ok"]');
-    let closed = false;
-    const close = (result) => {
-      if (closed) return;
-      closed = true;
-      overlay.remove();
-      resolve(result);
-    };
-    overlay.querySelectorAll('[data-cc-dest="cancel"]').forEach((b) => {
-      b.onclick = (ev) => { ev.preventDefault(); close(null); };
-    });
-
-    (async () => {
-      try {
-        const dest = { code: 'CCP', label: 'CCP' };
-        const usersResp = await contratacionesService.listValidacionUsuarios(dest.code, '');
-        const usuarios = usersResp.data || [];
-        body.innerHTML = `
-          <div class="mb-2">
-            <label class="form-label fw-semibold">Destino</label>
-            <select class="form-select form-select-sm" disabled>
-              <option value="CCP" selected>CCP</option>
-            </select>
-            <div class="form-text small">Transición oficial Workflow: Cuadro Comparativo → CCP</div>
-          </div>
-          <div class="mb-2">
-            <label class="form-label fw-semibold">Usuario responsable</label>
-            <select class="form-select form-select-sm" id="${id}_resp">
-              <option value="">Seleccione…</option>
-              ${usuarios.map((u) => `<option value="${u.id}" data-nombre="${esc(u.nombre)}">${esc(u.nombre)}${u.cargo ? ` — ${esc(u.cargo)}` : ''}</option>`).join('')}
-            </select>
-            ${!usuarios.length ? '<div class="text-danger small mt-1">No existen usuarios habilitados para CCP.</div>' : ''}
-          </div>
-          <div class="mb-0">
-            <label class="form-label fw-semibold">Observación</label>
-            <textarea class="form-control form-control-sm" id="${id}_obs" rows="2" placeholder="Opcional"></textarea>
-          </div>
-          <div id="${id}_err" class="alert alert-danger d-none py-2 mt-2 mb-0 small"></div>
-          <div id="${id}_busy" class="alert alert-info d-none py-2 mt-2 mb-0 small">Derivando expediente…</div>`;
-
-        const sync = () => {
-          btnOk.disabled = !usuarios.length || !overlay.querySelector(`#${id}_resp`)?.value;
-        };
-        overlay.querySelector(`#${id}_resp`)?.addEventListener('change', sync);
-        sync();
-
-        btnOk.onclick = async (ev) => {
-          ev.preventDefault();
-          const sel = overlay.querySelector(`#${id}_resp`);
-          const opt = sel?.selectedOptions?.[0];
-          const errBox = overlay.querySelector(`#${id}_err`);
-          const busy = overlay.querySelector(`#${id}_busy`);
-          if (!sel?.value || !opt) {
-            if (errBox) {
-              errBox.textContent = 'Seleccione el usuario responsable.';
-              errBox.classList.remove('d-none');
-            }
-            return;
-          }
-          btnOk.disabled = true;
-          if (busy) busy.classList.remove('d-none');
-          if (errBox) errBox.classList.add('d-none');
-          try {
-            const destPayload = {
-              destino_submodulo: 'CCP',
-              destino: 'CCP',
-              responsable_destino_id: parseInt(sel.value, 10),
-              responsable_id: parseInt(sel.value, 10),
-              responsable_destino_nombre: opt.dataset.nombre || opt.textContent,
-              responsable_nombre: opt.dataset.nombre || opt.textContent,
-              observacion_derivacion: overlay.querySelector(`#${id}_obs`)?.value || '',
-            };
-            await onConfirm(destPayload);
-            close(destPayload);
-          } catch (err) {
-            if (busy) busy.classList.add('d-none');
-            if (errBox) {
-              errBox.textContent = err.message || 'Error al derivar';
-              errBox.classList.remove('d-none');
-            }
-            btnOk.disabled = false;
-          }
-        };
-      } catch (err) {
-        body.innerHTML = `<div class="alert alert-danger mb-0">${esc(err.message)}</div>`;
-      }
-    })();
   });
 }
 

@@ -6,6 +6,7 @@ import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
 import {
   formatRequerimientosCuadro,
+  formatCentroCuadro,
   buildCuadroStats,
   renderCuadroStatsHtml,
   updateCuadroStatsDom,
@@ -458,9 +459,9 @@ async function loadCuadro(resetPage = false) {
       ? `<tr>
             <th>Solicitud</th>
             <th>Requerimiento</th>
-            <th>Proveedor</th>
+            <th>Centro</th>
             ${modoCoord ? '<th>Tipo</th>' : ''}
-            <th class="text-center">Versión</th>
+            <th class="text-center">Cotizaciones</th>
             <th>Estado</th>
             <th>Responsable</th>
             <th>Fecha</th>
@@ -469,7 +470,8 @@ async function loadCuadro(resetPage = false) {
       : `<tr>
             <th>Solicitud</th>
             <th>Requerimiento</th>
-            <th class="text-center">Versión</th>
+            <th>Centro</th>
+            <th class="text-center">Cotizaciones</th>
             <th>Estado</th>
             <th>Responsable actual</th>
             <th>Fecha</th>
@@ -478,6 +480,9 @@ async function loadCuadro(resetPage = false) {
 
     const tbody = rows.map((c) => {
       const menu = cuadroComparativoMenuItems(c, { rol: rolUi || c.rol_revision });
+      const nCot = c.total_cotizaciones != null
+        ? Number(c.total_cotizaciones)
+        : (Number(c.total_proveedores) || 0);
       if (modoCoord || modoDec || modoAdmin) {
         return `
             <tr>
@@ -485,9 +490,9 @@ async function loadCuadro(resetPage = false) {
                 <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
               </td>
               <td>${formatRequerimientosCuadro(c, esc)}</td>
-              <td class="small">${esc(c.proveedor_display || c.proveedores_nombres || '—')}</td>
+              <td class="small">${formatCentroCuadro(c, esc)}</td>
               ${modoCoord ? `<td class="small">${esc(c.tipo || '—')}</td>` : ''}
-              <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
+              <td class="text-center small">${Number.isFinite(nCot) ? esc(String(nCot)) : '—'}</td>
               <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
               <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
               <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
@@ -500,7 +505,8 @@ async function loadCuadro(resetPage = false) {
                 <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
               </td>
               <td>${formatRequerimientosCuadro(c, esc)}</td>
-              <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
+              <td class="small">${formatCentroCuadro(c, esc)}</td>
+              <td class="text-center small">${Number.isFinite(nCot) ? esc(String(nCot)) : '—'}</td>
               <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
               <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
               <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>

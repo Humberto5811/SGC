@@ -44,11 +44,13 @@ export function labelAccionRevision(accion) {
     APROBAR_COORDINADOR: 'Aprobar (Coordinador CM)',
     CONFORMIDAD_COORDINADOR: 'Conformidad Coordinador CM',
     DERIVAR_DEC: 'Derivar al DEC',
-    OBSERVAR_COORDINADOR: 'Observar (devolver a Analista)',
+    OBSERVAR_COORDINADOR: 'Observar / Devolver al Analista',
     CONFORMIDAD_DEC: 'Conformidad DEC',
     DERIVAR_ANALISTA: 'Derivar al Analista (Generación CCP)',
     APROBAR_DEC: 'Aprobar DEC → Analista',
-    OBSERVAR_DEC: 'Observar DEC (corrección Analista)',
+    OBSERVAR_DEC: 'Observar / Devolver al Analista',
+    OBSERVAR_DEC_A_COORD: 'Observar / Devolver al Coordinador CM',
+    APROBAR_DERIVAR_CCP: 'Aprobar y derivar a CCP',
     GENERAR_CCP: 'Generar / Derivar a CCP',
   };
   return map[String(accion || '').toUpperCase()] || accion;

@@ -131,7 +131,7 @@ export async function crearNuevaVersionPorObservacion(cur, {
       observado_por: obsRecord.usuario,
     };
   }
-  if (accion === 'OBSERVAR_DEC') {
+  if (accion === 'OBSERVAR_DEC' || accion === 'OBSERVAR_DEC_A_COORD') {
     datosArchivo.revision_dec = {
       ...(datosPrev.revision_dec || {}),
       conformidad: false,
@@ -139,6 +139,7 @@ export async function crearNuevaVersionPorObservacion(cur, {
         motivo: obsRecord.motivo,
         observacion: obsRecord.observacion,
         comentario: obsRecord.comentario,
+        destino: accion === 'OBSERVAR_DEC_A_COORD' ? 'COORDINADOR_CM' : 'ANALISTA',
       },
       observado_at: fecha,
       observado_por: obsRecord.usuario,

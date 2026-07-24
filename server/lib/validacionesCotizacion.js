@@ -12,6 +12,7 @@ import {
   legacyItemToEvaluacion,
   filasV2ToLegacyItems,
   calcularResultadoCotizacion,
+  calcularResultadoExpedienteValidacion,
   validarMatrizCompleta,
 } from './validacionFormatos.js';
 import {
@@ -20,6 +21,7 @@ import {
 } from '../../shared/validacionCentro.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
+  { code: 'VALIDACIONES', label: 'Validaciones' },
   { code: 'REGISTRO_REQUERIMIENTO', label: 'Registro de Requerimiento' },
   { code: 'EVALUACION_REQUERIMIENTO', label: 'Evaluación de Requerimiento' },
 ]);
@@ -149,6 +151,9 @@ function mapCotizacionRow(r) {
     denominacion: r.denominacion,
     objeto: r.objeto,
     requerimientos: r.requerimientos_texto || '',
+    requerimientos_texto: r.requerimientos_texto || '',
+    centros_texto: r.centros_texto || r.centro || '',
+    centro: r.centros_texto || r.centro || '',
     derivacion: inf.derivacion || null,
     responsable_id: inf.derivacion?.responsable_id || null,
     responsable_nombre: r.validacion_responsable || inf.derivacion?.responsable_nombre || '',
@@ -166,10 +171,8 @@ function estadoDisplayValidacion(validacionEstado, cotEstado) {
 
 /**
  * Destinos oficiales al cerrar validación AU (vía sync + registrarMovimiento).
- * APTO → CUADRO_COMPARATIVO (catálogo Workflow APROBAR).
- * NO_APTO/OBSERVADO → RECEPCION_COTIZACIONES (regla operativa actual).
- * Nota RC7.7A: el flujo funcional solicitado pedía INVITACIONES para no apto;
- * no se altera el motor ni se hardcodea INVITACIONES en la vista.
+ * APTO (≥1 cotización válida) → CUADRO_COMPARATIVO.
+ * NO_APTO (todas inválidas) → INVITACIONES (nueva ronda; se conserva historial).
  */
 export const DESTINOS_SALIDA_VALIDACION = Object.freeze({
   APTO: Object.freeze({
@@ -179,16 +182,15 @@ export const DESTINOS_SALIDA_VALIDACION = Object.freeze({
     bloqueado: true,
   }),
   NO_APTO: Object.freeze({
-    code: 'RECEPCION_COTIZACIONES',
-    label: 'Recepción de Cotizaciones',
-    estado_bandeja: 'Derivado a Recepción de Cotizaciones',
+    code: 'INVITACIONES',
+    label: 'Invitaciones',
+    estado_bandeja: 'Derivado a Invitaciones',
     bloqueado: true,
-    nota: 'Destino oficial vigente. El flujo solicitado (Invitaciones) contradice esta regla; no se alteró el Workflow Engine.',
   }),
   OBSERVADO: Object.freeze({
-    code: 'RECEPCION_COTIZACIONES',
-    label: 'Recepción de Cotizaciones',
-    estado_bandeja: 'Derivado a Recepción de Cotizaciones',
+    code: 'INVITACIONES',
+    label: 'Invitaciones',
+    estado_bandeja: 'Derivado a Invitaciones',
     bloqueado: true,
   }),
 });
@@ -334,7 +336,7 @@ export function estadoDisplayRecepcion(validacionEstado) {
   const v = String(validacionEstado || '').toUpperCase();
   if (v === 'DERIVADA' || v === 'EN_PROCESO') return 'Enviada a validación AU';
   if (['APTO', 'NO_APTO', 'OBSERVADO'].includes(v)) return 'Validada por área usuaria';
-  return 'Cotización presentada';
+  return 'Cotización recibida';
 }
 
 export function puedeEnviarAValidacion(validacionEstado) {
@@ -356,6 +358,7 @@ export function getSubmodulosValidacion() {
 export async function listUsuariosDerivacionValidacion(submoduloCode, search = '') {
   const code = String(submoduloCode || '').toUpperCase();
   const modReq = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO'].includes(code);
+  const modValidaciones = code === 'VALIDACIONES';
   const params = ['admin'];
   let where = 'WHERE u.activo = TRUE AND u.rol <> $1';
   if (String(search || '').trim()) {
@@ -388,6 +391,9 @@ export async function listUsuariosDerivacionValidacion(submoduloCode, search = '
     .filter((u) => {
       const p = u.permisosNorm;
       if (modReq) return p.modulos.includes('REQUERIMIENTOS') && p.submodulos.includes(code);
+      if (modValidaciones) {
+        return p.modulos.includes('CONTRATACIONES') && p.submodulos.includes('VALIDACIONES');
+      }
       // Destinos de salida post-validación (RC7.7A)
       if (['CUADRO_COMPARATIVO', 'RECEPCION_COTIZACIONES', 'INVITACIONES'].includes(code)) {
         return p.modulos.includes('CONTRATACIONES') && p.submodulos.includes(code);
@@ -487,10 +493,97 @@ export async function listarValidacionesAsignadas(usuario, userId) {
   return listarValidacionesExpedientes(usuario, userId, { soloAsignadas: true });
 }
 
+/**
+ * Centro(s) de bandeja — misma prioridad que Recepción de Cotizaciones:
+ * pedido SIGAMEF.centro → catálogo centros → CMN solo como último respaldo.
+ * (No usa el CMN como valor principal; p. ej. CNSP en lugar de 05277.)
+ */
+/** Código CMN numérico (p. ej. 05277) — no es el centro organizacional (CNSP). */
+export function esCodigoCmnCentro(valor, cmnHint = '') {
+  const s = String(valor || '').trim();
+  if (!s) return false;
+  const hint = String(cmnHint || '').trim();
+  if (hint && s === hint) return true;
+  return /^\d{4,6}$/.test(s);
+}
+
+/**
+ * Centro organizacional (pedido SIGAMEF → catálogo → responsable).
+ * Nunca usa el CMN numérico como valor de bandeja (p. ej. CNSP, no 05277).
+ */
+export async function resolveCentrosTextoSolicitud(solicitudId) {
+  const sid = parseInt(solicitudId, 10);
+  if (!Number.isFinite(sid)) return '';
+  const { rows } = await query(`
+    SELECT COALESCE((
+      SELECT string_agg(DISTINCT centro_val, ', ' ORDER BY centro_val)
+      FROM (
+        SELECT NULLIF(TRIM(COALESCE(
+          NULLIF(TRIM(p2.centro), ''),
+          NULLIF(TRIM(c.nombre), ''),
+          NULLIF(TRIM(c.codigo), ''),
+          NULLIF(TRIM(r.responsable), ''),
+          NULLIF(TRIM(a.responsable), '')
+        )), '') AS centro_val,
+        NULLIF(TRIM(COALESCE(r.cmn, '')), '') AS cmn_val
+        FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+        LEFT JOIN centros c ON a.centro_id = c.id
+        LEFT JOIN requerimiento_pedidos rp ON rp.requerimiento_id = r.id
+        LEFT JOIN pedidos_sigamef p2 ON p2.id = rp.pedido_sigamef_id
+        WHERE sr.solicitud_id = $1
+      ) centros_src
+      WHERE centro_val IS NOT NULL AND centro_val <> ''
+        AND (cmn_val IS NULL OR centro_val <> cmn_val)
+        AND centro_val !~ '^[0-9]{4,6}$'
+    ), (
+      SELECT string_agg(DISTINCT centro_elem, ', ')
+      FROM (
+        SELECT NULLIF(TRIM(COALESCE(
+          elem->>'centro_display', elem->>'centro_nombre', elem->>'centro', ''
+        )), '') AS centro_elem
+        FROM solicitudes_cotizacion sc
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
+        WHERE sc.id = $1
+      ) di
+      WHERE centro_elem IS NOT NULL AND centro_elem <> ''
+        AND centro_elem !~ '^[0-9]{4,6}$'
+    ), '') AS centros_texto
+  `, [sid]);
+  const raw = String(rows[0]?.centros_texto || '').trim();
+  if (!raw || esCodigoCmnCentro(raw)) return '';
+  // Filtrar partes que sean CMN si vinieran mezcladas
+  const parts = raw.split(',').map((s) => s.trim()).filter((s) => s && !esCodigoCmnCentro(s));
+  return parts.join(', ');
+}
+
+async function enrichCentrosBandejaValidacion(rows = []) {
+  const sids = [...new Set(rows.map((r) => r.solicitud_id).filter(Boolean))];
+  if (!sids.length) return rows;
+  const centroBySid = new Map();
+  await Promise.all(sids.map(async (sid) => {
+    try {
+      centroBySid.set(sid, await resolveCentrosTextoSolicitud(sid));
+    } catch (_) {
+      centroBySid.set(sid, '');
+    }
+  }));
+  return rows.map((r) => {
+    const resolved = centroBySid.get(r.solicitud_id) || '';
+    const centro = resolved || r.centros_texto || r.centro || '';
+    return { ...r, centros_texto: centro, centro };
+  });
+}
+
 /** Bandeja unificada — expedientes enviados desde Recepción de Cotizaciones (RC7.7). */
 export async function listarValidacionesExpedientes(usuario, userId, opts = {}) {
   const { rows } = await query(`
-    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+      cot.validacion_estado, cot.validacion_responsable, cot.validacion_informe,
+      cot.propuesta_economica, cot.created_at, cot.updated_at,
+      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
+      p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.tipo AS solicitud_tipo,
       COALESCE((
         SELECT string_agg(DISTINCT r.codigo, ', ' ORDER BY r.codigo)
@@ -529,7 +622,7 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
     if (!opts.soloAsignadas) return matchResponsable(r, usuario, userId, authOpts);
     return canUserValidateExpediente(r, usuario, userId, authOpts).puedeVer;
   });
-  return filtered.map((r) => {
+  const mapped = filtered.map((r) => {
     const perm = canUserValidateExpediente(r, usuario, userId, authOpts);
     return {
       ...mapCotizacionRow(r),
@@ -541,6 +634,7 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
       sin_asignacion: perm.sinAsignacion,
     };
   });
+  return enrichCentrosBandejaValidacion(mapped);
 }
 
 async function loadCotizacionFull(cotizacionId) {
@@ -617,6 +711,14 @@ async function loadPedidosCentroByReq(solicitudId) {
   return { byReq, byCodigo };
 }
 
+function findSavedFila(savedFilas, cotId, itemKey, baseKey) {
+  const list = Array.isArray(savedFilas) ? savedFilas : [];
+  return list.find((s) => s.item_key === itemKey)
+    || list.find((s) => String(s.cotizacion_id || '') === String(cotId) && (s.item_key === baseKey || s.item_key === itemKey))
+    || list.find((s) => !s.cotizacion_id && s.item_key === baseKey)
+    || null;
+}
+
 /**
  * Construye items legacy + matriz_v2 (RC7.7B) para una cotización/proveedor.
  */
@@ -627,6 +729,7 @@ async function buildMatrizValidacion(cot) {
   const { rows: countRows } = await query(`
     SELECT COUNT(*)::int AS total FROM cotizaciones_proveedor
     WHERE solicitud_id = $1 AND estado = 'COTIZACION_PRESENTADA'
+      AND validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
   `, [cot.solicitud_id]);
   const cantCot = countRows[0]?.total || 1;
   const reqMeta = await loadReqMetaMap(cot.solicitud_id);
@@ -643,10 +746,11 @@ async function buildMatrizValidacion(cot) {
   const list = (items.length ? items : [{ requerimiento_id: cot.requerimiento_id, item_index: 0, cantidad: 1 }]);
 
   const filas = list.map((it, idx) => {
-    const itemKey = `${it.requerimiento_id}-${it.item_index ?? idx}`;
-    const prop = propItems.find((p) => p.item_key === itemKey) || propItems[idx] || {};
-    const prevLegacy = savedLegacy.find((s) => s.item_key === itemKey) || {};
-    const prevFila = savedFilas.find((s) => s.item_key === itemKey) || {};
+    const baseKey = `${it.requerimiento_id}-${it.item_index ?? idx}`;
+    const itemKey = `${cot.id}:${baseKey}`;
+    const prop = propItems.find((p) => p.item_key === itemKey || p.item_key === baseKey) || propItems[idx] || {};
+    const prevLegacy = savedLegacy.find((s) => s.item_key === itemKey || s.item_key === baseKey) || {};
+    const prevFila = findSavedFila(savedFilas, cot.id, itemKey, baseKey) || {};
     const meta = reqMeta.get(it.requerimiento_id) || {};
     const nroReq = it.requerimiento_codigo || it.codigo || meta.codigo || '';
     const codigoSiga = it.codigo_sigamef || it.codigo_siga || it.cmn || '';
@@ -655,12 +759,21 @@ async function buildMatrizValidacion(cot) {
     const ped = pedidosCentro.byReq.get(it.requerimiento_id)
       || (codigoSiga ? pedidosCentro.byCodigo.get(String(codigoSiga)) : null)
       || {};
+    // Columna Centro del formato = centro organizacional (p. ej. CNSP), no el CMN (05277).
+    // Misma prioridad que bandeja Recepción/Validaciones: pedido SIGAMEF → cabecera.
+    const cmnCode = String(meta.cmn || codigoSiga || '').trim();
+    const savedCentroRaw = String(prevFila.automaticos?.centro || prevLegacy.centro || '').trim();
+    const savedCentroOk = savedCentroRaw && savedCentroRaw !== cmnCode ? savedCentroRaw : '';
+    const itemCentroRaw = String(it.centro || prop.centro || '').trim();
+    const itemCentroOk = itemCentroRaw && itemCentroRaw !== cmnCode && itemCentroRaw !== String(it.cmn || '').trim()
+      ? itemCentroRaw
+      : '';
     const resolved = resolveValidationCentro({
-      requerimientoCentro: meta.centro || meta.cmn || meta.area || '',
+      requerimientoCentro: '',
       pedidoCentro: ped.centro || '',
       cabeceraCentro,
-      informeCentro: prevFila.automaticos?.centro || prevLegacy.centro || '',
-      itemCentro: it.centro || it.cmn || prop.centro || '',
+      informeCentro: savedCentroOk,
+      itemCentro: itemCentroOk,
       centroCosto: meta.centro_costo || ped.centro_costo || prevFila.automaticos?.centro_costo || it.centro_costo || '',
     });
     if (resolved.warning) {
@@ -731,6 +844,200 @@ async function buildMatrizValidacion(cot) {
       filas,
     },
   };
+}
+
+/** Cotizaciones de la SC en bandeja de validación (todas las empresas). */
+async function loadCotizacionesValidacionSolicitud(solicitudId) {
+  const { rows } = await query(`
+    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      sc.detalle_items, sc.tipo AS solicitud_tipo
+    FROM cotizaciones_proveedor cot
+    JOIN proveedores p ON p.id = cot.proveedor_id
+    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    WHERE cot.solicitud_id = $1
+      AND cot.estado = 'COTIZACION_PRESENTADA'
+      AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
+    ORDER BY p.razon_social ASC, cot.id ASC
+  `, [solicitudId]);
+  return rows;
+}
+
+/**
+ * Matriz del expediente: una fila por ítem × proveedor (todas las cotizaciones derivadas).
+ */
+async function buildMatrizValidacionSolicitud(solicitudId, cotAncla = null) {
+  const cots = await loadCotizacionesValidacionSolicitud(solicitudId);
+  const lista = cots.length ? cots : (cotAncla ? [cotAncla] : []);
+  if (!lista.length) {
+    return {
+      tipoKey: 'BIENES',
+      legacyItems: [],
+      matriz_v2: { version: 2, tipo: 'BIENES', solicitud_id: solicitudId, expediente: true, filas: [] },
+    };
+  }
+  const allFilas = [];
+  let tipoKey = normalizeTipoValidacion(lista[0].solicitud_tipo) || 'BIENES';
+  for (const cot of lista) {
+    const built = await buildMatrizValidacion(cot);
+    tipoKey = built.tipoKey || tipoKey;
+    allFilas.push(...(built.matriz_v2?.filas || []));
+  }
+  return {
+    tipoKey,
+    legacyItems: filasV2ToLegacyItems(allFilas, tipoKey),
+    matriz_v2: {
+      version: 2,
+      tipo: tipoKey,
+      solicitud_id: solicitudId,
+      expediente: true,
+      cotizacion_id: cotAncla?.id || lista[0].id,
+      proveedor_id: cotAncla?.proveedor_id || lista[0].proveedor_id,
+      filas: allFilas,
+    },
+  };
+}
+
+/** Agrupa filas de matriz por cotizacion_id. */
+function groupFilasByCotizacion(filas = [], fallbackCotId = null) {
+  const map = new Map();
+  (filas || []).forEach((f) => {
+    const cid = f.cotizacion_id || fallbackCotId;
+    if (!cid) return;
+    if (!map.has(cid)) map.set(cid, []);
+    map.get(cid).push(f);
+  });
+  return map;
+}
+
+/** Conserva historial e indica nueva ronda posible en Invitaciones. */
+async function appendHistorialRetornoInvitacionesValidacion(solicitudId, usuario, observacion) {
+  const { rows } = await query(`
+    SELECT r.id, r.payload
+    FROM solicitud_requerimientos sr
+    JOIN requerimientos r ON r.id = sr.requerimiento_id
+    WHERE sr.solicitud_id = $1
+  `, [solicitudId]);
+  for (const row of rows) {
+    let payload = {};
+    try {
+      payload = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {});
+    } catch (_) {
+      payload = {};
+    }
+    if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
+    const ronda = payload.historial_invitaciones.length + 1;
+    payload.historial_invitaciones.push({
+      tipo: 'retorno_desde_validacion',
+      origen: 'VALIDACION_USUARIO',
+      motivo: 'todas_cotizaciones_no_validas',
+      ronda,
+      usuario: usuario || '',
+      observacion: String(observacion || '').slice(0, 500),
+      fecha: new Date().toISOString(),
+    });
+    await query('UPDATE requerimientos SET payload = $2::jsonb, updated_at = NOW() WHERE id = $1', [
+      row.id,
+      JSON.stringify(payload),
+    ]);
+  }
+}
+
+/**
+ * Persiste el subconjunto de filas de cada proveedor en su cotización
+ * (borrador o envío). No altera workflow.
+ */
+async function syncMatrizFilasHermanas({
+  solicitudId,
+  matriz_v2,
+  tipoKey,
+  usuario,
+  excludeCotizacionId = null,
+  modo = 'borrador',
+  estadoVal = null,
+  observacion = '',
+  formBase = null,
+  pdf_firmado = null,
+  derivacion_salida = null,
+}) {
+  const byCot = groupFilasByCotizacion(matriz_v2?.filas || [], matriz_v2?.cotizacion_id);
+  if (!byCot.size) return;
+  for (const [cid, filasCot] of byCot) {
+    if (excludeCotizacionId != null && String(cid) === String(excludeCotizacionId)) continue;
+    const cot = await loadCotizacionFull(cid);
+    if (String(cot.solicitud_id) !== String(solicitudId)) continue;
+    const est = String(cot.validacion_estado || '').toUpperCase();
+    if (modo === 'borrador' && !['DERIVADA', 'EN_PROCESO'].includes(est)) continue;
+    if (modo === 'envio' && !['DERIVADA', 'EN_PROCESO'].includes(est)) continue;
+    const inf = parseInforme(cot);
+    const calc = calcularResultadoCotizacion(tipoKey, filasCot);
+    // Resultado por cotización (filas propias). No heredar el resultado del expediente.
+    const formMerged = {
+      ...inf.formulario_07a,
+      ...(formBase || {}),
+      items: filasV2ToLegacyItems(filasCot, tipoKey),
+      resultado_global: calc.resultado_global || '',
+      cumple: calc.cumple || '',
+      fecha: new Date().toLocaleDateString('es-PE'),
+      profesional: formBase?.profesional
+        || inf.formulario_07a?.profesional
+        || responsableNombreDeCot(cot)
+        || usuario,
+    };
+    const matrizPersist = {
+      version: 2,
+      tipo: tipoKey,
+      cotizacion_id: cot.id,
+      proveedor_id: cot.proveedor_id,
+      solicitud_id: cot.solicitud_id,
+      filas: filasCot,
+      updated_at: new Date().toISOString(),
+      updated_by: usuario,
+      ...(modo === 'envio' ? { enviado_at: new Date().toISOString() } : {}),
+    };
+    const informe = {
+      ...inf,
+      formulario_07a: formMerged,
+      matriz_v2: matrizPersist,
+    };
+    if (modo === 'envio') {
+      if (pdf_firmado?.base64) {
+        informe.pdf_firmado = {
+          nombre: pdf_firmado.nombre || 'Validacion_formato.pdf',
+          mime_type: pdf_firmado.mime_type || 'application/pdf',
+          base64: pdf_firmado.base64,
+          tamaño_bytes: pdf_firmado.tamaño_bytes || bytesFromBase64(pdf_firmado.base64),
+          uploaded_at: new Date().toISOString(),
+          uploaded_by: usuario,
+        };
+      }
+      if (derivacion_salida) informe.derivacion_salida = derivacion_salida;
+      informe.enviado_at = new Date().toISOString();
+      informe.enviado_por = usuario;
+    }
+    if (modo === 'borrador') {
+      await query(`
+        UPDATE cotizaciones_proveedor SET
+          validacion_estado = 'EN_PROCESO',
+          validacion_informe = $2::jsonb,
+          updated_at = NOW()
+        WHERE id = $1 AND validacion_estado IN ('DERIVADA', 'EN_PROCESO')
+      `, [cid, JSON.stringify(informe)]);
+    } else {
+      const calcCot = calcularResultadoCotizacion(tipoKey, filasCot);
+      // Nunca usar estadoVal del expediente (APTO si ≥1 válida): cada hermana guarda su propio resultado.
+      const estadoCot = calcCot.estado === 'APTO' || calcCot.estado === 'NO_APTO'
+        ? calcCot.estado
+        : 'NO_APTO';
+      await query(`
+        UPDATE cotizaciones_proveedor SET
+          validacion_estado = $2,
+          validacion_observacion = $3,
+          validacion_informe = $4::jsonb,
+          updated_at = NOW()
+        WHERE id = $1 AND validacion_estado IN ('DERIVADA', 'EN_PROCESO')
+      `, [cid, estadoCot, observacion, JSON.stringify(informe)]);
+    }
+  }
 }
 
 function emptyEvaluacion(tipoKey) {
@@ -967,7 +1274,7 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
     throw new Error(perm.sinAsignacion ? 'Pendiente de asignación de responsable' : 'No tiene asignada esta validación');
   }
   const inf = parseInforme(cot);
-  const built = await buildMatrizValidacion(cot);
+  const built = await buildMatrizValidacionSolicitud(cot.solicitud_id, cot);
   const items = built.legacyItems;
   const requerimientos = await loadRequerimientosSolicitud(cot.solicitud_id);
   const reqIdsVinculados = new Set(requerimientos.map((r) => r.id));
@@ -998,7 +1305,7 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
     ? resolverDestinoSalidaValidacion(estado)
     : null;
   const fechaAuto = new Date().toLocaleDateString('es-PE');
-  const calc = calcularResultadoCotizacion(built.tipoKey, built.matriz_v2.filas);
+  const calc = calcularResultadoExpedienteValidacion(built.tipoKey, built.matriz_v2.filas);
   const centrosConsolidados = consolidateCentros(
     (built.matriz_v2.filas || []).map((f) => f.automaticos?.centro),
   );
@@ -1035,10 +1342,10 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
       fecha: inf.formulario_07a?.fecha || fechaAuto,
       profesional: inf.formulario_07a?.profesional || responsableNombreDeCot(cot) || usuario,
       producto_adquisicion: cot.denominacion || cot.objeto || '',
-      resultado_global: inf.formulario_07a?.resultado_global || calc.resultado_global || '',
+      resultado_global: inf.formulario_07a?.resultado_global || (calc.ok ? calc.resultado_global : '') || '',
       observacion_global: inf.formulario_07a?.observacion_global || '',
       sustento: inf.formulario_07a?.sustento || '',
-      cumple: inf.formulario_07a?.cumple || calc.cumple || '',
+      cumple: inf.formulario_07a?.cumple || (calc.ok ? calc.cumple : '') || '',
     },
     pdf_firmado: inf.pdf_firmado
       ? {
@@ -1080,13 +1387,19 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
 
   let formFromMatriz = formulario_07a;
   let matrizPersist = null;
+  const filasOwn = matriz_v2?.filas
+    ? (groupFilasByCotizacion(matriz_v2.filas, cot.id).get(cot.id) || matriz_v2.filas.filter((f) => !f.cotizacion_id || String(f.cotizacion_id) === String(cot.id)))
+    : null;
   if (matriz_v2?.filas) {
-    const calc = calcularResultadoCotizacion(tipoKey, matriz_v2.filas);
+    const calcExp = calcularResultadoExpedienteValidacion(tipoKey, matriz_v2.filas);
+    const filasGuardar = filasOwn?.length ? filasOwn : matriz_v2.filas;
     formFromMatriz = {
       ...(formulario_07a || {}),
-      items: filasV2ToLegacyItems(matriz_v2.filas, tipoKey),
-      resultado_global: formulario_07a?.resultado_global || calc.resultado_global,
-      cumple: formulario_07a?.cumple || calc.cumple,
+      items: filasV2ToLegacyItems(filasGuardar, tipoKey),
+      resultado_global: calcExp.ok
+        ? calcExp.resultado_global
+        : (formulario_07a?.resultado_global || ''),
+      cumple: calcExp.ok ? calcExp.cumple : (formulario_07a?.cumple || ''),
     };
     matrizPersist = {
       version: 2,
@@ -1094,7 +1407,7 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
       cotizacion_id: cot.id,
       proveedor_id: cot.proveedor_id,
       solicitud_id: cot.solicitud_id,
-      filas: matriz_v2.filas,
+      filas: filasGuardar,
       updated_at: new Date().toISOString(),
       updated_by: usuario,
     };
@@ -1169,6 +1482,18 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
   `, [cotizacionId, JSON.stringify(informe), JSON.stringify(historialExtra)]);
   if (!rows.length) throw new Error('No se pudo guardar: la validación no está editable');
 
+  if (matriz_v2?.filas?.length) {
+    await syncMatrizFilasHermanas({
+      solicitudId: cot.solicitud_id,
+      matriz_v2,
+      tipoKey,
+      usuario,
+      excludeCotizacionId: cot.id,
+      modo: 'borrador',
+      formBase: formMerged,
+    });
+  }
+
   return mapCotizacionRow({ ...rows[0], ruc: cot.ruc, razon_social: cot.razon_social, solicitud_codigo: cot.solicitud_codigo, denominacion: cot.denominacion, objeto: cot.objeto });
 }
 
@@ -1177,6 +1502,8 @@ function mapResultadoFormulario(resultado, cumple) {
   if (c.includes('no cumple') || c === 'no') return 'NO_APTO';
   if (c === 'cumple' || c === 'sí' || c === 'si') return 'APTO';
   const r = String(resultado || '').toLowerCase();
+  if (/al menos una cotizaci[oó]n v[aá]lida/i.test(r)) return 'APTO';
+  if (/todas las cotizaciones son no v[aá]lidas/i.test(r)) return 'NO_APTO';
   if (r.includes('no válid') || r.includes('no valid')) return 'NO_APTO';
   if (r.includes('válid') || r.includes('valid')) return 'APTO';
   return 'OBSERVADO';
@@ -1227,46 +1554,64 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
 
   let formulario_07a = formIn;
   let matrizPersist = null;
-  if (matriz_v2?.filas?.length) {
-    const check = validarMatrizCompleta(tipoKey, matriz_v2.filas);
-    if (!check.ok) throw new Error(check.errores.join(' '));
-    const calc = calcularResultadoCotizacion(tipoKey, matriz_v2.filas);
-    formulario_07a = {
-      ...(formIn || {}),
-      items: filasV2ToLegacyItems(matriz_v2.filas, tipoKey),
-      resultado_global: formIn?.resultado_global || calc.resultado_global,
-      cumple: formIn?.cumple || calc.cumple,
-    };
-    matrizPersist = {
-      version: 2,
-      tipo: tipoKey,
-      cotizacion_id: cot.id,
-      proveedor_id: cot.proveedor_id,
-      solicitud_id: cot.solicitud_id,
-      filas: matriz_v2.filas,
-      enviado_at: new Date().toISOString(),
-    };
+  const filasMatriz = Array.isArray(matriz_v2?.filas) ? matriz_v2.filas : [];
+  const filasOwnEnvio = filasMatriz.length
+    ? (groupFilasByCotizacion(filasMatriz, cot.id).get(cot.id)
+      || filasMatriz.filter((f) => !f.cotizacion_id || String(f.cotizacion_id) === String(cot.id)))
+    : null;
+
+  // Regla oficial del expediente (backend): recalcular siempre; no confiar en el cliente.
+  const calcExp = calcularResultadoExpedienteValidacion(tipoKey, filasMatriz);
+  if (!filasMatriz.length || calcExp.sin_cotizaciones) {
+    throw new Error('Sin cotizaciones para derivar.');
   }
+  if (calcExp.pendiente || !calcExp.ok) {
+    throw new Error(calcExp.motivo || 'Hay cotizaciones pendientes de validación.');
+  }
+  const check = validarMatrizCompleta(tipoKey, filasMatriz);
+  if (!check.ok) throw new Error(check.errores.join(' '));
 
-  if (!formulario_07a?.items?.length) throw new Error('Complete el formulario de validación');
-  if (!pdf_firmado?.base64) throw new Error('Adjunte el PDF firmado de la validación');
-
-  const estadoVal = mapResultadoFormulario(
-    resultado || formulario_07a.resultado_global,
-    formulario_07a.cumple,
-  );
+  const estadoVal = calcExp.estado; // APTO | NO_APTO
   const destOficial = resolverDestinoSalidaValidacion(estadoVal);
   const destinoCode = String(destino_submodulo || destOficial.code).toUpperCase();
   if (destinoCode !== destOficial.code) {
     throw new Error(`Destino no permitido. El Workflow determina: ${destOficial.label}`);
   }
+
+  const filasGuardar = filasOwnEnvio?.length ? filasOwnEnvio : filasMatriz;
+  const calcOwn = calcularResultadoCotizacion(tipoKey, filasGuardar);
+  formulario_07a = {
+    ...(formIn || {}),
+    items: filasV2ToLegacyItems(filasGuardar, tipoKey),
+    resultado_global: calcExp.resultado_global,
+    cumple: calcExp.cumple,
+  };
+  matrizPersist = {
+    version: 2,
+    tipo: tipoKey,
+    cotizacion_id: cot.id,
+    proveedor_id: cot.proveedor_id,
+    solicitud_id: cot.solicitud_id,
+    filas: filasGuardar,
+    enviado_at: new Date().toISOString(),
+    expediente: {
+      resultado_global: calcExp.resultado_global,
+      estado: calcExp.estado,
+      validas: calcExp.validas,
+      invalidas: calcExp.invalidas,
+    },
+  };
+
+  if (!formulario_07a?.items?.length) throw new Error('Complete el formulario de validación');
+  if (!pdf_firmado?.base64) throw new Error('Adjunte el PDF firmado de la validación');
+
   const respDestId = parseInt(responsable_destino_id, 10);
   const respDestNombre = String(responsable_destino_nombre || '').trim();
   if (!Number.isFinite(respDestId) || !respDestNombre) {
     throw new Error('Seleccione el usuario responsable del submódulo destino');
   }
 
-  const obsMatriz = (matriz_v2?.filas || matrizPersist?.filas || [])
+  const obsMatriz = filasMatriz
     .map((f) => String(f?.evaluacion?.observaciones || f?.observaciones || '').trim())
     .filter(Boolean)
     .join(' | ');
@@ -1274,13 +1619,12 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     observacion
     || formulario_07a.observacion_global
     || obsMatriz
-    || formulario_07a.resultado_global
+    || calcExp.resultado_global
     || '',
   ).trim();
   if (!obs) throw new Error('Las observaciones de la validación son obligatorias');
   if (String(estadoVal) !== 'APTO' && !obsMatriz && !String(formulario_07a.observacion_global || '').trim()) {
-    // Resultado negativo: exige observación en la matriz (columna OBSERVACIONES)
-    const tieneNegativa = (matriz_v2?.filas || []).some((f) => {
+    const tieneNegativa = filasMatriz.some((f) => {
       const r = String(f?.evaluacion?.resultado || f?.resultado || '');
       return /NO\s*V[ÁA]LID/i.test(r);
     });
@@ -1356,7 +1700,7 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     RETURNING *
   `, [
     cotizacionId,
-    estadoVal,
+    calcOwn.estado === 'APTO' || calcOwn.estado === 'NO_APTO' ? calcOwn.estado : estadoVal,
     obs,
     JSON.stringify(informe),
     JSON.stringify(histEnvio),
@@ -1386,6 +1730,22 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
 
   const updated = rows[0];
 
+  if (matriz_v2?.filas?.length) {
+    await syncMatrizFilasHermanas({
+      solicitudId: cot.solicitud_id,
+      matriz_v2,
+      tipoKey,
+      usuario,
+      excludeCotizacionId: cot.id,
+      modo: 'envio',
+      estadoVal,
+      observacion: obs,
+      formBase: formPersist,
+      pdf_firmado,
+      derivacion_salida: informe.derivacion_salida,
+    });
+  }
+
   await registrarTrazaPortal({
     solicitud_id: updated.solicitud_id,
     proveedor_id: updated.proveedor_id,
@@ -1412,18 +1772,29 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
       etapaDestino: destOficial.code,
       usuario,
-      observacion: observacion_derivacion || 'Validación técnica aprobada por área usuaria',
+      observacion: observacion_derivacion || 'Validación técnica: existe al menos una cotización válida',
       etapaEjecutor: 'VALIDACION_USUARIO',
       responsable: respDestNombre,
     });
   } else {
+    // Todas inválidas → retorno a Invitaciones (conserva historial / permite nueva ronda)
+    await query(`
+      UPDATE solicitudes_cotizacion SET estado = 'PUBLICADA', updated_at = NOW()
+      WHERE id = $1 AND estado NOT IN ('CERRADA')
+    `, [updated.solicitud_id]);
+    await appendHistorialRetornoInvitacionesValidacion(
+      updated.solicitud_id,
+      usuario,
+      observacion_derivacion || calcExp.resultado_global,
+    );
     await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
       etapaDestino: destOficial.code,
       usuario,
       observacion: observacion_derivacion
-        || 'Validación con observaciones — retorno a Recepción de Cotizaciones',
+        || 'Validación: todas las cotizaciones no válidas — retorno a Invitaciones',
       etapaEjecutor: 'VALIDACION_USUARIO',
       responsable: respDestNombre,
+      forzar: true,
     });
   }
 

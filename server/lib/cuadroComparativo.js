@@ -19,6 +19,11 @@ import {
 } from './cuadroComparativoAdjudicacion.js';
 import { registrarTrazaPortal } from './invitaciones.js';
 import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
+import { resolveCentrosTextoSolicitud, esCodigoCmnCentro } from './validacionesCotizacion.js';
+import {
+  calcularResultadoCotizacion,
+  normalizeTipoValidacion,
+} from './validacionFormatos.js';
 import { TRANSICIONES_POR_ACCION } from '../../core/workflowEngine/WorkflowTransitions.js';
 import { ETAPAS } from '../../core/workflowEngine/WorkflowState.js';
 import {
@@ -234,6 +239,35 @@ function parseInforme(cot) {
   return parseJson(cot?.validacion_informe, {});
 }
 
+/**
+ * Resultado por cotización: prioriza filas de matriz_v2 del informe (fuente de verdad
+ * del submódulo Validaciones). Evita mostrar APTO cuando el estado de columna fue
+ * sobrescrito con el resultado del expediente.
+ */
+function resolveValidacionEstadoCotizacion(cot, tipoSolicitud = '') {
+  const stored = String(cot?.validacion_estado || '').toUpperCase();
+  const inf = parseInforme(cot);
+  const tipoKey = normalizeTipoValidacion(tipoSolicitud || cot?.solicitud_tipo || cot?.tipo)
+    || normalizeTipoValidacion(inf.matriz_v2?.tipo)
+    || 'BIENES';
+  const filas = Array.isArray(inf.matriz_v2?.filas) ? inf.matriz_v2.filas : [];
+  const filasOwn = filas.filter((f) => !f.cotizacion_id
+    || String(f.cotizacion_id) === String(cot.id || cot.cotizacion_id));
+  const calc = calcularResultadoCotizacion(tipoKey, filasOwn.length ? filasOwn : filas);
+  if (calc.estado === 'APTO' || calc.estado === 'NO_APTO') return calc.estado;
+
+  const items = Array.isArray(inf.formulario_07a?.items) ? inf.formulario_07a.items : [];
+  if (items.length) {
+    const algunaNeg = items.some((it) => {
+      const r = String(it?.resultado || '');
+      return /NO\s*V[ÁA]LID/i.test(r) || /NO\s*VALIDA/i.test(r.normalize('NFD').replace(/\p{Diacritic}/gu, ''));
+    });
+    if (algunaNeg) return 'NO_APTO';
+    if (items.every((it) => String(it?.resultado || '').trim())) return 'APTO';
+  }
+  return stored;
+}
+
 function normalizeTipoContratacion(tipo) {
   const t = String(tipo || '').trim().toUpperCase();
   if (t === 'B' || t === 'BIEN' || t === 'BIENES') return 'Bien';
@@ -351,7 +385,7 @@ async function loadRequerimientosPorSolicitudes(solicitudIds) {
   if (!solicitudIds.length) return new Map();
   // payload es TEXT (no JSONB): no usar -> / ->> en SQL; parsear en Node.
   const { rows } = await query(`
-    SELECT sr.solicitud_id, r.id, r.codigo, r.denominacion, r.area, r.cmn, r.estado, r.payload
+    SELECT sr.solicitud_id, r.id, r.codigo, r.denominacion, r.area, r.cmn, r.responsable, r.estado, r.payload
     FROM solicitud_requerimientos sr
     JOIN requerimientos r ON r.id = sr.requerimiento_id
     WHERE sr.solicitud_id = ANY($1::int[])
@@ -360,20 +394,30 @@ async function loadRequerimientosPorSolicitudes(solicitudIds) {
   const map = new Map();
   for (const r of rows) {
     const payload = parseJson(r.payload, {});
-    const centro = String(
-      r.cmn
-      || payload.cmn
-      || payload.centro
-      || payload.centro_costo
-      || r.area
-      || '',
-    ).trim();
+    const cmnHint = String(r.cmn || payload.cmn || '').trim();
+    // Centro organizacional: nunca el CMN (05277). Preferir display/nombre/responsable.
+    const candidatos = [
+      payload.centro_display,
+      payload.centro_nombre,
+      payload.centro,
+      r.responsable,
+      payload.responsable,
+    ];
+    let centro = '';
+    for (const cand of candidatos) {
+      const s = String(cand || '').trim();
+      if (s && !esCodigoCmnCentro(s, cmnHint)) {
+        centro = s;
+        break;
+      }
+    }
     const list = map.get(r.solicitud_id) || [];
     list.push({
       id: r.id,
       codigo: r.codigo || '',
       descripcion: r.denominacion || '',
       centro,
+      cmn: cmnHint,
       area_usuaria: r.area || '',
       estado: r.estado || '',
       etapa_workflow: payload?.workflowSnapshot?.etapaActual || '',
@@ -454,6 +498,9 @@ export async function listarCuadroComparativoExpedientes() {
       COUNT(DISTINCT cot.proveedor_id) FILTER (
         WHERE cot.estado = 'COTIZACION_PRESENTADA'
       )::int AS total_proveedores,
+      COUNT(cot.id) FILTER (
+        WHERE cot.estado = 'COTIZACION_PRESENTADA'
+      )::int AS total_cotizaciones,
       COUNT(DISTINCT cot.proveedor_id) FILTER (
         WHERE cot.validacion_estado = 'APTO'
       )::int AS proveedores_aptos,
@@ -502,6 +549,15 @@ export async function listarCuadroComparativoExpedientes() {
   const ids = elegibles.map((r) => r.solicitud_id);
   const reqMap = await loadRequerimientosPorSolicitudes(ids);
   const estadoMap = await loadEstadosCuadroPorSolicitudes(ids);
+  const centroBySid = new Map();
+  await Promise.all(ids.map(async (sid) => {
+    const key = Number(sid);
+    try {
+      centroBySid.set(key, await resolveCentrosTextoSolicitud(sid));
+    } catch (_) {
+      centroBySid.set(key, '');
+    }
+  }));
 
   return elegibles.map((r) => {
     const reqs = reqMap.get(r.solicitud_id) || [];
@@ -509,6 +565,25 @@ export async function listarCuadroComparativoExpedientes() {
     const estadoCode = persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
     const area = areaUsuariaFromReqs(reqs, r.area_usuaria);
     const reqTexto = requerimientosTexto(reqs);
+    const sidKey = Number(r.solicitud_id);
+    let centrosTexto = String(centroBySid.get(sidKey) || '').trim();
+    if (!centrosTexto || esCodigoCmnCentro(centrosTexto)) {
+      centrosTexto = [...new Set(
+        reqs
+          .map((q) => {
+            const c = String(q.centro || '').trim();
+            return c && !esCodigoCmnCentro(c, q.cmn) ? c : '';
+          })
+          .filter(Boolean),
+      )].join(', ');
+    }
+    const reqsConCentro = reqs.map((q) => ({
+      id: q.id,
+      codigo: q.codigo,
+      descripcion: q.descripcion,
+      centro: centrosTexto || (esCodigoCmnCentro(q.centro, q.cmn) ? '' : q.centro),
+      area_usuaria: q.area_usuaria,
+    }));
     return {
       solicitud_id: r.solicitud_id,
       solicitud_codigo: r.solicitud_codigo || '',
@@ -516,17 +591,14 @@ export async function listarCuadroComparativoExpedientes() {
       objeto: r.objeto || '',
       tipo: normalizeTipoContratacion(r.tipo),
       tipo_raw: r.tipo || '',
-      requerimientos: reqs.map((q) => ({
-        id: q.id,
-        codigo: q.codigo,
-        descripcion: q.descripcion,
-        centro: q.centro,
-        area_usuaria: q.area_usuaria,
-      })),
+      requerimientos: reqsConCentro,
       requerimientos_texto: reqTexto,
       requerimientos_codigos: reqTexto,
+      centros_texto: centrosTexto,
+      centro: centrosTexto,
       area_usuaria: area,
       total_proveedores: Number(r.total_proveedores) || 0,
+      total_cotizaciones: Number(r.total_cotizaciones) || Number(r.total_proveedores) || 0,
       proveedores_aptos: Number(r.proveedores_aptos) || 0,
       proveedores_no_aptos: Number(r.proveedores_no_aptos) || 0,
       proveedores_pendientes: Number(r.proveedores_pendientes) || 0,
@@ -619,13 +691,17 @@ export async function getCuadroComparativoExpediente(solicitudId) {
 
   const proveedores = rows.map((r) => {
     const inf = parseInforme(r);
+    const validacion_estado = resolveValidacionEstadoCotizacion(
+      r,
+      base?.tipo_raw || base?.tipo || '',
+    );
     return {
       cotizacion_id: r.id,
       proveedor_id: r.proveedor_id,
       ruc: r.ruc || '',
       razon_social: r.razon_social || '',
       estado: r.estado,
-      validacion_estado: r.validacion_estado || '',
+      validacion_estado,
       validacion_responsable: r.validacion_responsable || '',
       validado_por: inf.formulario_07a?.profesional || r.validacion_responsable || '',
       validado_at: inf.enviado_at || r.updated_at || null,
@@ -652,6 +728,11 @@ async function loadSolicitudRow(solicitudId) {
 async function loadCotizacionesPresentadas(solicitudId) {
   // Fecha / cantidad de invitaciones: misma fuente que pestaña 4 — Invitaciones
   // (listarProveedoresSolicitud: fecha_envio + proveedores.cantidad_invitaciones).
+  const { rows: scRows } = await query(
+    `SELECT tipo FROM solicitudes_cotizacion WHERE id = $1`,
+    [solicitudId],
+  );
+  const tipoSol = scRows[0]?.tipo || '';
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.validacion_estado,
       cot.propuesta_tecnica, cot.propuesta_economica, cot.validacion_informe,
@@ -689,18 +770,32 @@ async function loadCotizacionesPresentadas(solicitudId) {
       END,
       p.razon_social ASC
   `, [solicitudId]);
-  return rows.map((r) => {
+  const mapped = rows.map((r) => {
     const fechaSol = r.fecha_envio_invitacion || null;
     const nSolicitud = Number(r.n_invitaciones_solicitud) || 0;
     const nProveedor = Number(r.cantidad_invitaciones_proveedor) || 0;
     // Prioriza conteo de envíos de esta solicitud; si no hay filas, usa el dato de pestaña 4
     const reiteraciones = nSolicitud > 0 ? nSolicitud : (fechaSol ? Math.max(nProveedor, 1) : nProveedor);
+    const validacion_estado = resolveValidacionEstadoCotizacion(r, tipoSol);
     return {
       ...r,
+      validacion_estado,
+      solicitud_tipo: tipoSol,
       fecha_solicitud: fechaSol,
       reiteraciones,
     };
   });
+  // Reordenar con el estado resuelto (filas de Validaciones), no solo columna DB.
+  const rank = (est) => {
+    const u = String(est || '').toUpperCase();
+    if (u === 'APTO') return 1;
+    if (u === 'NO_APTO') return 2;
+    if (u === 'OBSERVADO') return 3;
+    return 4;
+  };
+  mapped.sort((a, b) => rank(a.validacion_estado) - rank(b.validacion_estado)
+    || String(a.razon_social || '').localeCompare(String(b.razon_social || ''), 'es'));
+  return mapped;
 }
 
 async function getCuadroActivoRow(solicitudId, tipoDb = TIPO_BIENES) {
@@ -1920,7 +2015,9 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   const descripcionObs = String(body.descripcion || body.descripcion_observacion || observacion || motivoObs).trim();
   const comentarioObs = String(body.comentario || body.comentario_observacion || observacion || motivoObs).trim();
   if (accion === 'OBSERVAR_COORDINADOR' || accion === 'OBSERVAR_DEC'
-    || tr.requireObservacionEstructurada || tr.requireObservacionDecEstructurada) {
+    || accion === 'OBSERVAR_DEC_A_COORD'
+    || tr.requireObservacionEstructurada || tr.requireObservacionDecEstructurada
+    || tr.requireMotivoInstitucional) {
     if (!motivoObs && !observacion) {
       throw new Error('Motivo requerido');
     }
@@ -1958,8 +2055,12 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   }
 
   // RC8.7 — Observar crea versión N+1 (archiva la anterior sin eliminarla)
-  if (accion === 'OBSERVAR_COORDINADOR' || accion === 'OBSERVAR_DEC') {
+  if (accion === 'OBSERVAR_COORDINADOR' || accion === 'OBSERVAR_DEC'
+    || accion === 'OBSERVAR_DEC_A_COORD') {
     const userObs = String(usuario || '').slice(0, 150);
+    const destinoLabel = accion === 'OBSERVAR_DEC_A_COORD'
+      ? 'Coordinador CM'
+      : 'Analista';
     const creado = await crearNuevaVersionPorObservacion(cur, {
       accion,
       user: userObs,
@@ -1980,10 +2081,11 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
     const histInst = await registrarObservacionInstitucionalDesdeCuadro(cur.solicitud_id, {
       motivo: motivoObs || observacion,
       usuario: userObs,
-      origen_submodulo: body.origen_submodulo,
-      destino_submodulo: body.destino_submodulo,
-      destino_etapa: body.destino_etapa,
-      destino_persona: body.destino_persona,
+      origen_submodulo: body.origen_submodulo || (accion.startsWith('OBSERVAR_DEC') ? 'DEC' : 'Cuadro Comparativo'),
+      destino_submodulo: body.destino_submodulo
+        || (accion === 'OBSERVAR_DEC_A_COORD' ? 'Cuadro Comparativo' : 'Cuadro Comparativo'),
+      destino_etapa: body.destino_etapa || tr.to,
+      destino_persona: body.destino_persona || destinoLabel,
       observacion_padre_id: body.observacion_padre_id || body.observacionPadreId,
       accionRevision: accion,
     });
@@ -2000,6 +2102,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
         hacia: tr.to,
         motivo: motivoObs,
         observacion,
+        destinatario: destinoLabel,
         historial_institucional: histInst,
         workflow: sync,
       }).slice(0, 2000),
@@ -2023,6 +2126,7 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
         estado_destino: tr.to,
         responsable: tr.responsable,
         rol,
+        destinatario: destinoLabel,
         acciones: accionesDisponiblesRevision(tr.to, rol),
       },
       workflow: {
@@ -2040,12 +2144,106 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   }
 
   if (accion === 'DERIVAR_DEC' || tr.requireConformidad) {
-    if (tr.requireConformidad && !tieneConformidad) {
-      throw new Error('Debe registrar la conformidad del Coordinador antes de derivar al DEC');
-    }
     if ((tr.requireFirmado || accion === 'DERIVAR_DEC') && !tieneFirmado) {
       throw new Error('Debe adjuntar el PDF firmado del Anexo antes de derivar al DEC');
     }
+    // Derivar a DEC: si hay firma vigente, la conformidad se registra automáticamente.
+    if (tr.requireConformidad && !tieneConformidad && accion !== 'DERIVAR_DEC') {
+      throw new Error('Debe registrar la conformidad del Coordinador antes de derivar al DEC');
+    }
+  }
+
+  // DEC: aprobar y derivar a CCP (acción única)
+  if (accion === 'APROBAR_DERIVAR_CCP') {
+    if (!tieneFirmado) {
+      throw new Error('Debe existir el PDF firmado por el Coordinador');
+    }
+    if (!tieneFirmadoDec) {
+      throw new Error('Debe adjuntar el PDF firmado por el DEC');
+    }
+    const userApr = String(usuario || '').slice(0, 150);
+    const datosApr = { ...datosPrev };
+    const histApr = Array.isArray(datosApr.historial_revision) ? [...datosApr.historial_revision] : [];
+    // Auto-conformidades (Coord si faltaba; DEC al aprobar)
+    datosApr.revision_coordinador = {
+      ...(datosApr.revision_coordinador || {}),
+      conformidad: true,
+      conformidad_at: datosApr.revision_coordinador?.conformidad_at || new Date().toISOString(),
+      conformidad_por: datosApr.revision_coordinador?.conformidad_por || userApr,
+    };
+    datosApr.revision_dec = {
+      ...(datosApr.revision_dec || {}),
+      conformidad: true,
+      conformidad_at: new Date().toISOString(),
+      conformidad_por: userApr,
+    };
+    histApr.push({
+      at: new Date().toISOString(),
+      usuario: userApr,
+      accion: 'APROBAR_DEC',
+      estado: ESTADOS_REVISION_CUADRO.APROBADO_DEC,
+      observacion: observacion || 'Aprobado por DEC',
+      rol,
+    });
+    histApr.push({
+      at: new Date().toISOString(),
+      usuario: userApr,
+      accion: 'GENERAR_CCP',
+      estado: ESTADOS_REVISION_CUADRO.PENDIENTE_CCP,
+      observacion: observacion || 'CCP generado tras aprobación DEC',
+      rol,
+    });
+    datosApr.historial_revision = histApr.slice(-40);
+
+    // Idempotencia: ya derivado
+    if (estado === 'DERIVADO_CCP') {
+      return derivarCuadroACcp(id, body, usuario);
+    }
+
+    await query(`
+      UPDATE cuadros_comparativos
+      SET estado = 'PENDIENTE_CCP',
+          datos_json = $2::jsonb,
+          actualizado_por = $3,
+          actualizado_at = NOW()
+      WHERE id = $1 AND estado IN ('PENDIENTE_DEC', 'FIRMADO_COORDINADOR', 'APROBADO_DEC', 'PENDIENTE_CCP')
+    `, [id, JSON.stringify(datosApr), userApr]);
+
+    const { rows: midRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
+    if (!midRows.length) throw new Error('No se pudo aprobar el cuadro');
+    // Re-validar gates con conformidades ya persistidas
+    assertCuadroListoParaCcp(midRows[0], 'Aprobar y derivar a CCP');
+
+    await registrarEventoCuadroCcp(cur.solicitud_id, {
+      evento: EVENTOS_TRAZA_CUADRO_CCP.CUADRO_APROBADO_DEC,
+      usuario: userApr,
+      observacion: observacion || `CUADRO_APROBADO_DEC cuadro #${id} v${cur.version}`,
+      responsable: RESPONSABLES_REVISION.DEC,
+    });
+    await registrarEventoCuadroCcp(cur.solicitud_id, {
+      evento: EVENTOS_TRAZA_CUADRO_CCP.CCP_GENERADO,
+      usuario: userApr,
+      observacion: observacion || `CCP_GENERADO cuadro #${id} v${cur.version}`,
+      responsable: RESPONSABLES_REVISION.CCP,
+    });
+
+    const dest = await derivarCuadroACcp(id, {
+      ...body,
+      observacion_derivacion: body.observacion_derivacion || observacion
+        || 'Cuadro Comparativo aprobado por DEC y derivado a CCP',
+    }, usuario);
+    return {
+      ...dest,
+      aprobado_dec: true,
+      ccp_generado: true,
+      revision: {
+        accion,
+        estado_origen: estado,
+        estado_destino: 'DERIVADO_CCP',
+        responsable: RESPONSABLES_REVISION.CCP,
+        rol,
+      },
+    };
   }
 
   // RC8.6 — gates DEC (conformidad / firmas Coordinador + DEC)
@@ -2153,12 +2351,14 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   });
   datos.historial_revision = hist.slice(-40);
 
-  if (accion === 'CONFORMIDAD_COORDINADOR' || accion === 'APROBAR_COORDINADOR') {
+  if (accion === 'CONFORMIDAD_COORDINADOR' || accion === 'APROBAR_COORDINADOR'
+    || accion === 'DERIVAR_DEC') {
+    // DERIVAR_DEC registra conformidad automáticamente si hay PDF firmado vigente
     datos.revision_coordinador = {
       ...(datos.revision_coordinador || {}),
       conformidad: true,
-      conformidad_at: new Date().toISOString(),
-      conformidad_por: user,
+      conformidad_at: (datos.revision_coordinador || {}).conformidad_at || new Date().toISOString(),
+      conformidad_por: (datos.revision_coordinador || {}).conformidad_por || user,
       ...(modoPrueba ? { conformidad_contexto: actuarComo, conformidad_usuario_real_rol: rolReal } : {}),
     };
   }

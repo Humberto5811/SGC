@@ -43,7 +43,7 @@ export const ESTADO_ACTUAL_TEXTO = {
   PROGRAMACION: 'En Programación',
   ACTOS_PREPARATORIOS: 'En Coordinación CM',
   INVITACIONES: 'En Invitaciones',
-  RECEPCION_COTIZACIONES: 'En Recep. Cotiz.',
+  RECEPCION_COTIZACIONES: 'Cotización recibida',
   VALIDACION_USUARIO: 'En Valid. Usuario',
   CUADRO_COMPARATIVO: 'En Cuadro Comp.',
   CCP: 'En CCP',

@@ -334,7 +334,12 @@ export async function guardarBorradorCotizacion(proveedorId, body, req) {
 
 export async function listMisCotizaciones(proveedorId) {
   const { rows } = await query(`
-    SELECT cot.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+      cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
+      cot.validacion_estado, cot.validacion_observacion, cot.validacion_informe,
+      cot.validacion_responsable, cot.historial, cot.created_at, cot.updated_at,
+      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       ip.estado AS estado_invitacion
     FROM cotizaciones_proveedor cot
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -438,7 +443,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
     where += ` AND cot.validacion_estado = $${params.length}`;
   }
   const { rows } = await query(`
-    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.fecha_presentacion,
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado,
+      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       COALESCE((
@@ -450,7 +456,33 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
         SELECT string_agg(DISTINCT elem->>'requerimiento_codigo', ', ' ORDER BY elem->>'requerimiento_codigo')
         FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
         WHERE COALESCE(elem->>'requerimiento_codigo', '') <> ''
-      ), '') AS requerimientos_texto
+      ), '') AS requerimientos_texto,
+      COALESCE((
+        SELECT string_agg(DISTINCT centro_val, ', ' ORDER BY centro_val)
+        FROM (
+          SELECT NULLIF(TRIM(COALESCE(
+            NULLIF(TRIM(p2.centro), ''),
+            NULLIF(TRIM(c.nombre), ''),
+            NULLIF(TRIM(c.codigo), ''),
+            NULLIF(TRIM(a.responsable), ''),
+            NULLIF(TRIM(r.responsable), ''),
+            NULLIF(TRIM(r.cmn), '')
+          )), '') AS centro_val
+          FROM solicitud_requerimientos sr
+          JOIN requerimientos r ON r.id = sr.requerimiento_id
+          LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+          LEFT JOIN centros c ON a.centro_id = c.id
+          LEFT JOIN requerimiento_pedidos rp ON rp.requerimiento_id = r.id
+          LEFT JOIN pedidos_sigamef p2 ON p2.id = rp.pedido_sigamef_id
+          WHERE sr.solicitud_id = cot.solicitud_id
+        ) centros_src
+        WHERE centro_val IS NOT NULL AND centro_val <> ''
+      ), (
+        SELECT string_agg(DISTINCT NULLIF(TRIM(COALESCE(
+          elem->>'centro_display', elem->>'centro_nombre', elem->>'centro', ''
+        )), ''), ', ')
+        FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
+      ), '') AS centros_texto
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -482,6 +514,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       objeto: r.objeto,
       requerimientos_texto: r.requerimientos_texto || '',
       requerimientos_codigos: r.requerimientos_texto || '',
+      centros_texto: r.centros_texto || '',
+      centro: r.centros_texto || '',
     };
   });
 }

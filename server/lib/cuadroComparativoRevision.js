@@ -198,6 +198,37 @@ export const TRANSICIONES_REVISION_CUADRO = Object.freeze([
     requireObservacionDecEstructurada: false,
     requireMotivoInstitucional: true,
   },
+  /** DEC observa y devuelve al Coordinador CM (no al Analista). */
+  {
+    accion: 'OBSERVAR_DEC_A_COORD',
+    rol: ROLES_REVISION.DEC,
+    from: [
+      ESTADOS_REVISION_CUADRO.PENDIENTE_DEC,
+      ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
+    ],
+    to: ESTADOS_REVISION_CUADRO.PENDIENTE_COORDINADOR,
+    responsable: RESPONSABLES_REVISION.COORDINADOR_CM,
+    requireMotivoInstitucional: true,
+  },
+  /**
+   * DEC aprueba y deriva a CCP (flujo único).
+   * Requiere firmas Coord+DEC; registra conformidad DEC; genera CCP y deriva.
+   */
+  {
+    accion: 'APROBAR_DERIVAR_CCP',
+    rol: ROLES_REVISION.DEC,
+    from: [
+      ESTADOS_REVISION_CUADRO.PENDIENTE_DEC,
+      ESTADOS_REVISION_CUADRO.FIRMADO_COORDINADOR,
+      ESTADOS_REVISION_CUADRO.APROBADO_DEC,
+      ESTADOS_REVISION_CUADRO.PENDIENTE_CCP,
+    ],
+    to: ESTADOS_REVISION_CUADRO.DERIVADO_CCP,
+    responsable: RESPONSABLES_REVISION.CCP,
+    requireFirmado: true,
+    requireFirmadoDec: true,
+    requireVersionVigente: true,
+  },
   /** RC8.8 — Generar CCP (solo con cuadro plenamente aprobado; no deriva aún) */
   {
     accion: 'GENERAR_CCP',

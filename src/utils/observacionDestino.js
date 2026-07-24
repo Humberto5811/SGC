@@ -43,7 +43,10 @@ export const SUBMODULO_DISPLAY_LABELS = {
   'Evaluación de Requerimientos': 'Evaluación',
   'Registro de Requerimiento': 'Registro AU',
   'Invitaciones': 'Invitaciones',
-  'Cotizaciones': 'Cotizaciones',
+  'Cotizaciones': 'Cotización recibida',
+  'Cotización recibida': 'Cotización recibida',
+  'Recepción de Cotizaciones': 'Cotización recibida',
+  'Recepción Cotizaciones': 'Cotización recibida',
   'Cuadro Comparativo': 'Cuadro Comparativo',
   'CCP': 'CCP',
   'Ejecución Contractual': 'Ejecución',
@@ -96,6 +99,7 @@ export function getRolDisplayFromRow(row) {
     PROGRAMACION: 'Programación',
     DEC: 'DEC',
     EVALUACION: 'Evaluación',
+    RECEPCION_COTIZACIONES: 'Cotización recibida',
     CCP: 'CCP',
     CUADRO_COMPARATIVO: 'Cuadro Comparativo',
     EJECUCION: 'Ejecución',
@@ -110,7 +114,7 @@ export const SUBMODULOS_DESTINO = [
   { code: 'PROGRAMACION', label: 'Programación', personas: ['Programador', 'Jefe de Programación'] },
   { code: 'ACTOS_PREPARATORIOS', label: 'Coordinación CM', personas: ['Coordinador de Contratos Menores', 'Analista de Contratos Menores'] },
   { code: 'INVITACIONES', label: 'Invitaciones', personas: ['Especialista Contrataciones'] },
-  { code: 'RECEPCION_COTIZACIONES', label: 'Cotizaciones', personas: ['Especialista Contrataciones'] },
+  { code: 'RECEPCION_COTIZACIONES', label: 'Cotización recibida', personas: ['Especialista Contrataciones'] },
   { code: 'VALIDACION_USUARIO', label: 'Validación Usuario', personas: ['Área Usuaria', 'Responsable AU'] },
   { code: 'CUADRO_COMPARATIVO', label: 'Cuadro Comparativo', personas: ['Especialista Contrataciones'] },
   { code: 'CCP', label: 'CCP', personas: ['Comité de Compras Públicas'] },
@@ -124,6 +128,10 @@ export function getSubmoduloByLabel(label) {
   if (!s) return null;
   if (/actos prep/i.test(s) || /coordinaci[oó]n cm/i.test(s)) {
     return SUBMODULOS_DESTINO.find((item) => item.code === 'ACTOS_PREPARATORIOS') || null;
+  }
+  // Alias histórico / menú: Cotizaciones, Recepción de Cotizaciones → misma etapa
+  if (/cotizaci[oó]n(es)?\s*recibida/i.test(s) || /^cotizaciones$/i.test(s) || /recepci[oó]n\s*(de\s*)?cotiz/i.test(s)) {
+    return SUBMODULOS_DESTINO.find((item) => item.code === 'RECEPCION_COTIZACIONES') || null;
   }
   return SUBMODULOS_DESTINO.find((item) => item.label === s) || null;
 }

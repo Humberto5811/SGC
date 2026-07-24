@@ -177,7 +177,8 @@ assert(calcClient('SERVICIOS', reportSrv.matriz_v2.filas).estado === 'NO_APTO', 
 
 // 11) Docs compactos / auto-load
 assert(/Solo lista de proveedores|Ver documentos/.test(modalSrc) && !/firstBtn/.test(modalSrc), 'docs solo al pulsar Ver documentos');
-assert(/val-docs-scroll/.test(modalSrc), 'tabla docs con scroll interno');
+assert(/val-docs-scroll/.test(modalSrc), 'panel docs presente');
+assert(!/val-docs-scroll[^>]{0,80}max-height/.test(modalSrc), 'docs sin max-height interno (usa espacio del modal)');
 
 // 12) Orden bandeja en vivo (si hay datos)
 try {

@@ -3,12 +3,161 @@ import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
 import {
   CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
+  formatTimestampNaive,
 } from './cronogramaDatetime.js';
 
 function parseJson(val, fallback = []) {
   if (Array.isArray(val)) return val;
   if (val && typeof val === 'object') return val;
   try { return JSON.parse(val || 'null') ?? fallback; } catch (_) { return fallback; }
+}
+
+function trimText(v) {
+  if (v == null) return '';
+  return String(v).trim();
+}
+
+function itemHasCentro(it) {
+  return !!(
+    trimText(it?.centro_display)
+    || trimText(it?.centro_nombre)
+    || trimText(it?.centro)
+    || trimText(it?.centro_codigo)
+  );
+}
+
+function buildCentroDisplay(centro, centroCodigo, centroNombre) {
+  const codigo = trimText(centroCodigo);
+  const nombre = trimText(centroNombre);
+  const c = trimText(centro);
+  if (codigo && nombre && codigo !== nombre) return `${codigo} — ${nombre}`;
+  return nombre || codigo || c || '';
+}
+
+/** Carga agrupada de centros por requerimiento (pedido → área/centros → req). Sin N+1. */
+async function loadCentrosPorRequerimiento(requerimientoIds) {
+  const ids = [...new Set((requerimientoIds || []).map(Number).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const { rows } = await query(`
+    SELECT r.id AS requerimiento_id,
+      COALESCE((
+        SELECT NULLIF(TRIM(p.centro), '')
+        FROM requerimiento_pedidos rp
+        JOIN pedidos_sigamef p ON rp.pedido_sigamef_id = p.id
+        WHERE rp.requerimiento_id = r.id AND NULLIF(TRIM(p.centro), '') IS NOT NULL
+        ORDER BY rp.id ASC
+        LIMIT 1
+      ), '') AS pedido_centro,
+      COALESCE((
+        SELECT NULLIF(TRIM(p.centro_costo), '')
+        FROM requerimiento_pedidos rp
+        JOIN pedidos_sigamef p ON rp.pedido_sigamef_id = p.id
+        WHERE rp.requerimiento_id = r.id AND NULLIF(TRIM(p.centro_costo), '') IS NOT NULL
+        ORDER BY rp.id ASC
+        LIMIT 1
+      ), '') AS pedido_centro_costo,
+      COALESCE(NULLIF(TRIM(c.nombre), ''), '') AS centro_nombre,
+      COALESCE(NULLIF(TRIM(c.codigo), ''), '') AS centro_codigo,
+      COALESCE(NULLIF(TRIM(a.responsable), ''), '') AS area_responsable,
+      COALESCE(NULLIF(TRIM(r.responsable), ''), '') AS req_responsable,
+      COALESCE(NULLIF(TRIM(r.cmn), ''), '') AS req_cmn
+    FROM requerimientos r
+    LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+    LEFT JOIN centros c ON a.centro_id = c.id
+    WHERE r.id = ANY($1::int[])
+  `, [ids]);
+  const map = new Map();
+  rows.forEach((row) => {
+    const pedidoCentro = trimText(row.pedido_centro);
+    const centroNombre = trimText(row.centro_nombre);
+    const centroCodigo = trimText(row.centro_codigo);
+    const areaFallback = trimText(row.area_responsable);
+    const reqResponsable = trimText(row.req_responsable);
+    const reqCmn = trimText(row.req_cmn);
+    // Prioridad: pedido.centro → catálogo centros → área → responsable REQ → cmn
+    const centro = pedidoCentro || centroNombre || centroCodigo || areaFallback
+      || reqResponsable || reqCmn || '';
+    const displayBase = centroNombre || pedidoCentro || centroCodigo || reqResponsable || centro;
+    map.set(Number(row.requerimiento_id), {
+      centro,
+      centro_codigo: centroCodigo || (pedidoCentro || ''),
+      centro_nombre: displayBase,
+      centro_display: buildCentroDisplay(centro, centroCodigo || pedidoCentro, displayBase),
+      centro_costo: trimText(row.pedido_centro_costo),
+    });
+  });
+  return map;
+}
+
+/** Resuelve centros adicionales por código de pedido SIGAMEF (fallback si falta vínculo). */
+async function loadCentrosPorPedidoSigamef(pedidoCodes) {
+  const codes = [...new Set((pedidoCodes || []).map((c) => String(c || '').trim()).filter(Boolean))];
+  if (!codes.length) return new Map();
+  const { rows } = await query(`
+    SELECT
+      COALESCE(NULLIF(TRIM(pedido_sigamef), ''), CONCAT(UPPER(LEFT(COALESCE(tipo, 'PB'), 2)), '-', nro_pedido)) AS pedido_key,
+      NULLIF(TRIM(centro), '') AS centro,
+      NULLIF(TRIM(centro_costo), '') AS centro_costo
+    FROM pedidos_sigamef
+    WHERE NULLIF(TRIM(centro), '') IS NOT NULL
+      AND (
+        pedido_sigamef = ANY($1::text[])
+        OR CONCAT(UPPER(LEFT(COALESCE(tipo, 'PB'), 2)), '-', nro_pedido) = ANY($1::text[])
+      )
+  `, [codes]);
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = trimText(row.pedido_key);
+    const centro = trimText(row.centro);
+    if (!key || !centro) return;
+    map.set(key, {
+      centro,
+      centro_codigo: centro,
+      centro_nombre: centro,
+      centro_display: centro,
+      centro_costo: trimText(row.centro_costo),
+    });
+  });
+  return map;
+}
+
+function firstPedidoCodeFromItem(it) {
+  const raw = trimText(it?.pedido_sigamef);
+  if (!raw) return '';
+  return raw.split(',')[0].trim();
+}
+
+/** Respeta centro ya presente en el ítem; si falta, enriquece desde mapas precargados. */
+function enrichDetalleItemsConCentro(items, centroMap, pedidoCentroMap = new Map()) {
+  return (items || []).map((it) => {
+    if (itemHasCentro(it)) {
+      const centro = trimText(it.centro) || trimText(it.centro_nombre) || trimText(it.centro_codigo);
+      const centro_codigo = trimText(it.centro_codigo);
+      const centro_nombre = trimText(it.centro_nombre) || centro;
+      const centro_display = trimText(it.centro_display)
+        || buildCentroDisplay(centro, centro_codigo, centro_nombre);
+      return { ...it, centro, centro_codigo, centro_nombre, centro_display };
+    }
+    const byReq = centroMap.get(Number(it.requerimiento_id));
+    const byPedido = pedidoCentroMap.get(firstPedidoCodeFromItem(it));
+    const resolved = (byReq && trimText(byReq.centro))
+      ? byReq
+      : (byPedido || byReq || {
+        centro: '', centro_codigo: '', centro_nombre: '', centro_display: '',
+      });
+    return { ...it, ...resolved };
+  });
+}
+
+async function enrichItemsCentroPipeline(items) {
+  const list = items || [];
+  const reqIds = list.map((it) => it.requerimiento_id).filter(Boolean);
+  const pedidoCodes = list.map(firstPedidoCodeFromItem).filter(Boolean);
+  const [centroMap, pedidoCentroMap] = await Promise.all([
+    loadCentrosPorRequerimiento(reqIds),
+    loadCentrosPorPedidoSigamef(pedidoCodes),
+  ]);
+  return enrichDetalleItemsConCentro(list, centroMap, pedidoCentroMap);
 }
 
 export async function assertAccesoSolicitud(proveedorId, solicitudId) {
@@ -222,6 +371,8 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
   const reqIds = reqs.rows.map((r) => r.id);
   const adjuntosMap = await loadAdjuntosPorRequerimiento(reqIds);
   const documentos = buildDocumentosConvocatoria(acceso, reqIds, adjuntosMap);
+  const detalleRaw = parseJson(acceso.detalle_items);
+  const detalle_items = await enrichItemsCentroPipeline(detalleRaw);
 
   return {
     solicitud: {
@@ -238,7 +389,7 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
       cotizaciones_fin: acceso.cotizaciones_fin,
       docs_solicitados: parseJson(acceso.docs_solicitados),
       requisitos_tecnicos: parseJson(acceso.requisitos_tecnicos),
-      detalle_items: parseJson(acceso.detalle_items),
+      detalle_items,
     },
     requerimientos: reqs.rows,
     documentos,
@@ -253,8 +404,9 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
 
   const reqIds = [...new Set(items.map((it) => it.requerimiento_id).filter(Boolean))];
   const adjuntosMap = await loadAdjuntosPorRequerimiento(reqIds);
+  const itemsEnriquecidos = await enrichItemsCentroPipeline(items);
 
-  const itemsConDocs = items.map((it, idx) => ({
+  const itemsConDocs = itemsEnriquecidos.map((it, idx) => ({
     ...it,
     item_key: `${it.requerimiento_id}-${it.item_index ?? idx}`,
     unidad_medida: it.unidad_medida || it.um || 'UND',
@@ -505,7 +657,7 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     estado: cot.estado,
     validacion_estado: cot.validacion_estado || '',
     validacion_responsable: cot.validacion_responsable || cot.validado_por || '',
-    fecha_presentacion: cot.fecha_presentacion,
+    fecha_presentacion: formatTimestampNaive(cot.fecha_presentacion) || cot.fecha_presentacion,
     monto: propuestaEconomica.monto ?? null,
     moneda: propuestaEconomica.moneda || 'PEN',
     propuesta_tecnica: parseJson(cot.propuesta_tecnica, {}),

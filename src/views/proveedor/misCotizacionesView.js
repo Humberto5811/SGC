@@ -687,7 +687,7 @@ async function loadCotizacionesList() {
       <tbody>${rows.map((c) => `
         <tr>
           <td><strong>${esc(c.solicitud_codigo)}</strong> — ${esc(c.denominacion || c.objeto || '')}</td>
-          <td>${esc(c.estado)}</td>
+          <td>${esc(c.estado === 'COTIZACION_PRESENTADA' ? 'Cotización recibida' : (c.estado || '—'))}</td>
           <td>${esc(c.validacion_estado || 'Pendiente')}</td>
           <td class="small">${fmtDt(c.fecha_presentacion || c.created_at)}</td>
           <td class="text-nowrap">

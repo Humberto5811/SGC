@@ -5,7 +5,7 @@ function badgeEstadoCot(estado, validacion) {
   if (validacion === 'APTO') return '<span class="badge bg-success">Apto</span>';
   if (validacion === 'NO_APTO') return '<span class="badge bg-danger">No apto</span>';
   if (validacion === 'OBSERVADO') return '<span class="badge bg-warning text-dark">Observado</span>';
-  if (estado === 'COTIZACION_PRESENTADA') return '<span class="badge bg-primary">Presentada</span>';
+  if (estado === 'COTIZACION_PRESENTADA') return '<span class="badge bg-primary">Cotización recibida</span>';
   return '<span class="badge bg-secondary">Sin cotización</span>';
 }
 
@@ -46,7 +46,11 @@ export async function initEstadoParticipacionView() {
           <tbody>${inv.map((i) => `
             <tr>
               <td><strong>${esc(i.codigo)}</strong><br><small>${esc(i.denominacion || '')}</small></td>
-              <td>${esc(i.estado_invitacion || i.estado)}</td>
+              <td>${esc(
+                String(i.estado_invitacion || i.estado || '') === 'COTIZACION_PRESENTADA'
+                  ? 'Cotización recibida'
+                  : (i.estado_invitacion || i.estado || '—')
+              )}</td>
               <td>${badgeEstadoCot(i.cotizacion_estado, i.validacion_estado)}</td>
               <td>${esc(i.validacion_estado || '—')}</td>
               <td class="small">${fmtDt(i.fecha_presentacion)}</td>

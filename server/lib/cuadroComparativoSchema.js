@@ -175,9 +175,13 @@ export function buildPrimeraFuenteFromMatriz(matriz = {}, cotizaciones = []) {
       informacion_adicional,
       info_por_item,
       acciones_administrativas: (() => {
-        const valEst = String(p.validacion_estado || cot.validacion_estado || '').toUpperCase();
-        const apto = valEst === 'APTO';
-        const noApto = valEst === 'NO_APTO';
+        const valEst = String(p.validacion_estado || cot.validacion_estado || '').toUpperCase()
+          .normalize('NFD').replace(/\p{Diacritic}/gu, '');
+        const apto = valEst === 'APTO' || valEst === 'VALIDA';
+        const noApto = valEst === 'NO_APTO' || valEst === 'OBSERVADO'
+          || valEst === 'NO_VALIDA' || valEst === 'NO VALIDA'
+          || valEst === 'NO_CUMPLE' || valEst === 'NO CUMPLE'
+          || /NO\s*VALID/.test(valEst);
         const fechaSol = toDateOnly(
           cot.fecha_solicitud || cot.fecha_envio_invitacion || cot.fecha_envio || cot.fecha_invitacion,
         );
@@ -197,8 +201,8 @@ export function buildPrimeraFuenteFromMatriz(matriz = {}, cotizaciones = []) {
           dedicado_objeto: null,
           // Derivada a validación AU → siempre Sí
           au_participo_rtm: true,
+          // NO VÁLIDA: la UI de matriz muestra "NO VÁLIDA" (no "Sí"/"No")
           cumple_rtm_o_similar: apto ? true : (noApto ? false : null),
-          // Cotización válida (APTO) → Sí; no válida (NO_APTO) → No
           tomo_valor_referencial: apto ? true : (noApto ? false : null),
         };
       })(),

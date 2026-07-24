@@ -90,6 +90,50 @@ export function badgeClassCuadro(code) {
   return 'secondary';
 }
 
+/** Etiqueta institucional del resultado de validación en Cuadro Comparativo. */
+export function labelValidacionCuadro(estado) {
+  const raw = String(estado || '').trim();
+  if (!raw) return '—';
+  const v = raw.toUpperCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  if (v === 'APTO' || v === 'VALIDA') return 'APTO';
+  if (
+    v === 'NO_APTO'
+    || v === 'OBSERVADO'
+    || v === 'NO_VALIDA'
+    || v === 'NO VALIDA'
+    || v === 'NO_CUMPLE'
+    || v === 'NO CUMPLE'
+    || /NO\s*VALID/.test(v)
+  ) {
+    return 'NO VÁLIDA';
+  }
+  return raw;
+}
+
+export function esValidacionNoValidaCuadro(estado) {
+  return labelValidacionCuadro(estado) === 'NO VÁLIDA';
+}
+
+/** CMN numérico (p. ej. 05277) no debe mostrarse como Centro. */
+function esCmnEnBandeja(valor) {
+  const s = String(valor || '').trim();
+  return !s ? false : /^\d{4,6}$/.test(s);
+}
+
+/** Centro(s) del expediente (pedido SIGAMEF / responsable). Nunca el CMN. */
+export function formatCentroCuadro(row, esc) {
+  const raw = row?.centros_texto || row?.centro
+    || (Array.isArray(row?.requerimientos)
+      ? row.requerimientos.map((r) => r?.centro).filter(Boolean).join(', ')
+      : '');
+  const parts = String(raw).split(',')
+    .map((s) => s.trim())
+    .filter((s) => s && !esCmnEnBandeja(s));
+  if (!parts.length) return '—';
+  if (parts.length === 1) return esc(parts[0]);
+  return `<span class="small" title="${esc(parts.join(', '))}">${esc(parts[0])} <span class="text-muted">+${parts.length - 1}</span></span>`;
+}
+
 /** REQ-00016 | REQ-00016 + REQ-00017 | REQ-00016 + 2 más */
 export function formatRequerimientosCuadro(row, esc) {
   const codes = [];
@@ -178,7 +222,7 @@ export function cuadroComparativoMenuItems(row = {}, opts = {}) {
   // RC8.4B — Coordinador CM: abrir expediente completo (no solo el cuadro)
   if (rol === 'COORDINADOR_CM') {
     return [
-      { act: 'abrirExpedienteCoord', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+      { act: 'abrirExpedienteCoord', label: 'Generar C.C.', icon: 'bi-folder2-open' },
       { act: 'descargarCuadro', label: 'Descargar Cuadro', icon: 'bi-download', disabled: !row.cuadro_id && !row.tiene_pdf },
       { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
     ];
@@ -187,7 +231,7 @@ export function cuadroComparativoMenuItems(row = {}, opts = {}) {
   // RC8.4C — DEC: mismo expediente operativo
   if (rol === 'DEC') {
     return [
-      { act: 'abrirExpedienteDec', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+      { act: 'abrirExpedienteDec', label: 'Generar C.C.', icon: 'bi-folder2-open' },
       { act: 'descargarCuadro', label: 'Descargar Cuadro', icon: 'bi-download', disabled: !row.cuadro_id && !row.tiene_pdf },
       { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
     ];
@@ -197,13 +241,13 @@ export function cuadroComparativoMenuItems(row = {}, opts = {}) {
   if (rol === 'ADMINISTRADOR') {
     if (isCuadroEnRevisionExterna(e) || e === ESTADOS_CUADRO.PENDIENTE_DEC || e === ESTADOS_CUADRO.FIRMADO_COORDINADOR) {
       return [
-        { act: 'abrirExpedienteAdmin', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+        { act: 'abrirExpedienteAdmin', label: 'Generar C.C.', icon: 'bi-folder2-open' },
         { act: 'descargarCuadro', label: 'Descargar Cuadro', icon: 'bi-download', disabled: !row.cuadro_id && !row.tiene_pdf },
         { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
       ];
     }
     return [
-      { act: 'abrirExpedienteAdmin', label: 'Abrir expediente', icon: 'bi-folder2-open' },
+      { act: 'abrirExpedienteAdmin', label: 'Generar C.C.', icon: 'bi-folder2-open' },
       { act: 'elaborarCuadro', label: 'Ver cuadro', icon: 'bi-eye' },
       { act: 'trazabilidadCuadro', label: 'Trazabilidad', icon: 'bi-clock-history' },
     ];

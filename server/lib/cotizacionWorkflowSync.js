@@ -10,6 +10,8 @@ import { getSubModuloMeta } from './movimientos.js';
 
 const ESTADO_NEGOCIO_ETAPA = {
 
+  INVITACIONES: 'En Invitaciones',
+
   RECEPCION_COTIZACIONES: 'En Cotizaciones',
 
   VALIDACION_USUARIO: 'En Valid. Usuario',

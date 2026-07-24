@@ -37,7 +37,7 @@ const WORKFLOW_BANDEJA_LABELS = Object.freeze({
   PROGRAMACION: 'Programación',
   ACTOS_PREPARATORIOS: 'Coordinación CM',
   INVITACIONES: 'Invitaciones',
-  RECEPCION_COTIZACIONES: 'Cotizaciones',
+  RECEPCION_COTIZACIONES: 'Cotización recibida',
   VALIDACION_USUARIO: 'Validación Usuario',
   CUADRO_COMPARATIVO: 'Cuadro Comparativo',
   CCP: 'CCP',

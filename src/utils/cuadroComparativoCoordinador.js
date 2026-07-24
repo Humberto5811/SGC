@@ -1,6 +1,6 @@
 /**
  * RC8.5 / RC8.5-D — Revisión institucional del Coordinador CM.
- * Solo lectura económica; firma externa; conformidad; observar; derivar DEC.
+ * Solo lectura económica; firma externa; observar/devolver; derivar DEC.
  */
 import { resolveRolRevisionCliente, ROLES_REVISION } from './cuadroComparativoRevisionUi.js';
 
@@ -33,9 +33,9 @@ export function enRevisionCoordinador(cuadro = {}) {
 }
 
 /**
- * Gates UI Coordinador CM (RC8.5-C2).
- * En revisión: Descargar / Adjuntar / Ver Firmado / Observar / Conformidad.
- * Derivar a DEC solo cuando: firma + conformidad + versión vigente + sin obs.
+ * Gates UI Coordinador CM.
+ * Tras Anexo 08-A firmado: Observar/Devolver + Derivar a DEC.
+ * Conformidad se registra automáticamente al derivar (si hay firma vigente).
  */
 export function evaluarAccionesCoordinador(cuadro = {}) {
   const e = getEstadoCuadro(cuadro);
@@ -53,14 +53,12 @@ export function evaluarAccionesCoordinador(cuadro = {}) {
   const puedeAdjuntar = enCoord && tienePdf;
   const puedeVerFirmado = enCoord && tieneFirmado;
   const puedeEliminarFirmado = enCoord && tieneFirmado && !conformidad;
-  const puedeConformidad = enCoord && tieneFirmado && !conformidad;
   const puedeObservar = enCoord;
-  // RC8.5-C2 — Derivar visible solo con todos los gates
-  const puedeDerivar = enCoord && tieneFirmado && conformidad && vigente && sinObservaciones;
+  // Derivar a DEC: exige PDF firmado vigente (conformidad se auto-registra)
+  const puedeDerivar = enCoord && tieneFirmado && vigente && sinObservaciones;
 
   const condicionesDerivar = [
-    { key: 'firma', ok: !!tieneFirmado, label: 'Firma vigente (PDF firmado adjunto)' },
-    { key: 'conformidad', ok: !!conformidad, label: 'Conformidad del Coordinador CM' },
+    { key: 'firma', ok: !!tieneFirmado, label: 'Anexo 08-A firmado cargado' },
     { key: 'version', ok: !!vigente, label: 'Versión vigente del cuadro' },
     { key: 'observaciones', ok: !!sinObservaciones, label: 'Sin observaciones pendientes' },
     { key: 'estado', ok: !!enCoord, label: 'Expediente en revisión Coordinador CM' },
@@ -71,11 +69,6 @@ export function evaluarAccionesCoordinador(cuadro = {}) {
     : (faltantesDerivar.length
       ? `Derivar a DEC no disponible. Falta: ${faltantesDerivar.join('; ')}.`
       : 'Derivar a DEC no disponible.');
-
-  let motivoConformidad = '';
-  if (!enCoord) motivoConformidad = 'Expediente fuera de Coordinador CM';
-  else if (!tieneFirmado) motivoConformidad = 'Adjuntar Cuadro Firmado primero';
-  else if (conformidad) motivoConformidad = 'Conformidad ya registrada';
 
   return {
     estado: e,
@@ -89,11 +82,9 @@ export function evaluarAccionesCoordinador(cuadro = {}) {
     puedeAdjuntar,
     puedeVerFirmado,
     puedeEliminarFirmado,
-    puedeConformidad,
     puedeObservar,
     puedeDerivar,
     motivoDerivar,
-    motivoConformidad,
     condicionesDerivar,
     faltantesDerivar,
   };
@@ -111,18 +102,6 @@ export function isModoCoordinadorCm(user, cuadro) {
 export function renderPanelCoordinador(cuadro, matriz = {}) {
   const g = evaluarAccionesCoordinador(cuadro);
   void matriz;
-  const bloqueDerivar = g.puedeDerivar
-    ? `<button type="button" class="btn btn-sm btn-warning" id="ccBtnCoordDerivarDec"
-            title="Derivar expediente al DEC">
-            <i class="bi bi-send"></i> Derivar a DEC
-          </button>`
-    : (g.enCoord
-      ? `<div class="alert alert-warning py-2 small mb-0 mt-2 w-100" id="ccCoordDerivarBlocked"
-            data-faltantes="${esc(g.faltantesDerivar.join(' | '))}">
-            <strong>Derivar a DEC</strong> no está disponible.<br/>
-            Condición pendiente: <em>${esc(g.faltantesDerivar.join('; ') || 'revisión incompleta')}</em>
-          </div>`
-      : '');
 
   return `
     <div class="card border border-warning mb-3" id="ccPanelCoordinador"
@@ -130,15 +109,13 @@ export function renderPanelCoordinador(cuadro, matriz = {}) {
       <div class="card-body py-3">
         <h6 class="fw-bold mb-2"><i class="bi bi-person-badge"></i> Revisión Coordinador CM</h6>
         <p class="small text-muted mb-2 mb-0">
-          Acciones: Descargar Cuadro → Adjuntar Cuadro Firmado → Ver Firmado → Observar / Dar Conformidad.
-          Derivar a DEC aparece solo con firma, conformidad, versión vigente y sin observaciones.
+          Tras cargar el Anexo 08-A firmado: <strong>Observar / Devolver al Analista</strong>
+          o <strong>Derivar a DEC</strong>.
         </p>
         <div class="d-flex flex-wrap gap-2 mt-2 mb-2">
           <span class="badge ${g.tienePdf ? 'bg-success' : 'bg-secondary'}">PDF Anexo: ${g.tienePdf ? 'Sí' : 'No'}</span>
           <span class="badge ${g.tieneFirmado ? 'bg-success' : 'bg-warning text-dark'}">PDF firmado: ${g.tieneFirmado ? 'Sí' : 'Pendiente'}</span>
-          <span class="badge ${g.conformidad ? 'bg-success' : 'bg-warning text-dark'}">Conformidad: ${g.conformidad ? 'Sí' : 'Pendiente'}</span>
           <span class="badge ${g.vigente ? 'bg-success' : 'bg-danger'}">Versión: ${g.vigente ? 'Vigente' : 'No vigente'}</span>
-          <span class="badge ${g.sinObservaciones ? 'bg-success' : 'bg-danger'}">Obs.: ${g.sinObservaciones ? 'Ninguna pendiente' : 'Pendientes'}</span>
         </div>
         <div class="d-flex flex-wrap gap-2" id="ccCoordActions">
           <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnCoordDescargar"
@@ -156,23 +133,26 @@ export function renderPanelCoordinador(cuadro, matriz = {}) {
             title="${g.puedeVerFirmado ? 'Ver PDF firmado' : 'Adjuntar Cuadro Firmado primero'}">
             <i class="bi bi-eye"></i> Ver Firmado
           </button>
-          <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordObservar"
-            ${g.puedeObservar ? '' : 'disabled'}
-            title="${g.puedeObservar ? 'Observar y devolver al Analista' : 'Fuera de revisión Coordinador'}">
-            <i class="bi bi-exclamation-triangle"></i> Observar
-          </button>
-          <button type="button" class="btn btn-sm btn-success" id="ccBtnCoordConformidad"
-            ${g.puedeConformidad ? '' : 'disabled'}
-            title="${g.puedeConformidad ? 'Registrar conformidad (luego podrá Derivar a DEC)' : esc(g.motivoConformidad)}">
-            <i class="bi bi-check2-circle"></i> Dar Conformidad
-          </button>
           ${g.puedeEliminarFirmado ? `
             <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordEliminarFirmado"
               title="Eliminar PDF firmado para volver a adjuntar">
               <i class="bi bi-trash"></i> Eliminar firmado
             </button>` : ''}
-          ${bloqueDerivar}
+          <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnCoordObservar"
+            ${g.puedeObservar ? '' : 'disabled'}
+            title="Observar y devolver el expediente al Analista">
+            <i class="bi bi-exclamation-triangle"></i> Observar / Devolver al Analista
+          </button>
+          <button type="button" class="btn btn-sm btn-warning" id="ccBtnCoordDerivarDec"
+            ${g.puedeDerivar ? '' : 'disabled'}
+            title="${g.puedeDerivar ? 'Aprobar revisión y derivar al DEC' : esc(g.motivoDerivar)}">
+            <i class="bi bi-send"></i> Derivar a DEC
+          </button>
         </div>
+        ${!g.puedeDerivar && g.enCoord ? `
+          <div class="alert alert-warning py-2 small mb-0 mt-2" id="ccCoordDerivarBlocked">
+            ${esc(g.motivoDerivar)}
+          </div>` : ''}
         ${cuadro?.firmado_nombre ? `<div class="small text-muted mt-2">Firmado: <strong>${esc(cuadro.firmado_nombre)}</strong></div>` : ''}
         ${!g.enCoord ? '<div class="small text-danger mt-2">Estado actual no admite acciones de Coordinador CM.</div>' : ''}
       </div>

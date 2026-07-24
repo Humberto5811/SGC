@@ -170,16 +170,58 @@ function buildDatosAutomaticos(requerimientos) {
   };
 }
 
+/** Centro por ítem: pedido SIGAMEF → catálogo → área → responsable/cmn del REQ. Paquete es independiente. */
+function buildCentroFieldsFromRow(r) {
+  const pedidoCentro = String(r.pedido_centro || '').trim();
+  const centroNombre = String(r.centro_nombre || '').trim();
+  const centroCodigo = String(r.centro_codigo || '').trim();
+  const areaFallback = String(r.area_responsable || '').trim();
+  const reqResponsable = String(r.req_responsable || '').trim();
+  const reqCmn = String(r.req_cmn || '').trim();
+  const centro = pedidoCentro || centroNombre || centroCodigo || areaFallback
+    || reqResponsable || reqCmn || '';
+  const displayBase = centroNombre || pedidoCentro || centroCodigo || reqResponsable || centro;
+  let centro_display = '';
+  if (centroCodigo && displayBase && centroCodigo !== displayBase) {
+    centro_display = `${centroCodigo} — ${displayBase}`;
+  } else {
+    centro_display = displayBase || centro || '';
+  }
+  return {
+    centro,
+    centro_codigo: centroCodigo || pedidoCentro || '',
+    centro_nombre: displayBase,
+    centro_display,
+  };
+}
+
 export async function obtenerItemsRequerimientos(requerimientoIds) {
   if (!requerimientoIds?.length) return [];
   const placeholders = requerimientoIds.map((_, i) => `$${i + 1}`).join(', ');
   const { rows } = await query(`
     SELECT r.id, r.codigo, r.tipo, r.denominacion, r.payload,
       COALESCE(paq.codigo_paquete, '') AS codigo_paquete,
-      COALESCE(ped.pedidos_sigamef, '') AS pedidos_sigamef
+      COALESCE(ped.pedidos_sigamef, '') AS pedidos_sigamef,
+      COALESCE(ped.pedido_centro, '') AS pedido_centro,
+      COALESCE(NULLIF(TRIM(c.nombre), ''), '') AS centro_nombre,
+      COALESCE(NULLIF(TRIM(c.codigo), ''), '') AS centro_codigo,
+      COALESCE(NULLIF(TRIM(a.responsable), ''), '') AS area_responsable,
+      COALESCE(NULLIF(TRIM(r.responsable), ''), '') AS req_responsable,
+      COALESCE(NULLIF(TRIM(r.cmn), ''), '') AS req_cmn
     FROM requerimientos r
+    LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+    LEFT JOIN centros c ON a.centro_id = c.id
     LEFT JOIN LATERAL (
-      SELECT string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.pedido_sigamef), ''), CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)), ', ') AS pedidos_sigamef
+      SELECT
+        string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.pedido_sigamef), ''), CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)), ', ') AS pedidos_sigamef,
+        (
+          SELECT NULLIF(TRIM(p2.centro), '')
+          FROM requerimiento_pedidos rp2
+          JOIN pedidos_sigamef p2 ON rp2.pedido_sigamef_id = p2.id
+          WHERE rp2.requerimiento_id = r.id AND NULLIF(TRIM(p2.centro), '') IS NOT NULL
+          ORDER BY rp2.id ASC
+          LIMIT 1
+        ) AS pedido_centro
       FROM requerimiento_pedidos rp
       JOIN pedidos_sigamef p ON rp.pedido_sigamef_id = p.id
       WHERE rp.requerimiento_id = r.id
@@ -194,6 +236,7 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
 
   const items = [];
   for (const r of rows) {
+    const centroFields = buildCentroFieldsFromRow(r);
     const payload = parsePayload(r);
     const rawItems = r.tipo === 'servicios' ? (payload.servicioItems || [])
       : r.tipo === 'locacion' ? (payload.locadorItems || [])
@@ -208,7 +251,9 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
           codigo_sigamef: it.item_bien || it.codigo || '',
           descripcion: it.nombre_item || it.descripcion || r.denominacion || '',
           cantidad: it.cantidad || it.cant || 1,
+          unidad_medida: it.unidad_medida || it.um || 'UND',
           item_index: idx,
+          ...centroFields,
           documentos: Object.entries(it.documentos_anexos || {}).map(([tipo, d]) => ({
             documento: tipo,
             nombre: d?.nombre || d?.archivo || tipo,
@@ -227,7 +272,9 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
         codigo_sigamef: '',
         descripcion: r.denominacion || '',
         cantidad: 1,
+        unidad_medida: 'UND',
         item_index: 0,
+        ...centroFields,
         documentos: [],
       });
     }

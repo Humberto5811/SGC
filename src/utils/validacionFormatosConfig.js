@@ -255,6 +255,92 @@ export function calcularResultadoCotizacion(tipoKey, filas = []) {
     : { cumple: 'Cumple', resultado_global: 'VALIDA', estado: 'APTO' };
 }
 
+/**
+ * Resultado oficial del expediente (todas las cotizaciones de la matriz).
+ * ≥1 válida → APTO (Cuadro). Todas inválidas → NO_APTO (Invitaciones).
+ */
+export function calcularResultadoExpedienteValidacion(tipoKey, filas = []) {
+  const list = Array.isArray(filas) ? filas : [];
+  if (!list.length) {
+    return {
+      ok: false,
+      pendiente: true,
+      sin_cotizaciones: true,
+      cumple: '',
+      resultado_global: '',
+      estado: '',
+      validas: 0,
+      invalidas: 0,
+      pendientes: 0,
+      motivo: 'Sin cotizaciones para derivar.',
+    };
+  }
+
+  const byCot = new Map();
+  list.forEach((f, idx) => {
+    const cid = f.cotizacion_id != null ? String(f.cotizacion_id) : `row-${idx}`;
+    if (!byCot.has(cid)) byCot.set(cid, []);
+    byCot.get(cid).push(f);
+  });
+
+  let validas = 0;
+  let invalidas = 0;
+  let pendientes = 0;
+  byCot.forEach((filasCot) => {
+    const falta = filasCot.some((f) => !String(f?.evaluacion?.resultado || f?.resultado || '').trim());
+    if (falta) {
+      pendientes += 1;
+      return;
+    }
+    const calc = calcularResultadoCotizacion(tipoKey, filasCot);
+    if (calc.estado === 'APTO') validas += 1;
+    else invalidas += 1;
+  });
+
+  if (pendientes > 0) {
+    return {
+      ok: false,
+      pendiente: true,
+      sin_cotizaciones: false,
+      cumple: '',
+      resultado_global: '',
+      estado: '',
+      validas,
+      invalidas,
+      pendientes,
+      motivo: 'Hay cotizaciones pendientes de validación.',
+    };
+  }
+
+  if (validas >= 1) {
+    return {
+      ok: true,
+      pendiente: false,
+      sin_cotizaciones: false,
+      cumple: 'Cumple',
+      resultado_global: 'Existe al menos una cotización válida',
+      estado: 'APTO',
+      validas,
+      invalidas,
+      pendientes,
+      motivo: '',
+    };
+  }
+
+  return {
+    ok: true,
+    pendiente: false,
+    sin_cotizaciones: false,
+    cumple: 'No cumple',
+    resultado_global: 'Todas las cotizaciones son no válidas',
+    estado: 'NO_APTO',
+    validas,
+    invalidas,
+    pendientes,
+    motivo: '',
+  };
+}
+
 /** Valida filas antes de guardar completo / derivar. */
 export function validarMatrizCompleta(tipoKey, filas = []) {
   const errores = [];

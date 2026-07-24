@@ -9,8 +9,13 @@ import {
   MAX_ENTREGABLES_LOCADOR, cantidadPorTipo, normalizeTipoCotizacion,
 } from './proveedorCotizacionConfig.js';
 import { TEXTO_AUTORIZACION_CORREO, TEXTO_LEY_27444 } from './proveedorPdfCotizacion.js';
+import {
+  getAnexo05AInstitutionalScreenColumns,
+  getAnexo05AProviderScreenColumns,
+  displayItemCentro,
+  resolveAnexo05ACellValue,
+} from './proveedorAnexo05AConfig.js';
 
-const CANJE_OPTS = ['Sí', 'No', 'Parcial'];
 const RUBRO_OPTS = [
   'Medicamentos', 'Reactivos', 'Dispositivos Médicos', 'Equipos', 'Laboratorio',
   'Servicios', 'Consultoría', 'Locadores', 'Software', 'Mobiliario', 'Otros',
@@ -19,6 +24,31 @@ const ENTREGABLE_LABELS = ['Primer', 'Segundo', 'Tercer', 'Cuarto', 'Quinto', 'S
 
 function roAttr(readonly) {
   return readonly ? ' disabled readonly' : '';
+}
+
+function renderProviderInput(col, formItem, readonly) {
+  const ro = roAttr(readonly);
+  const val = formItem?.[col.field] ?? '';
+  if (col.inputType === 'select') {
+    const opts = col.options || [];
+    return `<select class="form-select form-select-sm ${esc(col.inputClass)}"${ro}>${opts.map((o) =>
+      `<option ${String(val) === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  }
+  const type = col.inputType === 'number' ? 'number' : 'text';
+  const extra = [
+    type === 'number' ? 'min="0"' : '',
+    col.maxlength ? `maxlength="${col.maxlength}"` : '',
+    col.placeholder ? `placeholder="${esc(col.placeholder)}"` : '',
+  ].filter(Boolean).join(' ');
+  return `<input class="form-control form-control-sm ${esc(col.inputClass)}" type="${type}" value="${esc(val)}"${extra ? ` ${extra}` : ''}${ro}>`;
+}
+
+function renderInstitutionalCell(col, it, sid, renderDocsColumn) {
+  if (col.source === 'docs') return renderDocsColumn(it, sid);
+  if (col.key === 'centro') return `<td>${esc(displayItemCentro(it))}</td>`;
+  const raw = resolveAnexo05ACellValue(col, it);
+  const align = col.align === 'center' ? ' class="text-center"' : '';
+  return `<td${align}>${esc(raw || '—')}</td>`;
 }
 
 function renderDatosProveedor06ACard(formState, readonly) {
@@ -109,59 +139,37 @@ export function renderStep1Bienes(ctx) {
   const { workspace, formState, config, readonly, renderDocsColumn, money, formatPriceDisplay } = ctx;
   const sol = workspace.solicitud;
   const sid = sol.id;
-  const ro = roAttr(readonly);
   const total = Object.values(formState.precios).reduce((a, p) => a + (Number(p.total) || 0), 0);
+  const institutionalCols = getAnexo05AInstitutionalScreenColumns();
+  const providerCols = getAnexo05AProviderScreenColumns();
+  const baseCols = institutionalCols.filter((c) => c.headerGroup === 'base');
 
   return `
     <div class="alert alert-light border small mb-2 py-2">
       <strong>${esc(sol.codigo)}</strong> — ${esc(sol.denominacion || sol.objeto || '')}
     </div>
     <h6 class="fw-bold mb-2">1. ${esc(config.labelTecnica)} — Información técnica solicitada (cumplimiento del ítem)</h6>
-    <div class="table-responsive mb-2">
+    <div class="table-responsive mb-3">
       <table class="table table-bordered table-sm prov-cot-table mb-0">
         <thead class="table-primary text-center align-middle">
           <tr>
-            <th rowspan="2">Req.</th><th rowspan="2">Centro</th><th rowspan="2">Código SIGA</th>
-            <th rowspan="2">Descripción</th><th rowspan="2">Cant.</th><th rowspan="2">U.M.</th>
-            <th rowspan="2">Requerimiento/Pedidos</th>
-            <th colspan="11">Cumplimiento del Ítem</th>
+            ${baseCols.map((c) => `<th rowspan="2">${esc(c.label)}</th>`).join('')}
+            <th colspan="${providerCols.length}">Cumplimiento del Ítem</th>
           </tr>
           <tr>
-            <th>Presentación</th><th>Cant. ofertada</th><th>Marca</th><th>Modelo</th><th>País</th>
-            <th>Año fab.</th><th>Garantía</th><th>Vigencia mín.</th><th>Canje</th><th>Plazo entrega</th><th>Doc. técnica</th>
+            ${providerCols.map((c) => `<th>${esc(c.label)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
           ${workspace.items.map((it, idx) => {
             const f = formState.items[idx] || {};
             return `<tr data-idx="${idx}">
-              <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
-              <td>${esc(it.paquete || '—')}</td>
-              <td>${esc(it.codigo_sigamef || '—')}</td>
-              <td>${esc(it.descripcion || '—')}</td>
-              <td class="text-center">${esc(it.cantidad ?? 1)}</td>
-              <td class="text-center">${esc(it.unidad_medida || 'UND')}</td>
-              ${renderDocsColumn(it, sid)}
-              <td><input class="form-control form-control-sm prov-f-presentacion" value="${esc(f.presentacion)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-cant" type="number" min="0" value="${esc(f.cantidad_ofertada)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-marca" value="${esc(f.marca)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-modelo" value="${esc(f.modelo)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-pais" value="${esc(f.pais)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-anio" value="${esc(f.anio_fabricacion)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-garantia" value="${esc(f.garantia)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-vigencia" value="${esc(f.vigencia_minima)}"${ro}></td>
-              <td><select class="form-select form-select-sm prov-f-canje"${ro}>${CANJE_OPTS.map((o) =>
-                `<option ${f.compromiso_canje === o ? 'selected' : ''}>${o}</option>`).join('')}</select></td>
-              <td><input class="form-control form-control-sm prov-f-plazo" type="number" min="0" value="${esc(f.plazo_entrega)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-doctec" value="${esc(f.doc_tecnica)}"${ro}></td>
+              ${baseCols.map((c) => renderInstitutionalCell(c, it, sid, renderDocsColumn)).join('')}
+              ${providerCols.map((c) => `<td>${renderProviderInput(c, f, readonly)}</td>`).join('')}
             </tr>`;
           }).join('')}
         </tbody>
       </table>
-    </div>
-    <div class="prov-firma-bienes mb-3 p-2 border rounded bg-light small">
-      <label class="form-label mb-1 fw-semibold">Firma del proveedor</label>
-      <div style="min-height:48px;border-bottom:1px solid #adb5bd;"></div>
     </div>
     ${renderDownloadHint(config.labelTecnica)}
     <h6 class="fw-bold mb-2">2. ${esc(config.labelEconomica)} — Oferta económica</h6>
@@ -173,6 +181,7 @@ export function renderStep1Bienes(ctx) {
         <tbody>
           ${workspace.items.map((it, idx) => {
             const p = formState.precios[it.item_key] || { unitario: 0, total: 0 };
+            const ro = roAttr(readonly);
             return `<tr data-pidx="${idx}">
               <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
               <td>${esc(it.descripcion || '—')}</td>

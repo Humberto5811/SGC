@@ -5,6 +5,7 @@ import {
   renderCronogramaCard, fmtCronogramaRango,
 } from '../../utils/proveedorShared.js';
 import { renderDocumentoLista, renderRequisitosTecnicos, bindDocumentoActions, attachSolicitudId } from '../../utils/proveedorDocumentos.js';
+import { displayItemCentro } from '../../utils/proveedorAnexo05AConfig.js';
 
 export function renderMisInvitacionesView() {
   if (!requireProveedorSession()) return '';
@@ -69,7 +70,7 @@ async function showDetalleInvitacion(solicitudId, codigo) {
             <tbody>${items.map((it) => `
               <tr>
                 <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
-                <td>${esc(it.paquete || '—')}</td>
+                <td>${esc(displayItemCentro(it))}</td>
                 <td>${esc(it.codigo_sigamef || '—')}</td>
                 <td>${esc(it.descripcion || '—')}</td>
                 <td class="text-center">${esc(it.cantidad ?? 1)}</td>
@@ -116,7 +117,11 @@ export async function initMisInvitacionesView() {
             <tr>
               <td><strong>${esc(r.codigo)}</strong></td>
               <td>${esc(r.denominacion || r.objeto || '—')}</td>
-              <td><span class="badge bg-info">${esc(r.estado_invitacion || r.estado)}</span></td>
+              <td><span class="badge bg-info">${esc(
+                String(r.estado_invitacion || r.estado || '') === 'COTIZACION_PRESENTADA'
+                  ? 'Cotización recibida'
+                  : (r.estado_invitacion || r.estado || '—')
+              )}</span></td>
               <td class="small">${fmtCronogramaRango(r.consultas_inicio, r.consultas_fin)}</td>
               <td class="small">${fmtCronogramaRango(r.cotizaciones_inicio, r.cotizaciones_fin)}</td>
               <td class="text-nowrap">

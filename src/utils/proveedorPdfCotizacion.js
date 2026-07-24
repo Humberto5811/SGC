@@ -7,10 +7,18 @@ import {
   FORMULA_F_ANEXO11, CIERRE_PENALIDAD_ANEXO11, NOTA_COTIZACION_ANEXO11,
   PLAZOS_ENTREGABLES_LABELS, MAX_ENTREGABLES_LOCADOR, cantidadPorTipo,
 } from './proveedorCotizacionConfig.js';
+import {
+  ANEXO_05A_HEADER,
+  ANEXO_05A_COLORS,
+  getAnexo05APdfColumns,
+  resolveAnexo05ACellValue,
+} from './proveedorAnexo05AConfig.js';
 
 const MARGIN = 54;
 const PAGE_W = 612;
 const CONTENT_W = PAGE_W - MARGIN * 2;
+/** Espacio vertical ≈ 4 líneas para firma manuscrita (05-B). */
+const FIRMA_05B_SPACE_PT = 68;
 
 export const TEXTO_AUTORIZACION_CORREO = 'Asimismo, AUTORIZO que el correo electrónico consignado en la presente Declaración Jurada sea utilizado como medio formal de comunicación con la Entidad para que me notifique las siguientes actuaciones: i) emisión de la Orden o Contrato, ii) ampliación de plazo, iii) otras modificaciones a la Orden o Contrato, iv) Observaciones al bien y Levantamiento de Observaciones al bien, v) apercibimiento para cumplimiento de obligaciones contractuales, vi) Resolución Parcial o Total del Contrato u Orden, vii) comunicación de penalidades y descargos respectivos; y viii) otras actuaciones durante la etapa de ejecución contractual.';
 
@@ -118,8 +126,11 @@ function renderFirmaRepresentante(doc, y) {
   return y + 10;
 }
 
-function appendDatosProveedor(doc, datos, startY) {
+function appendDatosProveedorSinFirma(doc, datos, startY, opts = {}) {
   const d = datos || {};
+  const marginX = opts.marginX ?? 40;
+  const valueX = opts.valueX ?? 170;
+  const maxValW = opts.maxValW ?? 360;
   let y = startY;
   doc.setFontSize(9);
   const rows = [
@@ -131,68 +142,147 @@ function appendDatosProveedor(doc, datos, startY) {
     ['Celular:', d.celular || ''],
     ['Correo electrónico:', d.correo || ''],
     ['Validez de la oferta:', d.validez_oferta || ''],
-    ['Firma del Representante legal:', d.firma_representante || ''],
   ];
   rows.forEach(([label, val]) => {
+    y = ensureSpace(doc, y, 22);
     doc.setFont(undefined, 'bold');
-    doc.text(label, 40, y);
+    doc.text(label, marginX, y);
     doc.setFont(undefined, 'normal');
-    const lines = doc.splitTextToSize(String(val), 360);
-    doc.text(lines, 170, y);
+    const lines = doc.splitTextToSize(String(val), maxValW);
+    doc.text(lines, valueX, y);
     y += Math.max(12, lines.length * 11);
   });
   return y + 8;
 }
 
+/** Bloque de firma manuscrita ≈ 4 líneas; no se parte entre páginas. */
+function renderBloqueFirmaRepresentante05B(doc, startY, opts = {}) {
+  const marginX = opts.marginX ?? 40;
+  const lineW = opts.lineWidth ?? 240;
+  const blockH = 18 + FIRMA_05B_SPACE_PT + 10;
+  let y = ensureSpace(doc, startY, blockH);
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'bold');
+  doc.text('Firma del Representante Legal:', marginX, y);
+  doc.setFont(undefined, 'normal');
+  y += 14;
+  const lineY = y + FIRMA_05B_SPACE_PT;
+  doc.setDrawColor(80);
+  doc.line(marginX, lineY, marginX + lineW, lineY);
+  return lineY + 16;
+}
+
+/** Pie común 05-A / 05-B: datos proveedor + firma + textos legales. */
+function appendPieAnexo05(doc, datos, startY, opts = {}) {
+  const marginX = opts.marginX ?? 40;
+  const pageW = doc.internal.pageSize.getWidth();
+  const contentW = opts.contentW ?? (pageW - marginX * 2);
+  const valueX = opts.valueX ?? marginX + 150;
+  const maxValW = Math.max(120, contentW - (valueX - marginX));
+
+  let y = appendDatosProveedorSinFirma(doc, datos, startY, { marginX, valueX, maxValW });
+  y = renderBloqueFirmaRepresentante05B(doc, y, { marginX, lineWidth: Math.min(280, contentW * 0.4) });
+  doc.setFontSize(8);
+  y = ensureSpace(doc, y, 60);
+  y = appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO, marginX, y, contentW);
+  y += 6;
+  y = ensureSpace(doc, y, 50);
+  appendWrappedText(doc, TEXTO_LEY_27444, marginX, y, contentW);
+  return y;
+}
+
 export function downloadAnexo05A({ solicitud, items, formItems, proveedor, datos }) {
   const jsPDF = ensureJsPdf();
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const codigo = solicitud?.codigo || 'SC';
-  doc.setFontSize(12);
-  doc.text('ANEXO 05-A — INFORMACIÓN TÉCNICA SOLICITADA (CUMPLIMIENTO DEL ÍTEM)', 40, 40);
-  doc.setFontSize(9);
-  doc.text(`Solicitud: ${codigo} — ${solicitud?.denominacion || solicitud?.objeto || ''}`, 40, 56);
-  doc.text(`Proveedor: ${datos?.razon_social || proveedor?.razon_social || ''} · RUC ${datos?.ruc || proveedor?.ruc || ''}`, 40, 68);
+  const pageW = doc.internal.pageSize.getWidth();
+  const marginX = 28;
+  const cols = getAnexo05APdfColumns();
 
-  const head = [[
-    'Req.', 'Código SIGA', 'Descripción', 'Cant.', 'Presentación', 'Cant.of.', 'Marca', 'Modelo',
-    'País', 'Año', 'Garantía', 'Vigencia', 'Canje', 'Plazo', 'Doc.téc.',
-  ]];
+  let y = 28;
+  doc.setFont(undefined, 'bold');
+  doc.setFontSize(11);
+  doc.text(`${ANEXO_05A_HEADER.titulo} — ${ANEXO_05A_HEADER.subtitulo}`, marginX, y);
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(8);
+  y += 14;
+  doc.text(`Solicitud: ${codigo}`, marginX, y);
+  y += 11;
+  const objeto = String(solicitud?.denominacion || solicitud?.objeto || '').trim();
+  if (objeto) {
+    y = appendWrappedText(doc, `Objeto: ${objeto}`, marginX, y, pageW - marginX * 2, 10);
+  }
+  const razon = datos?.razon_social || proveedor?.razon_social || '';
+  const ruc = datos?.ruc || proveedor?.ruc || '';
+  y += 2;
+  doc.text(`Proveedor: ${razon}${ruc ? ` · RUC ${ruc}` : ''}`, marginX, y);
+  y += 12;
+
+  const head = [cols.map((c) => c.label)];
   const body = (items || []).map((it, idx) => {
     const f = formItems[idx] || {};
-    return [
-      it.requerimiento_codigo || '',
-      it.codigo_sigamef || '',
-      String(it.descripcion || '').slice(0, 40),
-      String(it.cantidad ?? 1),
-      f.presentacion || '',
-      String(f.cantidad_ofertada ?? ''),
-      f.marca || '',
-      f.modelo || '',
-      f.pais || '',
-      f.anio_fabricacion || '',
-      f.garantia || '',
-      f.vigencia_minima || '',
-      f.compromiso_canje || '',
-      f.plazo_entrega || '',
-      f.doc_tecnica || '',
-    ];
+    return cols.map((col) => resolveAnexo05ACellValue(col, it, f, idx));
+  });
+
+  const columnStyles = {};
+  cols.forEach((col, i) => {
+    columnStyles[i] = {
+      cellWidth: col.pdfWidth || 'auto',
+      halign: col.align === 'center' ? 'center' : 'left',
+      valign: 'top',
+    };
   });
 
   doc.autoTable({
-    startY: 82,
+    startY: y,
     head,
     body,
-    styles: { fontSize: 7, cellPadding: 2 },
-    headStyles: { fillColor: [13, 110, 253] },
-    margin: { left: 40, right: 40 },
+    styles: {
+      fontSize: 6.5,
+      cellPadding: 2.5,
+      overflow: 'linebreak',
+      valign: 'top',
+      lineColor: [180, 180, 180],
+      lineWidth: 0.3,
+    },
+    headStyles: {
+      fontSize: 6.5,
+      fontStyle: 'bold',
+      halign: 'center',
+      valign: 'middle',
+      cellPadding: 2.5,
+    },
+    columnStyles,
+    margin: { left: marginX, right: marginX },
+    showHead: 'everyPage',
+    didParseCell(data) {
+      if (data.section !== 'head') return;
+      const col = cols[data.column.index];
+      if (!col) return;
+      if (col.headerColorType === 'provider') {
+        data.cell.styles.fillColor = ANEXO_05A_COLORS.provider;
+        data.cell.styles.textColor = ANEXO_05A_COLORS.providerText;
+      } else {
+        data.cell.styles.fillColor = ANEXO_05A_COLORS.institutional;
+        data.cell.styles.textColor = ANEXO_05A_COLORS.institutionalText;
+      }
+    },
   });
 
-  let y = doc.lastAutoTable.finalY + 24;
-  doc.setFontSize(9);
-  doc.text('Firma del proveedor:', 40, y);
-  doc.line(40, y + 28, 280, y + 28);
-  doc.save(`Anexo_05-A_${codigo.replace(/\s+/g, '_')}.pdf`);
+  let yFoot = (doc.lastAutoTable?.finalY || y) + 18;
+  appendPieAnexo05(doc, {
+    razon_social: datos?.razon_social || proveedor?.razon_social || '',
+    ruc: datos?.ruc || proveedor?.ruc || '',
+    domicilio_fiscal: datos?.domicilio_fiscal || '',
+    representante_legal: datos?.representante_legal || '',
+    persona_contacto: datos?.persona_contacto || '',
+    celular: datos?.celular || '',
+    correo: datos?.correo || '',
+    validez_oferta: datos?.validez_oferta || '',
+  }, yFoot, { marginX, contentW: pageW - marginX * 2 });
+
+  const safeName = String(codigo).replace(/[^\w.-]+/g, '_');
+  doc.save(`Anexo_05-A_${safeName}.pdf`);
 }
 
 export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }) {
@@ -210,7 +300,7 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
     total += Number(p.total || 0);
     return [
       it.requerimiento_codigo || '',
-      String(it.descripcion || '').slice(0, 60),
+      String(it.descripcion || ''),
       String(it.cantidad ?? 1),
       money(p.unitario),
       money(p.total),
@@ -221,21 +311,20 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
     startY: 72,
     head: [['Req.', 'Descripción', 'Cant.', 'P.Unitario S/.', 'P.Total S/.']],
     body,
-    styles: { fontSize: 9 },
+    styles: { fontSize: 9, overflow: 'linebreak', valign: 'top' },
     headStyles: { fillColor: [108, 117, 125] },
     margin: { left: 40, right: 40 },
+    showHead: 'everyPage',
   });
 
   let y = doc.lastAutoTable.finalY + 14;
   doc.setFontSize(10);
+  y = ensureSpace(doc, y, 20);
   doc.text(`Monto total de la oferta (incluido IGV): S/ ${money(total)}`, 40, y);
   y += 22;
-  y = appendDatosProveedor(doc, datos, y);
-  doc.setFontSize(8);
-  y = appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO, 40, y, 520);
-  y += 6;
-  appendWrappedText(doc, TEXTO_LEY_27444, 40, y, 520);
-  doc.save(`Anexo_05-B_${codigo.replace(/\s+/g, '_')}.pdf`);
+  appendPieAnexo05(doc, datos, y, { marginX: 40, contentW: 520 });
+  const safeName = String(codigo).replace(/[^\w.-]+/g, '_');
+  doc.save(`Anexo_05-B_${safeName}.pdf`);
 }
 
 export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, locador = false }) {

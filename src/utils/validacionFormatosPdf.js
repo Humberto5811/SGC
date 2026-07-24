@@ -116,7 +116,7 @@ export function downloadFormatoValidacion(opts = {}) {
     doc.setFont(undefined, 'normal');
     doc.setFontSize(7.5);
     doc.text(
-      `Solicitud: ${cabecera.solicitud_codigo || '—'}   REQ: ${cabecera.requerimientos || '—'}   Proveedor: ${cabecera.proveedor || '—'}`,
+      `Solicitud: ${cabecera.solicitud_codigo || '—'}   REQ: ${cabecera.requerimientos || '—'}   Tipo: ${cabecera.tipo_label || 'Servicios'}   Centro: ${cabecera.centro_label || cabecera.centro || '—'}`,
       36,
       yHead,
     );
@@ -128,12 +128,6 @@ export function downloadFormatoValidacion(opts = {}) {
     yHead += 11;
     doc.text(
       `Solicitud: ${cabecera.solicitud_codigo || ''}   REQ: ${cabecera.requerimientos || ''}   Tipo: ${cabecera.tipo_label || ''}   Centro: ${cabecera.centro_label || cabecera.centro || '—'}`,
-      36,
-      yHead,
-    );
-    yHead += 11;
-    doc.text(
-      `Proveedor: ${cabecera.proveedor || ''}   RUC: ${cabecera.ruc || ''}   Resultado: ${cabecera.resultado_global || '—'}`,
       36,
       yHead,
     );

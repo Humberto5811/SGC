@@ -55,16 +55,26 @@ try {
     cotizacionId: 1,
     detalle: { puede_derivar: true, ya_derivado: false, validacion_estado: 'EN_PROCESO' },
     pdfAdjunto: null,
+    tipoFormato: 'BIENES',
+    matriz_v2: {
+      tipo: 'BIENES',
+      filas: [{ cotizacion_id: 1, evaluacion: { resultado: '' } }],
+    },
     formulario: { resultado_global: '', observacion_global: '' },
   });
-  assert(!blocked.ok && blocked.missing.includes('resultado'), '8. Derivar deshabilitado sin requisitos');
+  assert(!blocked.ok && (blocked.missing.includes('pendientes') || blocked.missing.includes('resultado') || blocked.missing.includes('pdf_firmado')), '8. Derivar deshabilitado sin requisitos');
 
   const ready = canDerivarValidacion({
     cotizacionId: 1,
     detalle: { puede_derivar: true, ya_derivado: false, validacion_estado: 'EN_PROCESO' },
     pdfAdjunto: { base64: 'AAA', nombre: 'x.pdf' },
+    tipoFormato: 'BIENES',
+    matriz_v2: {
+      tipo: 'BIENES',
+      filas: [{ cotizacion_id: 1, evaluacion: { resultado: 'Especificaciones Técnicas válidas' } }],
+    },
     formulario: {
-      resultado_global: 'Especificaciones Técnicas válidas',
+      resultado_global: 'Existe al menos una cotización válida',
       observacion_global: 'OK técnico',
       cumple: 'Cumple',
       sustento: '',
@@ -82,9 +92,9 @@ try {
 
   // Destinos oficiales
   assert(resolverDestinoSalidaValidacion('APTO').code === 'CUADRO_COMPARATIVO', '12. APTO → Cuadro Comparativo');
-  assert(resolverDestinoSalidaValidacion('NO_APTO').code === 'RECEPCION_COTIZACIONES', '13. NO_APTO → Recepción');
-  const mapped = getDestinosSalidaPorResultado('Especificaciones Técnicas NO válidas', 'No cumple');
-  assert(mapped.destino.code === 'RECEPCION_COTIZACIONES', '13. mapeo NO_APTO destino recepción');
+  assert(resolverDestinoSalidaValidacion('NO_APTO').code === 'INVITACIONES', '13. NO_APTO → Invitaciones');
+  const mapped = getDestinosSalidaPorResultado('Todas las cotizaciones son no válidas', 'No cumple');
+  assert(mapped.destino.code === 'INVITACIONES', '13. mapeo NO_APTO destino Invitaciones');
 
   // 10: panel destino (no modal Bootstrap anidado)
   assert(/val-dest-overlay/.test(modalSrc) && /showDestinoDerivacionPanel/.test(modalSrc), '10. modal/panel de destino abre (overlay interno)');

@@ -82,8 +82,8 @@ assert(/idempotente/.test(cotSrc) && /ya_en_validacion/.test(cotSrc), 'derivar/d
 assert(/COALESCE\(UPPER\(TRIM\(validacion_estado\)\)/.test(cotSrc), 'UPDATE condiciona estado (anti-carrera)');
 assert(/observación es obligatoria para devolver/i.test(cotSrc), 'reapertura exige observación');
 assert(DESTINOS_SALIDA_VALIDACION.APTO.code === 'CUADRO_COMPARATIVO', 'remisión APTO → Cuadro Comparativo');
-assert(DESTINOS_SALIDA_VALIDACION.OBSERVADO.code === 'RECEPCION_COTIZACIONES', 'OBSERVADO → Recepción');
-assert(resolverDestinoSalidaValidacion('NO_APTO').code === 'RECEPCION_COTIZACIONES', 'NO_APTO → Recepción');
+assert(DESTINOS_SALIDA_VALIDACION.OBSERVADO.code === 'INVITACIONES', 'OBSERVADO → Invitaciones');
+assert(resolverDestinoSalidaValidacion('NO_APTO').code === 'INVITACIONES', 'NO_APTO → Invitaciones');
 assert(/VALIDACION_USUARIO/.test(cotSrc), 'devolver sincroniza a VALIDACION_USUARIO');
 assert(/validacion_reapertura/.test(cotSrc), 'historial reapertura');
 assert(/observacion_retorno/.test(cotSrc) && /observacion_retorno/.test(modalSrc), 'observación visible en AU');

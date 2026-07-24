@@ -46,16 +46,26 @@ try {
     cotizacionId: 1,
     detalle: { puede_derivar: true, ya_derivado: false, validacion_estado: 'EN_PROCESO' },
     pdfAdjunto: { base64: 'AAA' },
+    tipoFormato: 'BIENES',
+    matriz_v2: {
+      tipo: 'BIENES',
+      filas: [{ cotizacion_id: 1, evaluacion: { resultado: '' } }],
+    },
     formulario: { resultado_global: '', observacion_global: 'obs' },
   });
-  assert(!s1.ok && s1.faltantes.some((f) => /resultado/i.test(f)), '3. Sin resultado → muestra faltante');
+  assert(!s1.ok && s1.faltantes.some((f) => /pendiente|resultado/i.test(f)), '3. Sin resultado → muestra faltante');
 
   // 4. Sin PDF → faltante
   const s2 = canDerivarValidacion({
     cotizacionId: 1,
     detalle: { puede_derivar: true, ya_derivado: false, validacion_estado: 'EN_PROCESO' },
     pdfAdjunto: null,
-    formulario: { resultado_global: 'Especificaciones Técnicas válidas', observacion_global: 'obs', cumple: 'Cumple' },
+    tipoFormato: 'BIENES',
+    matriz_v2: {
+      tipo: 'BIENES',
+      filas: [{ cotizacion_id: 1, evaluacion: { resultado: 'Especificaciones Técnicas válidas' } }],
+    },
+    formulario: { resultado_global: 'Existe al menos una cotización válida', observacion_global: 'obs', cumple: 'Cumple' },
   });
   assert(!s2.ok && s2.faltantes.some((f) => /PDF/i.test(f)), '4. Sin PDF → muestra faltante');
   assert(/No se puede derivar/.test(formatFaltantesHtml(s2)), '4. mensaje HTML de faltantes');
@@ -68,8 +78,13 @@ try {
     cotizacionId: 10,
     detalle: { puede_derivar: true, ya_derivado: false, validacion_estado: 'DERIVADA' },
     pdfAdjunto: { base64: 'AAA', nombre: 'x.pdf' },
+    tipoFormato: 'BIENES',
+    matriz_v2: {
+      tipo: 'BIENES',
+      filas: [{ cotizacion_id: 10, evaluacion: { resultado: 'Especificaciones Técnicas válidas' } }],
+    },
     formulario: {
-      resultado_global: 'Especificaciones Técnicas válidas',
+      resultado_global: 'Existe al menos una cotización válida',
       observacion_global: 'Cumple especificaciones',
       cumple: 'Cumple',
     },
@@ -78,10 +93,10 @@ try {
   assert(/showDestinoDerivacionPanel/.test(modalSrc) && /position:fixed/.test(modalSrc), '6. abre panel destino fixed');
 
   // 7–8 destinos
-  assert(resolverDestinoCliente('Especificaciones Técnicas válidas', 'Cumple').code === 'CUADRO_COMPARATIVO', '7. APTO → Cuadro Comparativo');
-  assert(resolverDestinoCliente('Especificaciones Técnicas NO válidas', 'No cumple').code === 'RECEPCION_COTIZACIONES', '8. NO_APTO → Recepción');
+  assert(resolverDestinoCliente('Existe al menos una cotización válida', 'Cumple').code === 'CUADRO_COMPARATIVO', '7. APTO → Cuadro Comparativo');
+  assert(resolverDestinoCliente('Todas las cotizaciones son no válidas', 'No cumple').code === 'INVITACIONES', '8. NO_APTO → Invitaciones');
   assert(resolverDestinoSalidaValidacion('APTO').code === 'CUADRO_COMPARATIVO', '7. backend APTO');
-  assert(resolverDestinoSalidaValidacion('NO_APTO').code === 'RECEPCION_COTIZACIONES', '8. backend NO_APTO');
+  assert(resolverDestinoSalidaValidacion('NO_APTO').code === 'INVITACIONES', '8. backend NO_APTO');
 
   // 9. Payload
   assert(/destino_submodulo/.test(modalSrc) && /responsable_destino_id/.test(modalSrc) && /pdf_firmado/.test(modalSrc), '9. Payload correcto');

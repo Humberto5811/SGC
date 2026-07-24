@@ -29,16 +29,16 @@ try {
   assert(destApto.estado_bandeja.includes('Cuadro Comparativo'), 'estado bandeja APTO correcto');
 
   const destNo = resolverDestinoSalidaValidacion('NO_APTO');
-  assert(destNo.code === 'RECEPCION_COTIZACIONES', '8. NO_APTO → destino oficial RECEPCION_COTIZACIONES (no INVITACIONES hardcode)');
-  assert(estadoDisplayBandejaValidacion('NO_APTO').includes('Recepción'), 'etiqueta oficial NO_APTO');
+  assert(destNo.code === 'INVITACIONES', '8. NO_APTO → destino oficial INVITACIONES');
+  assert(estadoDisplayBandejaValidacion('NO_APTO').includes('Invitaciones'), 'etiqueta oficial NO_APTO');
 
-  const mapped = getDestinosSalidaPorResultado('Especificaciones Técnicas válidas', 'Cumple');
+  const mapped = getDestinosSalidaPorResultado('Existe al menos una cotización válida', 'Cumple');
   assert(mapped.resultado_mapeado === 'APTO', 'mapeo resultado válidas → APTO');
   assert(mapped.destino.code === DESTINOS_SALIDA_VALIDACION.APTO.code, 'destino mapeado APTO');
 
-  const mappedNo = getDestinosSalidaPorResultado('Especificaciones Técnicas NO válidas', 'No cumple');
+  const mappedNo = getDestinosSalidaPorResultado('Todas las cotizaciones son no válidas', 'No cumple');
   assert(mappedNo.resultado_mapeado === 'NO_APTO', 'mapeo NO válidas → NO_APTO');
-  assert(mappedNo.destino.code === 'RECEPCION_COTIZACIONES', 'destino NO_APTO oficial');
+  assert(mappedNo.destino.code === 'INVITACIONES', 'destino NO_APTO oficial');
 
   // --- Datos reales ---
   const adminRows = await listarValidacionesExpedientes('', '', { esAdmin: true });
@@ -173,7 +173,7 @@ try {
     if (derivado.validacion_estado === 'APTO') {
       assert(/Cuadro Comparativo/i.test(det.estado_bandeja), '10. APTO → Derivado a Cuadro Comparativo');
     } else {
-      assert(/Recepción/i.test(det.estado_bandeja), '10. NO_APTO → etiqueta destino oficial');
+      assert(/Invitaciones/i.test(det.estado_bandeja), '10. NO_APTO → etiqueta destino oficial');
     }
   } else {
     assert(true, '9/10. (sin derivado) omitido');
