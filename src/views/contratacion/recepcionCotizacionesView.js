@@ -18,16 +18,12 @@ import {
   setEmptyState,
 } from '../../utils/uiState/index.js';
 
-<<<<<<< HEAD
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 const VIEW_ID = 'recepcion-cotizaciones';
 const SCROLL_SEL = '#recepCotWrap';
 const loadGuard = createRequestSequenceGuard();
 let lifecycle = null;
 let refreshIndicator = null;
-=======
-const API_BASE = '/api';
->>>>>>> 3fcfe8b (Respaldo local VPS antes de integrar RC8)
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

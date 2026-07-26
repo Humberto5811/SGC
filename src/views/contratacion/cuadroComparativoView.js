@@ -45,16 +45,12 @@ import {
   setEmptyState,
 } from '../../utils/uiState/index.js';
 
-<<<<<<< HEAD
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 const VIEW_ID = 'cuadro-comparativo';
 const SCROLL_SEL = '#cuadroCompWrap';
 const loadGuard = createRequestSequenceGuard();
 let lifecycle = null;
 let refreshIndicator = null;
-=======
-const API_BASE = '/api';
->>>>>>> 3fcfe8b (Respaldo local VPS antes de integrar RC8)
 
 function currentUser() {
   try { return JSON.parse(localStorage.getItem('currentUser') || 'null') || {}; }
