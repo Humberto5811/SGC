@@ -1,5 +1,5 @@
 // Cliente HTTP central - VERSIÓN DEFINITIVA
-const BASE = 'http://localhost:3000/api';
+const BASE = '/api';
 
 function authHeaders() {
   try {

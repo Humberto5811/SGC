@@ -49,7 +49,7 @@ import {
   bindExpedienteDocsTable,
 } from './cuadroComparativoExpedienteDocs.js';
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 
 function esc(s) {
   return String(s == null ? '' : s)

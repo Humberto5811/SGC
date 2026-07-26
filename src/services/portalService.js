@@ -1,5 +1,5 @@
 // Cliente API — Portal de Proveedores (auth separada del SGC interno)
-const BASE = 'http://localhost:3000/api/portal';
+const BASE = '/api/portal';
 
 function portalHeaders() {
   try {

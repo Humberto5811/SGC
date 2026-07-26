@@ -5,7 +5,7 @@ import { contratacionesService } from '../services/contratacionesService.js';
 import { authService } from '../services/authService.js';
 import { getUserDisplayName } from './userDisplay.js';
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
