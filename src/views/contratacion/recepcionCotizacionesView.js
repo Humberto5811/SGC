@@ -1,12 +1,17 @@
-// Recepción de Cotizaciones — bandeja analista CM (RC8.0 refresh no destructivo)
+// Recepción de Cotizaciones — bandeja consolidada por Solicitud (RC8.0 refresh no destructivo)
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { bandejaTableStyles, renderActionMenuCell, bindActionMenus } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { usePagination } from '../../utils/paginacion.js';
+import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { showEnviarValidarModal } from '../../utils/derivarValidacionModal.js';
 import { renderPropuestaTecnicaRecepcion, renderPropuestaEconomicaRecepcion } from '../../utils/recepcionPropuestaRows.js';
-import { recepcionCotizacionesMenuItems } from '../../utils/bandejaActions.js';
-import { formatRequerimientosBandeja } from '../../utils/recepcionCotizacionUtils.js';
+import { puedeEnviarValidarRecepcion } from '../../utils/recepcionCotizacionUtils.js';
+import {
+  formatRequerimientosBandeja,
+  formatCentrosBandeja,
+  consolidarExpedientesRecepcion,
+} from '../../utils/recepcionCotizacionUtils.js';
+import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -18,12 +23,15 @@ import {
   setEmptyState,
 } from '../../utils/uiState/index.js';
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 const VIEW_ID = 'recepcion-cotizaciones';
 const SCROLL_SEL = '#recepCotWrap';
 const loadGuard = createRequestSequenceGuard();
 let lifecycle = null;
 let refreshIndicator = null;
+let cotizacionesCache = [];
+let expedientesCache = [];
+let filtroEstado = '';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -106,8 +114,6 @@ const VIEW_CONFIG = {
   listId: 'recepCotList',
 };
 
-let cotizacionesCache = [];
-let filtroEstado = '';
 const recepcionPagination = usePagination(
   'recepcion',
   (params) => contratacionesService.listRecepcionCotizaciones(params),
@@ -144,16 +150,15 @@ function renderRecepcionSummaryCards(containerId) {
     </div>`;
 }
 
-function updateRecepcionSummaryCards(rows, containerId) {
+function updateRecepcionSummaryCards(expedientes, containerId) {
   const root = document.getElementById(containerId);
   if (!root) return;
-  const all = Array.isArray(rows) ? rows : [];
-  const norm = (c) => String(c.validacion_estado || '').toUpperCase();
+  const all = Array.isArray(expedientes) ? expedientes : [];
   const counts = {
     total: all.length,
-    enCotizacion: all.filter((c) => !norm(c) || norm(c) === 'PENDIENTE').length,
-    enviadosValidar: all.filter((c) => ['DERIVADA', 'EN_PROCESO'].includes(norm(c))).length,
-    validadosUsuario: all.filter((c) => ['APTO', 'NO_APTO', 'OBSERVADO'].includes(norm(c))).length,
+    enCotizacion: all.filter((e) => e.validacion_estado === 'PENDIENTE' || !e.validacion_estado).length,
+    enviadosValidar: all.filter((e) => e.validacion_estado === 'DERIVADA').length,
+    validadosUsuario: all.filter((e) => e.validacion_estado === 'VALIDADA_AU').length,
   };
   Object.entries(counts).forEach(([k, v]) => {
     const el = root.querySelector(`[data-recep-kpi="${k}"]`);
@@ -182,33 +187,6 @@ function renderRecepcionFilterBar(prefix) {
         </div>
       </div>
     </div>`;
-}
-
-export function renderRecepcionCotizacionesView() {
-  const { prefix, title, icon, description, listId } = VIEW_CONFIG;
-  return `
-    <div class="container-fluid actos-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-          <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
-          <p class="text-muted mb-0">${esc(description)}</p>
-        </div>
-        <div class="d-flex gap-2 align-items-center">
-          <span id="recepCotBgRefreshHost"></span>
-          <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
-            <i class="bi bi-arrow-clockwise"></i> Actualizar
-          </button>
-        </div>
-      </div>
-      ${renderRecepcionSummaryCards(`${prefix}TrazaSummary`)}
-      ${renderRecepcionFilterBar(prefix)}
-      <hr/>
-      <div id="${esc(listId)}" class="sgc-bandeja-wrap actos-bandeja-wrap">
-        <div class="text-muted">Cargando…</div>
-      </div>
-    </div>
-  `;
 }
 
 function renderDocumentosList(cotId, documentos) {
@@ -255,6 +233,7 @@ function bindDocumentoButtons(container) {
 }
 
 async function showCotizacionDetalleModal(cotId) {
+  closeBandejaActionMenus();
   const id = `rcDetModal_${Date.now()}`;
   const wrap = document.createElement('div');
   wrap.innerHTML = `
@@ -277,7 +256,10 @@ async function showCotizacionDetalleModal(cotId) {
   document.body.appendChild(wrap);
   const el = document.getElementById(id);
   const modal = window.bootstrap.Modal.getOrCreateInstance(el);
-  el.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+  el.addEventListener('hidden.bs.modal', () => {
+    closeBandejaActionMenus();
+    wrap.remove();
+  }, { once: true });
   modal.show();
 
   try {
@@ -340,6 +322,114 @@ async function showCotizacionDetalleModal(cotId) {
   }
 }
 
+function renderAccionCotizacion(c) {
+  const v = String(c.validacion_estado || '').toUpperCase();
+  const puedeDevolver = c.estado === 'COTIZACION_PRESENTADA' && ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
+  const buttons = [
+    `<button type="button" class="btn btn-sm btn-outline-secondary rc-cot-ver" data-id="${c.id}">
+      <i class="bi bi-eye"></i> Ver propuesta
+    </button>`,
+  ];
+  if (puedeEnviarValidarRecepcion(c)) {
+    buttons.push(`<button type="button" class="btn btn-sm btn-primary rc-cot-enviar" data-id="${c.id}">
+      <i class="bi bi-send"></i> Enviar a validar
+    </button>`);
+  } else if (puedeDevolver) {
+    buttons.push(`<button type="button" class="btn btn-sm btn-warning rc-cot-enviar" data-id="${c.id}">
+      <i class="bi bi-arrow-counterclockwise"></i> Devolver a Validación AU
+    </button>`);
+  }
+  return `<div class="d-flex flex-wrap gap-1 justify-content-center">${buttons.join('')}</div>`;
+}
+
+function showExpedienteDetalleModal(expediente) {
+  closeBandejaActionMenus();
+  const id = `rcExpModal_${Date.now()}`;
+  const cots = expediente?.cotizaciones || [];
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="modal fade" id="${id}" tabindex="-1">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header bg-light">
+            <h5 class="modal-title">
+              <i class="bi bi-collection"></i> Cotizaciones recibidas — ${esc(expediente.solicitud_codigo || '')}
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body" id="${id}_body">
+            <div class="mb-3 small">
+              <div><strong>${esc(expediente.solicitud_codigo || '')}</strong> — ${esc(expediente.denominacion || expediente.objeto || '')}</div>
+              <div class="text-muted mt-1">
+                Requerimiento(s): ${esc(expediente.requerimientos_texto || '—')}
+                · Centro: ${esc(expediente.centros_texto || '—')}
+                · Cotizaciones: <strong>${cots.length}</strong>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover table-bordered mb-0">
+                <thead class="table-light"><tr>
+                  <th>Proveedor</th><th>Monto ofertado</th>
+                  <th>Fecha recepción</th><th>Estado</th><th class="text-center">Acciones</th>
+                </tr></thead>
+                <tbody>
+                  ${cots.map((c) => {
+                    const estadoLabel = labelEstadoRecepcion(c);
+                    const responsableHint = c.validacion_responsable && estadoLabel === 'Enviada a validación AU'
+                      ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
+                    return `
+                    <tr>
+                      <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
+                      <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
+                      <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
+                      <td>
+                        <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(estadoLabel)}</span>
+                        ${responsableHint}
+                      </td>
+                      <td class="text-center">${renderAccionCotizacion(c)}</td>
+                    </tr>`;
+                  }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin cotizaciones</td></tr>'}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const el = document.getElementById(id);
+  const modal = window.bootstrap.Modal.getOrCreateInstance(el);
+  el.addEventListener('hidden.bs.modal', () => {
+    closeBandejaActionMenus();
+    wrap.remove();
+  }, { once: true });
+  modal.show();
+
+  const body = document.getElementById(`${id}_body`);
+  body?.querySelectorAll('.rc-cot-ver').forEach((btn) => {
+    btn.onclick = () => showCotizacionDetalleModal(btn.dataset.id);
+  });
+  body?.querySelectorAll('.rc-cot-enviar').forEach((btn) => {
+    btn.onclick = () => {
+      const row = (cotizacionesCache || []).find((r) => String(r.id) === String(btn.dataset.id));
+      const v = String(row?.validacion_estado || '').toUpperCase();
+      const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
+      showEnviarValidarModal(btn.dataset.id, {
+        title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
+        submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
+        requireObservacion: esDevolucion,
+        onSuccess: () => {
+          modal.hide();
+          loadCotizaciones(true);
+        },
+      });
+    };
+  });
+}
+
 function buildLoadParams() {
   const params = {};
   if (filtroEstado) params.estado = filtroEstado;
@@ -347,29 +437,34 @@ function buildLoadParams() {
 }
 
 const RECEPCION_THEAD = `<tr>
-  <th>Solicitud</th><th>Requerimiento</th><th>Proveedor</th><th>Monto ofertado</th>
-  <th>Fecha recepción</th><th>Estado</th><th>Acciones</th>
+  <th>Solicitud de cotización</th>
+  <th>Requerimiento</th>
+  <th>Centro</th>
+  <th class="text-center">Cantidad</th>
+  <th>Estado</th>
+  <th class="text-center">Ver</th>
 </tr>`;
 
-function buildRecepcionRowHtml(c) {
-  const estadoLabel = labelEstadoRecepcion(c);
-  const responsableHint = c.validacion_responsable && estadoLabel === 'Enviada a validación AU'
-    ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
+function buildRecepcionRowHtml(exp) {
+  const n = Number(exp.cantidad_cotizaciones) || (exp.cotizaciones || []).length || 0;
   return `
-    <tr data-row-id="${c.id}">
+    <tr data-row-id="${esc(exp.solicitud_id)}">
       <td>
-        <strong>${esc(c.solicitud_codigo)}</strong>
-        <div class="small text-muted">${esc((c.denominacion || c.objeto || '').slice(0, 60))}</div>
+        <strong>${esc(exp.solicitud_codigo)}</strong>
+        <div class="small text-muted">${esc((exp.denominacion || exp.objeto || '').slice(0, 80))}</div>
       </td>
-      <td class="small">${formatRequerimientosBandeja(c, esc)}</td>
-      <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-      <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
-      <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
+      <td class="small">${formatRequerimientosBandeja(exp, esc)}</td>
+      <td class="small">${formatCentrosBandeja(exp, esc)}</td>
+      <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(estadoLabel)}</span>
-        ${responsableHint}
+        <span class="badge bg-${esc(exp.badge_estado || 'primary')}">${esc(exp.estado_recepcion || '—')}</span>
       </td>
-      ${renderActionMenuCell(c.id, recepcionCotizacionesMenuItems(c), '')}
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-primary rc-exp-ver"
+          data-solicitud-id="${esc(exp.solicitud_id)}">
+          <i class="bi bi-eye"></i> Ver
+        </button>
+      </td>
     </tr>`;
 }
 
@@ -380,6 +475,7 @@ async function loadCotizaciones(resetPage = false) {
 
   const hadShell = !!document.getElementById('recepCotBody');
   if (hadShell) captureScroll(VIEW_ID, SCROLL_SEL);
+  closeBandejaActionMenus(cont);
 
   const shell = ensureBandejaTableShell(cont, {
     outerId: 'recepCotOuter',
@@ -394,7 +490,7 @@ async function loadCotizaciones(resetPage = false) {
 
   const request = loadGuard.begin();
   if (lifecycle) lifecycle.addAbortController(request.controller);
-  const isBg = hadShell && cotizacionesCache.length > 0;
+  const isBg = hadShell && expedientesCache.length > 0;
   if (isBg) refreshIndicator?.show('Actualizando…');
 
   try {
@@ -402,13 +498,14 @@ async function loadCotizaciones(resetPage = false) {
     const result = await recepcionPagination.loadData(buildLoadParams(), resetPage);
     if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
 
-    const rows = result.data || [];
-    cotizacionesCache = result.allData || rows;
-    updateRecepcionSummaryCards(cotizacionesCache, `${VIEW_CONFIG.prefix}TrazaSummary`);
+    const flat = result.allData || result.data || [];
+    cotizacionesCache = flat;
+    expedientesCache = consolidarExpedientesRecepcion(flat);
+    updateRecepcionSummaryCards(expedientesCache, `${VIEW_CONFIG.prefix}TrazaSummary`);
 
     if (!shell?.tbody || !shell?.thead) return;
 
-    if (!rows.length && !cotizacionesCache.length) {
+    if (!expedientesCache.length) {
       shell.thead.innerHTML = RECEPCION_THEAD;
       shell.tbody.innerHTML = '';
       setEmptyState(shell, { empty: true, message: 'No hay cotizaciones recibidas de proveedores.' });
@@ -416,23 +513,27 @@ async function loadCotizaciones(resetPage = false) {
       return;
     }
 
+    const state = getPaginationState('recepcion');
+    const totalPages = Math.max(1, Math.ceil(expedientesCache.length / state.pageSize));
+    if (state.page > totalPages) state.page = totalPages;
+    updatePaginationState('recepcion', {
+      total: expedientesCache.length,
+      totalPages,
+      isVirtual: true,
+    });
+    const start = (state.page - 1) * state.pageSize;
+    const pageExpedientes = expedientesCache.slice(start, start + state.pageSize);
+
     setEmptyState(shell, { empty: false });
     shell.thead.innerHTML = RECEPCION_THEAD;
-    shell.tbody.innerHTML = rows.map(buildRecepcionRowHtml).join('');
+    shell.tbody.innerHTML = pageExpedientes.map(buildRecepcionRowHtml).join('');
 
-    bindActionMenus(cont, {
-      verPropuesta: (id) => showCotizacionDetalleModal(id),
-      enviarValidar: (id) => {
-        const row = (cotizacionesCache || []).find((r) => String(r.id) === String(id));
-        const v = String(row?.validacion_estado || '').toUpperCase();
-        const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
-        showEnviarValidarModal(id, {
-          title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
-          submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
-          requireObservacion: esDevolucion,
-          onSuccess: () => loadCotizaciones(true),
-        });
-      },
+    cont.querySelectorAll('.rc-exp-ver').forEach((btn) => {
+      btn.onclick = () => {
+        const sid = btn.dataset.solicitudId;
+        const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
+        if (exp) showExpedienteDetalleModal(exp);
+      };
     });
     recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));
     restoreScroll(VIEW_ID, SCROLL_SEL);
@@ -440,7 +541,7 @@ async function loadCotizaciones(resetPage = false) {
   } catch (err) {
     if (isAbortError(err) || !request.isCurrent()) return;
     if (lifecycle && !lifecycle.isActive()) return;
-    if (hadShell && cotizacionesCache.length) {
+    if (hadShell && expedientesCache.length) {
       refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
     } else {
       cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
@@ -448,9 +549,39 @@ async function loadCotizaciones(resetPage = false) {
   }
 }
 
+export function renderRecepcionCotizacionesView() {
+  const { prefix, title, icon, description, listId } = VIEW_CONFIG;
+  return `
+    <div class="container-fluid actos-bandeja-page">
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
+          <p class="text-muted mb-0">${esc(description)}</p>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <span id="recepCotBgRefreshHost"></span>
+          <button id="${esc(prefix)}Reload" type="button" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-clockwise"></i> Actualizar
+          </button>
+        </div>
+      </div>
+      ${renderRecepcionSummaryCards(`${prefix}TrazaSummary`)}
+      ${renderRecepcionFilterBar(prefix)}
+      <hr/>
+      <div id="${esc(listId)}" class="sgc-bandeja-wrap actos-bandeja-wrap">
+        <div class="text-muted">Cargando…</div>
+      </div>
+    </div>
+  `;
+}
+
 export function initRecepcionCotizacionesView() {
   lifecycle = createViewLifecycle(VIEW_ID);
-  lifecycle.addCleanup(() => loadGuard.abortCurrent());
+  lifecycle.addCleanup(() => {
+    loadGuard.abortCurrent();
+    closeBandejaActionMenus();
+  });
   refreshIndicator = createBackgroundRefreshIndicator('#recepCotBgRefreshHost', { id: 'recepCotBgRefresh' });
 
   const { prefix } = VIEW_CONFIG;

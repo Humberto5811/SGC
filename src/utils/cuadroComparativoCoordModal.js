@@ -16,6 +16,7 @@ import {
 import {
   isModoDec,
   renderPanelDec,
+  showDevolverDecModal,
 } from './cuadroComparativoDec.js';
 import { observarCuadroConModalInstitucional } from './cuadroComparativoObservaciones.js';
 import {
@@ -790,38 +791,56 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
     });
 
     host.querySelector('#ccBtnDecObservar')?.addEventListener('click', async () => {
-      const req = reqsDetalle[0] || null;
-      const reqId = req?.id || exp?.requerimientos?.[0]?.id;
-      await observarCuadroConModalInstitucional({
-        req,
-        requerimientoId: reqId,
-        cuadroId: cuadro.id,
-        rolRevision: ROLES_REVISION.DEC,
-        payloadRevision,
-        onDone: async () => {
-          if (typeof onSaved === 'function') onSaved();
-          await refreshDetalle();
-        },
-      });
-    });
-
-    host.querySelector('#ccBtnDecDerivarAnalista')?.addEventListener('click', async () => {
-      if (!cuadro?.conformidad_dec && !cuadro?.revision_dec?.conformidad) {
-        return alert('Debe registrar la conformidad antes de derivar al Analista.');
-      }
-      if (!confirm('¿Derivar el cuadro al Analista para Generación CCP?')) return;
+      const devolver = await showDevolverDecModal();
+      if (!devolver?.motivo) return;
+      const accion = devolver.destino === 'COORDINADOR_CM'
+        ? 'OBSERVAR_DEC_A_COORD'
+        : 'OBSERVAR_DEC';
       try {
         const resp = await contratacionesService.transitarRevisionCuadro(
           cuadro.id,
-          payloadRevision({ accion: 'DERIVAR_ANALISTA' }),
+          payloadRevision({
+            accion,
+            motivo: devolver.motivo,
+            observacion: devolver.motivo,
+            destino_persona: devolver.destino === 'COORDINADOR_CM' ? 'Coordinador CM' : 'Analista',
+          }),
         );
         const data = resp.data || resp;
         cuadro = data.cuadro || cuadro;
-        alert('Cuadro aprobado y derivado al Analista (Generación CCP).');
+        alert(devolver.destino === 'COORDINADOR_CM'
+          ? 'Cuadro observado y devuelto al Coordinador CM.'
+          : 'Cuadro observado y devuelto al Analista.');
         if (typeof onSaved === 'function') onSaved();
         await refreshDetalle();
       } catch (err) {
-        alert(err.message || 'No se pudo derivar al Analista');
+        alert(err.message || 'No se pudo observar el cuadro');
+      }
+    });
+
+    host.querySelector('#ccBtnDecAprobarCcp')?.addEventListener('click', async () => {
+      if (!cuadro?.tiene_pdf_firmado && !cuadro?.firmado_nombre) {
+        return alert('Debe existir el PDF firmado por el Coordinador.');
+      }
+      if (!cuadro?.tiene_pdf_firmado_dec && !cuadro?.firmado_dec_nombre) {
+        return alert('Debe adjuntar el PDF firmado por el DEC.');
+      }
+      if (!confirm('¿Aprobar el cuadro y derivarlo a CCP?')) return;
+      const btn = host.querySelector('#ccBtnDecAprobarCcp');
+      if (btn) btn.disabled = true;
+      try {
+        const resp = await contratacionesService.transitarRevisionCuadro(
+          cuadro.id,
+          payloadRevision({ accion: 'APROBAR_DERIVAR_CCP' }),
+        );
+        const data = resp.data || resp;
+        cuadro = data.cuadro || cuadro;
+        alert('Cuadro aprobado y derivado a CCP.');
+        if (typeof onSaved === 'function') onSaved();
+        await refreshDetalle();
+      } catch (err) {
+        alert(err.message || 'No se pudo aprobar y derivar a CCP');
+        if (btn) btn.disabled = false;
       }
     });
   }

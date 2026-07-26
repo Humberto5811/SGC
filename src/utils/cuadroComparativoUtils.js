@@ -21,23 +21,24 @@ export const ESTADOS_CUADRO = Object.freeze({
   DERIVADO_CCP: 'DERIVADO_CCP',
 });
 
+/** Etiquetas visibles de bandeja (código técnico se mantiene en ESTADOS_CUADRO). */
 export const ESTADOS_CUADRO_LABEL = Object.freeze({
-  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Pendiente de elaborar',
-  [ESTADOS_CUADRO.EN_ELABORACION]: 'En elaboración',
-  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro borrador',
-  [ESTADOS_CUADRO.GENERADO]: 'Generado',
-  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Generado preliminar',
-  [ESTADOS_CUADRO.ADJUDICADO]: 'Adjudicado',
-  [ESTADOS_CUADRO.OBSERVADO]: 'Observado',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'C.C. en revisión Coordinador CM',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Observado por Coordinador CM',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Firmado por Coordinador CM',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'C.C. en revisión DEC',
-  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Observado por DEC',
-  [ESTADOS_CUADRO.APROBADO_DEC]: 'Aprobado por DEC',
-  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Listo para CCP',
-  [ESTADOS_CUADRO.FIRMADO]: 'Firmado',
-  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
+  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comp. Trámite',
+  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comp. Trámite',
+  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comp. Trámite',
+  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comp. Trámite',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comp. Trámite',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comp. Trámite',
+  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comp. Observado',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comp. Revisión',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comp. Observado',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comp. Revisión',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comp. Aprobado',
+  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comp. Observado',
+  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comp. Aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comp. Aprobado',
+  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comp. Aprobado',
+  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comp. Aprobado',
 });
 
 export function normalizeCuadroEstado(raw) {
@@ -66,9 +67,40 @@ export function normalizeCuadroEstado(raw) {
   return ESTADOS_CUADRO.PENDIENTE_ELABORAR;
 }
 
+/** Traducción central de estado técnico → etiqueta visible de bandeja. */
 export function labelCuadroEstado(code) {
   return ESTADOS_CUADRO_LABEL[normalizeCuadroEstado(code)]
     || ESTADOS_CUADRO_LABEL[ESTADOS_CUADRO.PENDIENTE_ELABORAR];
+}
+
+/** Alias semántico: misma fuente que labelCuadroEstado. */
+export function labelCuadroEstadoVisible(code) {
+  return labelCuadroEstado(code);
+}
+
+function esCmnEnBandeja(valor) {
+  return /^\d{4,6}$/.test(String(valor || '').trim());
+}
+
+export function formatCentroCuadro(row, esc) {
+  const raw = row?.centros_texto || row?.centro
+    || (Array.isArray(row?.requerimientos)
+      ? row.requerimientos.map((r) => r?.centro).filter(Boolean).join(', ')
+      : '');
+  const parts = String(raw).split(',')
+    .map((s) => s.trim())
+    .filter((s) => s && !esCmnEnBandeja(s));
+  if (!parts.length) return '—';
+  if (parts.length === 1) return esc(parts[0]);
+  return `<span class="small" title="${esc(parts.join(', '))}">${esc(parts[0])} <span class="text-muted">+${parts.length - 1}</span></span>`;
+}
+
+export function formatCantidadCotizacionesCuadro(row, esc) {
+  const n = row?.total_cotizaciones != null
+    ? Number(row.total_cotizaciones)
+    : (Number(row?.total_proveedores) || 0);
+  if (!Number.isFinite(n) || n < 0) return '—';
+  return `${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}`;
 }
 
 export function badgeClassCuadro(code) {

@@ -6,6 +6,8 @@ import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
 import {
   formatRequerimientosCuadro,
+  formatCentroCuadro,
+  formatCantidadCotizacionesCuadro,
   buildCuadroStats,
   renderCuadroStatsHtml,
   updateCuadroStatsDom,
@@ -34,6 +36,7 @@ import {
 } from '../../utils/cuadroComparativoAdminPrueba.js';
 import { showTrazabilidadModal } from '../requerimiento/reqShared.js';
 import { closeBandejaDropdowns } from '../../components/bandejaDetailPanel.js';
+import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -45,7 +48,7 @@ import {
   setEmptyState,
 } from '../../utils/uiState/index.js';
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 const VIEW_ID = 'cuadro-comparativo';
 const SCROLL_SEL = '#cuadroCompWrap';
 const loadGuard = createRequestSequenceGuard();
@@ -378,17 +381,20 @@ async function openElaborarCuadro(solicitudId) {
 
 async function openExpedienteCoordinador(solicitudId) {
   closeBandejaDropdowns();
+  closeBandejaActionMenus();
   await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false));
 }
 
 async function openExpedienteDec(solicitudId) {
   closeBandejaDropdowns();
+  closeBandejaActionMenus();
   await showExpedienteDecModal(solicitudId, () => loadCuadro(false));
 }
 
 /** Admin RC8.5-G: modo prueba (actuar como) sin cambiar sesión ni rol real. */
 async function openExpedienteAdmin(solicitudId) {
   closeBandejaDropdowns();
+  closeBandejaActionMenus();
   const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
   const estado = row?.estado_cuadro || row?.estado || '';
   const sugerido = resolveModoAperturaExpediente(estado, ROLES_REVISION.ADMINISTRADOR);
@@ -444,59 +450,36 @@ async function openTrazabilidadCuadro(solicitudId) {
   await showTrazabilidadModal(reqId);
 }
 
-function buildCuadroTheadHtml({ modoCoord, modoDec, modoAdmin }) {
-  if (modoCoord || modoDec || modoAdmin) {
-    return `<tr>
-      <th>Solicitud</th>
-      <th>Requerimiento</th>
-      <th>Proveedor</th>
-      ${modoCoord ? '<th>Tipo</th>' : ''}
-      <th class="text-center">Versión</th>
-      <th>Estado</th>
-      <th>Responsable</th>
-      <th>Fecha</th>
-      <th>Acciones</th>
-    </tr>`;
-  }
+function buildCuadroTheadHtml() {
   return `<tr>
-    <th>Solicitud</th>
+    <th>Solicitud de cotización</th>
     <th>Requerimiento</th>
-    <th class="text-center">Versión</th>
+    <th>Centro</th>
+    <th class="text-center">Cantidad</th>
     <th>Estado</th>
-    <th>Responsable actual</th>
-    <th>Fecha</th>
+    <th class="text-center">Ver</th>
     <th>Acciones</th>
   </tr>`;
 }
 
-function buildCuadroRowHtml(c, { modoCoord, modoDec, modoAdmin, rolUi }) {
+function buildCuadroRowHtml(c, { rolUi }) {
   const menu = cuadroComparativoMenuItems(c, { rol: rolUi || c.rol_revision });
-  if (modoCoord || modoDec || modoAdmin) {
-    return `
-      <tr data-row-id="${c.solicitud_id}">
-        <td><strong>${esc(c.solicitud_codigo)}</strong>
-          <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
-        </td>
-        <td>${formatRequerimientosCuadro(c, esc)}</td>
-        <td class="small">${esc(c.proveedor_display || c.proveedores_nombres || '—')}</td>
-        ${modoCoord ? `<td class="small">${esc(c.tipo || '—')}</td>` : ''}
-        <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
-        <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
-        <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
-        <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
-        ${renderActionMenuCell(c.solicitud_id, menu, '')}
-      </tr>`;
-  }
+  const estadoLabel = c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro);
   return `
     <tr data-row-id="${c.solicitud_id}">
       <td><strong>${esc(c.solicitud_codigo)}</strong>
         <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
       </td>
       <td>${formatRequerimientosCuadro(c, esc)}</td>
-      <td class="text-center small">${c.version != null ? `v${esc(c.version)}` : '—'}</td>
-      <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro))}</span></td>
-      <td class="small">${esc(c.responsable_actual || c.responsable_revision || '—')}</td>
-      <td class="small">${esc(fmtFecha(c.fecha_actualizacion || c.fecha_ingreso_cuadro))}</td>
+      <td class="small">${formatCentroCuadro(c, esc)}</td>
+      <td class="text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
+      <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(estadoLabel)}</span></td>
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
+          data-id="${esc(c.solicitud_id)}" title="Ver expediente">
+          <i class="bi bi-eye"></i> Ver
+        </button>
+      </td>
       ${renderActionMenuCell(c.solicitud_id, menu, '')}
     </tr>`;
 }
@@ -550,17 +533,27 @@ function ensureCuadroChrome(shell, { modoAdmin, adminChrome, hint }) {
   hintEl.textContent = hint;
 }
 
+function openVerDesdeBandeja(id, { modoCoord, modoDec, modoAdmin }) {
+  closeBandejaActionMenus();
+  if (modoCoord) return openExpedienteCoordinador(id);
+  if (modoDec) return openExpedienteDec(id);
+  if (modoAdmin) return openExpedienteAdmin(id);
+  return showVerExpediente(id);
+}
+
 function bindCuadroActionMenus(cont, { modoCoord, modoDec, modoAdmin }) {
+  closeBandejaActionMenus(cont);
+  cont.querySelectorAll('.cc-ver-exp').forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      openVerDesdeBandeja(btn.dataset.id, { modoCoord, modoDec, modoAdmin });
+    };
+  });
   bindActionMenus(cont, {
     verExpediente: (id) => showVerExpediente(id),
     verValidaciones: (id) => showVerValidaciones(id),
     elaborarCuadro: (id) => openElaborarCuadro(id),
-    verCuadro: (id) => {
-      if (modoCoord) return openExpedienteCoordinador(id);
-      if (modoDec) return openExpedienteDec(id);
-      if (modoAdmin) return openExpedienteAdmin(id);
-      return openElaborarCuadro(id);
-    },
+    verCuadro: (id) => openVerDesdeBandeja(id, { modoCoord, modoDec, modoAdmin }),
     abrirExpedienteCoord: (id) => openExpedienteCoordinador(id),
     abrirExpedienteDec: (id) => openExpedienteDec(id),
     abrirExpedienteAdmin: (id) => openExpedienteAdmin(id),
@@ -582,6 +575,7 @@ async function loadCuadro(resetPage = false) {
 
   const hadShell = !!document.getElementById('cuadroCompBody');
   if (hadShell) captureScroll(VIEW_ID, SCROLL_SEL);
+  closeBandejaActionMenus(cont);
 
   const shell = ensureBandejaTableShell(cont, {
     outerId: 'cuadroCompOuter',
@@ -621,7 +615,7 @@ async function loadCuadro(resetPage = false) {
     if (!shell?.tbody || !shell?.thead) return;
 
     if (!allFiltered.length) {
-      shell.thead.innerHTML = buildCuadroTheadHtml({ modoCoord, modoDec, modoAdmin });
+      shell.thead.innerHTML = buildCuadroTheadHtml();
       shell.tbody.innerHTML = '';
       setEmptyState(shell, {
         empty: true,
@@ -632,10 +626,8 @@ async function loadCuadro(resetPage = false) {
     }
 
     setEmptyState(shell, { empty: false });
-    shell.thead.innerHTML = buildCuadroTheadHtml({ modoCoord, modoDec, modoAdmin });
-    shell.tbody.innerHTML = rows.map((c) => buildCuadroRowHtml(c, {
-      modoCoord, modoDec, modoAdmin, rolUi,
-    })).join('');
+    shell.thead.innerHTML = buildCuadroTheadHtml();
+    shell.tbody.innerHTML = rows.map((c) => buildCuadroRowHtml(c, { rolUi })).join('');
 
     bindCuadroActionMenus(cont, { modoCoord, modoDec, modoAdmin });
     cuadroPagination.renderControls('cuadroCompOuter', () => loadCuadro(false));
@@ -684,7 +676,10 @@ export function renderCuadroComparativoView() {
 
 export function initCuadroComparativoView() {
   lifecycle = createViewLifecycle(VIEW_ID);
-  lifecycle.addCleanup(() => loadGuard.abortCurrent());
+  lifecycle.addCleanup(() => {
+    loadGuard.abortCurrent();
+    closeBandejaActionMenus();
+  });
   refreshIndicator = createBackgroundRefreshIndicator('#cuadroCompBgRefreshHost', { id: 'cuadroCompBgRefresh' });
 
   bindBandejaToolbar({

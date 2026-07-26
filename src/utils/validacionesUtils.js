@@ -41,8 +41,7 @@ export function renderValidacionesStatsHtml(stats, containerId = 'validacionesSt
 export function updateValidacionesStatsDom(stats, containerId = 'validacionesStats') {
   const root = document.getElementById(containerId);
   if (!root) return;
-  const s = buildValidacionesStats(Array.isArray(stats) ? stats : []);
-  const data = Array.isArray(stats) ? buildValidacionesStats(stats) : (stats || s);
+  const data = Array.isArray(stats) ? buildValidacionesStats(stats) : (stats || buildValidacionesStats([]));
   Object.entries(data).forEach(([k, v]) => {
     const el = root.querySelector(`[data-val-kpi="${k}"]`);
     if (el) el.textContent = String(v);
@@ -52,4 +51,129 @@ export function updateValidacionesStatsDom(stats, containerId = 'validacionesSta
 export function isAdminUser(user) {
   const rol = String(user?.rol || '').toLowerCase();
   return rol === 'admin' || rol === 'dec';
+}
+
+function fechaSortKey(iso) {
+  const s = String(iso || '').trim();
+  if (!s) return 0;
+  const t = Date.parse(s.includes('T') || s.includes(' ') ? s : `${s}T00:00:00`);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/** Estado agregado del expediente en bandeja Validaciones. */
+export function estadoExpedienteValidacion(cotizaciones = []) {
+  const list = Array.isArray(cotizaciones) ? cotizaciones : [];
+  if (!list.length) {
+    return { label: 'Pendiente de validación', validacion_estado: 'DERIVADA', badge: 'warning' };
+  }
+  const norms = list.map((c) => normValEstado(c.validacion_estado));
+  if (norms.some((v) => !v || ESTADOS_PENDIENTE.has(v))) {
+    return { label: 'Pendiente de validación', validacion_estado: 'DERIVADA', badge: 'warning' };
+  }
+  if (norms.some((v) => ESTADOS_OBSERVADO.has(v))) {
+    const first = list.find((c) => ESTADOS_OBSERVADO.has(normValEstado(c.validacion_estado)));
+    return {
+      label: first?.estado_bandeja || 'Derivados / Observados',
+      validacion_estado: normValEstado(first?.validacion_estado) || 'OBSERVADO',
+      badge: first?.estado_bandeja_class || 'warning',
+    };
+  }
+  return {
+    label: 'Derivado a Cuadro Comparativo',
+    validacion_estado: 'APTO',
+    badge: 'success',
+  };
+}
+
+export function formatRequerimientosValidacion(c, esc) {
+  const raw = c?.requerimientos || c?.requerimientos_texto || c?.requerimientos_codigos || '';
+  const codes = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+  if (!codes.length) return '—';
+  if (codes.length <= 2) {
+    return codes.map((code) => `<div class="small">${esc(code)}</div>`).join('');
+  }
+  const title = codes.join(', ');
+  return `<span class="small" title="${esc(title)}">${esc(codes[0])} <span class="text-muted">+ ${codes.length - 1} más</span></span>`;
+}
+
+/** Excluye códigos CMN numéricos (p. ej. 05277) de la columna Centro. */
+function esCmnNumerico(valor) {
+  return /^\d{4,6}$/.test(String(valor || '').trim());
+}
+
+export function formatCentrosValidacion(c, esc) {
+  const raw = c?.centros_texto || c?.centro || '';
+  const parts = String(raw).split(',').map((s) => s.trim()).filter((s) => s && !esCmnNumerico(s));
+  if (!parts.length) return '—';
+  if (parts.length === 1) return esc(parts[0]);
+  return `<span class="small" title="${esc(parts.join(', '))}">${esc(parts[0])} <span class="text-muted">+${parts.length - 1}</span></span>`;
+}
+
+/**
+ * Consolida cotizaciones de validación en una fila por solicitud.
+ * Conserva el detalle en `cotizaciones` para el modal Ver.
+ */
+export function consolidarExpedientesValidacion(cotizaciones = []) {
+  const map = new Map();
+  (cotizaciones || []).forEach((c) => {
+    const key = String(c.solicitud_id || c.solicitud_codigo || '');
+    if (!key) return;
+    if (!map.has(key)) {
+      map.set(key, {
+        solicitud_id: c.solicitud_id,
+        solicitud_codigo: c.solicitud_codigo,
+        denominacion: c.denominacion || c.descripcion || '',
+        objeto: c.objeto || '',
+        requerimientos: c.requerimientos || c.requerimientos_texto || '',
+        requerimientos_texto: c.requerimientos_texto || c.requerimientos || '',
+        centros_texto: c.centros_texto || c.centro || '',
+        cotizaciones: [],
+      });
+    }
+    const g = map.get(key);
+    g.cotizaciones.push(c);
+    if (!g.requerimientos && (c.requerimientos || c.requerimientos_texto)) {
+      g.requerimientos = c.requerimientos || c.requerimientos_texto || '';
+      g.requerimientos_texto = g.requerimientos;
+    }
+  });
+
+  return [...map.values()].map((g) => {
+    const centrosUnicos = [];
+    const seenCentro = new Set();
+    g.cotizaciones.forEach((c) => {
+      String(c.centros_texto || c.centro || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .forEach((centro) => {
+          if (esCmnNumerico(centro) || centro === '—') return;
+          const k = centro.toLowerCase();
+          if (seenCentro.has(k)) return;
+          seenCentro.add(k);
+          centrosUnicos.push(centro);
+        });
+    });
+    g.centros_texto = centrosUnicos.join(', ');
+    const est = estadoExpedienteValidacion(g.cotizaciones);
+    const fechas = g.cotizaciones.map((c) => c.fecha_presentacion || c.created_at).filter(Boolean);
+    const fechaUltima = fechas.sort((a, b) => fechaSortKey(b) - fechaSortKey(a))[0] || '';
+    const responsables = [...new Set(
+      g.cotizaciones.map((c) => c.validacion_responsable || c.responsable_nombre || '').filter(Boolean),
+    )];
+    return {
+      ...g,
+      centro: g.centros_texto,
+      cantidad_cotizaciones: g.cotizaciones.length,
+      estado_bandeja: est.label,
+      estado_bandeja_class: est.badge,
+      validacion_estado: est.validacion_estado,
+      validacion_responsable: responsables.length === 1
+        ? responsables[0]
+        : (responsables.length > 1 ? 'Varios' : '—'),
+      fecha_ultima_presentacion: fechaUltima,
+      puede_validar: g.cotizaciones.some((c) => c.puede_validar),
+      puede_ver: g.cotizaciones.some((c) => c.puede_ver || c.puede_validar),
+    };
+  }).sort((a, b) => fechaSortKey(b.fecha_ultima_presentacion) - fechaSortKey(a.fecha_ultima_presentacion));
 }

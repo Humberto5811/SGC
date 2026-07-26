@@ -2,6 +2,7 @@
  * Lógica pura Validaciones — RC7.7A.2 (sin DOM).
  * Fuente única para habilitación de Derivar y línea compacta del expediente.
  */
+import { calcularResultadoExpedienteValidacion } from './validacionFormatosConfig.js';
 
 /** Línea compacta del expediente. */
 export function buildExpedienteLineaCompacta(d) {
@@ -13,20 +14,22 @@ export function buildExpedienteLineaCompacta(d) {
   return `Información del expediente: ${sc} · ${req} · ${desc} · ${tipo}`;
 }
 
-/** Espejo cliente de destinos oficiales (sin tocar Workflow Engine). */
+/** Espejo cliente de destinos oficiales del expediente. */
 export function resolverDestinoCliente(resultado, cumple) {
   const c = String(cumple || '').toLowerCase();
-  const r = String(resultado || '').toLowerCase();
+  const r = String(resultado || '');
   let estado = 'OBSERVADO';
   if (c.includes('no cumple') || c === 'no') estado = 'NO_APTO';
   else if (c === 'cumple' || c === 'sí' || c === 'si') estado = 'APTO';
-  else if (r.includes('no válid') || r.includes('no valid')) estado = 'NO_APTO';
-  else if (r.includes('válid') || r.includes('valid')) estado = 'APTO';
+  else if (/al menos una cotizaci[oó]n v[aá]lida/i.test(r)) estado = 'APTO';
+  else if (/todas las cotizaciones son no v[aá]lidas/i.test(r)) estado = 'NO_APTO';
+  else if (/no\s*válid/i.test(r) || /no\s*valid/i.test(r)) estado = 'NO_APTO';
+  else if (/válid/i.test(r) || /valid/i.test(r)) estado = 'APTO';
 
   if (estado === 'APTO') {
     return { code: 'CUADRO_COMPARATIVO', label: 'Cuadro Comparativo', estado };
   }
-  return { code: 'RECEPCION_COTIZACIONES', label: 'Recepción de Cotizaciones', estado };
+  return { code: 'INVITACIONES', label: 'Invitaciones', estado };
 }
 
 function obsDesdeMatriz(matriz) {
@@ -42,6 +45,8 @@ const LABEL_FALTANTE = {
   autorizacion: 'Usuario no autorizado para derivar.',
   ya_derivado: 'El expediente ya fue derivado anteriormente.',
   resultado: 'Falta registrar el resultado.',
+  pendientes: 'Hay cotizaciones pendientes de validación.',
+  sin_cotizaciones: 'Sin cotizaciones para derivar.',
   observaciones: 'Falta completar observaciones en la matriz (resultado negativo).',
   pdf_firmado: 'Falta adjuntar el PDF firmado.',
   destino: 'No se pudo resolver el destino oficial.',
@@ -49,7 +54,7 @@ const LABEL_FALTANTE = {
 
 /**
  * Única fuente de verdad para habilitar / validar Derivar.
- * @returns {{ ok: boolean, faltantes: string[], missing: string[], motivo: string, tooltip: string, destino?: object }}
+ * @returns {{ ok: boolean, faltantes: string[], missing: string[], motivo: string, tooltip: string, destino?: object, calcExpediente?: object }}
  */
 export function canDerivarValidacion(state) {
   const missing = [];
@@ -73,19 +78,29 @@ export function canDerivarValidacion(state) {
   if (yaDerivado) missing.push('ya_derivado');
   else if (!state.detalle.puede_derivar) missing.push('autorizacion');
 
+  const tipoKey = state.tipoFormato || state.matriz_v2?.tipo || state.detalle?.tipo_formato || 'BIENES';
+  const calcExp = calcularResultadoExpedienteValidacion(tipoKey, state.matriz_v2?.filas || []);
+  if (calcExp.sin_cotizaciones) missing.push('sin_cotizaciones');
+  else if (calcExp.pendiente || !calcExp.ok) missing.push('pendientes');
+
   const form = state.formulario || {};
-  const resultado = state.resultado ?? form.resultado_global ?? '';
-  const cumple = state.cumple ?? form.cumple ?? '';
+  const resultado = calcExp.ok
+    ? calcExp.resultado_global
+    : (state.resultado ?? form.resultado_global ?? '');
+  const cumple = calcExp.ok ? calcExp.cumple : (state.cumple ?? form.cumple ?? '');
   const observaciones = state.observaciones
     || form.observacion_global
     || obsDesdeMatriz(state.matriz_v2)
     || '';
 
-  if (!resultado) missing.push('resultado');
+  if (calcExp.ok && !resultado) missing.push('resultado');
+  else if (!calcExp.ok && !calcExp.pendiente && !calcExp.sin_cotizaciones && !resultado) {
+    missing.push('resultado');
+  }
 
-  const noCumple = String(cumple || '').toLowerCase().includes('no')
+  const noCumple = calcExp.estado === 'NO_APTO'
+    || String(cumple || '').toLowerCase().includes('no')
     || /no\s*válid/i.test(String(resultado || ''));
-  // Observaciones solo obligatorias cuando el resultado es negativo (columnas de la matriz)
   if (noCumple && !String(observaciones || '').trim()) {
     missing.push('observaciones');
   }
@@ -93,11 +108,13 @@ export function canDerivarValidacion(state) {
   const pdf = state.documentoFirmado || state.pdfAdjunto;
   if (!pdf?.base64) missing.push('pdf_firmado');
 
-  let destino = state.destinoOficial || null;
-  if (resultado && !destino) {
-    destino = resolverDestinoCliente(resultado, cumple);
+  let destino = null;
+  if (calcExp.ok && calcExp.estado) {
+    destino = resolverDestinoCliente(calcExp.resultado_global, calcExp.cumple);
+  } else if (resultado) {
+    destino = state.destinoOficial || resolverDestinoCliente(resultado, cumple);
   }
-  if (resultado && !destino?.code) missing.push('destino');
+  if ((calcExp.ok || resultado) && !destino?.code) missing.push('destino');
 
   const unique = [...new Set(missing)];
   const labels = unique.map((k) => LABEL_FALTANTE[k] || k);
@@ -109,6 +126,7 @@ export function canDerivarValidacion(state) {
     motivo: ok ? '' : `No se puede derivar el expediente.\n${labels.map((l) => `• ${l}`).join('\n')}`,
     tooltip: ok ? 'Derivar expediente' : labels.join(' '),
     destino: destino || null,
+    calcExpediente: calcExp,
   };
 }
 
