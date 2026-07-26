@@ -483,8 +483,9 @@ export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '')
   return `
     <td class="req-col-acc" onclick="event.stopPropagation()">
       <div class="dropdown">
-        <button class="btn btn-sm bandeja-actions-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Acciones">⋮</button>
-        <ul class="dropdown-menu dropdown-menu-end shadow-sm" data-bs-popper="static">
+        <button class="btn btn-sm bandeja-actions-btn dropdown-toggle" type="button"
+          data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false" title="Acciones">⋮</button>
+        <ul class="dropdown-menu dropdown-menu-end shadow-sm">
           ${items.map((m) => `
             <li><button type="button" class="dropdown-item bandeja-menu-act py-1" data-act="${esc(m.act)}" data-id="${id}" ${m.disabled ? 'disabled' : ''}>
               <i class="bi ${m.icon || 'bi-dot'} me-2"></i>${esc(m.label)}
@@ -495,13 +496,77 @@ export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '')
     </td>`;
 }
 
+/** Cierra menús de acciones abiertos (bandeja principal). */
+export function closeBandejaActionMenus(container = document) {
+  const root = container || document;
+  root.querySelectorAll?.('.req-col-acc .dropdown-toggle, .bandeja-actions-btn')?.forEach?.((btn) => {
+    try { window.bootstrap?.Dropdown?.getInstance(btn)?.hide(); } catch (_) { /* ignore */ }
+  });
+}
+
+/**
+ * Popper fixed: evita que overflow/table-responsive recorte el menú.
+ * Reutiliza el patrón de Programación (strategy: fixed + flip).
+ */
+export function fixBandejaDropdownMenus(container) {
+  if (!container || !window.bootstrap?.Dropdown) return;
+  const wrap = container.querySelector('.table-responsive, .sgc-bandeja-wrap') || container;
+
+  if (wrap._bandejaMenuScrollClose) {
+    wrap.removeEventListener('scroll', wrap._bandejaMenuScrollClose);
+    wrap._bandejaMenuScrollClose = null;
+  }
+  if (wrap._bandejaMenuResizeClose) {
+    window.removeEventListener('resize', wrap._bandejaMenuResizeClose);
+    wrap._bandejaMenuResizeClose = null;
+  }
+
+  wrap.querySelectorAll('.req-col-acc .dropdown-toggle, .bandeja-actions-btn').forEach((btn) => {
+    const menu = btn.parentElement?.querySelector(':scope > .dropdown-menu');
+    if (menu) menu.removeAttribute('data-bs-popper');
+    try { window.bootstrap.Dropdown.getInstance(btn)?.dispose(); } catch (_) { /* ignore */ }
+    btn.setAttribute('data-bs-toggle', 'dropdown');
+    btn.removeAttribute('data-bs-display');
+    window.bootstrap.Dropdown.getOrCreateInstance(btn, {
+      autoClose: true,
+      popperConfig(defaultConfig) {
+        return {
+          ...defaultConfig,
+          strategy: 'fixed',
+          modifiers: [
+            ...(defaultConfig.modifiers || []),
+            {
+              name: 'preventOverflow',
+              options: { boundary: 'viewport', padding: 8, altAxis: true },
+            },
+            {
+              name: 'flip',
+              options: {
+                fallbackPlacements: ['top-end', 'bottom-end', 'top-start', 'bottom-start'],
+              },
+            },
+          ],
+        };
+      },
+    });
+  });
+
+  wrap._bandejaMenuScrollClose = () => closeBandejaActionMenus(wrap);
+  wrap.addEventListener('scroll', wrap._bandejaMenuScrollClose, { passive: true });
+  wrap._bandejaMenuResizeClose = () => closeBandejaActionMenus(wrap);
+  window.addEventListener('resize', wrap._bandejaMenuResizeClose, { passive: true });
+}
+
 export function bindActionMenus(container, actMap = {}) {
   if (!container) return;
+  closeBandejaActionMenus(container);
+  fixBandejaDropdownMenus(container);
   container.querySelectorAll('.bandeja-menu-act').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();
       const act = btn.dataset.act;
       const id = btn.dataset.id;
+      closeBandejaActionMenus(container);
       if (actMap[act]) {
         actMap[act](id, btn);
         return;

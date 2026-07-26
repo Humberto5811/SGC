@@ -334,7 +334,12 @@ export async function guardarBorradorCotizacion(proveedorId, body, req) {
 
 export async function listMisCotizaciones(proveedorId) {
   const { rows } = await query(`
-    SELECT cot.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+      cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
+      cot.validacion_estado, cot.validacion_observacion, cot.validacion_informe,
+      cot.validacion_responsable, cot.historial, cot.created_at, cot.updated_at,
+      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       ip.estado AS estado_invitacion
     FROM cotizaciones_proveedor cot
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -388,7 +393,35 @@ export async function listarConsultasBandeja(queryParams = {}) {
   }
   const { rows } = await query(`
     SELECT c.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo,
-      r.codigo AS requerimiento_codigo
+      sc.denominacion, sc.objeto,
+      r.codigo AS requerimiento_codigo,
+      COALESCE((
+        SELECT string_agg(DISTINCT r2.codigo, ', ' ORDER BY r2.codigo)
+        FROM solicitud_requerimientos sr
+        JOIN requerimientos r2 ON r2.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = c.solicitud_id
+      ), COALESCE(r.codigo, '')) AS requerimientos_texto,
+      COALESCE((
+        SELECT string_agg(DISTINCT centro_val, ', ' ORDER BY centro_val)
+        FROM (
+          SELECT NULLIF(TRIM(COALESCE(
+            NULLIF(TRIM(p2.centro), ''),
+            NULLIF(TRIM(ce.nombre), ''),
+            NULLIF(TRIM(ce.codigo), ''),
+            NULLIF(TRIM(a.responsable), ''),
+            NULLIF(TRIM(r2.responsable), '')
+          )), '') AS centro_val
+          FROM solicitud_requerimientos sr
+          JOIN requerimientos r2 ON r2.id = sr.requerimiento_id
+          LEFT JOIN areas a ON r2.area = a.nombre OR a.codigo = r2.area
+          LEFT JOIN centros ce ON a.centro_id = ce.id
+          LEFT JOIN requerimiento_pedidos rp ON rp.requerimiento_id = r2.id
+          LEFT JOIN pedidos_sigamef p2 ON p2.id = rp.pedido_sigamef_id
+          WHERE sr.solicitud_id = c.solicitud_id
+        ) centros_src
+        WHERE centro_val IS NOT NULL AND centro_val <> ''
+          AND centro_val !~ '^[0-9]{4,6}$'
+      ), '') AS centros_texto
     FROM consultas_proveedor c
     JOIN proveedores p ON p.id = c.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
@@ -397,7 +430,12 @@ export async function listarConsultasBandeja(queryParams = {}) {
     ORDER BY c.created_at DESC
     LIMIT 500
   `, params);
-  return rows;
+  return rows.map((r) => ({
+    ...r,
+    requerimientos_texto: r.requerimientos_texto || r.requerimiento_codigo || '',
+    centros_texto: r.centros_texto || '',
+    centro: r.centros_texto || '',
+  }));
 }
 
 export async function responderConsultaAnalista(consultaId, body, usuario) {
@@ -438,7 +476,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
     where += ` AND cot.validacion_estado = $${params.length}`;
   }
   const { rows } = await query(`
-    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.fecha_presentacion,
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado,
+      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       COALESCE((
@@ -450,7 +489,33 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
         SELECT string_agg(DISTINCT elem->>'requerimiento_codigo', ', ' ORDER BY elem->>'requerimiento_codigo')
         FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
         WHERE COALESCE(elem->>'requerimiento_codigo', '') <> ''
-      ), '') AS requerimientos_texto
+      ), '') AS requerimientos_texto,
+      COALESCE((
+        SELECT string_agg(DISTINCT centro_val, ', ' ORDER BY centro_val)
+        FROM (
+          SELECT NULLIF(TRIM(COALESCE(
+            NULLIF(TRIM(p2.centro), ''),
+            NULLIF(TRIM(c.nombre), ''),
+            NULLIF(TRIM(c.codigo), ''),
+            NULLIF(TRIM(a.responsable), ''),
+            NULLIF(TRIM(r.responsable), '')
+          )), '') AS centro_val
+          FROM solicitud_requerimientos sr
+          JOIN requerimientos r ON r.id = sr.requerimiento_id
+          LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+          LEFT JOIN centros c ON a.centro_id = c.id
+          LEFT JOIN requerimiento_pedidos rp ON rp.requerimiento_id = r.id
+          LEFT JOIN pedidos_sigamef p2 ON p2.id = rp.pedido_sigamef_id
+          WHERE sr.solicitud_id = cot.solicitud_id
+        ) centros_src
+        WHERE centro_val IS NOT NULL AND centro_val <> ''
+          AND centro_val !~ '^[0-9]{4,6}$'
+      ), (
+        SELECT string_agg(DISTINCT NULLIF(TRIM(COALESCE(
+          elem->>'centro_display', elem->>'centro_nombre', elem->>'centro', ''
+        )), ''), ', ')
+        FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
+      ), '') AS centros_texto
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -482,6 +547,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       objeto: r.objeto,
       requerimientos_texto: r.requerimientos_texto || '',
       requerimientos_codigos: r.requerimientos_texto || '',
+      centros_texto: r.centros_texto || '',
+      centro: r.centros_texto || '',
     };
   });
 }

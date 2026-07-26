@@ -9,6 +9,23 @@ function trimStr(v) {
   return String(v).trim();
 }
 
+/** CMN numérico (p. ej. 05277) no es denominación de centro. */
+function esCmnNumerico(valor) {
+  return /^\d{4,6}$/.test(trimStr(valor));
+}
+
+function preferCentroTextual(...candidatos) {
+  const textuales = [];
+  const numericos = [];
+  for (const c of candidatos) {
+    const t = trimStr(c);
+    if (!t) continue;
+    if (esCmnNumerico(t)) numericos.push(t);
+    else textuales.push(t);
+  }
+  return textuales[0] || '';
+}
+
 /**
  * @typedef {object} CentroSources
  * @property {string} [requerimientoCentro] — cmn/centro/área del requerimiento
@@ -29,14 +46,14 @@ function trimStr(v) {
  */
 export function resolveValidationCentro(sources = {}) {
   const ordered = [
-    ['requerimiento', sources.requerimientoCentro],
     ['pedido_sigamef', sources.pedidoCentro],
+    ['requerimiento', sources.requerimientoCentro],
     ['cabecera', sources.cabeceraCentro],
     ['informe', sources.informeCentro],
     ['item', sources.itemCentro],
   ];
   for (const [fuente, raw] of ordered) {
-    const centro = trimStr(raw);
+    const centro = preferCentroTextual(raw);
     if (centro) {
       return {
         centro,
@@ -65,7 +82,7 @@ export function consolidateCentros(centros = []) {
   const unique = [];
   const seen = new Set();
   for (const c of centros || []) {
-    const t = trimStr(c);
+    const t = preferCentroTextual(c);
     if (!t) continue;
     const key = t.toLowerCase();
     if (seen.has(key)) continue;

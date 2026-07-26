@@ -7,6 +7,7 @@ import {
   TIPO_VALIDACION,
   OBS_MAX_CHARS,
   calcularResultadoCotizacion,
+  calcularResultadoExpedienteValidacion,
   validarMatrizCompleta,
   filasV2ToLegacyItems,
 } from './validacionFormatosConfig.js';
@@ -21,7 +22,7 @@ function esc(s) {
 
 const STYLES = `
 .val-mtx-wrap { overflow-x: auto; max-width: 100%; border: 1px solid #dee2e6; border-radius: .25rem; }
-.val-mtx-table { font-size: .75rem; margin-bottom: 0; min-width: 2200px; }
+.val-mtx-table { font-size: .75rem; margin-bottom: 0; min-width: 2480px; }
 .val-mtx-table thead th {
   position: sticky; top: 0; z-index: 1;
   white-space: normal; writing-mode: horizontal-tb; transform: none;
@@ -33,6 +34,17 @@ const STYLES = `
   background: #d4edda !important; color: #155724;
   min-width: 148px; max-width: 210px; font-size: .65rem; line-height: 1.2;
   vertical-align: bottom; padding: .55rem .4rem; font-weight: 700;
+}
+.val-mtx-table th.val-mtx-resultado {
+  min-width: 320px; max-width: 380px;
+}
+.val-mtx-table td.val-mtx-resultado {
+  min-width: 320px; max-width: 380px;
+}
+.val-mtx-table select.val-mtx-resultado-sel {
+  min-width: 310px; max-width: 100%; width: 100%;
+  white-space: normal;
+  text-overflow: clip;
 }
 .val-mtx-table th.val-mtx-docs { background: #cfe8f5 !important; color: #0a4275; min-width: 64px; }
 .val-mtx-table th.val-mtx-wide { min-width: 140px; max-width: 220px; }
@@ -78,11 +90,12 @@ export function renderMatrizValidacion(opts = {}) {
 
   const filas = matriz_v2?.filas || [];
   const cols = config.columnas;
-  const calc = calcularResultadoCotizacion(tipoKey, filas);
+  const calc = calcularResultadoExpedienteValidacion(tipoKey, filas);
 
   const thead = cols.map((c) => {
     let cls = c.kind === 'eval' ? 'val-mtx-eval' : (c.kind === 'docs' ? 'val-mtx-docs' : 'val-mtx-auto');
     if (c.key === 'descripcion' || c.key === 'razon_social') cls += ' val-mtx-wide';
+    if (c.key === 'resultado') cls += ' val-mtx-resultado';
     if (c.input === 'textarea' || c.key === 'observaciones' || c.key === 'obs_specs') cls += ' val-mtx-obs';
     // Evaluación (verde): texto institucional completo; automáticos pueden usar short
     const label = c.kind === 'eval' ? c.label : (c.short || c.label);
@@ -119,9 +132,14 @@ export function renderMatrizValidacion(opts = {}) {
         if (valNorm && !baseOpts.includes(valNorm)) baseOpts.push(valNorm);
         const optsHtml = baseOpts.map((o) =>
           `<option value="${esc(o)}"${String(o) === valNorm ? ' selected' : ''}>${esc(o || '—')}</option>`).join('');
-        return `<td class="val-mtx-eval">
-          <select class="form-select form-select-sm val-mtx-f" data-idx="${idx}" data-field="${esc(c.key)}"
-            aria-label="${esc(c.label)}" title="${esc(c.label)}" ${readonly ? 'disabled' : ''}>${optsHtml}</select>
+        const isResultado = c.key === 'resultado';
+        const tdCls = isResultado ? 'val-mtx-eval val-mtx-resultado' : 'val-mtx-eval';
+        const selCls = isResultado
+          ? 'form-select form-select-sm val-mtx-f val-mtx-resultado-sel'
+          : 'form-select form-select-sm val-mtx-f';
+        return `<td class="${tdCls}">
+          <select class="${selCls}" data-idx="${idx}" data-field="${esc(c.key)}"
+            aria-label="${esc(c.label)}" title="${esc(valNorm || c.label)}" ${readonly ? 'disabled' : ''}>${optsHtml}</select>
         </td>`;
       }
       const len = String(val || '').length;
@@ -140,19 +158,14 @@ export function renderMatrizValidacion(opts = {}) {
 
   return `
     ${renderMatrizStyles()}
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-      <div>
-        <h6 class="fw-semibold mb-0">Registro de Validación — ${esc(config.label)}</h6>
-        <div class="val-mtx-legend small text-muted mt-1">
-          <span style="background:#cfe8f5"></span> Automático (solo lectura)
-          <span class="ms-2" style="background:#d4edda"></span> Evaluación del Área Usuaria
-        </div>
+    <div class="mb-2">
+      <h6 class="fw-semibold mb-0">Registro de Validación — ${esc(config.label)}</h6>
+      <div class="val-mtx-legend small text-muted mt-1">
+        <span style="background:#cfe8f5"></span> Automático (solo lectura)
+        <span class="ms-2" style="background:#d4edda"></span> Evaluación del Área Usuaria
       </div>
-      <div class="small text-muted">
-        Proveedor: <strong>${esc(filas[0]?.automaticos?.razon_social || '—')}</strong>
-        <span class="ms-2">Resultado calculado: <strong id="${prefix}_resGlobal">${esc(calc.resultado_global || '—')}</strong></span>
-        <input type="hidden" id="${prefix}_cumple" value="${esc(calc.cumple || '')}">
-      </div>
+      <input type="hidden" id="${prefix}_resGlobal" value="${esc(calc.ok ? (calc.resultado_global || '') : '')}">
+      <input type="hidden" id="${prefix}_cumple" value="${esc(calc.ok ? (calc.cumple || '') : '')}">
     </div>
     <div class="val-mtx-wrap" id="${prefix}_mtxWrap">
       <table class="table table-bordered table-sm val-mtx-table" id="${prefix}_mtx">
@@ -186,14 +199,11 @@ export function collectMatrizFromDom(prefix, matrizBase) {
       observaciones: ev.observaciones || '',
     };
   });
-  const calc = calcularResultadoCotizacion(tipoKey, filas);
+  const calc = calcularResultadoExpedienteValidacion(tipoKey, filas);
   const resEl = document.getElementById(`${prefix}_resGlobal`);
   const cumpleEl = document.getElementById(`${prefix}_cumple`);
-  if (resEl) {
-    if (resEl.tagName === 'INPUT') resEl.value = calc.resultado_global;
-    else resEl.textContent = calc.resultado_global || '—';
-  }
-  if (cumpleEl) cumpleEl.value = calc.cumple;
+  if (resEl) resEl.value = calc.ok ? (calc.resultado_global || '') : '';
+  if (cumpleEl) cumpleEl.value = calc.ok ? (calc.cumple || '') : '';
 
   // Obs. de remisión = observaciones de filas (ya no hay campos separados debajo de la matriz)
   const obsFilas = filas
@@ -212,9 +222,9 @@ export function collectMatrizFromDom(prefix, matrizBase) {
     },
     formulario_07a: {
       items: filasV2ToLegacyItems(filas, tipoKey),
-      resultado_global: calc.resultado_global,
-      cumple: calc.cumple,
-      observacion_global: obsFilas || calc.resultado_global || '',
+      resultado_global: calc.ok ? calc.resultado_global : '',
+      cumple: calc.ok ? calc.cumple : '',
+      observacion_global: obsFilas || (calc.ok ? calc.resultado_global : '') || '',
       sustento: '',
       fecha: document.getElementById(`${prefix}_fechaAuto`)?.textContent || new Date().toLocaleDateString('es-PE'),
       profesional: document.getElementById(`${prefix}_respAuto`)?.textContent || '',
@@ -230,7 +240,10 @@ export function bindMatrizUi(prefix, { onChange, onDocsClick, readonly } = {}) {
   const wrap = document.getElementById(`${prefix}_mtxWrap`);
   if (!wrap) return;
   wrap.querySelectorAll('.val-mtx-f').forEach((el) => {
-    el.addEventListener('change', () => { if (onChange) onChange(); });
+    el.addEventListener('change', () => {
+      if (el.dataset.field === 'resultado') el.title = el.value || el.getAttribute('aria-label') || '';
+      if (onChange) onChange();
+    });
     el.addEventListener('input', () => {
       if (el.tagName === 'TEXTAREA') {
         const counter = el.parentElement?.querySelector('.text-muted');

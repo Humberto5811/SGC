@@ -244,9 +244,9 @@ function renderDocsPanel(meta, docsCot, docsReq) {
       </div>
       ${!rows.length
         ? '<div class="alert alert-warning small py-2 mb-0">No hay documentos para este proveedor y requerimiento.</div>'
-        : `<div class="table-responsive val-docs-scroll" style="max-height:min(52vh,420px);overflow:auto">
+        : `<div class="table-responsive val-docs-scroll">
             <table class="table table-sm table-bordered align-middle mb-0">
-              <thead class="table-light sticky-top">
+              <thead class="table-light">
                 <tr>
                   <th>Documento</th><th>Categoría</th><th>Tipo</th><th>Fecha</th><th>Estado</th><th style="width:150px">Acciones</th>
                 </tr>
@@ -447,14 +447,14 @@ function showDestinoDerivacionPanel(_parentEl, { resultado, cumple, onConfirm, o
         const usersResp = await contratacionesService.listValidacionUsuarios(dest.code, '');
         const usuarios = usersResp.data || [];
         body.innerHTML = `
-          <div class="mb-2 small"><span class="text-muted">Resultado de la validación</span>
+          <div class="mb-2 small"><span class="text-muted">Resultado</span>
             <div class="fw-semibold">${esc(resultado)}</div></div>
           <div class="mb-2">
-            <label class="form-label fw-semibold">Submódulo destino</label>
+            <label class="form-label fw-semibold">Destino</label>
             <select class="form-select form-select-sm" id="${id}_sub" disabled>
               <option value="${esc(dest.code)}" selected>${esc(dest.label)}</option>
             </select>
-            ${dest.nota ? `<div class="form-text small">${esc(dest.nota)}</div>` : ''}
+            <div class="form-text small">Destino calculado automáticamente según el resultado del expediente.</div>
           </div>
           <div class="mb-2">
             <label class="form-label fw-semibold">Usuario responsable</label>
