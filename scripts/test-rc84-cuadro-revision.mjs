@@ -104,8 +104,18 @@ assert(/PENDIENTE_COORDINADOR/.test(mig) && /APROBADO_DEC/.test(mig), 'migració
 
 const lib = fs.readFileSync(path.join(root, 'server/lib/cuadroComparativo.js'), 'utf8');
 assert(/transitarRevisionCuadro/.test(lib) && /syncRevisionCuadroWorkflow/.test(lib), 'funciones revisión');
+assert(/esAdminReal/.test(lib) || /ADMINISTRADOR/.test(lib), 'Admin puede supervisar transiciones sin actuar_como UI');
 assert(/registrarMovimiento/.test(fs.readFileSync(path.join(root, 'server/lib/cuadroComparativoRevision.js'), 'utf8')),
   'usa registrarMovimiento');
+
+const viewCc = fs.readFileSync(path.join(root, 'src/views/contratacion/cuadroComparativoView.js'), 'utf8');
+assert(/labelBandejaCuadroComparativo/.test(viewCc), 'bandeja CC etiqueta homogénea');
+assert(!/>\s*Acciones\s*</.test(viewCc) && /text-center">Ver</.test(viewCc), 'bandeja CC: columna Ver sin Acciones');
+assert(!/Actuar como/.test(viewCc), 'bandeja CC sin selector Actuar como');
+
+const viewVal = fs.readFileSync(path.join(root, 'src/views/contratacion/validacionesView.js'), 'utf8');
+assert(/openValidarExpediente/.test(viewVal) && /showValidarModal/.test(viewVal), 'Validaciones: Ver abre expediente');
+assert(!/Cotizaciones en validación/.test(viewVal), 'sin ventana intermedia Cotizaciones en validación');
 
 const portal = fs.readFileSync(path.join(root, 'server/routes/portal.js'), 'utf8');
 assert(/cuadroId\/revision/.test(portal), 'ruta revision');

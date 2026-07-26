@@ -14,20 +14,15 @@ import {
   renderPanelCoordinador,
 } from './cuadroComparativoCoordinador.js';
 import {
-  isModoDec,
   renderPanelDec,
   showDevolverDecModal,
 } from './cuadroComparativoDec.js';
 import { observarCuadroConModalInstitucional } from './cuadroComparativoObservaciones.js';
 import {
   ROLES_REVISION,
-  labelRolRevision,
-  normalizeActuarComo,
+  resolveRolRevisionCliente,
 } from './cuadroComparativoRevisionUi.js';
 import {
-  setActuarComoAdmin,
-  resolveActuarComoDesdeUi,
-  renderBannerAdminPrueba,
   enEstadoRevisionDec,
 } from './cuadroComparativoAdminPrueba.js';
 import { showTrazabilidadModal } from '../views/requerimiento/reqShared.js';
@@ -167,17 +162,18 @@ function extractDocsFromCotDetalle(det) {
 /**
  * @param {number|string} solicitudId
  * @param {() => void} [onSaved]
- * @param {{ modo?: string, adminPrueba?: boolean, adminSupervision?: boolean, actuarComo?: string }} [opts]
+ * @param {{ modo?: string }} [opts]
  */
 export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {}) {
   closeBandejaDropdowns();
 
-  const adminPrueba = !!(opts.adminPrueba || opts.adminSupervision);
-  let actuarComo = adminPrueba
-    ? (resolveActuarComoDesdeUi(opts.actuarComo || opts.modo) || ROLES_REVISION.COORDINADOR_CM)
-    : '';
-  if (adminPrueba) setActuarComoAdmin(actuarComo);
-  let modo = adminPrueba ? actuarComo : (opts.modo || ROLES_REVISION.COORDINADOR_CM);
+  // Sin «Actuar como»: modo de UI según bandeja/rol real (Admin abre por etapa).
+  const rolSesion = resolveRolRevisionCliente(currentUser());
+  let modo = opts.modo || (
+    rolSesion === ROLES_REVISION.DEC
+      ? ROLES_REVISION.DEC
+      : ROLES_REVISION.COORDINADOR_CM
+  );
   const sid = Number(solicitudId);
   if (!Number.isFinite(sid)) {
     alert('Solicitud inválida');
@@ -428,58 +424,26 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
   }
 
   function payloadRevision(extra = {}) {
-    const p = { ...extra };
-    if (adminPrueba && actuarComo) p.actuar_como = actuarComo;
-    return p;
-  }
-
-  function bindAdminPruebaSelector() {
-    if (!adminPrueba || !actionBar) return;
-    actionBar.querySelector('#ccAdminActuarComo')?.addEventListener('change', (ev) => {
-      const next = normalizeActuarComo(ev.target.value) || ROLES_REVISION.COORDINADOR_CM;
-      actuarComo = next;
-      modo = next;
-      setActuarComoAdmin(next);
-      const meta = headerMetaForModo(modo);
-      headerCls = meta.cls;
-      headerIcon = meta.icon;
-      headerLabel = meta.label;
-      const hdr = el.querySelector('.modal-header');
-      if (hdr) hdr.className = `modal-header ${headerCls} py-2 flex-shrink-0`;
-      const titulo = el.querySelector('.modal-title');
-      if (titulo) {
-        titulo.innerHTML = `<i class="bi ${headerIcon}"></i> ${esc(headerLabel)} — ${esc(exp?.solicitud_codigo || '')}`
-          + ` <span class="badge text-bg-warning ms-1">Admin → ${esc(labelRolRevision(actuarComo))}</span>`;
-      }
-      paintActionBar();
-      bindCoordActions();
-      bindDecActions();
-    });
+    // Rol real en backend; Admin supervisá sin actuar_como (override por estado).
+    return { ...extra };
   }
 
   function paintActionBar() {
     if (!actionBar) return;
     const user = currentUser();
-    const chrome = adminPrueba ? renderBannerAdminPrueba(actuarComo) : '';
+    const rol = resolveRolRevisionCliente(user);
+    const puedeCoord = rol === ROLES_REVISION.COORDINADOR_CM || rol === ROLES_REVISION.ADMINISTRADOR;
+    const puedeDec = rol === ROLES_REVISION.DEC || rol === ROLES_REVISION.ADMINISTRADOR;
     let html = '';
-    if (adminPrueba && modo === ROLES_REVISION.ANALISTA) {
-      html = `<div class="alert alert-secondary py-2 small mb-0">
-        Contexto <strong>Analista</strong>: para elaborar o responder observaciones abra el expediente en etapa de elaboración.
-        Cambie a <strong>Coordinador CM</strong> o <strong>DEC</strong> para probar revisión sin cerrar sesión.
-      </div>`;
-    } else if (modo === ROLES_REVISION.COORDINADOR_CM && cuadro && enRevisionCoordinador(cuadro)) {
+    if (modo === ROLES_REVISION.COORDINADOR_CM && cuadro && enRevisionCoordinador(cuadro) && puedeCoord) {
       html = renderPanelCoordinador(cuadro, matriz);
-    } else if (modo === ROLES_REVISION.DEC && cuadro
-      && (adminPrueba ? enEstadoRevisionDec(cuadro) : isModoDec(user, cuadro))) {
+    } else if (modo === ROLES_REVISION.DEC && cuadro && enEstadoRevisionDec(cuadro) && puedeDec) {
       html = renderPanelDec(cuadro);
     } else if (modo === ROLES_REVISION.COORDINADOR_CM || modo === ROLES_REVISION.DEC) {
-      html = `<div class="small text-muted py-1">Expediente en solo lectura. Estado actual no admite acciones de este perfil${
-        adminPrueba ? ` (actuando como ${labelRolRevision(modo)})` : ''
-      }.</div>`;
+      html = '<div class="small text-muted py-1">Expediente en solo lectura. Estado actual no admite acciones de este perfil.</div>';
     }
-    actionBar.innerHTML = chrome
-      + (html || '<div class="small text-muted py-1">Revise las pestañas del expediente. Las acciones de revisión aparecen aquí según el estado.</div>');
-    // RC8.5-E — una sola barra plana (sin card duplicada / sin menús contextuales)
+    actionBar.innerHTML = html
+      || '<div class="small text-muted py-1">Revise las pestañas del expediente. Las acciones de revisión aparecen aquí según el estado.</div>';
     const card = actionBar.querySelector('.card');
     if (card) {
       card.classList.remove('mb-3', 'border', 'border-warning', 'border-primary');
@@ -488,16 +452,12 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
     }
     actionBar.querySelectorAll('.dropdown, .dropdown-menu').forEach((n) => n.remove());
     closeBandejaDropdowns();
-    bindAdminPruebaSelector();
   }
 
   function paint() {
     const titulo = el.querySelector('.modal-title');
     if (titulo) {
-      const adminSuffix = adminPrueba
-        ? ` <span class="badge text-bg-warning ms-1">Admin → ${esc(labelRolRevision(actuarComo))}</span>`
-        : '';
-      titulo.innerHTML = `<i class="bi ${headerIcon}"></i> ${esc(headerLabel)} — ${esc(exp?.solicitud_codigo || '')}${adminSuffix}`;
+      titulo.innerHTML = `<i class="bi ${headerIcon}"></i> ${esc(headerLabel)} — ${esc(exp?.solicitud_codigo || '')}`;
     }
     paintActionBar();
 
@@ -709,11 +669,9 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
   function bindDecActions() {
     const host = actionBar;
     if (!host) return;
-    if (adminPrueba) {
-      if (modo !== ROLES_REVISION.DEC || !enEstadoRevisionDec(cuadro)) return;
-    } else if (!isModoDec(currentUser(), cuadro)) {
-      return;
-    }
+    const rol = resolveRolRevisionCliente(currentUser());
+    const puedeDec = rol === ROLES_REVISION.DEC || rol === ROLES_REVISION.ADMINISTRADOR;
+    if (modo !== ROLES_REVISION.DEC || !enEstadoRevisionDec(cuadro) || !puedeDec) return;
 
     host.querySelector('#ccBtnDecDescargarFirmado')?.addEventListener('click', async () => {
       try {

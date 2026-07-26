@@ -497,6 +497,9 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
             NULLIF(TRIM(p2.centro), ''),
             NULLIF(TRIM(c.nombre), ''),
             NULLIF(TRIM(c.codigo), ''),
+            NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_display'), ''),
+            NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_nombre'), ''),
+            NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro'), ''),
             NULLIF(TRIM(a.responsable), ''),
             NULLIF(TRIM(r.responsable), '')
           )), '') AS centro_val
@@ -511,10 +514,15 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
         WHERE centro_val IS NOT NULL AND centro_val <> ''
           AND centro_val !~ '^[0-9]{4,6}$'
       ), (
-        SELECT string_agg(DISTINCT NULLIF(TRIM(COALESCE(
-          elem->>'centro_display', elem->>'centro_nombre', elem->>'centro', ''
-        )), ''), ', ')
-        FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
+        SELECT string_agg(DISTINCT centro_elem, ', ')
+        FROM (
+          SELECT NULLIF(TRIM(COALESCE(
+            elem->>'centro_display', elem->>'centro_nombre', elem->>'centro', ''
+          )), '') AS centro_elem
+          FROM jsonb_array_elements(COALESCE(sc.detalle_items, '[]'::jsonb)) elem
+        ) di
+        WHERE centro_elem IS NOT NULL AND centro_elem <> ''
+          AND centro_elem !~ '^[0-9]{4,6}$'
       ), '') AS centros_texto
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
@@ -523,11 +531,21 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
     ORDER BY cot.fecha_presentacion DESC NULLS LAST, cot.created_at DESC
     LIMIT 500
   `, params);
+
+  const { resolveCentrosTextoSolicitud } = await import('./validacionesCotizacion.js');
+  const sids = [...new Set(rows.map((r) => r.solicitud_id).filter(Boolean))];
+  const centroBySid = new Map();
+  await Promise.all(sids.map(async (sid) => {
+    try { centroBySid.set(sid, await resolveCentrosTextoSolicitud(sid)); }
+    catch (_) { centroBySid.set(sid, ''); }
+  }));
+
   return rows.map((r) => {
     const eco = typeof r.propuesta_economica === 'object'
       ? r.propuesta_economica
       : (() => { try { return JSON.parse(r.propuesta_economica || '{}'); } catch (_) { return {}; } })();
     const valEst = r.validacion_estado || '';
+    const centro = centroBySid.get(r.solicitud_id) || r.centros_texto || '';
     return {
       id: r.id,
       solicitud_id: r.solicitud_id,
@@ -547,8 +565,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       objeto: r.objeto,
       requerimientos_texto: r.requerimientos_texto || '',
       requerimientos_codigos: r.requerimientos_texto || '',
-      centros_texto: r.centros_texto || '',
-      centro: r.centros_texto || '',
+      centros_texto: centro,
+      centro,
     };
   });
 }

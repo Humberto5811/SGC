@@ -457,7 +457,7 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        <span class="badge bg-${esc(exp.badge_estado || 'primary')}">${esc(exp.estado_recepcion || '—')}</span>
+        <span class="badge bg-primary">Recepción Cotizaciones</span>
       </td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary rc-exp-ver"

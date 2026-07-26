@@ -31,10 +31,6 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function fmtFecha(iso) {
-  return String(iso || '').slice(0, 16).replace('T', ' ');
-}
-
 const VIEW_ID = 'validaciones';
 const SCROLL_SEL = '#validacionesWrap';
 const loadGuard = createRequestSequenceGuard();
@@ -69,94 +65,22 @@ const VALIDACIONES_THEAD = `<tr>
   <th class="text-center">Ver</th>
 </tr>`;
 
-function badgeClass(row) {
-  return row.estado_bandeja_class || 'secondary';
-}
-
-function renderAccionCotizacion(c) {
-  if (c.sin_asignacion) {
-    return '<span class="small text-muted">Pendiente de asignación</span>';
-  }
-  if (c.puede_validar) {
-    return `<button type="button" class="btn btn-sm btn-primary val-validar" data-id="${c.id}"><i class="bi bi-clipboard-check"></i> Validar</button>`;
-  }
-  if (c.puede_ver) {
-    return `<button type="button" class="btn btn-sm btn-outline-secondary val-ver" data-id="${c.id}"><i class="bi bi-eye"></i> Ver</button>`;
-  }
-  return '<span class="small text-muted">—</span>';
-}
-
-function showExpedienteDetalleModal(expediente) {
+/** Abre Validar expediente directamente (sin ventana intermedia). */
+function openValidarExpediente(expediente) {
   closeBandejaActionMenus();
-  const id = `valExpModal_${Date.now()}`;
   const cots = expediente?.cotizaciones || [];
+  if (!cots.length) {
+    alert('No hay cotizaciones en validación para este expediente.');
+    return;
+  }
   const esAdmin = isAdminUser(authService.getCurrentUser());
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-    <div class="modal fade" id="${id}" tabindex="-1">
-      <div class="modal-dialog modal-xl modal-dialog-scrollable">
-        <div class="modal-content">
-          <div class="modal-header bg-light">
-            <h5 class="modal-title">
-              <i class="bi bi-shield-check"></i> Cotizaciones en validación — ${esc(expediente.solicitud_codigo || '')}
-            </h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-          </div>
-          <div class="modal-body" id="${id}_body">
-            <div class="mb-3 small">
-              <div><strong>${esc(expediente.solicitud_codigo || '')}</strong> — ${esc(expediente.denominacion || expediente.objeto || '')}</div>
-              <div class="text-muted mt-1">
-                Requerimiento(s): ${esc(expediente.requerimientos_texto || expediente.requerimientos || '—')}
-                · Centro: ${esc(expediente.centros_texto || '—')}
-                · Cotizaciones: <strong>${cots.length}</strong>
-              </div>
-            </div>
-            <div class="table-responsive">
-              <table class="table table-sm table-hover table-bordered mb-0">
-                <thead class="table-light"><tr>
-                  <th>Proveedor</th>
-                  <th>Tipo</th>
-                  <th>Fecha recepción</th>
-                  <th>Estado</th>
-                  <th>Responsable</th>
-                  <th class="text-center">Acciones</th>
-                </tr></thead>
-                <tbody>
-                  ${cots.map((c) => `
-                    <tr>
-                      <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-                      <td class="small">${esc(c.tipo_contratacion || '—')}</td>
-                      <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
-                      <td><span class="badge bg-${badgeClass(c)}">${esc(c.estado_bandeja || c.estado_display || '—')}</span></td>
-                      <td class="small">${esc(c.validacion_responsable || c.responsable_nombre || '—')}</td>
-                      <td class="text-center">${renderAccionCotizacion(c)}</td>
-                    </tr>`).join('') || '<tr><td colspan="6" class="text-muted text-center">Sin cotizaciones</td></tr>'}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const el = document.getElementById(id);
-  const modal = window.bootstrap.Modal.getOrCreateInstance(el);
-  el.addEventListener('hidden.bs.modal', () => {
-    closeBandejaActionMenus();
-    wrap.remove();
-  }, { once: true });
-  modal.show();
-
-  const body = document.getElementById(`${id}_body`);
-  body?.querySelectorAll('.val-validar, .val-ver').forEach((btn) => {
-    btn.onclick = () => {
-      modal.hide();
-      showValidarModal(btn.dataset.id, () => loadValidaciones(false), { esAdmin });
-    };
-  });
+  const enFlujo = (c) => ['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO']
+    .includes(String(c.validacion_estado || '').toUpperCase());
+  const preferida = cots.find((c) => c.puede_validar && enFlujo(c))
+    || cots.find((c) => c.puede_ver && enFlujo(c))
+    || cots.find((c) => enFlujo(c))
+    || cots[0];
+  showValidarModal(preferida.id, () => loadValidaciones(false), { esAdmin });
 }
 
 function buildValidacionRowHtml(exp) {
@@ -171,7 +95,7 @@ function buildValidacionRowHtml(exp) {
       <td class="small">${formatCentrosValidacion(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        <span class="badge bg-${esc(exp.estado_bandeja_class || 'secondary')}">${esc(exp.estado_bandeja || '—')}</span>
+        <span class="badge bg-primary">Validaciones</span>
       </td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary val-exp-ver"
@@ -255,7 +179,7 @@ async function loadValidaciones(resetPage = false) {
       btn.onclick = () => {
         const sid = btn.dataset.solicitudId;
         const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
-        if (exp) showExpedienteDetalleModal(exp);
+        if (exp) openValidarExpediente(exp);
       };
     });
     validacionesPagination.renderControls('validacionesOuter', () => loadValidaciones(false));

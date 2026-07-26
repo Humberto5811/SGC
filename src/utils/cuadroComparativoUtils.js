@@ -21,25 +21,33 @@ export const ESTADOS_CUADRO = Object.freeze({
   DERIVADO_CCP: 'DERIVADO_CCP',
 });
 
-/** Etiquetas visibles de bandeja (código técnico se mantiene en ESTADOS_CUADRO). */
+/**
+ * Etiquetas internas de etapa (detalle / flujo).
+ * La bandeja principal usa labelBandejaCuadroComparativo → «Cuadro Comparativo».
+ */
 export const ESTADOS_CUADRO_LABEL = Object.freeze({
-  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comp. Observado',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comp. Revisión',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comp. Observado',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comp. Revisión',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comp. Observado',
-  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comp. Aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comparativo observado',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comparativo en revisión',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comparativo observado',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comparativo en revisión',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comparativo para aprobación',
+  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comparativo observado',
+  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comparativo aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comparativo aprobado',
+  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comparativo aprobado',
+  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comparativo derivado a CCP',
 });
+
+/** Etiqueta homogénea de bandeja principal. */
+export function labelBandejaCuadroComparativo() {
+  return 'Cuadro Comparativo';
+}
 
 export function normalizeCuadroEstado(raw) {
   const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, '_');

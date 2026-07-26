@@ -1,8 +1,8 @@
 // Cuadro Comparativo — bandeja por Solicitud de Cotización (RC8.0 refresh no destructivo)
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { bandejaTableStyles, renderActionMenuCell, bindActionMenus } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { bindBandejaToolbar } from '../../utils/bandejaUi.js';
+import { bindBandejaToolbar, closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
 import {
   formatRequerimientosCuadro,
@@ -12,8 +12,8 @@ import {
   renderCuadroStatsHtml,
   updateCuadroStatsDom,
   labelCuadroEstado,
+  labelBandejaCuadroComparativo,
   badgeClassCuadro,
-  cuadroComparativoMenuItems,
   filterCuadroExpedientes,
   ESTADOS_CUADRO_LABEL,
 } from '../../utils/cuadroComparativoUtils.js';
@@ -28,15 +28,8 @@ import {
   resolveModoAperturaExpediente,
   ROLES_REVISION,
 } from '../../utils/cuadroComparativoRevisionUi.js';
-import {
-  getActuarComoAdmin,
-  setActuarComoAdmin,
-  resolveActuarComoDesdeUi,
-  renderBannerAdminPrueba,
-} from '../../utils/cuadroComparativoAdminPrueba.js';
 import { showTrazabilidadModal } from '../requerimiento/reqShared.js';
 import { closeBandejaDropdowns } from '../../components/bandejaDetailPanel.js';
-import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -391,30 +384,22 @@ async function openExpedienteDec(solicitudId) {
   await showExpedienteDecModal(solicitudId, () => loadCuadro(false));
 }
 
-/** Admin RC8.5-G: modo prueba (actuar como) sin cambiar sesión ni rol real. */
+/** Admin: abre según etapa real (sin simular rol). */
 async function openExpedienteAdmin(solicitudId) {
   closeBandejaDropdowns();
   closeBandejaActionMenus();
   const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
   const estado = row?.estado_cuadro || row?.estado || '';
   const sugerido = resolveModoAperturaExpediente(estado, ROLES_REVISION.ADMINISTRADOR);
-  const actuarComo = resolveActuarComoDesdeUi(getActuarComoAdmin() || sugerido) || sugerido;
-  setActuarComoAdmin(actuarComo);
-
-  if (actuarComo === ROLES_REVISION.ANALISTA && sugerido === ROLES_REVISION.ANALISTA) {
-    await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
+  if (sugerido === ROLES_REVISION.DEC) {
+    await showExpedienteDecModal(solicitudId, () => loadCuadro(false));
     return;
   }
-  if (sugerido === ROLES_REVISION.ANALISTA && actuarComo !== ROLES_REVISION.ANALISTA) {
-    // Etapa de elaboración: permitir abrir elaborar; el selector de contexto vive en revisión
-    await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
+  if (sugerido === ROLES_REVISION.COORDINADOR_CM) {
+    await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false));
     return;
   }
-  await showExpedienteRevisionModal(solicitudId, () => loadCuadro(false), {
-    modo: sugerido === ROLES_REVISION.DEC ? ROLES_REVISION.DEC : ROLES_REVISION.COORDINADOR_CM,
-    adminPrueba: true,
-    actuarComo: actuarComo === ROLES_REVISION.ANALISTA ? sugerido : actuarComo,
-  });
+  await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
 }
 
 async function openDescargarCuadro(solicitudId) {
@@ -458,13 +443,10 @@ function buildCuadroTheadHtml() {
     <th class="text-center">Cantidad</th>
     <th>Estado</th>
     <th class="text-center">Ver</th>
-    <th>Acciones</th>
   </tr>`;
 }
 
-function buildCuadroRowHtml(c, { rolUi }) {
-  const menu = cuadroComparativoMenuItems(c, { rol: rolUi || c.rol_revision });
-  const estadoLabel = c.estado_cuadro_label || labelCuadroEstado(c.estado_cuadro);
+function buildCuadroRowHtml(c) {
   return `
     <tr data-row-id="${c.solicitud_id}">
       <td><strong>${esc(c.solicitud_codigo)}</strong>
@@ -473,14 +455,13 @@ function buildCuadroRowHtml(c, { rolUi }) {
       <td>${formatRequerimientosCuadro(c, esc)}</td>
       <td class="small">${formatCentroCuadro(c, esc)}</td>
       <td class="text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
-      <td><span class="badge bg-${esc(c.estado_cuadro_badge || badgeClassCuadro(c.estado_cuadro))}">${esc(estadoLabel)}</span></td>
+      <td><span class="badge bg-primary">${esc(labelBandejaCuadroComparativo())}</span></td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
           data-id="${esc(c.solicitud_id)}" title="Ver expediente">
           <i class="bi bi-eye"></i> Ver
         </button>
       </td>
-      ${renderActionMenuCell(c.solicitud_id, menu, '')}
     </tr>`;
 }
 
@@ -490,38 +471,20 @@ function cuadroEmptyMessage({ modoCoord, modoDec }) {
   return 'No hay solicitudes con cotizaciones APTO para el cuadro comparativo.';
 }
 
-function cuadroHintText({ modoCoord, modoDec, modoAdmin }) {
+function cuadroHintText({ modoCoord, modoDec }) {
   if (modoCoord) {
-    return 'Expedientes derivados desde el Analista. Use Abrir expediente para firmar, observar, dar conformidad y derivar al DEC.';
+    return 'Expedientes derivados desde el Analista. Use Ver para revisar, observar o derivar al DEC.';
   }
   if (modoDec) {
-    return 'Expedientes derivados desde el Coordinador CM. Use Abrir expediente para la revisión DEC.';
+    return 'Expedientes derivados desde el Coordinador CM. Use Ver para observar o aprobar y derivar a CCP.';
   }
-  if (modoAdmin) {
-    return 'Modo Administrador (pruebas): abra el expediente y use «Actuar como» Analista / Coordinador CM / DEC sin cerrar sesión. El rol real no cambia.';
-  }
-  return 'Una fila por Solicitud de Cotización. La bandeja cambia según rol y etapa. En revisión externa: Ver / Descargar / Trazabilidad.';
+  return 'Una fila por Solicitud de Cotización. Use Ver para abrir el expediente. Las acciones de derivación están dentro del detalle.';
 }
 
-function ensureCuadroChrome(shell, { modoAdmin, adminChrome, hint }) {
+function ensureCuadroChrome(shell, { hint }) {
   if (!shell?.outer) return;
-  let chromeHost = document.getElementById('cuadroCompChrome');
-  if (!chromeHost) {
-    chromeHost = document.createElement('div');
-    chromeHost.id = 'cuadroCompChrome';
-    shell.outer.insertBefore(chromeHost, shell.wrap);
-  }
-  if (modoAdmin) {
-    if (!chromeHost.querySelector('#ccAdminActuarComo')) {
-      chromeHost.innerHTML = adminChrome || '';
-      chromeHost.querySelector('#ccAdminActuarComo')?.addEventListener('change', (ev) => {
-        setActuarComoAdmin(ev.target.value);
-        loadCuadro(false);
-      });
-    }
-  } else if (chromeHost.innerHTML) {
-    chromeHost.innerHTML = '';
-  }
+  const chromeHost = document.getElementById('cuadroCompChrome');
+  if (chromeHost) chromeHost.innerHTML = '';
 
   let hintEl = document.getElementById('cuadroCompHint');
   if (!hintEl) {
@@ -538,27 +501,16 @@ function openVerDesdeBandeja(id, { modoCoord, modoDec, modoAdmin }) {
   if (modoCoord) return openExpedienteCoordinador(id);
   if (modoDec) return openExpedienteDec(id);
   if (modoAdmin) return openExpedienteAdmin(id);
-  return showVerExpediente(id);
+  return openElaborarCuadro(id);
 }
 
-function bindCuadroActionMenus(cont, { modoCoord, modoDec, modoAdmin }) {
+function bindCuadroVerButtons(cont, { modoCoord, modoDec, modoAdmin }) {
   closeBandejaActionMenus(cont);
   cont.querySelectorAll('.cc-ver-exp').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();
       openVerDesdeBandeja(btn.dataset.id, { modoCoord, modoDec, modoAdmin });
     };
-  });
-  bindActionMenus(cont, {
-    verExpediente: (id) => showVerExpediente(id),
-    verValidaciones: (id) => showVerValidaciones(id),
-    elaborarCuadro: (id) => openElaborarCuadro(id),
-    verCuadro: (id) => openVerDesdeBandeja(id, { modoCoord, modoDec, modoAdmin }),
-    abrirExpedienteCoord: (id) => openExpedienteCoordinador(id),
-    abrirExpedienteDec: (id) => openExpedienteDec(id),
-    abrirExpedienteAdmin: (id) => openExpedienteAdmin(id),
-    descargarCuadro: (id) => openDescargarCuadro(id),
-    trazabilidadCuadro: (id) => openTrazabilidadCuadro(id),
   });
 }
 
@@ -569,9 +521,6 @@ async function loadCuadro(resetPage = false) {
   const modoCoord = isModoBandejaCoordinador();
   const modoDec = isModoBandejaDec();
   const modoAdmin = isModoBandejaAdmin();
-  const rolSesion = rolBandejaActual();
-  const rolUi = modoCoord ? 'COORDINADOR_CM'
-    : (modoDec ? 'DEC' : (modoAdmin ? 'ADMINISTRADOR' : rolSesion));
 
   const hadShell = !!document.getElementById('cuadroCompBody');
   if (hadShell) captureScroll(VIEW_ID, SCROLL_SEL);
@@ -588,14 +537,8 @@ async function loadCuadro(resetPage = false) {
     tableClass: 'table table-sm table-hover table-bordered mb-0 align-middle',
   });
 
-  const adminChrome = modoAdmin
-    ? renderBannerAdminPrueba(resolveActuarComoDesdeUi(getActuarComoAdmin()
-      || ROLES_REVISION.COORDINADOR_CM) || ROLES_REVISION.COORDINADOR_CM)
-    : '';
   ensureCuadroChrome(shell, {
-    modoAdmin,
-    adminChrome,
-    hint: cuadroHintText({ modoCoord, modoDec, modoAdmin }),
+    hint: cuadroHintText({ modoCoord, modoDec }),
   });
 
   const request = loadGuard.begin();
@@ -627,9 +570,9 @@ async function loadCuadro(resetPage = false) {
 
     setEmptyState(shell, { empty: false });
     shell.thead.innerHTML = buildCuadroTheadHtml();
-    shell.tbody.innerHTML = rows.map((c) => buildCuadroRowHtml(c, { rolUi })).join('');
+    shell.tbody.innerHTML = rows.map((c) => buildCuadroRowHtml(c)).join('');
 
-    bindCuadroActionMenus(cont, { modoCoord, modoDec, modoAdmin });
+    bindCuadroVerButtons(cont, { modoCoord, modoDec, modoAdmin });
     cuadroPagination.renderControls('cuadroCompOuter', () => loadCuadro(false));
     restoreScroll(VIEW_ID, SCROLL_SEL);
     refreshIndicator?.hide();

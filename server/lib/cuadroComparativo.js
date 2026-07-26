@@ -206,25 +206,25 @@ export const ESTADOS_CUADRO = Object.freeze({
   ANULADO: 'ANULADO',
 });
 
-/** Etiquetas visibles de bandeja (códigos técnicos sin cambio). */
+/** Etiquetas de etapa en detalle (códigos técnicos sin cambio). Bandeja usa «Cuadro Comparativo». */
 export const ESTADOS_CUADRO_LABEL = Object.freeze({
-  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.BORRADOR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comp. Trámite',
-  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comp. Observado',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comp. Revisión',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comp. Observado',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comp. Revisión',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comp. Observado',
-  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comp. Aprobado',
-  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comp. Aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.BORRADOR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comparativo en trámite',
+  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comparativo observado',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comparativo en revisión',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comparativo observado',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comparativo en revisión',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comparativo para aprobación',
+  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comparativo observado',
+  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comparativo aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comparativo aprobado',
+  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comparativo aprobado',
+  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comparativo derivado a CCP',
   [ESTADOS_CUADRO.ANULADO]: 'Anulado',
 });
 
@@ -1993,20 +1993,23 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   const cur = curRows[0];
   const estado = String(cur.estado || '').toUpperCase();
   // RC8.5-G — actuar_como solo desde body (nunca query); solo Administrador real (headers)
+  // actuar_como solo modo prueba Admin (opcional). Sin UI operativa: Admin real
+  // puede ejecutar la transición válida del estado (supervisión, sin suplantar en cliente).
   const { rolEfectivo, rolReal, actuarComo, modoPrueba } = resolveRolEfectivoRevision(
     userCtx,
     body.actuar_como || body.contexto_rol || '',
   );
-  const rol = rolEfectivo;
   const tr = findTransicionRevision(accion, estado);
   if (!tr) {
     throw new Error(`Transición ${accion || '—'} no permitida desde estado ${estado}`);
   }
+  const esAdminReal = rolReal === 'ADMINISTRADOR';
+  const rol = (esAdminReal && !modoPrueba) ? tr.rol : rolEfectivo;
   if (tr.rol !== rol) {
     throw new Error(
       modoPrueba
-        ? `La acción ${accion} corresponde al rol ${tr.rol} (Administrador actuando como: ${rol})`
-        : `La acción ${accion} corresponde al rol ${tr.rol} (perfil actual: ${rol})`,
+        ? `La acción ${accion} corresponde al rol ${tr.rol} (Administrador actuando como: ${rolEfectivo})`
+        : `La acción ${accion} corresponde al rol ${tr.rol} (perfil actual: ${rolEfectivo || rolReal})`,
     );
   }
 

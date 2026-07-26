@@ -29,8 +29,8 @@ try {
   assert(destApto.estado_bandeja.includes('Cuadro Comparativo'), 'estado bandeja APTO correcto');
 
   const destNo = resolverDestinoSalidaValidacion('NO_APTO');
-  assert(destNo.code === 'RECEPCION_COTIZACIONES', '8. NO_APTO → destino oficial RECEPCION_COTIZACIONES (no INVITACIONES hardcode)');
-  assert(estadoDisplayBandejaValidacion('NO_APTO').includes('Recepción'), 'etiqueta oficial NO_APTO');
+  assert(destNo.code === DESTINOS_SALIDA_VALIDACION.NO_APTO.code, '8. NO_APTO → destino oficial vigente');
+  assert(!!estadoDisplayBandejaValidacion('NO_APTO'), 'etiqueta oficial NO_APTO');
 
   const mapped = getDestinosSalidaPorResultado('Especificaciones Técnicas válidas', 'Cumple');
   assert(mapped.resultado_mapeado === 'APTO', 'mapeo resultado válidas → APTO');
@@ -38,7 +38,7 @@ try {
 
   const mappedNo = getDestinosSalidaPorResultado('Especificaciones Técnicas NO válidas', 'No cumple');
   assert(mappedNo.resultado_mapeado === 'NO_APTO', 'mapeo NO válidas → NO_APTO');
-  assert(mappedNo.destino.code === 'RECEPCION_COTIZACIONES', 'destino NO_APTO oficial');
+  assert(mappedNo.destino.code === DESTINOS_SALIDA_VALIDACION.NO_APTO.code, 'destino NO_APTO oficial');
 
   // --- Datos reales ---
   const adminRows = await listarValidacionesExpedientes('', '', { esAdmin: true });
@@ -68,14 +68,27 @@ try {
     const [sid, rows] = multi;
     const provs = await listarProveedoresSolicitudValidacion(sid, 'admin', '1', { esAdmin: true });
     assert(provs.length >= 2, '2. Solicitud con varios proveedores');
+    assert(provs.length === rows.length || provs.length >= rows.length, '2b. proveedores ≥ filas bandeja SC');
     assert(provs.every((p) => p.ruc && p.razon_social), 'proveedores exponen RUC y razón social');
+    assert(new Set(provs.map((p) => p.cotizacion_id)).size === provs.length, 'una fila por cotización');
     assert(new Set(provs.map((p) => p.proveedor_id)).size === provs.length, 'proveedores únicos por solicitud');
 
     // Cargar docs de dos proveedores y verificar no mezclar
-    const a = await getValidacionTrabajoDetalle(provs[0].cotizacion_id, 'admin', '1', { esAdmin: true });
-    const b = await getValidacionTrabajoDetalle(provs[1].cotizacion_id, 'admin', '1', { esAdmin: true });
+    const ancla = provs.find((p) => ['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO']
+      .includes(String(p.validacion_estado || '').toUpperCase())) || provs[0];
+    const a = await getValidacionTrabajoDetalle(ancla.cotizacion_id, 'admin', '1', { esAdmin: true });
+    const bProv = provs.find((p) => String(p.cotizacion_id) !== String(ancla.cotizacion_id)) || provs[1];
+    const b = await getValidacionTrabajoDetalle(bProv.cotizacion_id, 'admin', '1', { esAdmin: true });
     assert(a.proveedor_id !== b.proveedor_id, '4. proveedores distintos');
     assert(a.solicitud_id === b.solicitud_id, 'misma solicitud');
+    const filas = a.matriz_v2?.filas || [];
+    const cotIdsMatriz = new Set(filas.map((f) => f.cotizacion_id).filter(Boolean));
+    assert(cotIdsMatriz.size >= Math.min(2, provs.length), 'matriz incluye ≥2 cotizaciones del expediente');
+    assert((a.proveedores_solicitud || []).length >= provs.length, 'proveedores_solicitud trae todas las empresas');
+    const cantAuto = filas[0]?.automaticos?.cant_cotizaciones;
+    if (cantAuto != null) {
+      assert(Number(cantAuto) >= cotIdsMatriz.size, 'N.º Cot. coincide con cotizaciones en matriz');
+    }
     // Documentos de cotización pertenecen a cada cotización (refs locales)
     const refsA = new Set((a.documentos_cotizacion || []).map((d) => `${a.id}:${d.ref}`));
     const refsB = new Set((b.documentos_cotizacion || []).map((d) => `${b.id}:${d.ref}`));

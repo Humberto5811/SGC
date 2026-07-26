@@ -19,6 +19,7 @@ import {
   filterCuadroExpedientes,
   cuadroComparativoMenuItems,
   normalizeCuadroEstado as normClient,
+  labelBandejaCuadroComparativo,
 } from '../src/utils/cuadroComparativoUtils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -119,9 +120,8 @@ assert(/Number\(r\.proveedores_aptos\) >= 1/.test(libSrc) || /proveedores_aptos\
   '5. backend descarta sin APTO');
 
 // 6) Una fila por solicitud (vista)
-assert(/solicitud_codigo/.test(viewSrc) && /proveedores_aptos/.test(viewSrc), '6. vista usa campos de expediente');
-assert(!/razon_social/.test(viewSrc.match(/cont\.innerHTML[\s\S]*?bindActionMenus/)?.[0] || '')
-  || /Una fila por Solicitud/.test(viewSrc), '6. bandeja documenta una fila por SC');
+assert(/solicitud_codigo/.test(viewSrc) && /labelBandejaCuadroComparativo/.test(viewSrc), '6. vista usa campos de expediente');
+assert(/Una fila por Solicitud/.test(viewSrc), '6. bandeja documenta una fila por SC');
 assert(/Una fila por Solicitud/.test(viewSrc), '6. copy: una fila por SC');
 
 // 7) Contadores
@@ -142,8 +142,8 @@ const menu = cuadroComparativoMenuItems(scMulti);
 assert(menu.some((m) => m.act === 'verExpediente'), '8. Ver expediente');
 assert(menu.some((m) => m.act === 'verValidaciones'), '8. Ver validaciones');
 assert(menu.some((m) => m.act === 'elaborarCuadro'), '8. Elaborar cuadro');
-assert(/renderActionMenuCell/.test(viewSrc), '8. menú estándar ⋮');
-assert(/verExpediente/.test(viewSrc) && /elaborarCuadro/.test(viewSrc), '8. acciones cableadas');
+assert(/cc-ver-exp/.test(viewSrc) && /openVerDesdeBandeja/.test(viewSrc), '8. columna Ver (sin menú Acciones)');
+assert(/openElaborarCuadro|showElaborarCuadroModal|showExpediente/.test(viewSrc), '8. acciones cableadas en detalle');
 
 // 9) Filtros
 const filtered = filterCuadroExpedientes([scMulti], { q: 'humberto' });
@@ -153,11 +153,12 @@ assert(filterCuadroExpedientes([scMulti], { tipo: 'bien' }).length === 1, '9. fi
 assert(filterCuadroExpedientes([scMulti], { estado: 'PENDIENTE_ELABORAR' }).length === 1, '9. filtro estado');
 
 // 10) Estados documentales
-assert(labelCuadroEstado('PENDIENTE_ELABORAR') === 'Pendiente de elaborar', '10. label pendiente');
+assert(/trámite/i.test(labelCuadroEstado('PENDIENTE_ELABORAR')), '10. label etapa trámite');
 assert(normalizeCuadroEstado('') === ESTADOS_CUADRO.PENDIENTE_ELABORAR, '10. default pendiente');
 assert(normClient('DERIVADO_A_CCP') === ESTADOS_CUADRO.DERIVADO_CCP, '10. alias derivado CCP');
-assert(ESTADOS_CUADRO_LABEL.FIRMADO === 'Firmado', '10. label Firmado reservado');
+assert(/Cuadro Comparativo/i.test(ESTADOS_CUADRO_LABEL.FIRMADO), '10. label Firmado = etapa CC (no badge interno)');
 assert(/PENDIENTE_ELABORAR/.test(libSrc) && !/estado del Workflow como único/.test(libSrc), '10. estado propio del cuadro');
+assert(labelBandejaCuadroComparativo() === 'Cuadro Comparativo', '10. bandeja homogénea Cuadro Comparativo');
 
 // 11) Ruta / permisos intactos
 assert(/'dec\/cuadro'/.test(routerSrc), '11. ruta dec/cuadro en router');
@@ -179,10 +180,13 @@ assert(!/Motor de Observaciones|observacionesMotor/.test(libSrc), '13. lib cuadr
 assert(typeof listarCuadroComparativo === 'function', '14. listarCuadroComparativo exportado desde cuadroComparativo.js');
 
 // 15) Vista no muestra fila por proveedor en tabla principal
-const tableBlock = viewSrc.match(/<th>Solicitud<\/th>[\s\S]*?<th>Acciones<\/th>/)?.[0] || '';
-assert(/Solicitud/.test(tableBlock) && /Requerimientos/.test(tableBlock), '15. columnas bandeja por SC');
-assert(!/<th>Proveedor<\/th>/.test(tableBlock), '15. columnas de bandeja sin Proveedor');
-assert(/Prov\. APTO|proveedores_aptos/.test(viewSrc), '15. contador APTO en bandeja');
+const tableBlock = viewSrc.match(/function buildCuadroTheadHtml[\s\S]*?^}/m)?.[0] || '';
+assert(/Solicitud de cotización/.test(tableBlock) && /Requerimiento/.test(tableBlock)
+  && /Centro/.test(tableBlock) && /Cantidad/.test(tableBlock) && />Ver</.test(tableBlock),
+  '15. columnas bandeja por SC');
+assert(!/<th>Proveedor<\/th>/.test(viewSrc.match(/buildCuadroTheadHtml[\s\S]*?^}/m)?.[0] || '')
+  && !/Acciones/.test(tableBlock), '15. columnas de bandeja sin Proveedor ni Acciones');
+assert(/formatCantidadCotizacionesCuadro|cantidad_cotizaciones|Cantidad/.test(viewSrc), '15. cantidad de cotizaciones en bandeja');
 
 // 16) RC8.1.1 — no usar operador JSON sobre payload TEXT
 const listFn = libSrc.match(/export async function listarCuadroComparativoExpedientes[\s\S]*?(?=\nexport async function)/)?.[0] || '';

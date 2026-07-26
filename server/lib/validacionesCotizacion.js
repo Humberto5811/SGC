@@ -289,23 +289,50 @@ function normalizeTipoContratacion(tipo) {
 }
 
 async function loadRequerimientosSolicitud(solicitudId) {
+  // Centro organizacional textual (CNSP); nunca priorizar CMN numérico (05277).
   const { rows } = await query(`
     SELECT r.id, r.codigo, r.denominacion, r.area, r.cmn, r.payload,
       COALESCE(
-        NULLIF(TRIM(r.cmn), ''),
-        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'cmn'), ''),
+        NULLIF(TRIM(p2.centro), ''),
+        NULLIF(TRIM(c.nombre), ''),
+        NULLIF(TRIM(c.codigo), ''),
+        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_display'), ''),
+        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_nombre'), ''),
         NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro'), ''),
-        NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_costo'), ''),
-        NULLIF(TRIM(r.area), ''),
+        NULLIF(TRIM(r.responsable), ''),
+        NULLIF(TRIM(a.responsable), ''),
         ''
-      ) AS centro,
+      ) AS centro_raw,
       NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_costo'), '') AS centro_costo
     FROM solicitud_requerimientos sr
     JOIN requerimientos r ON r.id = sr.requerimiento_id
+    LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+    LEFT JOIN centros c ON a.centro_id = c.id
+    LEFT JOIN LATERAL (
+      SELECT p.centro
+      FROM requerimiento_pedidos rp
+      JOIN pedidos_sigamef p ON p.id = rp.pedido_sigamef_id
+      WHERE rp.requerimiento_id = r.id
+      ORDER BY rp.id DESC
+      LIMIT 1
+    ) p2 ON TRUE
     WHERE sr.solicitud_id = $1
     ORDER BY r.codigo ASC
   `, [solicitudId]);
-  return rows;
+  return rows.map((r) => {
+    const raw = String(r.centro_raw || '').trim();
+    const centro = (raw && !esCodigoCmnCentro(raw, r.cmn)) ? raw : '';
+    return {
+      id: r.id,
+      codigo: r.codigo,
+      denominacion: r.denominacion,
+      area: r.area,
+      cmn: r.cmn,
+      payload: r.payload,
+      centro,
+      centro_costo: r.centro_costo || '',
+    };
+  });
 }
 
 async function loadDocumentosRequerimientoSolicitud(solicitudId) {
@@ -410,6 +437,7 @@ export async function listUsuariosDerivacionValidacion(submoduloCode, search = '
 export async function listarProveedoresSolicitudValidacion(solicitudId, usuario, userId, opts = {}) {
   const sid = parseInt(solicitudId, 10);
   if (!Number.isFinite(sid)) throw new Error('Solicitud inválida');
+  // Expediente: todas las cotizaciones presentadas de la SC (no solo la ancla DERIVADA).
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
       cot.validacion_estado, cot.validacion_responsable, cot.validacion_informe,
@@ -420,42 +448,46 @@ export async function listarProveedoresSolicitudValidacion(solicitudId, usuario,
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
     WHERE cot.solicitud_id = $1
       AND cot.estado = 'COTIZACION_PRESENTADA'
-      AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
-    ORDER BY p.razon_social ASC, cot.fecha_presentacion DESC NULLS LAST
+    ORDER BY p.razon_social ASC, cot.id ASC
   `, [sid]);
   const reqs = await loadRequerimientosSolicitud(sid);
+  const centroSolicitud = await resolveCentrosTextoSolicitud(sid);
   const esAdmin = !!opts.esAdmin;
   const authOpts = { esAdmin, usuarioNombre: usuario };
   const out = [];
+  const seenCot = new Set();
   for (const r of rows) {
+    // Una fila por cotización/proveedor (no expandir por N requerimientos → evita “mezclar” empresas).
+    if (seenCot.has(r.id)) continue;
+    seenCot.add(r.id);
     const perm = canUserValidateExpediente(r, usuario, userId, authOpts);
-    const reqsFila = r.requerimiento_id
-      ? reqs.filter((q) => q.id === r.requerimiento_id)
-      : reqs;
-    const lista = reqsFila.length ? reqsFila : [{ id: null, codigo: '', denominacion: r.denominacion || r.objeto || '', area: '', cmn: '' }];
-    for (const req of lista) {
-      out.push({
-        cotizacion_id: r.id,
-        solicitud_id: r.solicitud_id,
-        proveedor_id: r.proveedor_id,
-        requerimiento_id: req.id || r.requerimiento_id || null,
-        ruc: r.ruc || '',
-        razon_social: r.razon_social || '',
-        fecha_presentacion: r.fecha_presentacion,
-        estado: r.estado,
-        validacion_estado: r.validacion_estado || '',
-        estado_display: estadoDisplayValidacion(r.validacion_estado, r.estado),
-        estado_bandeja: estadoDisplayBandejaValidacion(r.validacion_estado),
-        estado_bandeja_class: badgeBandejaClass(r.validacion_estado),
-        requerimiento_codigo: req.codigo || '',
-        requerimientos: req.codigo || '',
-        descripcion: req.denominacion || r.denominacion || r.objeto || '',
-        centro: req.centro || req.cmn || req.area || '',
-        puede_validar: perm.puedeValidar,
-        puede_ver: perm.puedeVer,
-        sin_asignacion: perm.sinAsignacion,
-      });
-    }
+    const req = r.requerimiento_id
+      ? (reqs.find((q) => q.id === r.requerimiento_id) || reqs[0] || null)
+      : (reqs[0] || null);
+    const centroTxt = (req?.centro && !esCodigoCmnCentro(req.centro, req.cmn))
+      ? req.centro
+      : (centroSolicitud || '');
+    out.push({
+      cotizacion_id: r.id,
+      solicitud_id: r.solicitud_id,
+      proveedor_id: r.proveedor_id,
+      requerimiento_id: req?.id || r.requerimiento_id || null,
+      ruc: r.ruc || '',
+      razon_social: r.razon_social || '',
+      fecha_presentacion: r.fecha_presentacion,
+      estado: r.estado,
+      validacion_estado: r.validacion_estado || '',
+      estado_display: estadoDisplayValidacion(r.validacion_estado, r.estado),
+      estado_bandeja: estadoDisplayBandejaValidacion(r.validacion_estado),
+      estado_bandeja_class: badgeBandejaClass(r.validacion_estado),
+      requerimiento_codigo: req?.codigo || '',
+      requerimientos: req?.codigo || '',
+      descripcion: req?.denominacion || r.denominacion || r.objeto || '',
+      centro: centroTxt,
+      puede_validar: perm.puedeValidar,
+      puede_ver: perm.puedeVer,
+      sin_asignacion: perm.sinAsignacion,
+    });
   }
   return out;
 }
@@ -522,6 +554,9 @@ export async function resolveCentrosTextoSolicitud(solicitudId) {
           NULLIF(TRIM(p2.centro), ''),
           NULLIF(TRIM(c.nombre), ''),
           NULLIF(TRIM(c.codigo), ''),
+          NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_display'), ''),
+          NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro_nombre'), ''),
+          NULLIF(TRIM(COALESCE(r.payload, '{}')::jsonb->>'centro'), ''),
           NULLIF(TRIM(r.responsable), ''),
           NULLIF(TRIM(a.responsable), '')
         )), '') AS centro_val,
@@ -553,7 +588,6 @@ export async function resolveCentrosTextoSolicitud(solicitudId) {
   `, [sid]);
   const raw = String(rows[0]?.centros_texto || '').trim();
   if (!raw || esCodigoCmnCentro(raw)) return '';
-  // Filtrar partes que sean CMN si vinieran mezcladas
   const parts = raw.split(',').map((s) => s.trim()).filter((s) => s && !esCodigoCmnCentro(s));
   return parts.join(', ');
 }
@@ -578,6 +612,8 @@ async function enrichCentrosBandejaValidacion(rows = []) {
 
 /** Bandeja unificada — expedientes enviados desde Recepción de Cotizaciones (RC7.7). */
 export async function listarValidacionesExpedientes(usuario, userId, opts = {}) {
+  // Incluye hermanas PRESENTADA de la misma SC aunque aún figuren PENDIENTE
+  // (regresión histórica: solo se derivaba 1 de N).
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
       cot.validacion_estado, cot.validacion_responsable, cot.validacion_informe,
@@ -605,7 +641,15 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
-      AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
+      AND (
+        cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
+        OR cot.solicitud_id IN (
+          SELECT DISTINCT c2.solicitud_id
+          FROM cotizaciones_proveedor c2
+          WHERE c2.estado = 'COTIZACION_PRESENTADA'
+            AND c2.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
+        )
+      )
     ORDER BY
       COALESCE(
         NULLIF(cot.validacion_informe->'derivacion'->>'derivado_at', '')::timestamptz,
@@ -617,20 +661,32 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
   `);
   const esAdmin = !!opts.esAdmin;
   const authOpts = { esAdmin, usuarioNombre: usuario };
-  const filtered = rows.filter((r) => {
-    if (esAdmin) return true;
-    if (!opts.soloAsignadas) return matchResponsable(r, usuario, userId, authOpts);
-    return canUserValidateExpediente(r, usuario, userId, authOpts).puedeVer;
-  });
+  // Si el usuario ve al menos una cotización de la SC, incluir hermanas PRESENTADA
+  // (cantidad y matriz del expediente completas).
+  const solsVisibles = new Set();
+  for (const r of rows) {
+    if (esAdmin) {
+      solsVisibles.add(r.solicitud_id);
+      continue;
+    }
+    const ok = opts.soloAsignadas
+      ? canUserValidateExpediente(r, usuario, userId, authOpts).puedeVer
+      : matchResponsable(r, usuario, userId, authOpts);
+    if (ok) solsVisibles.add(r.solicitud_id);
+  }
+  const filtered = rows.filter((r) => solsVisibles.has(r.solicitud_id));
   const mapped = filtered.map((r) => {
     const perm = canUserValidateExpediente(r, usuario, userId, authOpts);
+    const enFlujo = ['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO']
+      .includes(String(r.validacion_estado || '').toUpperCase());
     return {
       ...mapCotizacionRow(r),
       tipo_contratacion: normalizeTipoContratacion(r.solicitud_tipo),
       area_usuaria: r.area_usuaria || '',
       descripcion: r.denominacion || r.objeto || '',
-      puede_validar: perm.puedeValidar,
-      puede_ver: perm.puedeVer,
+      // Hermanas aún PENDIENTE: visibles en expediente; edición al sincronizar/derivar.
+      puede_validar: enFlujo && perm.puedeValidar,
+      puede_ver: enFlujo ? perm.puedeVer : solsVisibles.has(r.solicitud_id),
       sin_asignacion: perm.sinAsignacion,
     };
   });
@@ -668,7 +724,7 @@ async function loadReqMetaMap(solicitudId) {
     map.set(r.id, {
       codigo: r.codigo,
       denominacion: r.denominacion,
-      centro: r.centro || r.cmn || r.area || '',
+      centro: (r.centro && !esCodigoCmnCentro(r.centro, r.cmn)) ? r.centro : '',
       centro_costo: r.centro_costo || '',
       cmn: r.cmn || '',
       area: r.area || '',
@@ -713,9 +769,11 @@ async function loadPedidosCentroByReq(solicitudId) {
 
 function findSavedFila(savedFilas, cotId, itemKey, baseKey) {
   const list = Array.isArray(savedFilas) ? savedFilas : [];
-  return list.find((s) => s.item_key === itemKey)
-    || list.find((s) => String(s.cotizacion_id || '') === String(cotId) && (s.item_key === baseKey || s.item_key === itemKey))
-    || list.find((s) => !s.cotizacion_id && s.item_key === baseKey)
+  const sameCot = (s) => String(s.cotizacion_id || '') === String(cotId);
+  // Nunca reutilizar evaluación de otro proveedor (evita mezclar / perder filas).
+  return list.find((s) => sameCot(s) && s.item_key === itemKey)
+    || list.find((s) => sameCot(s) && (s.item_key === baseKey || String(s.item_key || '').endsWith(`:${baseKey}`)))
+    || list.find((s) => sameCot(s) && !s.item_key && s.automaticos)
     || null;
 }
 
@@ -729,7 +787,6 @@ async function buildMatrizValidacion(cot) {
   const { rows: countRows } = await query(`
     SELECT COUNT(*)::int AS total FROM cotizaciones_proveedor
     WHERE solicitud_id = $1 AND estado = 'COTIZACION_PRESENTADA'
-      AND validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
   `, [cot.solicitud_id]);
   const cantCot = countRows[0]?.total || 1;
   const reqMeta = await loadReqMetaMap(cot.solicitud_id);
@@ -769,7 +826,7 @@ async function buildMatrizValidacion(cot) {
       ? itemCentroRaw
       : '';
     const resolved = resolveValidationCentro({
-      requerimientoCentro: '',
+      requerimientoCentro: meta.centro || '',
       pedidoCentro: ped.centro || '',
       cabeceraCentro,
       informeCentro: savedCentroOk,
@@ -846,27 +903,43 @@ async function buildMatrizValidacion(cot) {
   };
 }
 
-/** Cotizaciones de la SC en bandeja de validación (todas las empresas). */
+/**
+ * Cotizaciones presentadas de la SC para matriz de validación (todas las empresas).
+ * Incluye PRESENTADA aunque alguna aún figure PENDIENTE (regresión: solo se derivaba 1 de N).
+ */
 async function loadCotizacionesValidacionSolicitud(solicitudId) {
   const { rows } = await query(`
-    SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
-      sc.detalle_items, sc.tipo AS solicitud_tipo
+    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+      cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
+      cot.fecha_presentacion, cot.validacion_estado, cot.validacion_observacion,
+      cot.validacion_informe, cot.validacion_responsable, cot.historial,
+      cot.created_at, cot.updated_at,
+      p.ruc, p.razon_social,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      sc.detalle_items AS solicitud_detalle_items,
+      sc.tipo AS solicitud_tipo
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
     WHERE cot.solicitud_id = $1
       AND cot.estado = 'COTIZACION_PRESENTADA'
-      AND cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
     ORDER BY p.razon_social ASC, cot.id ASC
   `, [solicitudId]);
-  return rows;
+  return rows.map((r) => ({
+    ...r,
+    detalle_items: r.solicitud_detalle_items,
+  }));
 }
 
 /**
- * Matriz del expediente: una fila por ítem × proveedor (todas las cotizaciones derivadas).
+ * Matriz del expediente: una fila por ítem × proveedor (todas las cotizaciones de la SC).
  */
 async function buildMatrizValidacionSolicitud(solicitudId, cotAncla = null) {
-  const cots = await loadCotizacionesValidacionSolicitud(solicitudId);
+  let cots = await loadCotizacionesValidacionSolicitud(solicitudId);
+  // Si el ancla no vino en el listado, forzarla.
+  if (cotAncla?.id && !cots.some((c) => String(c.id) === String(cotAncla.id))) {
+    cots = [...cots, { ...cotAncla, detalle_items: cotAncla.detalle_items || cotAncla.solicitud_detalle_items }];
+  }
   const lista = cots.length ? cots : (cotAncla ? [cotAncla] : []);
   if (!lista.length) {
     return {
@@ -875,16 +948,49 @@ async function buildMatrizValidacionSolicitud(solicitudId, cotAncla = null) {
       matriz_v2: { version: 2, tipo: 'BIENES', solicitud_id: solicitudId, expediente: true, filas: [] },
     };
   }
+
+  // Unificar detalle_items de la solicitud (fuente única).
+  let detalleSolicitud = [];
+  try {
+    const { rows: scRows } = await query(
+      'SELECT detalle_items, tipo FROM solicitudes_cotizacion WHERE id = $1',
+      [solicitudId],
+    );
+    detalleSolicitud = parseJson(scRows[0]?.detalle_items, []);
+    if (!lista[0].solicitud_tipo && scRows[0]?.tipo) {
+      lista[0].solicitud_tipo = scRows[0].tipo;
+    }
+  } catch (_) { /* keep */ }
+
   const allFilas = [];
   let tipoKey = normalizeTipoValidacion(lista[0].solicitud_tipo) || 'BIENES';
   for (const cot of lista) {
-    const built = await buildMatrizValidacion(cot);
+    const cotForBuild = {
+      ...cot,
+      detalle_items: detalleSolicitud.length ? detalleSolicitud : (cot.detalle_items || cot.solicitud_detalle_items || []),
+    };
+    const built = await buildMatrizValidacion(cotForBuild);
     tipoKey = built.tipoKey || tipoKey;
     allFilas.push(...(built.matriz_v2?.filas || []));
   }
+
+  // Deduplicar por cotizacion_id + item_key (no perder proveedores).
+  const seen = new Set();
+  const filasUnicas = [];
+  for (const f of allFilas) {
+    const key = `${f.cotizacion_id}|${f.item_key || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    filasUnicas.push(f);
+  }
+  const nCot = new Set(filasUnicas.map((f) => f.cotizacion_id).filter(Boolean)).size;
+  filasUnicas.forEach((f) => {
+    if (f.automaticos) f.automaticos.cant_cotizaciones = nCot || lista.length;
+  });
+
   return {
     tipoKey,
-    legacyItems: filasV2ToLegacyItems(allFilas, tipoKey),
+    legacyItems: filasV2ToLegacyItems(filasUnicas, tipoKey),
     matriz_v2: {
       version: 2,
       tipo: tipoKey,
@@ -892,17 +998,25 @@ async function buildMatrizValidacionSolicitud(solicitudId, cotAncla = null) {
       expediente: true,
       cotizacion_id: cotAncla?.id || lista[0].id,
       proveedor_id: cotAncla?.proveedor_id || lista[0].proveedor_id,
-      filas: allFilas,
+      filas: filasUnicas,
     },
   };
 }
 
-/** Agrupa filas de matriz por cotizacion_id. */
+/** Agrupa filas de matriz por cotizacion_id (sin reasignar a otro proveedor). */
 function groupFilasByCotizacion(filas = [], fallbackCotId = null) {
   const map = new Map();
   (filas || []).forEach((f) => {
-    const cid = f.cotizacion_id || fallbackCotId;
-    if (!cid) return;
+    const cid = f.cotizacion_id || null;
+    if (!cid) {
+      // Sin cotizacion_id no se agrupa al ancla: se pierde la fila en sync de hermanas
+      // (mejor que mezclar datos de un proveedor en otro).
+      if (fallbackCotId && !f.proveedor_id) {
+        if (!map.has(fallbackCotId)) map.set(fallbackCotId, []);
+        map.get(fallbackCotId).push({ ...f, cotizacion_id: fallbackCotId });
+      }
+      return;
+    }
     if (!map.has(cid)) map.set(cid, []);
     map.get(cid).push(f);
   });
@@ -1194,6 +1308,20 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
   }
 
   const updated = rows[0];
+
+  // Expediente: derivar/reabrir hermanas PRESENTADAS de la misma SC (evita 1 de N en Validaciones).
+  if (!esReapertura) {
+    await sincronizarHermanasDerivacionValidacion({
+      solicitudId: updated.solicitud_id,
+      origenCotizacionId: updated.id,
+      sub,
+      responsable_id,
+      responsable_nombre,
+      usuarioOperador,
+      histEntry,
+    });
+  }
+
   await registrarTrazaPortal({
     solicitud_id: updated.solicitud_id,
     proveedor_id: updated.proveedor_id,
@@ -1262,16 +1390,108 @@ export async function devolverValidacionAAreaUsuaria(cotizacionId, body, usuario
   }, usuarioOperador);
 }
 
+/**
+ * Repara hermanas PRESENTADA aún PENDIENTE cuando la SC ya está en Validaciones.
+ * Idempotente; no altera APTO/NO_APTO/OBSERVADO.
+ */
+async function sincronizarHermanasDerivacionValidacion({
+  solicitudId,
+  origenCotizacionId,
+  sub,
+  responsable_id,
+  responsable_nombre,
+  usuarioOperador,
+  histEntry = null,
+}) {
+  try {
+    const { rows: hermanas } = await query(`
+      SELECT id FROM cotizaciones_proveedor
+      WHERE solicitud_id = $1
+        AND id <> $2
+        AND estado = 'COTIZACION_PRESENTADA'
+        AND COALESCE(UPPER(TRIM(validacion_estado)), '') = ANY($3::text[])
+    `, [solicitudId, origenCotizacionId, ['', 'PENDIENTE']]);
+    for (const h of hermanas) {
+      const cotH = await loadCotizacionFull(h.id);
+      const docsH = buildManifiestoCotizacionTecnica(cotH);
+      const prevH = parseInforme(cotH);
+      const informeH = {
+        ...prevH,
+        derivacion_salida: null,
+        enviado_at: null,
+        enviado_por: null,
+        observacion_retorno: null,
+        derivacion: {
+          ...(prevH.derivacion || {}),
+          submodulo: sub.code,
+          submodulo_label: sub.label,
+          responsable_id: parseInt(responsable_id, 10) || null,
+          responsable_nombre,
+          documentos_tecnicos: docsH,
+          derivado_por: usuarioOperador,
+          derivado_at: new Date().toISOString(),
+          reapertura: false,
+          sincronizado_expediente: true,
+        },
+      };
+      await query(`
+        UPDATE cotizaciones_proveedor SET
+          validacion_estado = 'DERIVADA',
+          validacion_responsable = $2,
+          validacion_informe = $3::jsonb,
+          historial = historial || $4::jsonb,
+          updated_at = NOW()
+        WHERE id = $1
+          AND COALESCE(UPPER(TRIM(validacion_estado)), '') = ANY($5::text[])
+      `, [
+        h.id,
+        responsable_nombre,
+        JSON.stringify(informeH),
+        JSON.stringify([{
+          ...(histEntry || {
+            tipo: 'derivacion_validacion_expediente',
+            usuario: usuarioOperador,
+            fecha: new Date().toISOString(),
+          }),
+          tipo: 'derivacion_validacion_expediente',
+          cotizacion_origen_id: origenCotizacionId,
+        }]),
+        ['', 'PENDIENTE'],
+      ]);
+    }
+  } catch (err) {
+    console.warn('[validaciones] sync hermanas derivación', err?.message || err);
+  }
+}
+
 export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId, opts = {}) {
-  const cot = await loadCotizacionFull(cotizacionId);
+  let cot = await loadCotizacionFull(cotizacionId);
   const esAdmin = !!opts.esAdmin;
-  const estado = String(cot.validacion_estado || '');
+  let estado = String(cot.validacion_estado || '');
   if (!['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO'].includes(estado)) {
     throw new Error('La cotización no tiene validación derivada');
   }
   const perm = canUserValidateExpediente(cot, usuario, userId, { esAdmin, usuarioNombre: usuario });
   if (!perm.puedeVer) {
     throw new Error(perm.sinAsignacion ? 'Pendiente de asignación de responsable' : 'No tiene asignada esta validación');
+  }
+  // Reparar expediente: promover hermanas PENDIENTE a DERIVADA con el mismo responsable.
+  if (['DERIVADA', 'EN_PROCESO'].includes(estado)) {
+    const inf0 = parseInforme(cot);
+    const der = inf0.derivacion || {};
+    await sincronizarHermanasDerivacionValidacion({
+      solicitudId: cot.solicitud_id,
+      origenCotizacionId: cot.id,
+      sub: {
+        code: der.submodulo || 'VALIDACION_TECNICA',
+        label: der.submodulo_label || 'Validación técnica',
+      },
+      responsable_id: der.responsable_id || userId,
+      responsable_nombre: der.responsable_nombre || cot.validacion_responsable || usuario,
+      usuarioOperador: usuario,
+    });
+    cot = await loadCotizacionFull(cotizacionId);
+    estado = String(cot.validacion_estado || '');
   }
   const inf = parseInforme(cot);
   const built = await buildMatrizValidacionSolicitud(cot.solicitud_id, cot);
@@ -1325,7 +1545,7 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
       denominacion: r.denominacion,
       area: r.area,
       cmn: r.cmn,
-      centro: r.centro || r.cmn || r.area || '',
+      centro: (r.centro && !esCodigoCmnCentro(r.centro, r.cmn)) ? r.centro : (centrosConsolidados.display !== '—' ? centrosConsolidados.display : ''),
       centro_costo: r.centro_costo || '',
     })),
     observacion_retorno: inf.observacion_retorno || null,

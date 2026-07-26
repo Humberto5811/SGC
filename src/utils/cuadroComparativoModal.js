@@ -607,10 +607,14 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
               <span class="badge bg-${esc(badgeClassCuadro(cuadro?.estado_cuadro || cuadro?.estado))}" id="ccEstadoBadge">
                 ${esc(cuadro?.estado_cuadro_label || labelCuadroEstado(cuadro?.estado))}
               </span>
-              <span class="small text-muted" id="ccVersionLabel">v${esc(cuadro?.version || 1)} · id ${esc(cuadro?.id || '—')}</span>
+              ${cuadro?.version != null ? `<span class="small text-muted" id="ccVersionLabel">Versión ${esc(cuadro.version)}</span>` : '<span class="small text-muted d-none" id="ccVersionLabel"></span>'}
+              ${(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre)
+    ? '<span class="badge bg-success">Firmado</span>' : ''}
               ${validacion.puede_generar === false && (matriz?.meta?.items_incompletos > 0)
     ? '<span class="badge bg-warning text-dark">Ofertas incompletas</span>'
-    : '<span class="badge bg-success">Matriz lista para adjudicación</span>'}
+    : (validacion.puede_generar === true
+      ? '<span class="badge bg-success">Matriz lista para adjudicación</span>'
+      : '')}
             </div>
             <div id="ccVersionHost">${renderPanelVersionado(cuadro, versiones)}</div>
             <h6 class="fw-bold">Proveedores</h6>
@@ -633,7 +637,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
               <i class="bi bi-arrow-clockwise"></i> Recargar
             </button>
             <button type="button" class="btn btn-outline-primary" id="ccBtnGuardar">
-              <i class="bi bi-save"></i> Guardar borrador
+              <i class="bi bi-save"></i> Guardar
             </button>
             <button type="button" class="btn btn-success" id="ccBtnAdjudicar">
               <i class="bi bi-award"></i> Guardar adjudicación
@@ -648,26 +652,14 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
               <i class="bi bi-download"></i> Descargar Cuadro Final
             </button>
             <button type="button" class="btn btn-outline-warning" id="ccBtnDerivarCoord">
-              <i class="bi bi-person-check"></i> Derivar Coordinador
+              <i class="bi bi-person-check"></i> Derivar a Coordinador CM
             </button>
-            <button type="button" class="btn btn-outline-success" id="ccBtnAprobarCoord">
-              <i class="bi bi-check2"></i> Aprobar Coordinador
-            </button>
-            <button type="button" class="btn btn-outline-danger" id="ccBtnObservarCoord">
-              <i class="bi bi-exclamation-triangle"></i> Observar Coordinador
-            </button>
-            <button type="button" class="btn btn-outline-success" id="ccBtnAprobarDec">
-              <i class="bi bi-check2-all"></i> Aprobar DEC
-            </button>
-            <button type="button" class="btn btn-outline-danger" id="ccBtnObservarDec">
-              <i class="bi bi-exclamation-triangle"></i> Observar DEC
-            </button>
-            <button type="button" class="btn btn-success" id="ccBtnGenerarCcp">
-              <i class="bi bi-file-earmark-plus"></i> Generar CCP
-            </button>
-            <button type="button" class="btn btn-primary" id="ccBtnDerivarCcp">
-              <i class="bi bi-send"></i> Derivar CCP
-            </button>
+            <button type="button" class="btn btn-outline-success d-none" id="ccBtnAprobarCoord" tabindex="-1" aria-hidden="true"></button>
+            <button type="button" class="btn btn-outline-danger d-none" id="ccBtnObservarCoord" tabindex="-1" aria-hidden="true"></button>
+            <button type="button" class="btn btn-outline-success d-none" id="ccBtnAprobarDec" tabindex="-1" aria-hidden="true"></button>
+            <button type="button" class="btn btn-outline-danger d-none" id="ccBtnObservarDec" tabindex="-1" aria-hidden="true"></button>
+            <button type="button" class="btn btn-success d-none" id="ccBtnGenerarCcp" tabindex="-1" aria-hidden="true"></button>
+            <button type="button" class="btn btn-primary d-none" id="ccBtnDerivarCcp" tabindex="-1" aria-hidden="true"></button>
           </div>
         </div>
       </div>
@@ -762,7 +754,15 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     const verHost = el.querySelector('#ccVersionHost');
     if (verHost) verHost.innerHTML = renderPanelVersionado(cuadro, versiones);
     const verLbl = el.querySelector('#ccVersionLabel');
-    if (verLbl) verLbl.textContent = `v${cuadro?.version || 1} · id ${cuadro?.id || '—'}`;
+    if (verLbl) {
+      if (cuadro?.version != null) {
+        verLbl.textContent = `Versión ${cuadro.version}`;
+        verLbl.classList.remove('d-none');
+      } else {
+        verLbl.textContent = '';
+        verLbl.classList.add('d-none');
+      }
+    }
   }
 
   async function refreshVersiones() {
