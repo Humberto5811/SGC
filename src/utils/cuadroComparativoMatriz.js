@@ -422,37 +422,55 @@ export function renderMatrizBienesHtml(matriz, opts = {}) {
       </tr>`;
   }).join('');
 
-  // Continuación vertical: sin celdas bajo VALOR ADJUDICADO
-  const emptyAdj = '<td class="cc-adj-block cc-adj-empty" colspan="3"></td>';
+  // OD34 — sin cuadrícula vacía bajo VALOR ADJUDICADO: la última fuente absorbe spanAdj.
+  const spanAdj = 3;
+  const celdasFuentesContinuacion = (extraClass = '') => {
+    if (!todas.length) return '';
+    return todas.map((f, idx) => {
+      const span = spanFuente(f) + (idx === todas.length - 1 ? spanAdj : 0);
+      const sf = isSegundaFuente(f) ? 'cc-col-sf' : '';
+      return `<td colspan="${span}" class="small text-center ${sf} ${extraClass}"></td>`;
+    }).join('');
+  };
+  const celdasFuentesInfo = (key) => {
+    if (!todas.length) return '';
+    return todas.map((f, idx) => {
+      const span = spanFuente(f) + (idx === todas.length - 1 ? spanAdj : 0);
+      const sf = isSegundaFuente(f) ? 'cc-col-sf' : '';
+      return `<td colspan="${span}" class="small text-center ${sf}">${cellInfoFuente(f, key)}</td>`;
+    }).join('');
+  };
+  const celdasFuentesAa = (key, type) => {
+    if (!todas.length) return '';
+    return todas.map((f, idx) => {
+      const span = spanFuente(f) + (idx === todas.length - 1 ? spanAdj : 0);
+      const sf = isSegundaFuente(f) ? 'cc-col-sf' : '';
+      return `<td colspan="${span}" class="small text-center ${sf}">${cellAccionFuente(f, key, type, editable)}</td>`;
+    }).join('');
+  };
 
   const sectionInfo = `
     <tr class="cc-section-row">
       <td class="small fw-semibold sticky-col" colspan="${fixedCols}">Información adicional</td>
-      ${todas.map((f) => `<td colspan="${spanFuente(f)}" class="small text-center fw-semibold ${isSegundaFuente(f) ? 'cc-col-sf' : ''}"></td>`).join('')}
-      ${emptyAdj}
+      ${celdasFuentesContinuacion('fw-semibold')}
     </tr>`;
 
   const infoBody = infoRowsForMatriz(matriz).map(([label, key]) => `
     <tr class="cc-info-row">
       <td class="small table-light sticky-col" colspan="${fixedCols}">${esc(label)}</td>
-      ${todas.map((f) => `
-        <td colspan="${spanFuente(f)}" class="small text-center ${isSegundaFuente(f) ? 'cc-col-sf' : ''}">${cellInfoFuente(f, key)}</td>`).join('')}
-      ${emptyAdj}
+      ${celdasFuentesInfo(key)}
     </tr>`).join('');
 
   const sectionAa = `
     <tr class="cc-section-row">
       <td class="small fw-semibold sticky-col" colspan="${fixedCols}">Acciones administrativas</td>
-      ${todas.map((f) => `<td colspan="${spanFuente(f)}" class="small ${isSegundaFuente(f) ? 'cc-col-sf' : ''}"></td>`).join('')}
-      ${emptyAdj}
+      ${celdasFuentesContinuacion()}
     </tr>`;
 
   const aaBody = AA_FIELDS.map(([key, label, type]) => `
     <tr class="cc-aa-row">
       <td class="small table-light sticky-col" colspan="${fixedCols}">${esc(label)}</td>
-      ${todas.map((f) => `
-        <td colspan="${spanFuente(f)}" class="small text-center ${isSegundaFuente(f) ? 'cc-col-sf' : ''}">${cellAccionFuente(f, key, type, editable)}</td>`).join('')}
-      ${emptyAdj}
+      ${celdasFuentesAa(key, type)}
     </tr>`).join('');
 
   return `
@@ -464,7 +482,6 @@ export function renderMatrizBienesHtml(matriz, opts = {}) {
       .cc-matriz-table .cc-col-sf { max-width: 72px; width: 72px; min-width: 56px; }
       .cc-matriz-table th.cc-col-sf { max-width: 288px; }
       .cc-matriz-table .cc-adj-block { background: #fff8e1; min-width: 88px; }
-      .cc-matriz-table .cc-adj-empty { background: #fafafa; border-left: 2px solid #e0e0e0; }
       .cc-matriz-table .cc-section-row td { background: #eef3f7; }
       .cc-sf-toolbar { margin-bottom: 0.5rem; }
     </style>

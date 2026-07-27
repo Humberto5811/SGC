@@ -7,7 +7,6 @@ import { adjuntosService } from '../services/adjuntosService.js';
 import { programacionService } from '../services/programacionService.js';
 import { requerimientosService } from '../services/requerimientosService.js';
 import { trazabilidadService } from '../services/trazabilidadService.js';
-import { downloadAnexo8APdf } from './cuadroComparativoPdf.js';
 import { triggerPdfUpload } from './validacionAnexo07aPdf.js';
 import {
   enRevisionCoordinador,
@@ -74,11 +73,16 @@ function authHeaders() {
   } catch (_) { return {}; }
 }
 
+function assertBlobForObjectUrl(blob, msg = 'Documento no disponible') {
+  if (!(blob instanceof Blob) || blob.size <= 0) throw new Error(msg);
+  return blob;
+}
+
 async function openPdfValidacion(cotId) {
   const url = `${API_BASE}/contrataciones/portal-analista/validaciones/${cotId}/pdf-validacion?inline=1`;
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error('PDF de validación no disponible');
-  const blob = await res.blob();
+  const blob = assertBlobForObjectUrl(await res.blob(), 'PDF de validación vacío');
   const objUrl = URL.createObjectURL(blob);
   window.open(objUrl, '_blank');
   setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
@@ -90,7 +94,7 @@ async function openCotizacionDoc(cotId, ref, { download = false, downloadName = 
   const url = `${API_BASE}/contrataciones/portal-analista/cotizaciones/${cotId}/documento/${encodeURIComponent(ref)}/${mode}`;
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error('Documento no disponible');
-  const blob = await res.blob();
+  const blob = assertBlobForObjectUrl(await res.blob());
   const objUrl = URL.createObjectURL(blob);
   if (download) {
     let nombre = downloadName || 'documento.pdf';
@@ -110,10 +114,11 @@ async function openCotizacionDoc(cotId, ref, { download = false, downloadName = 
 }
 
 async function openUrlAuth(path, inline = true, downloadName = 'documento.pdf') {
+  if (!path) throw new Error('Documento no disponible');
   const url = path.startsWith('http') ? path : `${API_BASE.replace(/\/api$/, '')}${path}`;
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error('Documento no disponible');
-  const blob = await res.blob();
+  const blob = assertBlobForObjectUrl(await res.blob());
   const objUrl = URL.createObjectURL(blob);
   if (inline) window.open(objUrl, '_blank');
   else {
@@ -547,7 +552,13 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
 
     host.querySelector('#ccBtnCoordDescargar')?.addEventListener('click', async () => {
       try {
-        downloadAnexo8APdf(await buildPersistidoParaPdf());
+        // No regenerar: descargar PDF persistido del Analista (firmado o generado).
+        if (cuadro?.tiene_pdf || cuadro?.pdf_nombre || cuadro?.id) {
+          const path = await contratacionesService.getCuadroPdfUrl(cuadro.id, false);
+          await openUrlAuth(path, false, cuadro.pdf_nombre || 'Cuadro_Analista.pdf');
+          return;
+        }
+        throw new Error('El Analista aún no ha generado/adjuntado el PDF del cuadro');
       } catch (err) {
         alert(err.message || 'No se pudo descargar el cuadro');
       }
@@ -675,14 +686,22 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
 
     host.querySelector('#ccBtnDecDescargarFirmado')?.addEventListener('click', async () => {
       try {
+        // Solo descarga del PDF firmado persistido (no regenerar cuadro nuevo).
+        if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
+          await openUrlAuth(
+            await contratacionesService.getCuadroPdfFirmadoUrl(cuadro.id, false),
+            false,
+            cuadro.firmado_nombre || 'Cuadro_firmado_Coord.pdf',
+          );
+          return;
+        }
         await openUrlAuth(
-          await contratacionesService.getCuadroPdfFirmadoUrl(cuadro.id, false),
+          await contratacionesService.getCuadroPdfUrl(cuadro.id, false),
           false,
-          cuadro.firmado_nombre || 'Cuadro_firmado_Coord.pdf',
+          cuadro.pdf_nombre || 'Cuadro_Analista.pdf',
         );
       } catch (err) {
-        try { downloadAnexo8APdf(await buildPersistidoParaPdf()); }
-        catch (e2) { alert(err.message || e2.message || 'No se pudo descargar'); }
+        alert(err.message || 'No se pudo descargar el PDF firmado');
       }
     });
 

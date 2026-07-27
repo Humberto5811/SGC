@@ -190,7 +190,18 @@ export function openBase64Document({ nombre, mime_type, contenido_base64 }) {
   setViewerLoading(true);
 
   const mime = mime_type || 'application/octet-stream';
-  const bytes = atob(contenido_base64 || '');
+  const b64 = String(contenido_base64 || '').trim();
+  if (!b64) {
+    setViewerLoading(false);
+    throw new Error('Documento sin contenido para visualizar');
+  }
+  let bytes;
+  try {
+    bytes = atob(b64.includes(',') ? b64.split(',').pop() : b64);
+  } catch (_) {
+    setViewerLoading(false);
+    throw new Error('Contenido del documento inválido');
+  }
   const arr = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i += 1) arr[i] = bytes.charCodeAt(i);
 

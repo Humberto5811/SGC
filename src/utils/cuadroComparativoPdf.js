@@ -76,6 +76,42 @@ function textoCabeceraCotizacionPdf(f) {
   ].join('\n');
 }
 
+function parseMontoAdjudicado(raw) {
+  const s = String(raw ?? '').replace(/[^\d,.-]/g, '').replace(/,/g, '');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function resolveMonedaReport(report = {}) {
+  const m = String(
+    report.resultado?.moneda
+    || report.cabecera?.moneda
+    || report.meta?.moneda
+    || 'PEN',
+  ).toUpperCase();
+  if (m === 'USD' || m === 'US$') return { code: 'USD', symbol: 'US$' };
+  return { code: 'PEN', symbol: 'S/' };
+}
+
+/**
+ * Suma valores adjudicados de ítems (no filas informativas).
+ * @returns {{ total: number, label: string, moneda: string, symbol: string }}
+ */
+export function calcTotalGeneralAdjudicado(report = {}) {
+  const { symbol, code } = resolveMonedaReport(report);
+  let total = Number(report.resultado?.valor_adjudicado_num);
+  if (!Number.isFinite(total) || total < 0) {
+    total = (report.filas || []).reduce((acc, f) => (
+      acc + parseMontoAdjudicado(f.adjudicado?.valor_total || f.valor_adjudicado_item)
+    ), 0);
+  }
+  const label = `${symbol} ${total.toLocaleString('es-PE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+  return { total, label, moneda: code, symbol };
+}
+
 /**
  * Construye cabeceras + cuerpo de la matriz institucional (única tabla).
  */
@@ -148,67 +184,93 @@ export function buildMatrizInstitucionalTable(report) {
     return [...base, ...cot, ...sf, ...adj];
   });
 
-  const emptyAdj = Array(spanAdj).fill('');
-  const emptyCot = primera.map(() => ({ content: '', colSpan: spanCot, styles: { fillColor: COLOR_SECTION } }));
-  const emptySf = segunda.map(() => ({ content: '', colSpan: spanSf, styles: { fillColor: COLOR_SECTION } }));
-
+  const totalCols = nBase + primera.length * spanCot + segunda.length * spanSf + spanAdj;
+  // Sin celdas vacías bajo VALOR ADJUDICADO: secciones ocupan el ancho completo.
   const sectionRow = (title) => [
     {
       content: title,
-      colSpan: nBase,
+      colSpan: totalCols,
       styles: { fillColor: COLOR_SECTION, fontStyle: 'bold', fontSize: 6.5, textColor: COLOR_HEAD },
     },
-    ...emptyCot,
-    ...emptySf,
-    ...emptyAdj.map((c) => ({ content: c, styles: { fillColor: [250, 250, 250] } })),
   ];
 
   const infoBody = (report.info_adicional || []).map((row) => {
-    const cells = [
+    const cotCells = (row.cotizaciones || []).map((v) => ({
+      content: String(v ?? '—'),
+      colSpan: spanCot,
+      styles: { halign: 'center', fontSize: 5.5 },
+    }));
+    const sfCells = (row.segundas || []).map((v, idx, arr) => ({
+      content: String(v ?? 'NO APLICA'),
+      colSpan: idx === arr.length - 1 ? spanSf + spanAdj : spanSf,
+      styles: { halign: 'center', fontSize: 5.5, fillColor: [255, 252, 240] },
+    }));
+    if (!sfCells.length && spanAdj) {
+      cotCells[cotCells.length - 1] = {
+        ...(cotCells[cotCells.length - 1] || { content: '—', styles: { halign: 'center', fontSize: 5.5 } }),
+        colSpan: ((cotCells[cotCells.length - 1]?.colSpan) || spanCot) + spanAdj,
+      };
+    }
+    return [
       {
         content: row.label,
         colSpan: nBase,
         styles: { fillColor: [248, 249, 250], fontSize: 6 },
       },
-      ...(row.cotizaciones || []).map((v) => ({
-        content: String(v ?? '—'),
-        colSpan: spanCot,
-        styles: { halign: 'center', fontSize: 5.5 },
-      })),
-      ...(row.segundas || []).map((v) => ({
-        content: String(v ?? 'NO APLICA'),
-        colSpan: spanSf,
-        styles: { halign: 'center', fontSize: 5.5, fillColor: [255, 252, 240] },
-      })),
-      ...emptyAdj.map((c) => ({ content: c, styles: { fillColor: [250, 250, 250] } })),
+      ...cotCells,
+      ...sfCells,
     ];
-    return cells;
   });
 
   const aaBody = (report.acciones_administrativas || []).map((row) => {
-    const cells = [
+    const cotCells = (row.cotizaciones || []).map((v) => ({
+      content: String(v ?? '—'),
+      colSpan: spanCot,
+      styles: { halign: 'center', fontSize: 5.5 },
+    }));
+    const sfCells = (row.segundas || []).map((v, idx, arr) => ({
+      content: String(v ?? '—'),
+      colSpan: idx === arr.length - 1 ? spanSf + spanAdj : spanSf,
+      styles: { halign: 'center', fontSize: 5.5, fillColor: [255, 252, 240] },
+    }));
+    if (!sfCells.length && spanAdj && cotCells.length) {
+      cotCells[cotCells.length - 1] = {
+        ...cotCells[cotCells.length - 1],
+        colSpan: (cotCells[cotCells.length - 1].colSpan || spanCot) + spanAdj,
+      };
+    }
+    return [
       {
         content: row.label,
         colSpan: nBase,
         styles: { fillColor: [248, 249, 250], fontSize: 6 },
       },
-      ...(row.cotizaciones || []).map((v) => ({
-        content: String(v ?? '—'),
-        colSpan: spanCot,
-        styles: { halign: 'center', fontSize: 5.5 },
-      })),
-      ...(row.segundas || []).map((v) => ({
-        content: String(v ?? '—'),
-        colSpan: spanSf,
-        styles: { halign: 'center', fontSize: 5.5, fillColor: [255, 252, 240] },
-      })),
-      ...emptyAdj.map((c) => ({ content: c, styles: { fillColor: [250, 250, 250] } })),
+      ...cotCells,
+      ...sfCells,
     ];
-    return cells;
   });
+
+  // OD34 — TOTAL GENERAL (solo ítems adjudicados; sin filas informativas).
+  const { total: totalGeneral, label: totalLabel } = calcTotalGeneralAdjudicado(report);
+  const preAdjCols = nBase + primera.length * spanCot + segunda.length * spanSf;
+  const totalRow = (report.filas || []).length
+    ? [[
+      {
+        content: 'TOTAL GENERAL',
+        colSpan: preAdjCols + 2,
+        styles: { fontStyle: 'bold', fontSize: 7, fillColor: COLOR_ADJ, textColor: COLOR_HEAD, halign: 'right' },
+      },
+      {
+        content: totalLabel,
+        colSpan: 1,
+        styles: { fontStyle: 'bold', fontSize: 7, fillColor: COLOR_ADJ, textColor: COLOR_HEAD, halign: 'right' },
+      },
+    ]]
+    : [];
 
   const body = [
     ...priceBody,
+    ...totalRow,
     sectionRow('Información adicional'),
     ...infoBody,
     sectionRow('Acciones administrativas'),
@@ -218,7 +280,7 @@ export function buildMatrizInstitucionalTable(report) {
   return {
     head: [headTop, headCols],
     body,
-    colCount: nBase + primera.length * spanCot + segunda.length * spanSf + spanAdj,
+    colCount: totalCols,
   };
 }
 
@@ -236,13 +298,12 @@ function drawResultadoYFirmas(doc, report, startY, pageW, pageH, margin) {
   doc.setFont(undefined, 'normal');
   doc.setFontSize(8);
   doc.setTextColor(40);
-  const r = report.resultado;
-  // Solo hasta Sustento (sin segunda fuente / N.° orden / modalidad / resumen)
+  const r = report.resultado || {};
   const resLines = [
-    `Proveedor ganador: ${r.proveedor_adjudicado} — RUC ${r.ruc_adjudicado}`,
-    `Valor adjudicado total: S/ ${r.valor_adjudicado}`,
-    `Metodología / criterio: ${r.metodologia || r.criterio}`,
-    `Sustento: ${r.sustento}`,
+    `Proveedor ganador: ${r.proveedor_adjudicado || '—'} — RUC ${r.ruc_adjudicado || '—'}`,
+    `Valor adjudicado total: ${String(r.valor_adjudicado || '').startsWith('S/') ? r.valor_adjudicado : `S/ ${r.valor_adjudicado || '—'}`}`,
+    `Metodología / criterio: ${r.metodologia || r.criterio || '—'}`,
+    `Sustento: ${r.sustento || '—'}`,
   ];
   resLines.forEach((ln) => {
     const w = doc.splitTextToSize(ln, pageW - margin * 2);
@@ -250,7 +311,39 @@ function drawResultadoYFirmas(doc, report, startY, pageW, pageH, margin) {
     y += w.length * 10 + 2;
   });
 
-  y += 20;
+  const resumen = Array.isArray(r.resumen_centro_clasificador) ? r.resumen_centro_clasificador : [];
+  if (resumen.length) {
+    y += 8;
+    doc.setFont(undefined, 'bold');
+    doc.setTextColor(...COLOR_HEAD);
+    doc.text('Resumen por Centro / Clasificador', margin, y);
+    y += 11;
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(40);
+    doc.text('Centro', margin, y);
+    doc.text('Clasificador de gasto', margin + 160, y);
+    doc.text('Valor adjudicado', pageW - margin - 90, y, { align: 'left' });
+    y += 4;
+    doc.setDrawColor(180);
+    doc.line(margin, y, pageW - margin, y);
+    y += 10;
+    resumen.forEach((row) => {
+      if (y > pageH - 100) {
+        doc.addPage();
+        y = 48;
+      }
+      const centro = String(row.centro || '—');
+      const clasif = String(row.clasificador || '—');
+      const valor = String(row.valor || '—');
+      doc.text(doc.splitTextToSize(centro, 150), margin, y);
+      doc.text(doc.splitTextToSize(clasif, 200), margin + 160, y);
+      doc.text(valor, pageW - margin, y, { align: 'right' });
+      y += 12;
+    });
+  }
+
+  y += 16;
   if (y > pageH - 90) {
     doc.addPage();
     y = 48;
@@ -348,16 +441,55 @@ export function generateAnexo8APdf(persistido = {}) {
 
 export function previewAnexo8APdf(persistido) {
   const { blob } = generateAnexo8APdf(persistido);
+  if (!(blob instanceof Blob) || !blob.size) {
+    throw new Error('No se pudo generar el PDF (contenido vacío)');
+  }
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
   setTimeout(() => URL.revokeObjectURL(url), 120000);
   return url;
 }
 
+/**
+ * Generador: crea PDF nuevo desde matriz (solo pre-firma / versión no firmada).
+ * No usar para documentos firmados persistidos.
+ */
 export function downloadAnexo8APdf(persistido) {
   const { doc, filename } = generateAnexo8APdf(persistido);
   doc.save(filename);
   return filename;
+}
+
+/**
+ * OD34 — descarga blob de PDF firmado persistido (nunca regenera).
+ */
+export function assertBlobForObjectUrl(blob, label = 'Documento') {
+  if (!(blob instanceof Blob) || !blob.size) {
+    throw new Error(`${label} sin contenido o no disponible`);
+  }
+  return blob.type === 'application/pdf' || !blob.type
+    ? (blob.type === 'application/pdf' ? blob : new Blob([blob], { type: 'application/pdf' }))
+    : blob;
+}
+
+export function downloadBlobPersistido(blob, filename, { inline = false } = {}) {
+  const safe = assertBlobForObjectUrl(blob, filename || 'PDF firmado');
+  const url = URL.createObjectURL(safe);
+  try {
+    if (inline) {
+      window.open(url, '_blank', 'noopener');
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'documento_firmado.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  }
+  return url;
 }
 
 export { validateCuadroParaAnexo8A, buildCuadroComparativoReportData, ANEXO_8A, ANEXO_8B };

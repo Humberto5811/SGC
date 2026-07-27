@@ -366,12 +366,16 @@ export async function registrarEventoCuadroCcp(solicitudId, {
   responsable = RESPONSABLES_REVISION.ANALISTA,
   etapaDestino = null,
   estadoNegocio = null,
+  revisionEstado = null,
 } = {}) {
   if (!solicitudId || !evento) return { actualizados: 0 };
   const etapa = ETAPAS.CUADRO_COMPARATIVO;
   const dest = etapaDestino ? String(etapaDestino).toUpperCase() : etapa;
   const estado = estadoNegocio
     || (dest === ETAPAS.CCP ? 'En CCP' : 'En Cuadro Comparativo');
+  // OD32 — al derivar a CCP el snapshot debe reflejar DERIVADO_CCP (no obs. histórica)
+  const revEstado = revisionEstado
+    || (dest === ETAPAS.CCP ? ESTADOS_REVISION_CUADRO.DERIVADO_CCP : null);
   const ids = await requerimientoIdsDeSolicitud(solicitudId);
   let actualizados = 0;
   for (const requerimientoId of ids) {
@@ -385,9 +389,36 @@ export async function registrarEventoCuadroCcp(solicitudId, {
       etapaEjecutor: etapa,
       etapaDestino: dest,
     });
+    const { rows } = await query(
+      'SELECT payload FROM requerimientos WHERE id = $1',
+      [requerimientoId],
+    );
+    if (rows.length) {
+      const payload = parsePayload(rows[0].payload);
+      const meta = getSubModuloMeta(dest);
+      payload.workflowSnapshot = {
+        ...(payload.workflowSnapshot || {}),
+        etapaActual: dest,
+        subModuloActual: meta.subModulo || (dest === ETAPAS.CCP ? 'CCP' : 'Cuadro Comparativo'),
+        moduloActual: meta.modulo || 'Contrataciones',
+        responsableActual: responsable || RESPONSABLES_REVISION.ANALISTA,
+        fechaEstadoActual: new Date().toISOString(),
+        ...(revEstado ? { revisionEstado: revEstado } : {}),
+      };
+      await query(
+        'UPDATE requerimientos SET payload = $2::jsonb, estado_actual = $3, sub_modulo_actual = $4, responsable_actual = $5 WHERE id = $1',
+        [
+          requerimientoId,
+          JSON.stringify(payload),
+          dest,
+          meta.subModulo || (dest === ETAPAS.CCP ? 'CCP' : 'Cuadro Comparativo'),
+          responsable || RESPONSABLES_REVISION.ANALISTA,
+        ],
+      );
+    }
     actualizados += 1;
   }
-  return { actualizados, evento, etapaDestino: dest };
+  return { actualizados, evento, etapaDestino: dest, revisionEstado: revEstado };
 }
 
 /** Verifica que la salida Workflow oficial CUADRO → CCP siga vigente. */

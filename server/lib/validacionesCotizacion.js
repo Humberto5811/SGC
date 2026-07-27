@@ -129,16 +129,36 @@ function matchResponsableParaEdicion(cot, usuario, userId, opts = {}) {
   return canUserValidateExpediente(cot, usuario, userId, opts).puedeValidar;
 }
 
-function mapCotizacionRow(r) {
+function mapCotizacionRow(r, ccpFlags = null) {
   const eco = parseJson(r.propuesta_economica, {});
   const inf = parseInforme(r);
   const valEst = r.validacion_estado || '';
+  const solicitudEstado = String(r.solicitud_estado || '').toUpperCase();
+  const estadoCuadro = String(r.estado_cuadro || '').toUpperCase();
+  const derivadoCcp = solicitudEstado === 'EN_CCP'
+    || estadoCuadro === 'DERIVADO_CCP'
+    || estadoCuadro === 'DERIVADO_A_CCP';
+  const codigoCcp = String(ccpFlags?.codigo_ccp || r.codigo_ccp || '').trim();
+  const ccpActivo = !!(ccpFlags?.ccp_activo || codigoCcp);
+  const enviadaOppm = !!(ccpFlags?.enviada_oppm || r.enviada_oppm);
+  let estadoBandeja = derivadoCcp ? 'Derivado a CCP' : estadoDisplayBandejaValidacion(valEst);
+  if (ccpActivo) estadoBandeja = 'CCP registrado';
+  else if (enviadaOppm) estadoBandeja = 'Solicitud enviada a OPPM';
   return {
     id: r.id,
     solicitud_id: r.solicitud_id,
     proveedor_id: r.proveedor_id,
     estado: r.estado,
     validacion_estado: valEst,
+    solicitud_estado: r.solicitud_estado || '',
+    estado_cuadro: r.estado_cuadro || '',
+    derivado_ccp: derivadoCcp || ccpActivo || enviadaOppm,
+    codigo_ccp: codigoCcp,
+    ccp_activo: ccpActivo,
+    ccp_registrado: ccpActivo,
+    enviada_oppm: enviadaOppm,
+    estado_codigo: ccpActivo ? 'CCP_REGISTRADO' : (enviadaOppm ? 'ENVIADA_OPPM' : (derivadoCcp ? 'DERIVADO_CCP' : '')),
+    etiqueta_estado: estadoBandeja,
     estado_display: estadoDisplayValidacion(valEst, r.estado),
     validacion_responsable: r.validacion_responsable || '',
     fecha_presentacion: r.fecha_presentacion,
@@ -157,8 +177,9 @@ function mapCotizacionRow(r) {
     derivacion: inf.derivacion || null,
     responsable_id: inf.derivacion?.responsable_id || null,
     responsable_nombre: r.validacion_responsable || inf.derivacion?.responsable_nombre || '',
-    estado_bandeja: estadoDisplayBandejaValidacion(valEst),
-    estado_bandeja_class: badgeBandejaClass(valEst),
+    // OD33/OD35 — CCP registrado > Derivado a CCP > fallback local
+    estado_bandeja: estadoBandeja,
+    estado_bandeja_class: derivadoCcp ? 'ccp-morado' : badgeBandejaClass(valEst),
   };
 }
 
@@ -178,7 +199,7 @@ export const DESTINOS_SALIDA_VALIDACION = Object.freeze({
   APTO: Object.freeze({
     code: 'CUADRO_COMPARATIVO',
     label: 'Cuadro Comparativo',
-    estado_bandeja: 'Derivado a Cuadro Comparativo',
+    estado_bandeja: 'C.C. en elaboración',
     bloqueado: true,
   }),
   NO_APTO: Object.freeze({
@@ -501,6 +522,13 @@ export function getDestinosSalidaPorResultado(resultado, cumple) {
 export async function listarValidacionesPendientesDerivacion() {
   const { rows } = await query(`
     SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      sc.estado AS solicitud_estado,
+      (
+        SELECT cc.estado FROM cuadros_comparativos cc
+        WHERE cc.solicitud_id = sc.id AND UPPER(COALESCE(cc.estado, '')) <> 'ANULADO'
+        ORDER BY cc.version DESC NULLS LAST, cc.id DESC
+        LIMIT 1
+      ) AS estado_cuadro,
       COALESCE((
         SELECT string_agg(DISTINCT r.codigo, ', ' ORDER BY r.codigo)
         FROM solicitud_requerimientos sr
@@ -518,7 +546,12 @@ export async function listarValidacionesPendientesDerivacion() {
       AND COALESCE(cot.validacion_estado, '') NOT IN ('APTO', 'NO_APTO')
     ORDER BY cot.fecha_presentacion DESC NULLS LAST, cot.updated_at DESC
   `);
-  return rows.map(mapCotizacionRow);
+  let ccpBySid = new Map();
+  try {
+    const { loadCcpFlagsBySolicitudIds } = await import('./ccpEstadoFlags.js');
+    ccpBySid = await loadCcpFlagsBySolicitudIds(rows.map((r) => r.solicitud_id));
+  } catch (_) { /* noop */ }
+  return rows.map((r) => mapCotizacionRow(r, ccpBySid.get(Number(r.solicitud_id)) || null));
 }
 
 export async function listarValidacionesAsignadas(usuario, userId) {
@@ -621,6 +654,13 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
       to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.tipo AS solicitud_tipo,
+      sc.estado AS solicitud_estado,
+      (
+        SELECT cc.estado FROM cuadros_comparativos cc
+        WHERE cc.solicitud_id = sc.id AND UPPER(COALESCE(cc.estado, '')) <> 'ANULADO'
+        ORDER BY cc.version DESC NULLS LAST, cc.id DESC
+        LIMIT 1
+      ) AS estado_cuadro,
       COALESCE((
         SELECT string_agg(DISTINCT r.codigo, ', ' ORDER BY r.codigo)
         FROM solicitud_requerimientos sr
@@ -675,12 +715,18 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
     if (ok) solsVisibles.add(r.solicitud_id);
   }
   const filtered = rows.filter((r) => solsVisibles.has(r.solicitud_id));
+  let ccpBySid = new Map();
+  try {
+    const { loadCcpFlagsBySolicitudIds } = await import('./ccpEstadoFlags.js');
+    ccpBySid = await loadCcpFlagsBySolicitudIds([...solsVisibles]);
+  } catch (_) { /* noop */ }
   const mapped = filtered.map((r) => {
     const perm = canUserValidateExpediente(r, usuario, userId, authOpts);
     const enFlujo = ['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO']
       .includes(String(r.validacion_estado || '').toUpperCase());
+    const ccpFlags = ccpBySid.get(Number(r.solicitud_id)) || null;
     return {
-      ...mapCotizacionRow(r),
+      ...mapCotizacionRow(r, ccpFlags),
       tipo_contratacion: normalizeTipoContratacion(r.solicitud_tipo),
       area_usuaria: r.area_usuaria || '',
       descripcion: r.denominacion || r.objeto || '',
@@ -696,7 +742,14 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
 async function loadCotizacionFull(cotizacionId) {
   const { rows } = await query(`
     SELECT cot.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
-      sc.detalle_items, sc.tipo AS solicitud_tipo, sc.id AS solicitud_id_ref
+      sc.detalle_items, sc.tipo AS solicitud_tipo, sc.id AS solicitud_id_ref,
+      sc.estado AS solicitud_estado,
+      (
+        SELECT cc.estado FROM cuadros_comparativos cc
+        WHERE cc.solicitud_id = sc.id AND UPPER(COALESCE(cc.estado, '')) <> 'ANULADO'
+        ORDER BY cc.version DESC NULLS LAST, cc.id DESC
+        LIMIT 1
+      ) AS estado_cuadro
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id

@@ -4,6 +4,7 @@ import { query } from '../db.js';
 import {
   TRAZA_EXTRA_SELECT,
   enrichRequerimientoRow,
+  enrichRequerimientoRowsWithCcp,
   registrarMovimiento,
   registrarSubsanacionDerivacion,
   obtenerTrazabilidad,
@@ -63,7 +64,7 @@ router.get('/listar-con-detalles', async (req, res, next) => {
     `;
 
     const result = await query(dataSql, params);
-    const rows = (result.rows || []).map(enrichRequerimientoRow);
+    const rows = await enrichRequerimientoRowsWithCcp(result.rows || []);
 
     res.json({
       data: rows,

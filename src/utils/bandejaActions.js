@@ -265,3 +265,28 @@ export function paquetesReqMenuItems() {
     { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
   ];
 }
+
+/**
+ * OD35 — menú Acciones bandeja CCP.
+ * @param {object} row
+ * @param {{ canManage?: boolean }} [opts]
+ */
+export function ccpMenuItems(row = {}, opts = {}) {
+  const canManage = opts.canManage !== false;
+  const tieneCodigo = !!(row.tiene_codigo || row.ccp_activo || row.codigo_ccp);
+  const items = [];
+  if (canManage && !tieneCodigo) {
+    items.push({ act: 'registrarCcp', label: 'Registrar CCP', icon: 'bi-plus-circle' });
+  }
+  if (canManage && tieneCodigo) {
+    items.push(
+      { act: 'editarCcp', label: 'Editar CCP', icon: 'bi-pencil' },
+      { act: 'eliminarCcp', label: 'Eliminar CCP', icon: 'bi-trash' },
+    );
+  }
+  items.push({ act: 'ver', label: 'Ver', icon: 'bi-eye' });
+  if (row.consolidacion_id) {
+    items.push({ act: 'descargarWord', label: 'Descargar Word', icon: 'bi-file-earmark-word' });
+  }
+  return items;
+}

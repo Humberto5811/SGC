@@ -120,7 +120,7 @@ assert(/Number\(r\.proveedores_aptos\) >= 1/.test(libSrc) || /proveedores_aptos\
   '5. backend descarta sin APTO');
 
 // 6) Una fila por solicitud (vista)
-assert(/solicitud_codigo/.test(viewSrc) && /labelBandejaCuadroComparativo/.test(viewSrc), '6. vista usa campos de expediente');
+assert(/solicitud_codigo/.test(viewSrc) && /labelEstadoExpedienteUnificado|labelCuadroEstado/.test(viewSrc), '6. vista usa campos de expediente');
 assert(/Una fila por Solicitud/.test(viewSrc), '6. bandeja documenta una fila por SC');
 assert(/Una fila por Solicitud/.test(viewSrc), '6. copy: una fila por SC');
 
@@ -153,12 +153,14 @@ assert(filterCuadroExpedientes([scMulti], { tipo: 'bien' }).length === 1, '9. fi
 assert(filterCuadroExpedientes([scMulti], { estado: 'PENDIENTE_ELABORAR' }).length === 1, '9. filtro estado');
 
 // 10) Estados documentales
-assert(/trámite/i.test(labelCuadroEstado('PENDIENTE_ELABORAR')), '10. label etapa trámite');
+assert(/elaboración/i.test(labelCuadroEstado('PENDIENTE_ELABORAR')), '10. label etapa elaboración');
 assert(normalizeCuadroEstado('') === ESTADOS_CUADRO.PENDIENTE_ELABORAR, '10. default pendiente');
 assert(normClient('DERIVADO_A_CCP') === ESTADOS_CUADRO.DERIVADO_CCP, '10. alias derivado CCP');
-assert(/Cuadro Comparativo/i.test(ESTADOS_CUADRO_LABEL.FIRMADO), '10. label Firmado = etapa CC (no badge interno)');
+assert(/C\.C\. aprobado|aprobado/i.test(ESTADOS_CUADRO_LABEL.FIRMADO), '10. label Firmado = C.C. aprobado');
 assert(/PENDIENTE_ELABORAR/.test(libSrc) && !/estado del Workflow como único/.test(libSrc), '10. estado propio del cuadro');
-assert(labelBandejaCuadroComparativo() === 'Cuadro Comparativo', '10. bandeja homogénea Cuadro Comparativo');
+assert(labelBandejaCuadroComparativo('PENDIENTE_COORDINADOR') === 'C.C. en revisión Coordinador CM', '10. bandeja dinámica Coordinador');
+assert(labelBandejaCuadroComparativo('OBSERVADO_DEC') === 'C.C. observado por DEC', '10. bandeja dinámica DEC observado');
+assert(labelBandejaCuadroComparativo('DERIVADO_CCP') === 'Derivado a CCP', '10. bandeja Derivado a CCP');
 
 // 11) Ruta / permisos intactos
 assert(/'dec\/cuadro'/.test(routerSrc), '11. ruta dec/cuadro en router');

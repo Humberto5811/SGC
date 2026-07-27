@@ -4,6 +4,7 @@ import {
   registrarMovimiento,
   ETAPAS,
   enrichRequerimientoRow,
+  enrichRequerimientoRowsWithCcp,
   TRAZA_EXTRA_SELECT,
   buildListFilters,
 } from './trazabilidad.js';
@@ -218,7 +219,7 @@ export async function listarBandejaActos(page, pageSize, queryParams = {}, optio
   `, params);
 
   return {
-    data: rows.map(enrichRequerimientoRow),
+    data: await enrichRequerimientoRowsWithCcp(rows),
     total,
     page,
     pageSize,

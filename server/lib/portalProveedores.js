@@ -480,6 +480,13 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      sc.estado AS solicitud_estado,
+      (
+        SELECT cc.estado FROM cuadros_comparativos cc
+        WHERE cc.solicitud_id = sc.id AND UPPER(COALESCE(cc.estado, '')) <> 'ANULADO'
+        ORDER BY cc.version DESC NULLS LAST, cc.id DESC
+        LIMIT 1
+      ) AS estado_cuadro,
       COALESCE((
         SELECT string_agg(DISTINCT r.codigo, ', ' ORDER BY r.codigo)
         FROM solicitud_requerimientos sr
@@ -533,12 +540,14 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
   `, params);
 
   const { resolveCentrosTextoSolicitud } = await import('./validacionesCotizacion.js');
+  const { loadCcpFlagsBySolicitudIds, applyCcpFlagsToRow } = await import('./ccpEstadoFlags.js');
   const sids = [...new Set(rows.map((r) => r.solicitud_id).filter(Boolean))];
   const centroBySid = new Map();
   await Promise.all(sids.map(async (sid) => {
     try { centroBySid.set(sid, await resolveCentrosTextoSolicitud(sid)); }
     catch (_) { centroBySid.set(sid, ''); }
   }));
+  const ccpBySid = await loadCcpFlagsBySolicitudIds(sids);
 
   return rows.map((r) => {
     const eco = typeof r.propuesta_economica === 'object'
@@ -546,13 +555,21 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       : (() => { try { return JSON.parse(r.propuesta_economica || '{}'); } catch (_) { return {}; } })();
     const valEst = r.validacion_estado || '';
     const centro = centroBySid.get(r.solicitud_id) || r.centros_texto || '';
-    return {
+    const solicitudEstado = String(r.solicitud_estado || '').toUpperCase();
+    const estadoCuadro = String(r.estado_cuadro || '').toUpperCase();
+    const derivadoCcp = solicitudEstado === 'EN_CCP'
+      || estadoCuadro === 'DERIVADO_CCP'
+      || estadoCuadro === 'DERIVADO_A_CCP';
+    const ccpInfo = ccpBySid.get(Number(r.solicitud_id)) || {};
+    const enriched = applyCcpFlagsToRow({
       id: r.id,
       solicitud_id: r.solicitud_id,
       proveedor_id: r.proveedor_id,
       estado: r.estado,
       validacion_estado: valEst,
-      estado_recepcion: estadoDisplayRecepcion(valEst),
+      solicitud_estado: r.solicitud_estado || '',
+      estado_cuadro: r.estado_cuadro || '',
+      derivado_ccp: derivadoCcp,
       validacion_responsable: r.validacion_responsable || '',
       fecha_presentacion: r.fecha_presentacion,
       created_at: r.created_at,
@@ -567,6 +584,14 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       requerimientos_codigos: r.requerimientos_texto || '',
       centros_texto: centro,
       centro,
+    }, ccpInfo.ccp_activo ? { codigo_ccp: ccpInfo.codigo_ccp } : null, {
+      ccp_activo: !!ccpInfo.ccp_activo,
+      enviada_oppm: !!ccpInfo.enviada_oppm,
+    });
+    return {
+      ...enriched,
+      estado_recepcion: enriched.etiqueta_estado
+        || (derivadoCcp ? 'Derivado a CCP' : estadoDisplayRecepcion(valEst)),
     };
   });
 }

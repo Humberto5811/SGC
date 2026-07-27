@@ -1,5 +1,5 @@
 /**
- * ÚNICA autoridad del estado visual — RC4.1.
+ * ÚNICA autoridad del estado visual — RC4.1 / OD32.
  * Ningún otro archivo debe interpretar estado/estado_actual/sub_modulo/workflowSnapshot para UI.
  */
 import {
@@ -9,6 +9,10 @@ import {
   bloqueaSubsanacionPorHijos,
   getListaObservaciones,
 } from '../../shared/observacionesMotor.js';
+import {
+  ESTADOS_CUADRO_VIGENTE_LABEL,
+  resolveEstadoActualExpediente,
+} from '../../shared/estadoExpedienteVigente.js';
 import { enrichReqRow, ETAPA_LABELS } from './trazabilidad.js';
 import {
   getSubmoduloByLabel,
@@ -26,6 +30,8 @@ const ESTADO_COLORES = Object.freeze({
   VALIDACION_USUARIO: { bg: '#ffc107', fg: '#212529' },
   CUADRO_COMPARATIVO: { bg: '#495057', fg: '#fff' },
   CCP: { bg: '#6f42c1', fg: '#fff' },
+  CCP_REGISTRADO: { bg: '#198754', fg: '#fff' },
+  ENVIADA_OPPM: { bg: '#0d6efd', fg: '#fff' },
   EJECUCION: { bg: '#495057', fg: '#fff' },
   FINALIZADO: { bg: '#198754', fg: '#fff' },
 });
@@ -45,17 +51,10 @@ const WORKFLOW_BANDEJA_LABELS = Object.freeze({
   FINALIZADO: 'Finalizado',
 });
 
-/** RC8.4A — Estados documentales de revisión del Cuadro Comparativo */
+/** RC8.4A / OD32 — etiquetas documentales (alineadas al estado vigente). */
 export const CUADRO_REVISION_ESTADO_LABELS = Object.freeze({
-  PENDIENTE_COORDINADOR: 'C.C. en revisión Coordinador CM',
-  OBSERVADO_COORDINADOR: 'Observado por Coordinador CM',
-  FIRMADO_COORDINADOR: 'Firmado por Coordinador CM',
-  PENDIENTE_DEC: 'C.C. en revisión DEC',
-  OBSERVADO_DEC: 'Observado por DEC',
-  APROBADO_DEC: 'Aprobado por DEC',
-  PENDIENTE_CCP: 'Listo para CCP',
-  DERIVADO_CCP: 'Derivado a CCP',
-  CUADRO_BORRADOR: 'Cuadro borrador',
+  ...ESTADOS_CUADRO_VIGENTE_LABEL,
+  CUADRO_BORRADOR: 'C.C. en elaboración',
 });
 
 function extractWorkflowSnapshot(row) {
@@ -122,51 +121,75 @@ export function buildEstadoVisual(row, opts = {}) {
   const workflowActual = resolveWorkflowEtapa(enriched);
   const pendienteReceptor = resolvePendienteReceptor(enriched);
   const snap = extractWorkflowSnapshot(enriched);
-  const revisionEstado = String(
-    opts.revisionEstado
-    || snap?.revisionEstado
-    || enriched.estado_cuadro
-    || row?.estado_cuadro
-    || '',
-  ).toUpperCase();
-  const labelRevision = CUADRO_REVISION_ESTADO_LABELS[revisionEstado] || '';
+
+  // OD32/OD35 — estado vigente unificado (CCP_REGISTRADO > DERIVADO_CCP > obs. históricas)
+  const vigente = resolveEstadoActualExpediente(enriched, {
+    revisionEstado: opts.revisionEstado || snap?.revisionEstado || '',
+    estadoCuadro: opts.estadoCuadro || enriched.estado_cuadro || row?.estado_cuadro || '',
+    workflowEtapa: workflowActual,
+    solicitudEstado: enriched.solicitud_estado || row?.solicitud_estado || '',
+    codigoCcp: enriched.codigo_ccp || row?.codigo_ccp || '',
+    ccpActivo: enriched.ccp_activo || row?.ccp_activo || enriched.ccp_registrado || false,
+  });
 
   const moduloReceptorRaw = pendienteReceptor
     ? String(pendienteReceptor.destino_submodulo || pendienteReceptor.moduloReceptor || pendienteReceptor.moduloDestino || '').trim()
     : '';
 
-  const etapaMostrada = pendienteReceptor
-    ? (etapaFromSubmodulo(moduloReceptorRaw) || workflowActual)
-    : workflowActual;
+  // Tras DERIVADO_CCP / CCP_REGISTRADO no se usa el módulo receptor de obs. históricas
+  const etapaMostrada = vigente.ccpRegistrado
+    ? 'CCP_REGISTRADO'
+    : (vigente.derivadoCcp
+      ? 'CCP'
+      : (pendienteReceptor
+        ? (etapaFromSubmodulo(moduloReceptorRaw) || workflowActual)
+        : workflowActual));
 
-  // RC8.4A: si hay estado documental de revisión del cuadro, prevalece en el badge
-  const textoPrincipal = labelRevision || labelFromEtapa(etapaMostrada);
+  const labelRevision = CUADRO_REVISION_ESTADO_LABELS[vigente.code] || vigente.label || '';
+  const textoPrincipal = vigente.ccpRegistrado
+    ? 'CCP registrado'
+    : (vigente.code === 'ENVIADA_OPPM'
+      ? 'Solicitud enviada a OPPM'
+      : (vigente.derivadoCcp
+        ? 'Derivado a CCP'
+        : (labelRevision || labelFromEtapa(etapaMostrada))));
 
-  const moduloResponsable = pendienteReceptor
-    ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada) || textoPrincipal)
-    : (fullModuloLabelFromEtapa(workflowActual) || textoPrincipal);
+  const moduloResponsable = vigente.derivadoCcp
+    ? 'CCP'
+    : (pendienteReceptor
+      ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada) || textoPrincipal)
+      : (fullModuloLabelFromEtapa(workflowActual) || textoPrincipal));
 
-  const moduloBadgeKey = pendienteReceptor
-    ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada))
-    : fullModuloLabelFromEtapa(workflowActual);
+  const moduloBadgeKey = vigente.derivadoCcp
+    ? 'CCP'
+    : (pendienteReceptor
+      ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada))
+      : fullModuloLabelFromEtapa(workflowActual));
 
   const motorBadge = obtenerEstadoObservaciones(enriched, moduloBadgeKey || null);
   const motorActions = obtenerEstadoObservaciones(enriched, opts.moduloContext || null);
-  const badgeObservado = pendienteReceptor ? (motorBadge.requiereBadge === true) : false;
+  // Observación histórica NO marca badge principal si el expediente ya avanzó a CCP
+  const badgeObservado = (!vigente.derivadoCcp && pendienteReceptor)
+    ? (motorBadge.requiereBadge === true)
+    : false;
 
-  const color = ESTADO_COLORES[String(etapaMostrada).toUpperCase()] || ESTADO_COLORES.REGISTRADO;
+  const color = ESTADO_COLORES[String(etapaMostrada).toUpperCase()]
+    || (vigente.ccpRegistrado
+      ? ESTADO_COLORES.CCP_REGISTRADO
+      : (vigente.derivadoCcp ? ESTADO_COLORES.CCP : ESTADO_COLORES.REGISTRADO));
 
   return {
     textoPrincipal,
     badgeObservado,
-    workflowActual,
+    workflowActual: vigente.derivadoCcp ? 'CCP' : workflowActual,
     moduloResponsable,
     color,
-    puedeSubsanar: motorActions.puedeSubsanar,
+    puedeSubsanar: vigente.derivadoCcp ? false : motorActions.puedeSubsanar,
     puedeCerrar: motorActions.puedeCerrar,
     pendientesCount: motorBadge.pendientesModuloCount ?? motorBadge.pendientesCount ?? 0,
     motor: motorActions,
     motorBadge,
+    estadoVigente: vigente,
   };
 }
 

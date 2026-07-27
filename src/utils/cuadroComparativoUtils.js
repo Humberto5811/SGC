@@ -1,6 +1,16 @@
 /**
  * Utilidades — bandeja Cuadro Comparativo (RC8.1).
  */
+import {
+  resolveEstadoActualExpediente,
+  labelEstadoCuadroVigente,
+  BADGE_COLOR_CCP,
+  badgeVisualEstadoVigente,
+  renderBadgeEstadoVigenteHtml,
+  esExpedienteDerivadoCcp,
+} from '../../shared/estadoExpedienteVigente.js';
+
+export { BADGE_COLOR_CCP, badgeVisualEstadoVigente, renderBadgeEstadoVigenteHtml, esExpedienteDerivadoCcp };
 
 export const ESTADOS_CUADRO = Object.freeze({
   PENDIENTE_ELABORAR: 'PENDIENTE_ELABORAR',
@@ -19,34 +29,42 @@ export const ESTADOS_CUADRO = Object.freeze({
   PENDIENTE_CCP: 'PENDIENTE_CCP',
   FIRMADO: 'FIRMADO',
   DERIVADO_CCP: 'DERIVADO_CCP',
+  ENVIADA_OPPM: 'ENVIADA_OPPM',
+  CCP_REGISTRADO: 'CCP_REGISTRADO',
 });
 
 /**
- * Etiquetas internas de etapa (detalle / flujo).
- * La bandeja principal usa labelBandejaCuadroComparativo → «Cuadro Comparativo».
+ * Etiquetas dinámicas del workflow (mismo texto en bandejas y detalle).
+ * No usar nombres de módulo («Cuadro Comparativo», «Validaciones», etc.).
  */
 export const ESTADOS_CUADRO_LABEL = Object.freeze({
-  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comparativo observado',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comparativo en revisión',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comparativo observado',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comparativo en revisión',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comparativo para aprobación',
-  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comparativo observado',
-  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comparativo aprobado',
-  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comparativo aprobado',
-  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comparativo aprobado',
-  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comparativo derivado a CCP',
+  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.EN_ELABORACION]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.GENERADO]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.OBSERVADO]: 'C.C. observado por Coordinador CM',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'C.C. en revisión Coordinador CM',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'C.C. observado por Coordinador CM',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'C.C. en revisión Coordinador CM',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'C.C. en revisión DEC',
+  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'C.C. observado por DEC',
+  [ESTADOS_CUADRO.APROBADO_DEC]: 'C.C. aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'C.C. aprobado',
+  [ESTADOS_CUADRO.FIRMADO]: 'C.C. aprobado',
+  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
+  [ESTADOS_CUADRO.ENVIADA_OPPM]: 'Solicitud enviada a OPPM',
+  [ESTADOS_CUADRO.CCP_REGISTRADO]: 'CCP registrado',
 });
 
-/** Etiqueta homogénea de bandeja principal. */
-export function labelBandejaCuadroComparativo() {
-  return 'Cuadro Comparativo';
+/**
+ * Etiqueta visible del expediente según estado_cuadro (y contexto de subsanación).
+ * @param {string} code
+ * @param {{ subsanado?: boolean, respuesta_observaciones?: string }} [opts]
+ */
+export function labelBandejaCuadroComparativo(code, opts = {}) {
+  return labelCuadroEstado(code, opts);
 }
 
 export function normalizeCuadroEstado(raw) {
@@ -71,19 +89,62 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'PENDIENTE_CCP') return ESTADOS_CUADRO.PENDIENTE_CCP;
   if (s === 'FIRMADO' || s === 'FIRMADA') return ESTADOS_CUADRO.FIRMADO;
   if (s === 'DERIVADO_CCP' || s === 'DERIVADO_A_CCP' || s === 'CCP') return ESTADOS_CUADRO.DERIVADO_CCP;
+  if (s === 'ENVIADA_OPPM' || s === 'ENVIADO_OPPM') return ESTADOS_CUADRO.ENVIADA_OPPM;
+  if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP') return ESTADOS_CUADRO.CCP_REGISTRADO;
   if (ESTADOS_CUADRO_LABEL[s]) return s;
   return ESTADOS_CUADRO.PENDIENTE_ELABORAR;
 }
 
-/** Traducción central de estado técnico → etiqueta visible de bandeja. */
-export function labelCuadroEstado(code) {
-  return ESTADOS_CUADRO_LABEL[normalizeCuadroEstado(code)]
+/**
+ * Traducción central de estado técnico → etiqueta visible (bandeja + detalle).
+ * Si hay respuesta a observación y aún no se re-derivó → «C.C. subsanado».
+ */
+export function labelCuadroEstado(code, opts = {}) {
+  const e = normalizeCuadroEstado(code);
+  const tieneRespuesta = !!(opts.subsanado
+    || String(opts.respuesta_observaciones || opts.respuesta || '').trim());
+  if (tieneRespuesta
+    && (e === ESTADOS_CUADRO.OBSERVADO_COORDINADOR
+      || e === ESTADOS_CUADRO.OBSERVADO_DEC
+      || e === ESTADOS_CUADRO.OBSERVADO)) {
+    return 'C.C. subsanado';
+  }
+  return ESTADOS_CUADRO_LABEL[e]
     || ESTADOS_CUADRO_LABEL[ESTADOS_CUADRO.PENDIENTE_ELABORAR];
 }
 
 /** Alias semántico: misma fuente que labelCuadroEstado. */
-export function labelCuadroEstadoVisible(code) {
-  return labelCuadroEstado(code);
+export function labelCuadroEstadoVisible(code, opts = {}) {
+  return labelCuadroEstado(code, opts);
+}
+
+/**
+ * Resuelve etiqueta de estado del expediente sin depender del módulo UI.
+ * OD32 — usa resolveEstadoActualExpediente (DERIVADO_CCP > observaciones históricas).
+ */
+export function labelEstadoExpedienteUnificado(row = {}) {
+  const vigente = resolveEstadoActualExpediente(row);
+  if (vigente?.derivadoCcp) return 'Derivado a CCP';
+  if (vigente?.code && ESTADOS_CUADRO_LABEL[normalizeCuadroEstado(vigente.code)]) {
+    return vigente.label || labelEstadoCuadroVigente(vigente.code, {
+      respuesta_observaciones: row.respuesta_observaciones
+        || row.datos_json?.respuesta_observaciones
+        || '',
+      subsanado: !!row.subsanado,
+    });
+  }
+  if (row.estado_cuadro_label) {
+    // No confiar en label histórico si el workflow ya está en CCP
+    if (/derivado\s*a\s*ccp/i.test(String(row.estado_cuadro_label))) return 'Derivado a CCP';
+  }
+  if (row.estado_bandeja) return String(row.estado_bandeja);
+  if (row.estado_recepcion) return String(row.estado_recepcion);
+  return vigente?.label || 'C.C. en elaboración';
+}
+
+/** Alias OD32 — código + etiqueta vigentes para bandejas. */
+export function resolveEstadoVigenteBandeja(row = {}) {
+  return resolveEstadoActualExpediente(row);
 }
 
 function esCmnEnBandeja(valor) {
@@ -126,8 +187,75 @@ export function badgeClassCuadro(code) {
   if (e === ESTADOS_CUADRO.FIRMADO_COORDINADOR
     || e === ESTADOS_CUADRO.APROBADO_DEC
     || e === ESTADOS_CUADRO.FIRMADO) return 'success';
-  if (e === ESTADOS_CUADRO.DERIVADO_CCP) return 'secondary';
+  // OD33/OD35 — no usar gris; CCP registrado / derivado usan badge unificado
+  if (e === 'CCP_REGISTRADO') return 'success';
+  if (e === 'ENVIADA_OPPM') return 'primary';
+  if (e === ESTADOS_CUADRO.DERIVADO_CCP) return 'ccp-morado';
   return 'secondary';
+}
+
+/** Clase CSS completa del badge (sin prefijo bg- forzado). */
+export function badgeHtmlClassCuadro(code) {
+  const n = normalizeCuadroEstado(code);
+  if (n === ESTADOS_CUADRO.DERIVADO_CCP || n === 'CCP_REGISTRADO' || n === 'ENVIADA_OPPM') {
+    return 'badge-estado-mod';
+  }
+  return `bg-${badgeClassCuadro(code)}`;
+}
+
+export function badgeStyleCuadro(code) {
+  const n = normalizeCuadroEstado(code);
+  if (n === 'CCP_REGISTRADO') return 'background:#198754;color:#fff';
+  if (n === 'ENVIADA_OPPM') return 'background:#0d6efd;color:#fff';
+  if (n === ESTADOS_CUADRO.DERIVADO_CCP) {
+    return `background:${BADGE_COLOR_CCP};color:#fff`;
+  }
+  return '';
+}
+
+/** Badge unificado: CCP registrado (verde) / DERIVADO_CCP (morado). */
+export function renderBadgeEstadoCuadroHtml(rowOrCode, label, escFn = (s) => String(s ?? '')) {
+  const code = (rowOrCode && typeof rowOrCode === 'object')
+    ? (rowOrCode.estado_cuadro || rowOrCode.estado_vigente || rowOrCode.estado || '')
+    : rowOrCode;
+  const row = (rowOrCode && typeof rowOrCode === 'object')
+    ? rowOrCode
+    : { estado_cuadro: code, estado: code };
+  const n = normalizeCuadroEstado(code);
+  if (row.ccp_activo || row.ccp_registrado || row.codigo_ccp
+    || n === 'CCP_REGISTRADO' || n === 'ENVIADA_OPPM'
+    || esExpedienteDerivadoCcp(row) || n === ESTADOS_CUADRO.DERIVADO_CCP) {
+    return renderBadgeEstadoVigenteHtml(row, escFn);
+  }
+  const text = label != null
+    ? label
+    : (labelEstadoExpedienteUnificado(row) || labelCuadroEstado(code));
+  return `<span class="badge ${badgeHtmlClassCuadro(code)}">${escFn(text)}</span>`;
+}
+
+/** Actualiza un nodo badge existente (modales). */
+export function applyBadgeEstadoCuadroEl(el, rowOrCode, label) {
+  if (!el) return;
+  const code = (rowOrCode && typeof rowOrCode === 'object')
+    ? (rowOrCode.estado_cuadro || rowOrCode.estado || '')
+    : rowOrCode;
+  const row = (rowOrCode && typeof rowOrCode === 'object')
+    ? rowOrCode
+    : { estado_cuadro: code, estado: code };
+  const text = label != null
+    ? label
+    : (row.estado_cuadro_label || labelEstadoExpedienteUnificado(row) || labelCuadroEstado(code));
+  const v = badgeVisualEstadoVigente(row);
+  if (v.code === 'CCP_REGISTRADO' || v.code === 'ENVIADA_OPPM' || v.derivadoCcp
+    || esExpedienteDerivadoCcp(row) || normalizeCuadroEstado(code) === ESTADOS_CUADRO.DERIVADO_CCP) {
+    el.className = 'badge badge-estado-mod';
+    el.style.cssText = v.style || `background:${BADGE_COLOR_CCP};color:#fff`;
+    el.textContent = v.label || 'Derivado a CCP';
+    return;
+  }
+  el.className = `badge ${badgeHtmlClassCuadro(code)}`;
+  el.style.cssText = '';
+  el.textContent = text;
 }
 
 /** REQ-00016 | REQ-00016 + REQ-00017 | REQ-00016 + 2 más */

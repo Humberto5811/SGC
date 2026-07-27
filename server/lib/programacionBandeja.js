@@ -2,6 +2,7 @@
 import { query } from '../db.js';
 import {
   enrichRequerimientoRow,
+  enrichRequerimientoRowsWithCcp,
   TRAZA_EXTRA_SELECT,
   buildListFilters,
 } from './trazabilidad.js';
@@ -62,7 +63,7 @@ export async function listarBandejaProgramacion(page, pageSize, queryParams = {}
   `, params);
 
   return {
-    data: rows.map(enrichRequerimientoRow),
+    data: await enrichRequerimientoRowsWithCcp(rows),
     total,
     page,
     pageSize,

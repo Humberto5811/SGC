@@ -653,6 +653,17 @@ export function enrichRequerimientoRow(row) {
   };
 }
 
+/** OD35 — enrich + flags CCP (código activo → estado CCP registrado en todas las bandejas). */
+export async function enrichRequerimientoRowsWithCcp(rows = []) {
+  const list = (Array.isArray(rows) ? rows : []).map(enrichRequerimientoRow);
+  try {
+    const { attachCcpFlagsToRows } = await import('./ccpEstadoFlags.js');
+    return await attachCcpFlagsToRows(list);
+  } catch (_) {
+    return list;
+  }
+}
+
 export async function registrarMovimiento({
   requerimientoId,
   estadoNuevo,

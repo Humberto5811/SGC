@@ -12,8 +12,8 @@ import {
   renderCuadroStatsHtml,
   updateCuadroStatsDom,
   labelCuadroEstado,
-  labelBandejaCuadroComparativo,
-  badgeClassCuadro,
+  labelEstadoExpedienteUnificado,
+  renderBadgeEstadoCuadroHtml,
   filterCuadroExpedientes,
   ESTADOS_CUADRO_LABEL,
 } from '../../utils/cuadroComparativoUtils.js';
@@ -103,6 +103,7 @@ async function openPdfValidacion(cotId) {
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error('PDF de validación no disponible');
   const blob = await res.blob();
+  if (!(blob instanceof Blob) || !blob.size) throw new Error('PDF de validación vacío');
   const objUrl = URL.createObjectURL(blob);
   window.open(objUrl, '_blank');
   setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
@@ -132,7 +133,7 @@ function getViewConfig() {
   if (isModoBandejaAdmin()) {
     return {
       prefix: 'cuadroComp',
-      title: 'Cuadro Comparativo — Supervisión',
+      title: 'Cuadro Comparativo',
       icon: 'bi-shield-lock',
       description: 'Vista administrativa: todos los expedientes. Abrir expediente usa el modo de la etapa actual (solo visualización en revisión Coord/DEC).',
       listId: 'cuadroCompList',
@@ -285,7 +286,7 @@ async function showVerExpediente(solicitudId) {
               <div class="col-md-4"><div class="small text-muted">Solicitud</div><strong>${esc(det.solicitud_codigo)}</strong></div>
               <div class="col-md-4"><div class="small text-muted">Tipo</div><strong>${esc(det.tipo || '—')}</strong></div>
               <div class="col-md-4"><div class="small text-muted">Estado del cuadro</div>
-                <span class="badge bg-${esc(badgeClassCuadro(det.estado_cuadro))}">${esc(det.estado_cuadro_label || labelCuadroEstado(det.estado_cuadro))}</span>
+                ${renderBadgeEstadoCuadroHtml(det, det.estado_cuadro_label || labelCuadroEstado(det.estado_cuadro), esc)}
               </div>
               <div class="col-12"><div class="small text-muted">Denominación</div><div>${esc(det.denominacion || '—')}</div></div>
               <div class="col-md-6"><div class="small text-muted">Área usuaria</div><div>${esc(det.area_usuaria || '—')}</div></div>
@@ -413,6 +414,7 @@ async function openDescargarCuadro(solicitudId) {
     const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) throw new Error('PDF no disponible');
     const blob = await res.blob();
+    if (!(blob instanceof Blob) || !blob.size) throw new Error('PDF vacío o no disponible');
     const objUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = objUrl;
@@ -455,7 +457,7 @@ function buildCuadroRowHtml(c) {
       <td>${formatRequerimientosCuadro(c, esc)}</td>
       <td class="small">${formatCentroCuadro(c, esc)}</td>
       <td class="text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
-      <td><span class="badge bg-primary">${esc(labelBandejaCuadroComparativo())}</span></td>
+      <td>${renderBadgeEstadoCuadroHtml(c, labelEstadoExpedienteUnificado(c) || labelCuadroEstado(c.estado_cuadro || c.estado), esc)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
           data-id="${esc(c.solicitud_id)}" title="Ver expediente">

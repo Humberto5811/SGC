@@ -203,28 +203,32 @@ export const ESTADOS_CUADRO = Object.freeze({
   PENDIENTE_CCP: ESTADOS_REVISION_CUADRO.PENDIENTE_CCP,
   FIRMADO: 'FIRMADO',
   DERIVADO_CCP: 'DERIVADO_CCP',
+  ENVIADA_OPPM: 'ENVIADA_OPPM',
+  CCP_REGISTRADO: 'CCP_REGISTRADO',
   ANULADO: 'ANULADO',
 });
 
-/** Etiquetas de etapa en detalle (códigos técnicos sin cambio). Bandeja usa «Cuadro Comparativo». */
+/** Etiquetas dinámicas del workflow (mismo texto en API, bandejas y detalle). */
 export const ESTADOS_CUADRO_LABEL = Object.freeze({
-  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.BORRADOR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.EN_ELABORACION]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.GENERADO]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.ADJUDICADO]: 'Cuadro Comparativo en trámite',
-  [ESTADOS_CUADRO.OBSERVADO]: 'Cuadro Comparativo observado',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'Cuadro Comparativo en revisión',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'Cuadro Comparativo observado',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'Cuadro Comparativo en revisión',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'Cuadro Comparativo para aprobación',
-  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'Cuadro Comparativo observado',
-  [ESTADOS_CUADRO.APROBADO_DEC]: 'Cuadro Comparativo aprobado',
-  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'Cuadro Comparativo aprobado',
-  [ESTADOS_CUADRO.FIRMADO]: 'Cuadro Comparativo aprobado',
-  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Cuadro Comparativo derivado a CCP',
+  [ESTADOS_CUADRO.PENDIENTE_ELABORAR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.BORRADOR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.EN_ELABORACION]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.CUADRO_BORRADOR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.GENERADO]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.ADJUDICADO]: 'C.C. en elaboración',
+  [ESTADOS_CUADRO.OBSERVADO]: 'C.C. observado por Coordinador CM',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'C.C. en revisión Coordinador CM',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'C.C. observado por Coordinador CM',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'C.C. en revisión Coordinador CM',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'C.C. en revisión DEC',
+  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'C.C. observado por DEC',
+  [ESTADOS_CUADRO.APROBADO_DEC]: 'C.C. aprobado',
+  [ESTADOS_CUADRO.PENDIENTE_CCP]: 'C.C. aprobado',
+  [ESTADOS_CUADRO.FIRMADO]: 'C.C. aprobado',
+  [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
+  [ESTADOS_CUADRO.ENVIADA_OPPM]: 'Solicitud enviada a OPPM',
+  [ESTADOS_CUADRO.CCP_REGISTRADO]: 'CCP registrado',
   [ESTADOS_CUADRO.ANULADO]: 'Anulado',
 });
 
@@ -318,13 +322,24 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'PENDIENTE_CCP') return ESTADOS_CUADRO.PENDIENTE_CCP;
   if (s === 'FIRMADO' || s === 'FIRMADA') return ESTADOS_CUADRO.FIRMADO;
   if (s === 'DERIVADO_CCP' || s === 'DERIVADO_A_CCP' || s === 'CCP') return ESTADOS_CUADRO.DERIVADO_CCP;
+  if (s === 'ENVIADA_OPPM' || s === 'ENVIADO_OPPM') return ESTADOS_CUADRO.ENVIADA_OPPM;
+  if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP') return ESTADOS_CUADRO.CCP_REGISTRADO;
   if (s === 'ANULADO') return ESTADOS_CUADRO.ANULADO;
   if (ESTADOS_CUADRO_LABEL[s]) return s;
   return ESTADOS_CUADRO.PENDIENTE_ELABORAR;
 }
 
-export function labelCuadroEstado(code) {
+export function labelCuadroEstado(code, opts = {}) {
   const n = normalizeCuadroEstado(code);
+  const tieneRespuesta = !!(opts.subsanado
+    || String(opts.respuesta_observaciones || opts.respuesta || '').trim());
+  if (tieneRespuesta && (
+    n === ESTADOS_CUADRO.OBSERVADO_COORDINADOR
+    || n === ESTADOS_CUADRO.OBSERVADO_DEC
+    || n === ESTADOS_CUADRO.OBSERVADO
+  )) {
+    return 'C.C. subsanado';
+  }
   return ESTADOS_CUADRO_LABEL[n] || ESTADOS_CUADRO_LABEL[ESTADOS_CUADRO.PENDIENTE_ELABORAR];
 }
 
@@ -378,7 +393,8 @@ function badgeClassCuadro(estadoCode) {
   if (e === ESTADOS_CUADRO.FIRMADO_COORDINADOR
     || e === ESTADOS_CUADRO.APROBADO_DEC
     || e === ESTADOS_CUADRO.FIRMADO) return 'success';
-  if (e === ESTADOS_CUADRO.DERIVADO_CCP) return 'secondary';
+  // OD33 — morado CCP (mismo #6f42c1 que Invitaciones); no gris
+  if (e === ESTADOS_CUADRO.DERIVADO_CCP) return 'ccp-morado';
   return 'secondary';
 }
 
@@ -560,10 +576,26 @@ export async function listarCuadroComparativoExpedientes() {
     }
   }));
 
+  let ccpBySid = new Map();
+  try {
+    const { loadCcpFlagsBySolicitudIds } = await import('./ccpEstadoFlags.js');
+    ccpBySid = await loadCcpFlagsBySolicitudIds(ids);
+  } catch (_) { /* noop */ }
+
   return elegibles.map((r) => {
     const reqs = reqMap.get(r.solicitud_id) || [];
     const persisted = estadoMap.get(r.solicitud_id);
-    const estadoCode = persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
+    const ccpFlags = ccpBySid.get(Number(r.solicitud_id)) || {};
+    // OD32/OD35 — CCP registrado > ENVIADA_OPPM > DERIVADO_CCP
+    let estadoCode = persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
+    if (ccpFlags.ccp_activo) {
+      estadoCode = 'CCP_REGISTRADO';
+    } else if (ccpFlags.enviada_oppm) {
+      estadoCode = 'ENVIADA_OPPM';
+    } else if (String(r.solicitud_estado || '').toUpperCase() === 'EN_CCP'
+      || String(estadoCode).toUpperCase() === 'DERIVADO_CCP') {
+      estadoCode = ESTADOS_CUADRO.DERIVADO_CCP;
+    }
     const area = areaUsuariaFromReqs(reqs, r.area_usuaria);
     const reqTexto = requerimientosTexto(reqs);
     const sidKey = Number(r.solicitud_id);
@@ -612,6 +644,16 @@ export async function listarCuadroComparativoExpedientes() {
       estado_cuadro: estadoCode,
       estado_cuadro_label: labelCuadroEstado(estadoCode),
       estado_cuadro_badge: badgeClassCuadro(estadoCode),
+      estado_codigo: estadoCode,
+      etiqueta_estado: labelCuadroEstado(estadoCode),
+      estado_vigente: estadoCode,
+      estado_vigente_label: labelCuadroEstado(estadoCode),
+      codigo_ccp: ccpFlags.codigo_ccp || '',
+      ccp_activo: !!ccpFlags.ccp_activo,
+      ccp_registrado: !!ccpFlags.ccp_activo,
+      derivado_ccp: estadoCode === ESTADOS_CUADRO.DERIVADO_CCP
+        || estadoCode === ESTADOS_CUADRO.CCP_REGISTRADO
+        || estadoCode === ESTADOS_CUADRO.ENVIADA_OPPM,
       cuadro_id: persisted?.cuadro_id || null,
       version: persisted?.version != null ? Number(persisted.version) : null,
       fecha_actualizacion: persisted?.actualizado_at || r.fecha_ingreso_cuadro || null,
@@ -624,10 +666,14 @@ export async function listarCuadroComparativoExpedientes() {
           ESTADOS_CUADRO.FIRMADO_COORDINADOR,
           ESTADOS_CUADRO.PENDIENTE_DEC,
           ESTADOS_CUADRO.DERIVADO_CCP,
+          ESTADOS_CUADRO.CCP_REGISTRADO,
+          ESTADOS_CUADRO.ENVIADA_OPPM,
           ESTADOS_CUADRO.FIRMADO,
         ].includes(estadoCode),
       solo_lectura: [
         ESTADOS_CUADRO.DERIVADO_CCP,
+        ESTADOS_CUADRO.CCP_REGISTRADO,
+        ESTADOS_CUADRO.ENVIADA_OPPM,
         ESTADOS_CUADRO.FIRMADO,
         ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
         ESTADOS_CUADRO.FIRMADO_COORDINADOR,
@@ -833,6 +879,19 @@ function buildMatrizFromSources(sc, cotizaciones, requerimientos) {
   return attachPrimeraFuenteFromCotizaciones(withRec, cotizaciones);
 }
 
+/** OD32 — bloqueo controlado de mutaciones tras DERIVADO_CCP. */
+export function assertNoMutacionTrasDerivadoCcp(estado, accionLabel = 'modificar') {
+  const e = String(estado || '').toUpperCase();
+  if (e === ESTADOS_CUADRO.DERIVADO_CCP || e === 'DERIVADO_A_CCP') {
+    const err = new Error(
+      `Expediente derivado a CCP: no se puede ${accionLabel}. Estado vigente: Derivado a CCP.`,
+    );
+    err.code = 'DERIVADO_CCP_READONLY';
+    err.status = 409;
+    throw err;
+  }
+}
+
 function mapCuadroRow(row) {
   if (!row) return null;
   const estado = String(row.estado || '').toUpperCase();
@@ -840,7 +899,9 @@ function mapCuadroRow(row) {
   const tieneFirmado = !!(row.firmado_contenido || row.tiene_pdf_firmado || row.firmado_nombre);
   const tieneFirmadoDec = !!(row.firmado_dec_contenido || row.tiene_pdf_firmado_dec || row.firmado_dec_nombre);
   const datosJson = parseJson(row.datos_json, {});
+  const respuestaObs = String(datosJson.respuesta_observaciones || '').trim();
   const derivado = estado === ESTADOS_CUADRO.DERIVADO_CCP;
+  const derivacionCcp = datosJson.derivacion_ccp || null;
   const enRevisionExterna = [
     ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
     ESTADOS_CUADRO.FIRMADO_COORDINADOR,
@@ -858,8 +919,16 @@ function mapCuadroRow(row) {
     version: row.version,
     estado: row.estado,
     estado_cuadro: mapEstadoDbABandeja(row.estado),
-    estado_cuadro_label: labelCuadroEstado(row.estado),
+    estado_cuadro_label: derivado
+      ? 'Derivado a CCP'
+      : labelCuadroEstado(row.estado, { respuesta_observaciones: respuestaObs }),
+    estado_vigente: derivado ? 'DERIVADO_CCP' : mapEstadoDbABandeja(row.estado),
+    estado_vigente_label: derivado
+      ? 'Derivado a CCP'
+      : labelCuadroEstado(row.estado, { respuesta_observaciones: respuestaObs }),
+    respuesta_observaciones: respuestaObs || undefined,
     datos_json: datosJson,
+    derivacion_ccp: derivacionCcp,
     proveedor_ganador_id: row.proveedor_ganador_id,
     criterio_seleccion: row.criterio_seleccion,
     sustento_decision: row.sustento_decision,
@@ -1071,8 +1140,9 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
   const estadoCur = String(cur.estado || '').toUpperCase();
+  assertNoMutacionTrasDerivadoCcp(estadoCur, 'guardar borrador');
   // Tras generar PDF / firmar / derivar no se edita borrador (evita degradar GENERADO → EN_ELABORACION).
-  if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(estadoCur)) {
+  if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'ANULADO'].includes(estadoCur)) {
     throw new Error(`El cuadro en estado ${cur.estado} no admite edición de borrador`);
   }
 
@@ -1168,7 +1238,8 @@ export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario 
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
   const estadoAdj = String(cur.estado || '').toUpperCase();
-  if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'DERIVADO_CCP', 'ANULADO'].includes(estadoAdj)) {
+  assertNoMutacionTrasDerivadoCcp(estadoAdj, 'guardar adjudicación');
+  if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'ANULADO'].includes(estadoAdj)) {
     throw new Error(`El cuadro en estado ${cur.estado} no admite adjudicación`);
   }
 
@@ -1392,11 +1463,22 @@ export async function guardarPdfCuadro(cuadroId, payload = {}, usuario = '') {
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
   const estado = String(cur.estado || '').toUpperCase();
-  if (estado === 'FIRMADO') {
-    throw new Error('Cuadro firmado: no se puede regenerar el PDF sin anular la versión');
+  // OD34 — no regenerar ni sobrescribir PDF si ya hay firma o el flujo avanzó
+  if (estado === 'FIRMADO' || cur.firmado_contenido || cur.firmado_nombre) {
+    const err = new Error(
+      'Existe un PDF firmado persistido: no se regenera ni sobrescribe. '
+      + 'Para aplicar un nuevo formato se requiere reapertura explícita / nueva versión.',
+    );
+    err.code = 'PDF_FIRMADO_INMUTABLE';
+    err.status = 409;
+    throw err;
   }
-  if (['DERIVADO_CCP', 'ANULADO'].includes(estado)) {
-    throw new Error(`El cuadro en estado ${estado} no admite generación de PDF`);
+  if (['DERIVADO_CCP', 'ANULADO', 'APROBADO_DEC', 'PENDIENTE_CCP',
+    'PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR', 'PENDIENTE_DEC'].includes(estado)) {
+    const err = new Error(`El cuadro en estado ${estado} no admite generación de PDF dinámico`);
+    err.code = 'PDF_ESTADO_BLOQUEADO';
+    err.status = 409;
+    throw err;
   }
   if (!['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR',
     'OBSERVADO', 'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC'].includes(estado)) {
@@ -1409,26 +1491,28 @@ export async function guardarPdfCuadro(cuadroId, payload = {}, usuario = '') {
   const user = String(usuario || '').slice(0, 150);
   const datos = parseJson(cur.datos_json, {});
   const hist = Array.isArray(datos.pdf_versiones) ? [...datos.pdf_versiones] : [];
+  const prevVersion = Number(cur.version || 1);
   if (cur.pdf_nombre || cur.pdf_contenido) {
     hist.push({
-      version: cur.version,
+      version: prevVersion,
       pdf_nombre: cur.pdf_nombre,
       generado_at: cur.actualizado_at,
       generado_por: cur.actualizado_por,
+      reemplazado_por: prevVersion + 1,
+      vigente: false,
     });
   }
   // No guardar base64 histórico completo (solo metadata); vigente en columnas
   datos.pdf_versiones = hist.slice(-20);
+  // OD34 — nueva versión documental al regenerar (no pisa firmados: ya bloqueados arriba)
+  const nextVersion = (cur.pdf_nombre || cur.pdf_contenido) ? prevVersion + 1 : prevVersion;
   datos.pdf_meta = {
     nombre,
     generado_at: new Date().toISOString(),
     generado_por: user,
     vigente: true,
+    version: nextVersion,
   };
-
-  // RC8.7: el número de versión documental solo cambia al observar (nueva fila).
-  // Regenerar PDF actualiza el Anexo de la versión vigente sin sobrescribir historial.
-  const nextVersion = Number(cur.version || 1);
 
   const { rows } = await query(`
     UPDATE cuadros_comparativos
@@ -1436,13 +1520,14 @@ export async function guardarPdfCuadro(cuadroId, payload = {}, usuario = '') {
         pdf_contenido = $3,
         datos_json = $4::jsonb,
         estado = 'GENERADO',
+        version = $6,
         actualizado_por = $5,
         actualizado_at = NOW()
     WHERE id = $1
     RETURNING id, solicitud_id, tipo, version, estado, pdf_nombre,
       proveedor_ganador_id, criterio_seleccion, valor_adjudicado,
       creado_por, actualizado_por, creado_at, actualizado_at
-  `, [id, nombre, base64, JSON.stringify(datos), user]);
+  `, [id, nombre, base64, JSON.stringify(datos), user, nextVersion]);
 
   await registrarTrazaPortal({
     solicitud_id: cur.solicitud_id,
@@ -1870,8 +1955,36 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
     throw new Error('Nombre del responsable CCP es obligatorio');
   }
 
-  const observacion = String(body.observacion_derivacion || body.observacion || '').trim()
-    || 'Cuadro Comparativo firmado derivado a CCP';
+  const observacion = String(body.observacion_derivacion || body.observacion || '').trim();
+  if (!observacion || observacion.length < 3) {
+    throw new Error('La observación es obligatoria para derivar a CCP');
+  }
+  const rolDerivacion = String(body.rol_derivacion || body.rol || 'ANALISTA').slice(0, 80);
+  const fechaDeriv = new Date().toISOString();
+  const datosPrev = parseJson(cur.datos_json, {});
+  const historialRev = Array.isArray(datosPrev.historial_revision) ? [...datosPrev.historial_revision] : [];
+  historialRev.push({
+    tipo: 'DERIVAR_CCP',
+    accion: 'DERIVAR_CCP',
+    usuario: user,
+    rol: rolDerivacion,
+    fecha: fechaDeriv,
+    observacion,
+    responsable_ccp_id: respId,
+    responsable_ccp_nombre: respNombre,
+  });
+  const datosNext = {
+    ...datosPrev,
+    historial_revision: historialRev,
+    derivacion_ccp: {
+      usuario: user,
+      rol: rolDerivacion,
+      fecha: fechaDeriv,
+      observacion,
+      responsable_id: respId,
+      responsable_nombre: respNombre,
+    },
+  };
 
   const { rows } = await query(`
     UPDATE cuadros_comparativos
@@ -1880,6 +1993,7 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
         derivado_por = $2,
         responsable_ccp_id = $3,
         responsable_ccp_nombre = $4,
+        datos_json = $5::jsonb,
         actualizado_por = $2,
         actualizado_at = NOW()
     WHERE id = $1 AND estado IN ('APROBADO_DEC', 'PENDIENTE_CCP')
@@ -1888,7 +2002,7 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
       creado_por, actualizado_por, creado_at, actualizado_at, derivado_at,
       derivado_por, responsable_ccp_id, responsable_ccp_nombre, datos_json,
       usuario_adjudicacion, fecha_adjudicacion, modalidad_adjudicacion, sustento_decision
-  `, [id, user, respId, respNombre.slice(0, 200)]);
+  `, [id, user, respId, respNombre.slice(0, 200), JSON.stringify(datosNext)]);
 
   if (!rows.length) {
     // Carrera: otro proceso derivó
@@ -1922,22 +2036,27 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
     responsable: respNombre,
     etapaDestino: ETAPAS.CCP,
     estadoNegocio: 'En CCP',
+    revisionEstado: ESTADOS_CUADRO.DERIVADO_CCP,
   });
+
+  const detalleObs = JSON.stringify({
+    cuadro_id: id,
+    destino: DESTINO_SALIDA_CUADRO.code,
+    responsable_id: respId,
+    responsable: respNombre,
+    usuario: user,
+    rol: rolDerivacion,
+    fecha: fechaDeriv,
+    observacion,
+    workflow_actualizados: sync?.actualizados,
+    evento: EVENTOS_TRAZA_CUADRO_CCP.CCP_DERIVADO,
+  }).slice(0, 2000);
 
   await registrarTrazaPortal({
     solicitud_id: cur.solicitud_id,
     proveedor_id: cur.proveedor_ganador_id || null,
     evento: 'CUADRO_COMPARATIVO_DERIVADO',
-    detalle: JSON.stringify({
-      cuadro_id: id,
-      destino: DESTINO_SALIDA_CUADRO.code,
-      responsable_id: respId,
-      responsable: respNombre,
-      usuario: user,
-      fecha: new Date().toISOString(),
-      workflow_actualizados: sync?.actualizados,
-      evento: EVENTOS_TRAZA_CUADRO_CCP.CCP_DERIVADO,
-    }).slice(0, 2000),
+    detalle: detalleObs,
     usuario: user,
   });
 
@@ -1945,7 +2064,7 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
     solicitud_id: cur.solicitud_id,
     proveedor_id: cur.proveedor_ganador_id || null,
     evento: 'CCP_DERIVADO',
-    detalle: `Expediente derivado desde Cuadro Comparativo → CCP (${respNombre})`,
+    detalle: `[${rolDerivacion}] ${user} · ${observacion} → CCP (${respNombre})`.slice(0, 2000),
     usuario: user,
   });
 
@@ -1953,7 +2072,7 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
     solicitud_id: cur.solicitud_id,
     proveedor_id: cur.proveedor_ganador_id || null,
     evento: 'DERIVADO_A_CCP',
-    detalle: `Expediente derivado desde Cuadro Comparativo → CCP (${respNombre})`,
+    detalle: `[${rolDerivacion}] ${user} · ${fechaDeriv} · ${observacion}`.slice(0, 2000),
     usuario: user,
   });
 
@@ -1992,6 +2111,10 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
   const estado = String(cur.estado || '').toUpperCase();
+  // OD32 — tras DERIVADO_CCP solo lectura (salvo consulta idempotente de derivar)
+  if (estado === 'DERIVADO_CCP' && accion !== 'DERIVAR_CCP' && accion !== 'GENERAR_CCP') {
+    assertNoMutacionTrasDerivadoCcp(estado, `ejecutar ${accion || 'revisión'}`);
+  }
   // RC8.5-G — actuar_como solo desde body (nunca query); solo Administrador real (headers)
   // actuar_como solo modo prueba Admin (opcional). Sin UI operativa: Admin real
   // puede ejecutar la transición válida del estado (supervisión, sin suplantar en cliente).

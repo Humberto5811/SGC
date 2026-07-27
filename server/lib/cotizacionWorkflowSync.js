@@ -56,18 +56,19 @@ async function persistWorkflowSnapshot(requerimientoId, etapaCode, responsable) 
 
   const meta = getSubModuloMeta(etapaCode);
 
+  const prevSnap = payload.workflowSnapshot || {};
+  const etapaUp = String(etapaCode || '').toUpperCase();
   payload.workflowSnapshot = {
-
+    ...prevSnap,
     etapaActual: etapaCode,
-
     subModuloActual: meta.subModulo,
-
     moduloActual: meta.modulo,
-
     responsableActual: responsable || meta.subModulo,
-
     fechaEstadoActual: new Date().toISOString(),
-
+    // OD32 — CCP fija revisionEstado vigente; no hereda OBSERVADO_* histórico
+    ...(etapaUp === 'CCP'
+      ? { revisionEstado: 'DERIVADO_CCP' }
+      : {}),
   };
 
   await query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [

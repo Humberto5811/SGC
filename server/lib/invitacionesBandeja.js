@@ -2,6 +2,7 @@
 import { query } from '../db.js';
 import {
   enrichRequerimientoRow,
+  enrichRequerimientoRowsWithCcp,
   TRAZA_EXTRA_SELECT,
   buildListFilters,
 } from './trazabilidad.js';
@@ -97,13 +98,14 @@ export async function listarBandejaInvitaciones(page, pageSize, queryParams = {}
     LIMIT $${limitIdx} OFFSET $${offsetIdx}
   `, params);
 
+  const enriched = rows.map((row) => enrichRequerimientoRow({
+    ...row,
+    tiene_invitacion: row.tiene_solicitud_cotizacion,
+    cantidad_invitaciones: row.num_solicitudes_cotizacion,
+    total_invitaciones: row.num_solicitudes_cotizacion,
+  }));
   return {
-    data: rows.map((row) => enrichRequerimientoRow({
-      ...row,
-      tiene_invitacion: row.tiene_solicitud_cotizacion,
-      cantidad_invitaciones: row.num_solicitudes_cotizacion,
-      total_invitaciones: row.num_solicitudes_cotizacion,
-    })),
+    data: await enrichRequerimientoRowsWithCcp(enriched),
     total,
     page,
     pageSize,

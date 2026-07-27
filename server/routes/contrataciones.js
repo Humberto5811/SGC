@@ -4,6 +4,7 @@ import { query } from '../db.js';
 import {
   TRAZA_EXTRA_SELECT,
   enrichRequerimientoRow,
+  enrichRequerimientoRowsWithCcp,
   registrarMovimiento,
   buildListFilters,
   ETAPAS,
@@ -75,7 +76,7 @@ async function listarRequerimientosPorEstados(estados, page, pageSize, queryPara
 
   const result = await query(dataSql, params);
   return {
-    data: (result.rows || []).map(enrichRequerimientoRow),
+    data: await enrichRequerimientoRowsWithCcp(result.rows || []),
     total,
     page,
     pageSize,

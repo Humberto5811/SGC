@@ -48,15 +48,20 @@ async function request(path, options = {}) {
 
 async function requestBlob(path, options = {}) {
   const url = BASE + path;
+  // No sobrescribir headers con ...options: se perderían x-user-id / auth.
+  const { headers: optHeaders, ...rest } = options || {};
   const res = await fetch(url, {
-    headers: { ...authHeaders(), ...(options.headers || {}) },
-    ...options,
+    ...rest,
+    headers: { ...authHeaders(), ...(optHeaders || {}) },
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({}));
     throw new Error(error.detail || error.error || `Error ${res.status}`);
   }
   const blob = await res.blob();
+  if (!(blob instanceof Blob) || !blob.size) {
+    throw new Error('Documento vacío o no disponible');
+  }
   return {
     blob,
     contentType: res.headers.get('content-type') || blob.type || 'application/octet-stream',
@@ -70,7 +75,15 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
   put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
   patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
-  del: (path) => request(path, { method: 'DELETE' }),
+  del: (path, body) => request(path, {
+    method: 'DELETE',
+    ...(body != null ? { body: JSON.stringify(body) } : {}),
+  }),
+  postBlob: (path, body = {}) => requestBlob(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  }),
   list: (resource, { page = 1, pageSize = 50, search = '', ...extra } = {}) => {
     const q = new URLSearchParams({ page, pageSize, search });
     Object.entries(extra).forEach(([k, v]) => { if (v != null && v !== '') q.set(k, v); });

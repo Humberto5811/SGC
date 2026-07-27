@@ -17,12 +17,18 @@ import {
   TIPOS_SEGUNDA_FUENTE,
   isCuadroServicios,
 } from './cuadroComparativoMatriz.js';
-import { labelCuadroEstado, badgeClassCuadro } from './cuadroComparativoUtils.js';
+import {
+  labelCuadroEstado,
+  applyBadgeEstadoCuadroEl,
+  renderBadgeEstadoCuadroHtml,
+} from './cuadroComparativoUtils.js';
 import {
   generateAnexo8APdf,
   previewAnexo8APdf,
   downloadAnexo8APdf,
   validateCuadroParaAnexo8A,
+  downloadBlobPersistido,
+  assertBlobForObjectUrl,
 } from './cuadroComparativoPdf.js';
 import { triggerPdfUpload } from './validacionAnexo07aPdf.js';
 import { normalizeSegundaFuente, calcPrecioActualizado } from './cuadroComparativoFuentes.js';
@@ -47,8 +53,6 @@ import {
   renderPanelGeneracionCcp,
   evaluarGatesCcpCliente,
 } from './cuadroComparativoCcp.js';
-import { puedeMostrarBotonesCcp } from './cuadroComparativoRevisionUi.js';
-
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -106,6 +110,22 @@ function isDerivado(cuadro) {
   return String(cuadro?.estado || '').toUpperCase() === 'DERIVADO_CCP';
 }
 
+/** Estados donde no aplica regenerar/descargar Anexo dinámico. */
+function esEstadoSinDescargaDinamica(cuadro) {
+  const e = String(cuadro?.estado || '').toUpperCase();
+  return [
+    'APROBADO_DEC', 'PENDIENTE_CCP', 'DERIVADO_CCP', 'FIRMADO',
+    'PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR', 'PENDIENTE_DEC',
+  ].includes(e)
+    || !!cuadro?.tiene_pdf_firmado
+    || !!cuadro?.tiene_pdf_firmado_dec;
+}
+
+function esFlujoFirmasCompleto(cuadro) {
+  return !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre)
+    && !!(cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre);
+}
+
 function renderPanelSustento(matriz, readonly) {
   const adj = matriz?.adjudicacion || {};
   const opts = CRITERIOS.map((c) => `
@@ -129,37 +149,36 @@ function renderPanelSustento(matriz, readonly) {
 
 function renderPanelFirma(cuadro, matriz = null) {
   const derivado = isDerivado(cuadro);
-  const tiene = !!cuadro?.tiene_pdf_firmado || !!cuadro?.firmado_nombre;
-  const nombre = cuadro?.firmado_nombre || '';
-  const meta = tiene
-    ? `<div class="small text-success mb-1"><i class="bi bi-check-circle"></i> Firmado: <strong>${esc(nombre)}</strong>
-        ${cuadro.firmado_por ? ` · ${esc(cuadro.firmado_por)}` : ''}
-        ${cuadro.firmado_at ? ` · ${esc(String(cuadro.firmado_at).slice(0, 16).replace('T', ' '))}` : ''}</div>`
+  const cerrado = derivado || esFlujoFirmasCompleto(cuadro)
+    || ['APROBADO_DEC', 'PENDIENTE_CCP'].includes(String(cuadro?.estado || '').toUpperCase());
+  const tieneCoord = !!cuadro?.tiene_pdf_firmado || !!cuadro?.firmado_nombre;
+  const tieneDec = !!cuadro?.tiene_pdf_firmado_dec || !!cuadro?.firmado_dec_nombre;
+  const nombre = tieneDec
+    ? (cuadro.firmado_dec_nombre || cuadro.firmado_nombre || '')
+    : (cuadro?.firmado_nombre || '');
+  const meta = (tieneCoord || tieneDec)
+    ? `<div class="small text-success mb-1"><i class="bi bi-check-circle"></i> Firmado persistido: <strong>${esc(nombre)}</strong>
+        ${tieneDec && cuadro.firmado_dec_por ? ` · DEC: ${esc(cuadro.firmado_dec_por)}` : ''}
+        ${!tieneDec && cuadro.firmado_por ? ` · ${esc(cuadro.firmado_por)}` : ''}
+        ${(tieneDec ? cuadro.firmado_dec_at : cuadro.firmado_at)
+    ? ` · ${esc(String(tieneDec ? cuadro.firmado_dec_at : cuadro.firmado_at).slice(0, 16).replace('T', ' '))}`
+    : ''}</div>`
     : '<div class="small text-muted mb-1">Sin PDF firmado adjunto aún.</div>';
-  const infoDeriv = derivado
-    ? `<div class="alert alert-secondary py-2 small mb-2">
-        Derivado a CCP
-        ${cuadro.derivado_at ? ` el ${esc(String(cuadro.derivado_at).slice(0, 16).replace('T', ' '))}` : ''}
-        ${cuadro.responsable_ccp_nombre ? ` · Responsable: <strong>${esc(cuadro.responsable_ccp_nombre)}</strong>` : ''}
-        ${cuadro.derivado_por ? ` · Por: ${esc(cuadro.derivado_por)}` : ''}
-      </div>`
-    : '';
   const anexoLbl = anexoUiLabels(matriz, cuadro);
   return `
     <div class="card border mb-3" id="ccPanelFirma">
       <div class="card-body py-3">
         <h6 class="fw-bold mb-2">${esc(anexoLbl.firmado)}</h6>
-        ${infoDeriv}
         ${meta}
         <div class="d-flex flex-wrap gap-2" id="ccFirmaActions">
-          ${!derivado ? `
+          ${!cerrado ? `
             <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnAdjuntarFirmado">
               <i class="bi bi-paperclip"></i> ${esc(anexoLbl.adjuntar)}
             </button>` : ''}
-          ${tiene ? `
+          ${(tieneCoord || tieneDec) ? `
             <button type="button" class="btn btn-sm btn-outline-secondary" id="ccBtnVerFirmado"><i class="bi bi-eye"></i> Ver</button>
             <button type="button" class="btn btn-sm btn-outline-primary" id="ccBtnDlFirmado"><i class="bi bi-download"></i> Descargar</button>` : ''}
-          ${tiene && !derivado ? `
+          ${tieneCoord && !cerrado ? `
             <button type="button" class="btn btn-sm btn-outline-danger" id="ccBtnEliminarFirmado"><i class="bi bi-trash"></i> Eliminar</button>` : ''}
         </div>
       </div>
@@ -504,16 +523,20 @@ function showDerivarCcpPanel({ onConfirm }) {
             ${!usuarios.length ? '<div class="text-danger small mt-1">No existen usuarios habilitados para CCP.</div>' : ''}
           </div>
           <div class="mb-0">
-            <label class="form-label fw-semibold">Observación</label>
-            <textarea class="form-control form-control-sm" id="${id}_obs" rows="2" placeholder="Opcional"></textarea>
+            <label class="form-label fw-semibold">Observación <span class="text-danger">*</span></label>
+            <textarea class="form-control form-control-sm" id="${id}_obs" rows="3"
+              placeholder="Registre la observación de la derivación a CCP" required></textarea>
+            <div class="form-text small">Queda en trazabilidad con usuario, fecha y rol.</div>
           </div>
           <div id="${id}_err" class="alert alert-danger d-none py-2 mt-2 mb-0 small"></div>
           <div id="${id}_busy" class="alert alert-info d-none py-2 mt-2 mb-0 small">Derivando expediente…</div>`;
 
         const sync = () => {
-          btnOk.disabled = !usuarios.length || !overlay.querySelector(`#${id}_resp`)?.value;
+          const obsOk = String(overlay.querySelector(`#${id}_obs`)?.value || '').trim().length >= 3;
+          btnOk.disabled = !usuarios.length || !overlay.querySelector(`#${id}_resp`)?.value || !obsOk;
         };
         overlay.querySelector(`#${id}_resp`)?.addEventListener('change', sync);
+        overlay.querySelector(`#${id}_obs`)?.addEventListener('input', sync);
         sync();
 
         btnOk.onclick = async (ev) => {
@@ -522,9 +545,17 @@ function showDerivarCcpPanel({ onConfirm }) {
           const opt = sel?.selectedOptions?.[0];
           const errBox = overlay.querySelector(`#${id}_err`);
           const busy = overlay.querySelector(`#${id}_busy`);
+          const obsTxt = String(overlay.querySelector(`#${id}_obs`)?.value || '').trim();
           if (!sel?.value || !opt) {
             if (errBox) {
               errBox.textContent = 'Seleccione el usuario responsable.';
+              errBox.classList.remove('d-none');
+            }
+            return;
+          }
+          if (obsTxt.length < 3) {
+            if (errBox) {
+              errBox.textContent = 'La observación es obligatoria.';
               errBox.classList.remove('d-none');
             }
             return;
@@ -533,6 +564,10 @@ function showDerivarCcpPanel({ onConfirm }) {
           if (busy) busy.classList.remove('d-none');
           if (errBox) errBox.classList.add('d-none');
           try {
+            const user = (() => {
+              try { return JSON.parse(localStorage.getItem('currentUser') || 'null') || {}; }
+              catch (_) { return {}; }
+            })();
             const destPayload = {
               destino_submodulo: 'CCP',
               destino: 'CCP',
@@ -540,7 +575,10 @@ function showDerivarCcpPanel({ onConfirm }) {
               responsable_id: parseInt(sel.value, 10),
               responsable_destino_nombre: opt.dataset.nombre || opt.textContent,
               responsable_nombre: opt.dataset.nombre || opt.textContent,
-              observacion_derivacion: overlay.querySelector(`#${id}_obs`)?.value || '',
+              observacion_derivacion: obsTxt,
+              observacion: obsTxt,
+              rol_derivacion: String(user.cargo || user.rol || user.role || 'ANALISTA'),
+              usuario_derivacion: String(user.nombre || user.username || user.dni || ''),
             };
             await onConfirm(destPayload);
             close(destPayload);
@@ -604,9 +642,11 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
           </div>
           <div class="modal-body" id="ccElaborarBody">
             <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
-              <span class="badge bg-${esc(badgeClassCuadro(cuadro?.estado_cuadro || cuadro?.estado))}" id="ccEstadoBadge">
-                ${esc(cuadro?.estado_cuadro_label || labelCuadroEstado(cuadro?.estado))}
-              </span>
+              ${renderBadgeEstadoCuadroHtml(
+    cuadro,
+    cuadro?.estado_cuadro_label || labelCuadroEstado(cuadro?.estado),
+    esc,
+  ).replace('<span ', '<span id="ccEstadoBadge" ')}
               ${cuadro?.version != null ? `<span class="small text-muted" id="ccVersionLabel">Versión ${esc(cuadro.version)}</span>` : '<span class="small text-muted d-none" id="ccVersionLabel"></span>'}
               ${(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre)
     ? '<span class="badge bg-success">Firmado</span>' : ''}
@@ -689,22 +729,28 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
     // RC8.5/8.6: Coordinador/DEC — solo lectura económica; acciones en su panel
     const hideAnalista = modoCoord || modoDec;
-    // RC8.5-B1 — CCP solo tras APROBADO_DEC / listo CCP (por estado, no solo por rol)
-    const hideCcpPorEstado = !puedeMostrarBotonesCcp(e);
-    setHide('#ccBtnGuardar', hideAnalista);
-    setHide('#ccBtnAdjudicar', hideAnalista);
-    setHide('#ccBtnGenerar8a', hideAnalista);
-    setHide('#ccBtnDerivarCoord', hideAnalista);
+    // OD34 — ocultar operativos / descarga dinámica / Recargar en expediente cerrado
+    const sinDinamica = esEstadoSinDescargaDinamica(cuadro);
+    const firmasOk = esFlujoFirmasCompleto(cuadro);
+    setHide('#ccBtnRecargar', true);
+    setHide('#ccBtnGuardar', hideAnalista || derivado || firmasOk);
+    setHide('#ccBtnAdjudicar', hideAnalista || derivado || firmasOk);
+    setHide('#ccBtnPreview8a', hideAnalista || derivado || sinDinamica);
+    setHide('#ccBtnGenerar8a', hideAnalista || derivado || sinDinamica);
+    setHide('#ccBtnDescargar8a', hideAnalista || derivado || sinDinamica);
+    setHide('#ccBtnDerivarCoord', hideAnalista || derivado || firmasOk);
     setHide('#ccBtnAprobarCoord', true);
     setHide('#ccBtnObservarCoord', true);
     setHide('#ccBtnAprobarDec', true);
     setHide('#ccBtnObservarDec', true);
-    setHide('#ccBtnGenerarCcp', hideAnalista || hideCcpPorEstado);
-    setHide('#ccBtnDerivarCcp', hideAnalista || hideCcpPorEstado);
+    setHide('#ccBtnGenerarCcp', true);
+    setHide('#ccBtnDerivarCcp', true);
 
     setDis('#ccBtnGuardar', readonly || derivado);
     setDis('#ccBtnAdjudicar', readonly || derivado || e === 'GENERADO' || e === 'GENERADO_PRELIMINAR');
-    setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || !cuadro?.id);
+    setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || !cuadro?.id || sinDinamica);
+    setDis('#ccBtnPreview8a', derivado || sinDinamica);
+    setDis('#ccBtnDescargar8a', derivado || sinDinamica);
     const puedeDerivarCoord = !!cuadro?.id && !derivado && [
       'CUADRO_BORRADOR', 'EN_ELABORACION', 'GENERADO', 'GENERADO_PRELIMINAR', 'ADJUDICADO', 'FIRMADO',
       'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC',
@@ -733,8 +779,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
     const ccpHost = el.querySelector('#ccCcpHost');
     if (ccpHost) {
-      const showCcp = !modoCoord && !modoDec && !hideCcpPorEstado
-        && (isModoGeneracionCcp(cuadro) || e === 'DERIVADO_CCP');
+      // OD34 — panel CCP solo pre-derivación (sin bloque técnico tras DERIVADO_CCP)
+      const showCcp = !modoCoord && !modoDec && isModoGeneracionCcp(cuadro);
       ccpHost.innerHTML = showCcp ? renderPanelGeneracionCcp(cuadro) : '';
       if (showCcp) bindCcpActions();
     }
@@ -844,8 +890,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         };
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          applyBadgeEstadoCuadroEl(badge, cuadro);
         }
         syncUiLocks();
         alert('Conformidad registrada. Ahora puede Derivar a DEC.');
@@ -879,8 +924,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
           } catch (_) { /* keep */ }
           const badge = el.querySelector('#ccEstadoBadge');
           if (badge && cuadro) {
-            badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-            badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+            applyBadgeEstadoCuadroEl(badge, cuadro);
           }
           await refreshVersiones();
           if (typeof onSaved === 'function') onSaved();
@@ -905,8 +949,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         cuadro = data.cuadro || cuadro;
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          applyBadgeEstadoCuadroEl(badge, cuadro);
         }
         alert('Cuadro derivado al DEC.');
         if (typeof onSaved === 'function') onSaved();
@@ -1003,8 +1046,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         cuadro = data.cuadro || cuadro;
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          applyBadgeEstadoCuadroEl(badge, cuadro);
         }
         alert(devolver.destino === 'COORDINADOR_CM'
           ? 'Cuadro observado y devuelto al Coordinador CM.'
@@ -1035,8 +1077,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         cuadro = data.cuadro || cuadro;
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          applyBadgeEstadoCuadroEl(badge, cuadro);
         }
         alert('Cuadro aprobado y derivado a CCP.');
         if (typeof onSaved === 'function') onSaved();
@@ -1052,15 +1093,11 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     if (!cuadro?.id) return;
     try {
       const blob = await contratacionesService.fetchCuadroPdfFirmadoDec(cuadro.id, !!inline);
-      const url = URL.createObjectURL(blob);
-      if (inline) window.open(url, '_blank');
-      else {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = cuadro.firmado_dec_nombre || 'Anexo_08A_firmado_DEC.pdf';
-        a.click();
-      }
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      downloadBlobPersistido(
+        assertBlobForObjectUrl(blob, 'PDF firmado DEC'),
+        cuadro.firmado_dec_nombre || 'Anexo_08A_firmado_DEC.pdf',
+        { inline: !!inline },
+      );
     } catch (err) {
       alert(err.message || 'No se pudo abrir el PDF firmado DEC');
     }
@@ -1082,8 +1119,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       cuadro = data.cuadro || cuadro;
       const badge = el.querySelector('#ccEstadoBadge');
       if (badge && cuadro) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        applyBadgeEstadoCuadroEl(badge, cuadro);
       }
       alert(`Revisión: ${accion} → ${cuadro.estado_cuadro_label || cuadro.estado}`);
       if (typeof onSaved === 'function') onSaved();
@@ -1135,25 +1171,26 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     });
   }
 
+  /** OD34 — abre/descarga PDF firmado persistido (Coord o DEC). Nunca regenera. */
   async function openFirmadoUrl(inline) {
     if (!cuadro?.id) return;
     try {
-      const { blob } = await contratacionesService.fetchCuadroPdfFirmado(cuadro.id, inline);
-      const pdfBlob = blob.type === 'application/pdf'
-        ? blob
-        : new Blob([blob], { type: 'application/pdf' });
-      const url = URL.createObjectURL(pdfBlob);
-      if (inline) {
-        window.open(url, '_blank', 'noopener');
-      } else {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = cuadro.firmado_nombre || 'Anexo_08A_firmado.pdf';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+      const preferDec = !!(cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre);
+      if (preferDec) {
+        const blob = await contratacionesService.fetchCuadroPdfFirmadoDec(cuadro.id, !!inline);
+        downloadBlobPersistido(
+          assertBlobForObjectUrl(blob, 'PDF firmado DEC'),
+          cuadro.firmado_dec_nombre || 'Anexo_08A_firmado_DEC.pdf',
+          { inline: !!inline },
+        );
+        return;
       }
-      setTimeout(() => URL.revokeObjectURL(url), 120000);
+      const { blob } = await contratacionesService.fetchCuadroPdfFirmado(cuadro.id, inline);
+      downloadBlobPersistido(
+        assertBlobForObjectUrl(blob, 'PDF firmado'),
+        cuadro.firmado_nombre || 'Anexo_08A_firmado.pdf',
+        { inline: !!inline },
+      );
     } catch (err) {
       alert(err.message || 'No se pudo abrir el PDF firmado');
     }
@@ -1175,8 +1212,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
           cuadro = data.cuadro || { ...cuadro, estado: 'FIRMADO', tiene_pdf_firmado: true, firmado_nombre: meta.nombre };
           const badge = el.querySelector('#ccEstadoBadge');
           if (badge && cuadro) {
-            badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-            badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+            applyBadgeEstadoCuadroEl(badge, cuadro);
           }
           syncUiLocks();
           alert(`${anexoUiLabels(matriz, cuadro).firmado} adjuntado. Estado: FIRMADO.`);
@@ -1200,8 +1236,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         cuadro = data.cuadro || { ...cuadro, estado: 'GENERADO', tiene_pdf_firmado: false, firmado_nombre: '' };
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          applyBadgeEstadoCuadroEl(badge, cuadro);
         }
         syncUiLocks();
         if (typeof onSaved === 'function') onSaved();
@@ -1224,8 +1259,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       if (panel) panel.outerHTML = renderPanelSustento(matriz, readonly);
       const badge = el.querySelector('#ccEstadoBadge');
       if (badge && cuadro) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        applyBadgeEstadoCuadroEl(badge, cuadro);
       }
       syncUiLocks();
     } catch (err) {
@@ -1233,7 +1267,12 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     }
   }
 
-  el.querySelector('#ccBtnRecargar').onclick = () => reloadFresh();
+  // OD34 — Recargar eliminado; la vista se refresca tras cada acción válida
+  const btnRecargar = el.querySelector('#ccBtnRecargar');
+  if (btnRecargar) {
+    btnRecargar.classList.add('d-none');
+    btnRecargar.onclick = null;
+  }
 
   el.querySelector('#ccBtnGuardar').onclick = async () => {
     if (!cuadro?.id) {
@@ -1311,8 +1350,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       refreshMatrizHost(el, matriz, !isReadonlyEstado(cuadro));
       const badge = el.querySelector('#ccEstadoBadge');
       if (badge && cuadro) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        applyBadgeEstadoCuadroEl(badge, cuadro);
       }
       alert('Adjudicación guardada (estado ADJUDICADO). No se derivó a CCP.');
       if (typeof onSaved === 'function') onSaved();
@@ -1441,8 +1479,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       cuadro = data.cuadro || { ...cuadro, estado: 'GENERADO', version: data.version };
       const badge = el.querySelector('#ccEstadoBadge');
       if (badge) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        applyBadgeEstadoCuadroEl(badge, cuadro);
       }
       alert(`${anexoLbl.titulo} generado y guardado (v${data.version || cuadro.version}). Estado: GENERADO.`);
       if (typeof onSaved === 'function') onSaved();
@@ -1455,7 +1492,19 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   };
 
   el.querySelector('#ccBtnDescargar8a').onclick = async () => {
+    // OD34 — generador dinámico solo pre-firma; si hay firmado, usar persistido
     try {
+      if (esEstadoSinDescargaDinamica(cuadro)) {
+        if (cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre) {
+          await openFirmadoDecUrl(false);
+          return;
+        }
+        if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
+          await openFirmadoUrl(false);
+          return;
+        }
+        return alert('No hay PDF firmado persistido. Use Generar Anexo solo en etapas de elaboración.');
+      }
       const persistido = await buildPersistidoParaPdf();
       persistido.borrador_no_oficial = false;
       persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'OFICIAL', puede_pdf_oficial: true };
@@ -1499,8 +1548,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       cuadro = data.cuadro || cuadro;
       const badge = el.querySelector('#ccEstadoBadge');
       if (badge && cuadro) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+        applyBadgeEstadoCuadroEl(badge, cuadro);
       }
       await refreshVersiones();
       alert('Cuadro derivado al Coordinador CM.');
@@ -1517,66 +1565,24 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   el.querySelector('#ccBtnObservarDec')?.classList.add('d-none');
 
   function bindCcpActions() {
-    el.querySelector('#ccBtnCcpDescargarFinal')?.addEventListener('click', async () => {
-      try {
-        if (cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre) {
-          await openFirmadoDecUrl(false);
-        } else if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
-          await openFirmadoUrl(false);
-        } else {
-          const persistido = await buildPersistidoParaPdf();
-          persistido.borrador_no_oficial = false;
-          downloadAnexo8APdf(persistido);
-        }
-      } catch (err) {
-        alert(err.message || 'No se pudo descargar el Cuadro Final');
-      }
-    });
-
+    // OD34 — sin descarga dinámica del generador; solo PDFs firmados persistidos
     el.querySelector('#ccBtnCcpVerFirmas')?.addEventListener('click', async () => {
       try {
-        if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
-          await openFirmadoUrl(true);
-        }
+        let opened = false;
         if (cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre) {
           await openFirmadoDecUrl(true);
+          opened = true;
+        } else if (cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre) {
+          await openFirmadoUrl(true);
+          opened = true;
         }
-        if (!cuadro?.tiene_pdf_firmado && !cuadro?.tiene_pdf_firmado_dec) {
-          alert('No hay PDFs firmados adjuntos.');
-        }
+        if (!opened) alert('No hay PDFs firmados adjuntos.');
       } catch (err) {
         alert(err.message || 'No se pudieron abrir las firmas');
       }
     });
 
-    el.querySelector('#ccBtnCcpGenerar')?.addEventListener('click', () => generarCcpAction());
     el.querySelector('#ccBtnCcpDerivar')?.addEventListener('click', () => derivarCcpAction());
-  }
-
-  async function generarCcpAction() {
-    if (!cuadro?.id) return;
-    const gates = evaluarGatesCcpCliente(cuadro);
-    if (!gates.ok) {
-      return alert(`No se puede Generar CCP: falta ${gates.faltantes.join(', ')}.`);
-    }
-    if (!confirm('¿Generar CCP? El cuadro debe estar completamente aprobado.')) return;
-    try {
-      const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
-        accion: 'GENERAR_CCP',
-      });
-      const data = resp.data || resp;
-      cuadro = data.cuadro || { ...cuadro, estado: 'PENDIENTE_CCP' };
-      const badge = el.querySelector('#ccEstadoBadge');
-      if (badge && cuadro) {
-        badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-        badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
-      }
-      syncUiLocks();
-      alert('CCP generado. Puede derivarlo al responsable CCP.');
-      if (typeof onSaved === 'function') onSaved();
-    } catch (err) {
-      alert(err.message || 'No se pudo generar el CCP');
-    }
   }
 
   async function derivarCcpAction() {
@@ -1589,18 +1595,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     if (!['APROBADO_DEC', 'PENDIENTE_CCP'].includes(est)) {
       return alert('El cuadro debe estar APROBADO_DEC o PENDIENTE_CCP.');
     }
-    // Si aún no se generó, generar primero
-    if (est === 'APROBADO_DEC') {
-      try {
-        const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
-          accion: 'GENERAR_CCP',
-        });
-        const data = resp.data || resp;
-        cuadro = data.cuadro || { ...cuadro, estado: 'PENDIENTE_CCP' };
-      } catch (err) {
-        return alert(err.message || 'No se pudo generar el CCP antes de derivar');
-      }
-    }
+    // Derivar CCP sin paso «Generar CCP» (no pertenece a este flujo).
     await showDerivarCcpPanel({
       onConfirm: async (dest) => {
         const resp = await contratacionesService.derivarCuadroACcp(cuadro.id, dest);
@@ -1608,8 +1603,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         cuadro = data.cuadro || { ...cuadro, estado: 'DERIVADO_CCP' };
         const badge = el.querySelector('#ccEstadoBadge');
         if (badge && cuadro) {
-          badge.className = `badge bg-${badgeClassCuadro(cuadro.estado_cuadro || cuadro.estado)}`;
-          badge.textContent = cuadro.estado_cuadro_label || labelCuadroEstado(cuadro.estado);
+          applyBadgeEstadoCuadroEl(badge, cuadro);
         }
         refreshMatrizHost(el, matriz, false);
         syncUiLocks();
@@ -1619,7 +1613,11 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     });
   }
 
-  el.querySelector('#ccBtnGenerarCcp').onclick = () => generarCcpAction();
+  const btnGenCcp = el.querySelector('#ccBtnGenerarCcp');
+  if (btnGenCcp) {
+    btnGenCcp.classList.add('d-none');
+    btnGenCcp.onclick = null;
+  }
   el.querySelector('#ccBtnDerivarCcp').onclick = () => derivarCcpAction();
 
   syncUiLocks();

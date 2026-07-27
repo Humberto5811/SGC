@@ -234,6 +234,40 @@ export const contratacionesService = {
   async derivarCuadroACcp(cuadroId, body = {}) {
     return api.post(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/derivar-ccp`, body);
   },
+  // —— Certificación Presupuestal (CCP) ——
+  async listCcpBandeja(params = {}) {
+    const q = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') q.set(k, v); });
+    const qs = q.toString();
+    return api.get(`/ccp/bandeja${qs ? `?${qs}` : ''}`);
+  },
+  async getCcpRequerimiento(id) {
+    return api.get(`/ccp/${id}`);
+  },
+  async registrarCodigoCcp(requerimientoId, body) {
+    return api.post(`/ccp/${requerimientoId}/codigo`, body);
+  },
+  async editarCodigoCcp(requerimientoId, body) {
+    return api.put(`/ccp/${requerimientoId}/codigo`, body);
+  },
+  async anularCodigoCcp(requerimientoId, body) {
+    return api.del(`/ccp/${requerimientoId}/codigo`, body);
+  },
+  async crearConsolidacionCcp(body) {
+    return api.post('/ccp/consolidaciones', body);
+  },
+  async getConsolidacionCcp(id) {
+    return api.get(`/ccp/consolidaciones/${id}`);
+  },
+  async actualizarConsolidacionCcp(id, body) {
+    return api.put(`/ccp/consolidaciones/${id}`, body);
+  },
+  async retirarRequerimientoCcp(solicitudId, requerimientoId) {
+    return api.post(`/ccp/consolidaciones/${solicitudId}/retirar`, { requerimiento_id: requerimientoId });
+  },
+  async generarWordCcp(solicitudId) {
+    return api.postBlob(`/ccp/consolidaciones/${solicitudId}/generar-word`, {});
+  },
   async transitarRevisionCuadro(cuadroId, body = {}) {
     // RC8.5-G — no enviar cargo/rol en body (privilegios solo por headers de sesión).
     // actuar_como solo lo envía el FE en modo prueba Admin; el BE lo valida.

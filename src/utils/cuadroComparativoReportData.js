@@ -515,6 +515,37 @@ export function buildCuadroComparativoReportData(persistido = {}) {
         items: p.items,
         valor: fmtMoney(p.valor_adjudicado),
       })),
+      resumen_centro_clasificador: (() => {
+        const reqById = new Map();
+        const reqByCode = new Map();
+        (datos.requerimientos || []).forEach((r) => {
+          if (r?.id != null) reqById.set(Number(r.id), r);
+          if (r?.codigo) reqByCode.set(String(r.codigo).toUpperCase(), r);
+        });
+        const buckets = new Map();
+        itemsRaw.forEach((it) => {
+          const req = (it.requerimiento_id != null && reqById.get(Number(it.requerimiento_id)))
+            || (it.requerimiento_codigo && reqByCode.get(String(it.requerimiento_codigo).toUpperCase()))
+            || null;
+          const centro = safeStr(
+            it.centro || req?.centro || req?.centro_nombre || req?.centro_display || '—',
+          ) || '—';
+          const clasificador = safeStr(
+            it.clasificador || it.clasificador_gasto || req?.clasificador || req?.clasificador_gasto || '—',
+          ) || '—';
+          const key = `${centro}|${clasificador}`;
+          const vt = Number(it.valor_adjudicado_item);
+          const prev = buckets.get(key) || { centro, clasificador, valor_num: 0 };
+          prev.valor_num += Number.isFinite(vt) ? vt : 0;
+          buckets.set(key, prev);
+        });
+        return [...buckets.values()].map((b) => ({
+          centro: b.centro,
+          clasificador: b.clasificador,
+          valor: fmtMoney(b.valor_num),
+          valor_num: b.valor_num,
+        }));
+      })(),
     },
     firmas: {
       elaborado_por: { cargo: 'Analista', nombre: optField(persistido.elaborado_por || adj.usuario_adjudicacion || cuadro.usuario_adjudicacion, '') },

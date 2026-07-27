@@ -109,13 +109,18 @@ assert(/registrarMovimiento/.test(fs.readFileSync(path.join(root, 'server/lib/cu
   'usa registrarMovimiento');
 
 const viewCc = fs.readFileSync(path.join(root, 'src/views/contratacion/cuadroComparativoView.js'), 'utf8');
-assert(/labelBandejaCuadroComparativo/.test(viewCc), 'bandeja CC etiqueta homogénea');
+assert(/labelEstadoExpedienteUnificado|labelCuadroEstado/.test(viewCc), 'bandeja CC etiqueta dinámica workflow');
 assert(!/>\s*Acciones\s*</.test(viewCc) && /text-center">Ver</.test(viewCc), 'bandeja CC: columna Ver sin Acciones');
 assert(!/Actuar como/.test(viewCc), 'bandeja CC sin selector Actuar como');
+assert(/labelEstadoExpedienteUnificado|labelCuadroEstado/.test(viewCc), 'bandeja CC estados dinámicos');
 
 const viewVal = fs.readFileSync(path.join(root, 'src/views/contratacion/validacionesView.js'), 'utf8');
 assert(/openValidarExpediente/.test(viewVal) && /showValidarModal/.test(viewVal), 'Validaciones: Ver abre expediente');
 assert(!/Cotizaciones en validación/.test(viewVal), 'sin ventana intermedia Cotizaciones en validación');
+assert(!/>Validaciones</.test(viewVal), 'Validaciones sin badge genérico de módulo');
+
+const ccpUi = fs.readFileSync(path.join(root, 'src/utils/cuadroComparativoCcp.js'), 'utf8');
+assert(!/ccBtnCcpGenerar/.test(ccpUi) && !/>Generar CCP</.test(ccpUi), 'sin botón Generar CCP en panel');
 
 const portal = fs.readFileSync(path.join(root, 'server/routes/portal.js'), 'utf8');
 assert(/cuadroId\/revision/.test(portal), 'ruta revision');

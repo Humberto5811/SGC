@@ -49,6 +49,7 @@ function extractObservacionTrazabilidad(payloadStr, estadoAnterior, estadoNuevo)
 import contratacionesRouter from './routes/contrataciones.js';
 import invitacionesRouter from './routes/invitaciones.js';
 import portalRouter, { portalAnalistaRouter } from './routes/portal.js';
+import ccpRouter from './routes/ccp.js';
 import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
@@ -347,6 +348,7 @@ app.use('/api/requerimientos', requerimientosEspecialRouter);
 app.use('/api/contrataciones', contratacionesRouter);
 app.use('/api/contrataciones/invitaciones', invitacionesRouter);
 app.use('/api/contrataciones/portal-analista', portalAnalistaRouter);
+app.use('/api/ccp', ccpRouter);
 
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',

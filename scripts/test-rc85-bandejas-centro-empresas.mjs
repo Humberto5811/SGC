@@ -36,7 +36,7 @@ assert(/loadCotizacionesValidacionSolicitud/.test(valJs), 'carga todas PRESENTAD
 const recView = fs.readFileSync(path.join(root, 'src/views/contratacion/recepcionCotizacionesView.js'), 'utf8');
 assert(/Solicitud de cotización/.test(recView) && /Requerimiento/.test(recView)
   && /Centro/.test(recView) && /Cantidad/.test(recView), 'Recepción columnas principales');
-assert(/Recepción Cotizaciones/.test(recView), 'Recepción estado homogéneo');
+assert(/estado_recepcion/.test(recView), 'Recepción estado dinámico por expediente');
 
 try {
   const adminRows = await listarValidacionesExpedientes('', '', { esAdmin: true });

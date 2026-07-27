@@ -26,7 +26,7 @@ try {
   // --- Destinos oficiales ---
   const destApto = resolverDestinoSalidaValidacion('APTO');
   assert(destApto.code === 'CUADRO_COMPARATIVO', '7. APTO → Cuadro Comparativo');
-  assert(destApto.estado_bandeja.includes('Cuadro Comparativo'), 'estado bandeja APTO correcto');
+  assert(/C\.C\. en elaboración|Cuadro Comparativo/i.test(destApto.estado_bandeja), 'estado bandeja APTO correcto');
 
   const destNo = resolverDestinoSalidaValidacion('NO_APTO');
   assert(destNo.code === DESTINOS_SALIDA_VALIDACION.NO_APTO.code, '8. NO_APTO → destino oficial vigente');
@@ -184,7 +184,7 @@ try {
     // Workflow / etiqueta
     assert(!!det.estado_bandeja, '10. estado bandeja presente');
     if (derivado.validacion_estado === 'APTO') {
-      assert(/Cuadro Comparativo/i.test(det.estado_bandeja), '10. APTO → Derivado a Cuadro Comparativo');
+      assert(/C\.C\. en elaboración|Cuadro Comparativo/i.test(det.estado_bandeja), '10. APTO → C.C. en elaboración');
     } else {
       assert(/Recepción/i.test(det.estado_bandeja), '10. NO_APTO → etiqueta destino oficial');
     }

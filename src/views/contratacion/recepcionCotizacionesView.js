@@ -10,6 +10,7 @@ import {
   formatRequerimientosBandeja,
   formatCentrosBandeja,
   consolidarExpedientesRecepcion,
+  renderBadgeEstadoRecepcionHtml,
 } from '../../utils/recepcionCotizacionUtils.js';
 import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import {
@@ -89,6 +90,7 @@ async function openCotizacionDoc(cotId, ref, inline = false) {
     throw new Error(err.detail || err.error || 'No se pudo abrir el documento');
   }
   const blob = await res.blob();
+  if (!(blob instanceof Blob) || !blob.size) throw new Error('Documento vacío o no disponible');
   const disp = res.headers.get('Content-Disposition') || '';
   let nombre = 'documento';
   const m = disp.match(/filename="([^"]+)"/);
@@ -457,7 +459,7 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        <span class="badge bg-primary">Recepción Cotizaciones</span>
+        ${renderBadgeEstadoRecepcionHtml(exp, esc)}
       </td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary rc-exp-ver"

@@ -15,6 +15,7 @@ import {
   consolidarExpedientesValidacion,
   formatRequerimientosValidacion,
   formatCentrosValidacion,
+  renderBadgeEstadoValidacionHtml,
 } from '../../utils/validacionesUtils.js';
 import {
   createViewLifecycle,
@@ -95,7 +96,7 @@ function buildValidacionRowHtml(exp) {
       <td class="small">${formatCentrosValidacion(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        <span class="badge bg-primary">Validaciones</span>
+        ${renderBadgeEstadoValidacionHtml(exp, esc)}
       </td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary val-exp-ver"
