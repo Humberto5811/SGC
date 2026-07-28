@@ -24,6 +24,7 @@ export const MODULOS = [
       { id: 'VALIDACIONES', label: 'Validaciones', route: 'contrataciones/validaciones' },
       { id: 'CUADRO_COMPARATIVO', label: 'Cuadro Comparativo', route: 'dec/cuadro' },
       { id: 'CCP', label: 'CCP', route: 'dec/ccp' },
+      { id: 'REGISTRO_ORDENES_CONTRATACION', label: 'Registro de Órdenes', route: 'dec/registro-ordenes' },
     ],
   },
   {

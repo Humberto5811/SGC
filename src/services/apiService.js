@@ -28,13 +28,14 @@ function authHeaders() {
 async function request(path, options = {}) {
   const url = BASE + path;
   console.log('📡 Llamando a:', url);
-  
+  const { headers: optHeaders, ...rest } = options || {};
+
   try {
     const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      ...options,
+      ...rest,
+      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(optHeaders || {}) },
     });
-    
+
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
       throw new Error(error.detail || error.error || `Error ${res.status}`);
@@ -42,6 +43,12 @@ async function request(path, options = {}) {
     return res.status === 204 ? null : res.json();
   } catch (error) {
     console.error('❌ Error en request:', error);
+    const msg = String(error?.message || error || '');
+    if (/failed to fetch|networkerror|load failed|fetch.*abort/i.test(msg)) {
+      throw new Error(
+        'No se pudo conectar con el servidor. Verifique que la API esté en ejecución (puerto 3000) e intente nuevamente.',
+      );
+    }
     throw error;
   }
 }

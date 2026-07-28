@@ -1,0 +1,161 @@
+/**
+ * Utilidades y menú Acciones — Registro de Órdenes (OD36).
+ */
+import { ESTADOS_ORDEN_LABEL, normalizeEstadoOrden } from '../../shared/estadoExpedienteVigente.js';
+
+export { ESTADOS_ORDEN_LABEL, normalizeEstadoOrden };
+
+export const CONDICIONES_INICIO_OPTS = [
+  { value: 'EMISION_ORDEN', label: 'A partir de la emisión de la orden' },
+  { value: 'DIA_SIGUIENTE_NOTIFICACION', label: 'Al día siguiente de la notificación de la orden' },
+  { value: 'SUSCRIPCION_ACTA_INICIO', label: 'A partir de la suscripción del acta de inicio' },
+  { value: 'DIA_SIGUIENTE_ACTA_INICIO', label: 'Al día siguiente de suscrita el acta de inicio' },
+  { value: 'SUSCRIPCION_CONTRATO', label: 'A partir de la suscripción del contrato' },
+  { value: 'DIA_SIGUIENTE_CONTRATO', label: 'Al día siguiente de suscrito el contrato' },
+];
+
+export function tipoOrdenSugerido(tipoContratacion) {
+  return /servic|locador/i.test(String(tipoContratacion || '')) ? 'OS' : 'OC';
+}
+
+export function esServicioTipo(tipo) {
+  return /servic|locador/i.test(String(tipo || ''));
+}
+
+export function fmtMonto(n, moneda = 'PEN') {
+  const val = Number(n || 0);
+  const sym = String(moneda).toUpperCase() === 'USD' ? 'US$' : 'S/';
+  return `${sym} ${val.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function fmtFecha(v) {
+  if (!v) return '—';
+  const s = String(v).slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return String(v);
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+export function fmtFechaHora(v) {
+  if (!v) return '—';
+  try {
+    return new Date(v).toLocaleString('es-PE');
+  } catch (_) {
+    return String(v);
+  }
+}
+
+/**
+ * Menú Acciones OD36 según estado real.
+ */
+export function registroOrdenesMenuItems(row = {}, opts = {}) {
+  const can = opts.canManage !== false;
+  const estado = normalizeEstadoOrden(row.estado || row.orden_estado || 'REGISTRO_ORDENES');
+  const tieneFirmado = !!row.ccp_firmado || !!row.ccp_firmado_id;
+  const tieneOrden = !!row.orden_id;
+  const esServicio = esServicioTipo(row.tipo || row.tipo_contratacion);
+  const items = [];
+
+  // A. Sin CCP firmado
+  if (!tieneFirmado) {
+    items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+    if (can) items.push({ act: 'adjuntarCcpFirmado', label: 'Adjuntar CCP firmado', icon: 'bi-file-earmark-lock' });
+    return items;
+  }
+
+  // B. Con CCP firmado sin orden
+  if (!tieneOrden) {
+    items.push({ act: 'verCcpFirmado', label: 'Ver CCP firmado', icon: 'bi-file-earmark-pdf' });
+    items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+    if (can) items.push({ act: 'eliminarCcpFirmado', label: 'Eliminar CCP firmado', icon: 'bi-trash' });
+    if (can) items.push({ act: 'registrarOrden', label: 'Registrar orden', icon: 'bi-plus-circle' });
+    return items;
+  }
+
+  // F. Recepción confirmada / ejecución
+  if (estado === 'ORDEN_RECEPCION_CONFIRMADA' || estado === 'EN_EJECUCION') {
+    items.push({ act: 'verConfirmacion', label: 'Ver confirmación', icon: 'bi-check2-circle' });
+    items.push({ act: 'verCronograma', label: 'Ver cronograma', icon: 'bi-calendar-week' });
+    items.push({ act: 'verFechasMaximas', label: 'Ver fechas máximas', icon: 'bi-calendar-check' });
+    if (can && estado === 'ORDEN_RECEPCION_CONFIRMADA') {
+      items.push({ act: 'derivarEjecucion', label: 'Derivar a Ejecución', icon: 'bi-box-arrow-right' });
+    }
+    items.push({ act: 'verHistorial', label: 'Ver historial', icon: 'bi-clock-history' });
+    return items;
+  }
+
+  // E. Orden notificada
+  if (estado === 'ORDEN_NOTIFICADA') {
+    items.push({ act: 'verNotificacion', label: 'Ver notificación', icon: 'bi-envelope' });
+    if (can) items.push({ act: 'reenviar', label: 'Reenviar orden', icon: 'bi-arrow-repeat' });
+    items.push({ act: 'verConfirmacion', label: 'Ver confirmación de recepción', icon: 'bi-check2-circle' });
+    items.push({ act: 'verFechasMaximas', label: 'Ver fechas máximas', icon: 'bi-calendar-check' });
+    items.push({ act: 'verHistorial', label: 'Ver historial', icon: 'bi-clock-history' });
+    return items;
+  }
+
+  // D. Lista para notificación — solo si checklist completo
+  if (estado === 'ORDEN_LISTA_NOTIFICACION') {
+    items.push({ act: 'verOrdenFirmada', label: 'Ver orden firmada', icon: 'bi-file-earmark-pdf' });
+    items.push({ act: 'descargarOrden', label: 'Descargar orden', icon: 'bi-download' });
+    if (can && row.checklist_completo === false) {
+      items.push({ act: 'verChecklist', label: 'Completar información', icon: 'bi-exclamation-circle' });
+    } else {
+      items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+      if (can) items.push({ act: 'notificarProveedor', label: 'Notificar al proveedor', icon: 'bi-send' });
+    }
+    items.push({ act: 'verHistorial', label: 'Ver historial', icon: 'bi-clock-history' });
+    return items;
+  }
+
+  // C. Orden registrada (incluye cronograma parcial / firmada sin cronograma)
+  items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+  if (can) {
+    items.push({ act: 'editarOrden', label: 'Editar orden', icon: 'bi-pencil' });
+    items.push({
+      act: 'adminEntregas',
+      label: esServicio ? 'Registrar entregables' : 'Registrar entregas',
+      icon: 'bi-calendar-week',
+    });
+    items.push({ act: 'adjuntarOrdenFirmada', label: 'Adjuntar orden firmada', icon: 'bi-file-earmark-pdf' });
+  }
+  items.push({ act: 'verHistorial', label: 'Ver historial', icon: 'bi-clock-history' });
+  return items;
+}
+
+export function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+export function openPdfBase64(base64, nombre = 'documento.pdf') {
+  const raw = String(base64 || '');
+  const b64 = raw.includes('base64,') ? raw.split('base64,')[1] : raw;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return nombre;
+}
+
+export function downloadPdfBase64(base64, nombre = 'documento.pdf') {
+  const raw = String(base64 || '');
+  const b64 = raw.includes('base64,') ? raw.split('base64,')[1] : raw;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5_000);
+}

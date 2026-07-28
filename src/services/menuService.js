@@ -13,6 +13,7 @@ export const CONTRATACIONES_SUBMENU = [
   { path: 'contrataciones/validaciones', label: 'Validaciones', icon: 'bi-shield-check', submoduloId: 'VALIDACIONES' },
   { path: 'dec/cuadro', label: 'Cuadro Comparativo', icon: 'bi-table', submoduloId: 'CUADRO_COMPARATIVO' },
   { path: 'dec/ccp', label: 'CCP', icon: 'bi-people', submoduloId: 'CCP' },
+  { path: 'dec/registro-ordenes', label: 'Registro de Órdenes', icon: 'bi-clipboard-check', submoduloId: 'REGISTRO_ORDENES_CONTRATACION' },
 ];
 
 /** Rutas legacy → misma ruta canónica (compatibilidad). */

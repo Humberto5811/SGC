@@ -24,6 +24,7 @@ import { renderValidacionesView, initValidacionesView } from './views/contrataci
 import { renderPortalProveedoresView, initPortalProveedoresView } from './views/portal/portalProveedoresView.js';
 import { renderCcpView, initCcpView } from './views/contratacion/ccpView.js';
 import { renderCuadroComparativoView, initCuadroComparativoView } from './views/contratacion/cuadroComparativoView.js';
+import { renderRegistroOrdenesView, initRegistroOrdenesView } from './views/contratacion/registroOrdenesView.js';
 
 // Ejecución
 import { renderEjecucionView, initEjecucionView } from './views/ejecucion/ejecucionView.js';
@@ -86,6 +87,7 @@ const routes = {
   'dec/cotizaciones': { render: renderRecepcionCotizacionesView, init: initRecepcionCotizacionesView },
   'dec/ccp': { render: renderCcpView, init: initCcpView },
   'dec/cuadro': { render: renderCuadroComparativoView, init: initCuadroComparativoView },
+  'dec/registro-ordenes': { render: renderRegistroOrdenesView, init: initRegistroOrdenesView },
 
   // Portal de Proveedores (módulo independiente — acceso público con login propio)
   'portal-proveedores': { render: renderPortalProveedoresView, init: initPortalProveedoresView },

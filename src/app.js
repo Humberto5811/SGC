@@ -72,6 +72,13 @@ async function renderProveedorApp(route) {
       setTimeout(() => mod.initEstadoParticipacionView(), 50);
       return;
     }
+    if (route === 'proveedor/ordenes-recibidas') {
+      const mod = await import('./views/proveedor/ordenesProveedorView.js');
+      content = mod.renderOrdenesProveedorView();
+      appEl.innerHTML = content;
+      setTimeout(() => mod.initOrdenesProveedorView(), 50);
+      return;
+    }
     window.location.hash = '#/proveedor/login';
   } catch (e) {
     appEl.innerHTML = `<div class="alert alert-danger m-4">${e.message}</div>`;
@@ -196,6 +203,11 @@ async function renderApp() {
       const module = await import('./views/contratacion/ccpView.js');
       content = module.renderCcpView();
       setTimeout(() => module.initCcpView(), 50);
+    }
+    else if (currentRoute === 'dec/registro-ordenes') {
+      const module = await import('./views/contratacion/registroOrdenesView.js');
+      content = module.renderRegistroOrdenesView();
+      setTimeout(() => module.initRegistroOrdenesView(), 50);
     }
     else if (currentRoute === 'dec/cuadro') {
       const module = await import('./views/contratacion/cuadroComparativoView.js');

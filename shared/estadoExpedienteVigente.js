@@ -1,9 +1,11 @@
 /**
- * OD32 / OD35 — Resolución del estado vigente del expediente.
+ * OD32 / OD35 / OD36 — Resolución del estado vigente del expediente.
  * Fuente única FE/BE: prioriza avance del workflow sobre observaciones históricas.
  *
  * Prioridad (mayor gana):
- * CCP_REGISTRADO > ENVIADA_OPPM > DERIVADO_CCP > APROBADO_DEC > …
+ * EN_EJECUCION > ORDEN_RECEPCION_CONFIRMADA > ORDEN_NOTIFICADA >
+ * ORDEN_LISTA_NOTIFICACION > ORDEN_REGISTRADA > REGISTRO_ORDENES >
+ * CCP_REGISTRADO > DERIVADO_CCP > …
  */
 
 /** Mayor índice = más avanzado (reemplaza visualmente a los anteriores). */
@@ -27,7 +29,60 @@ export const PRIORIDAD_ESTADO_CUADRO = Object.freeze([
   'DERIVADO_CCP',
   'ENVIADA_OPPM',
   'CCP_REGISTRADO',
+  'REGISTRO_ORDENES',
+  'ORDEN_REGISTRADA',
+  'ORDEN_LISTA_NOTIFICACION',
+  'ORDEN_NOTIFICADA',
+  'ORDEN_RECEPCION_CONFIRMADA',
+  'EN_EJECUCION',
 ]);
+
+export const ESTADOS_ORDEN_LABEL = Object.freeze({
+  REGISTRO_ORDENES: 'Registro de órdenes',
+  ORDEN_REGISTRADA: 'Orden registrada',
+  ORDEN_LISTA_NOTIFICACION: 'Orden lista para notificación',
+  ORDEN_NOTIFICADA: 'Orden notificada',
+  ORDEN_RECEPCION_CONFIRMADA: 'Recepción de orden confirmada',
+  EN_EJECUCION: 'En ejecución',
+  ORDEN_ANULADA: 'Orden anulada',
+  // Aliases / legacy mapeados a etiquetas vigentes
+  PENDIENTE_CCP_FIRMADO: 'Registro de órdenes',
+  CCP_FIRMADO_RECIBIDO: 'Registro de órdenes',
+  PENDIENTE_REGISTRO_ORDEN: 'Registro de órdenes',
+  ORDEN_BORRADOR: 'Orden registrada',
+  CRONOGRAMA_DEFINIDO: 'Orden registrada',
+  ORDEN_FIRMADA: 'Orden lista para notificación',
+  ORDEN_ENVIADA: 'Orden notificada',
+  ORDEN_ENVIADA_PENDIENTE_CONFIRMACION: 'Orden notificada',
+  ORDEN_EN_EJECUCION: 'En ejecución',
+  ORDEN_OBSERVADA: 'Orden observada',
+  DERIVADO_EJECUCION: 'En ejecución',
+});
+
+export function normalizeEstadoOrden(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, '_');
+  if (!s) return '';
+  if (s === 'PENDIENTE_CCP_FIRMADO' || s === 'CCP_FIRMADO_RECIBIDO'
+    || s === 'PENDIENTE_REGISTRO_ORDEN' || s === 'REGISTRO_DE_ORDENES') {
+    return 'REGISTRO_ORDENES';
+  }
+  if (s === 'ORDEN_BORRADOR' || s === 'CRONOGRAMA_DEFINIDO') return 'ORDEN_REGISTRADA';
+  if (s === 'ORDEN_FIRMADA' || s === 'LISTA_NOTIFICACION') return 'ORDEN_LISTA_NOTIFICACION';
+  if (s === 'ORDEN_ENVIADA' || s === 'ORDEN_ENVIADA_PENDIENTE_CONFIRMACION'
+    || s === 'PENDIENTE_CONFIRMACION' || s === 'NOTIFICADA') {
+    return 'ORDEN_NOTIFICADA';
+  }
+  if (s === 'RECEPCION_CONFIRMADA') return 'ORDEN_RECEPCION_CONFIRMADA';
+  if (s === 'ORDEN_EN_EJECUCION' || s === 'DERIVADO_EJECUCION' || s === 'EN_EJECUCION') {
+    return 'EN_EJECUCION';
+  }
+  if (ESTADOS_ORDEN_LABEL[s] || s === 'REGISTRO_ORDENES' || s === 'ORDEN_REGISTRADA'
+    || s === 'ORDEN_LISTA_NOTIFICACION' || s === 'ORDEN_NOTIFICADA'
+    || s === 'ORDEN_RECEPCION_CONFIRMADA' || s === 'ORDEN_ANULADA') {
+    return s;
+  }
+  return s;
+}
 
 export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
   PENDIENTE_ELABORAR: 'C.C. en elaboración',
@@ -49,6 +104,13 @@ export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
   DERIVADO_CCP: 'Derivado a CCP',
   ENVIADA_OPPM: 'Solicitud enviada a OPPM',
   CCP_REGISTRADO: 'CCP registrado',
+  REGISTRO_ORDENES: 'Registro de órdenes',
+  ORDEN_REGISTRADA: 'Orden registrada',
+  ORDEN_LISTA_NOTIFICACION: 'Orden lista para notificación',
+  ORDEN_NOTIFICADA: 'Orden notificada',
+  ORDEN_RECEPCION_CONFIRMADA: 'Recepción de orden confirmada',
+  EN_EJECUCION: 'En ejecución',
+  ORDEN_ANULADA: 'Orden anulada',
   ANULADO: 'Anulado',
 });
 
@@ -64,6 +126,8 @@ export function normalizeEstadoCuadroVigente(raw) {
   if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP') return 'CCP_REGISTRADO';
   if (s === 'PENDIENTE' || s === 'PENDIENTE_DE_ELABORAR') return 'PENDIENTE_ELABORAR';
   if (s === 'ELABORACION') return 'CUADRO_BORRADOR';
+  const orden = normalizeEstadoOrden(s);
+  if (ESTADOS_ORDEN_LABEL[orden]) return orden;
   if (PRIORIDAD_INDEX[s] != null || ESTADOS_CUADRO_VIGENTE_LABEL[s]) return s;
   return s;
 }
@@ -138,6 +202,29 @@ function hasEnviadaOppm(row = {}, opts = {}) {
   return e === 'ENVIADA_OPPM';
 }
 
+function resolveEstadoOrdenFromRow(row = {}, opts = {}) {
+  const raw = opts.estadoOrden || row.orden_estado || row.estado_orden || row.estado_orden_contratacion || '';
+  const code = normalizeEstadoOrden(raw);
+  if (code && code !== 'ORDEN_ANULADA' && (
+    ESTADOS_ORDEN_LABEL[code]
+    || ['REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
+      'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION'].includes(code)
+  )) {
+    return code;
+  }
+  if (row.derivado_ejecucion_at || opts.derivadoEjecucion) return 'EN_EJECUCION';
+  if (row.recibido_proveedor_at || opts.recepcionConfirmada) return 'ORDEN_RECEPCION_CONFIRMADA';
+  if (row.enviado_proveedor_at || opts.ordenEnviada || opts.ordenNotificada) return 'ORDEN_NOTIFICADA';
+  // Expediente visible en Registro de Órdenes (con o sin CCP firmado)
+  if (opts.enRegistroOrdenes === true || row.en_registro_ordenes === true) {
+    return 'REGISTRO_ORDENES';
+  }
+  if (opts.ccpFirmado === true || row.ccp_firmado === true || row.ccp_firmado_id) {
+    return 'REGISTRO_ORDENES';
+  }
+  return '';
+}
+
 /**
  * Resuelve el estado vigente del expediente.
  * Observaciones históricas NUNCA reemplazan un estado posterior (p. ej. DERIVADO_CCP / CCP_REGISTRADO).
@@ -153,7 +240,21 @@ export function resolveEstadoActualExpediente(row = {}, opts = {}) {
     row.solicitud_estado || row.estado_solicitud || opts.solicitudEstado || '',
   ).toUpperCase();
 
-  // 0) CCP registrado (código vigente) — máxima prioridad visual
+  // -1) Estados de Registro de Órdenes / Ejecución (prioridad sobre CCP registrado)
+  const ordenCode = resolveEstadoOrdenFromRow(row, opts);
+  if (ordenCode && ESTADOS_ORDEN_LABEL[ordenCode]) {
+    return {
+      code: ordenCode,
+      label: ESTADOS_ORDEN_LABEL[ordenCode],
+      workflowEtapa: workflowEtapa || (ordenCode === 'DERIVADO_EJECUCION' ? 'EJECUCION' : 'ORDEN'),
+      derivadoCcp: true,
+      ccpRegistrado: true,
+      soloLectura: true,
+      fuente: 'orden_contratacion',
+    };
+  }
+
+  // 0) CCP registrado (código vigente)
   if (hasCodigoCcpActivo(row, opts)) {
     return {
       code: 'CCP_REGISTRADO',
@@ -270,6 +371,30 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
     : { estado_cuadro: rowOrCode, estado: rowOrCode };
   const vigente = resolveEstadoActualExpediente(row, opts);
 
+  if (ESTADOS_ORDEN_LABEL[vigente.code]
+    || ['REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
+      'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION'].includes(vigente.code)) {
+    const colorMap = {
+      EN_EJECUCION: '#212529',
+      ORDEN_RECEPCION_CONFIRMADA: '#0d6efd',
+      ORDEN_NOTIFICADA: '#fd7e14',
+      ORDEN_LISTA_NOTIFICACION: '#20c997',
+      ORDEN_REGISTRADA: '#0dcaf0',
+      REGISTRO_ORDENES: '#6f42c1',
+      ORDEN_ANULADA: '#6c757d',
+    };
+    const color = colorMap[vigente.code] || '#6f42c1';
+    return {
+      code: vigente.code,
+      label: ESTADOS_ORDEN_LABEL[vigente.code] || vigente.label,
+      className: 'badge badge-estado-mod',
+      style: `background:${color};color:#fff`,
+      bootstrap: null,
+      derivadoCcp: true,
+      ccpRegistrado: true,
+      color,
+    };
+  }
   if (vigente.code === 'CCP_REGISTRADO' || vigente.ccpRegistrado) {
     return {
       code: 'CCP_REGISTRADO',
@@ -320,7 +445,7 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
 
 export function renderBadgeEstadoVigenteHtml(rowOrCode, escFn = (s) => String(s ?? ''), opts = {}) {
   const v = badgeVisualEstadoVigente(rowOrCode, opts);
-  if (v.code === 'CCP_REGISTRADO' || v.code === 'ENVIADA_OPPM' || v.derivadoCcp) {
+  if (ESTADOS_ORDEN_LABEL[v.code] || v.code === 'CCP_REGISTRADO' || v.code === 'ENVIADA_OPPM' || v.derivadoCcp) {
     return `<span class="${v.className}" style="${v.style}">${escFn(v.label)}</span>`;
   }
   const boot = opts.bootstrapClass || opts.fallbackBootstrap || 'secondary';

@@ -109,6 +109,43 @@ export const portalService = {
   async guardarBorradorCotizacion(body) {
     return portalRequest('/cotizaciones/borrador', { method: 'POST', body: JSON.stringify(body) });
   },
+  async listMisOrdenes() {
+    return portalRequest('/ordenes');
+  },
+  async getOrden(ordenId) {
+    return portalRequest(`/ordenes/${ordenId}`);
+  },
+  async confirmarRecepcionOrden(ordenId) {
+    return portalRequest(`/ordenes/${ordenId}/confirmar-recepcion`, { method: 'POST', body: '{}' });
+  },
+  async downloadOrdenDocumento(ordenId, documentoId, filename) {
+    const res = await fetch(
+      `${BASE}/ordenes/${ordenId}/documentos/${documentoId}`,
+      { headers: { ...portalHeaders() } },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Error ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'orden.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  async getOrdenByToken(token) {
+    return portalRequest(`/orden/${encodeURIComponent(token)}`);
+  },
+  async confirmarRecepcionByToken(token) {
+    return portalRequest(`/orden/${encodeURIComponent(token)}/confirmar-recepcion`, {
+      method: 'POST',
+      body: '{}',
+    });
+  },
 };
 
 export default portalService;

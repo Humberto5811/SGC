@@ -11,6 +11,7 @@ export const PROVEEDOR_ROUTES = {
   misConsultas: 'proveedor/mis-consultas',
   misCotizaciones: 'proveedor/mis-cotizaciones',
   estadoParticipacion: 'proveedor/estado-participacion',
+  ordenesRecibidas: 'proveedor/ordenes-recibidas',
 };
 
 export function isProveedorRoute(route) {
@@ -109,6 +110,7 @@ export function renderProveedorNav(active) {
     { route: PROVEEDOR_ROUTES.misInvitaciones, label: 'Mis Invitaciones', icon: 'bi-envelope-open' },
     { route: PROVEEDOR_ROUTES.misConsultas, label: 'Mis Consultas', icon: 'bi-chat-left-text' },
     { route: PROVEEDOR_ROUTES.misCotizaciones, label: 'Mis Cotizaciones', icon: 'bi-file-earmark-text' },
+    { route: PROVEEDOR_ROUTES.ordenesRecibidas, label: 'Órdenes recibidas', icon: 'bi-clipboard-check' },
     { route: PROVEEDOR_ROUTES.estadoParticipacion, label: 'Estado de Participación', icon: 'bi-activity' },
   ];
   return `

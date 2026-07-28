@@ -221,6 +221,79 @@ router.get('/estado-participacion', requirePortalProveedor, async (req, res, nex
   } catch (err) { next(err); }
 });
 
+// ——— Órdenes recibidas (Registro de Órdenes / Contrataciones) ———
+router.get('/ordenes', requirePortalProveedor, async (req, res, next) => {
+  try {
+    const { listarOrdenesPortalProveedor } = await import('../lib/ordenesProveedor.js');
+    const data = await listarOrdenesPortalProveedor(req.portalProveedor.id);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+router.get('/ordenes/:id', requirePortalProveedor, async (req, res, next) => {
+  try {
+    const { getOrdenPortalParaProveedor } = await import('../lib/ordenesProveedor.js');
+    const data = await getOrdenPortalParaProveedor(req.params.id, req.portalProveedor.id);
+    res.json({ data });
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+router.get('/ordenes/:id/documentos/:documentoId', requirePortalProveedor, async (req, res, next) => {
+  try {
+    const { descargarDocumentoPortal } = await import('../lib/ordenesProveedor.js');
+    const doc = await descargarDocumentoPortal(req.params.id, req.portalProveedor.id, req.params.documentoId);
+    const buf = Buffer.from(doc.contenido_base64, 'base64');
+    res.setHeader('Content-Type', doc.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${doc.nombre_archivo || 'orden.pdf'}"`);
+    res.send(buf);
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+router.post('/ordenes/:id/confirmar-recepcion', requirePortalProveedor, async (req, res, next) => {
+  try {
+    const { confirmarRecepcionDesdeSesion } = await import('../lib/ordenesProveedor.js');
+    const data = await confirmarRecepcionDesdeSesion(req.params.id, req.portalProveedor.id, {
+      ip: clientIp(req),
+      userAgent: req.headers['user-agent'] || '',
+    });
+    res.json({ data });
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+router.get('/orden/:token', async (req, res, next) => {
+  try {
+    const { getOrdenPortalPorToken } = await import('../lib/ordenesProveedor.js');
+    const data = await getOrdenPortalPorToken(req.params.token);
+    res.json({ success: true, data });
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+router.post('/orden/:token/confirmar-recepcion', async (req, res, next) => {
+  try {
+    const { confirmarRecepcionOrden } = await import('../lib/ordenesProveedor.js');
+    const data = await confirmarRecepcionOrden(req.params.token, {
+      ip: clientIp(req),
+      userAgent: req.headers['user-agent'] || '',
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
 export default router;
 
 export const portalAnalistaRouter = express.Router();

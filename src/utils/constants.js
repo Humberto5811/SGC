@@ -16,6 +16,7 @@ export const ROUTE_ROLES = {
   'contrataciones/recepcion-cotizaciones': ['dec', 'admin'],
   'contrataciones/validaciones': ['dec', 'admin', 'au'],
   'dec/ccp': ['dec', 'admin'],
+  'dec/registro-ordenes': ['dec', 'admin'],
   'dec/cuadro': ['dec', 'admin'],
   'portal-proveedores': [],
   ejecucion: ['dec', 'admin', 'au'],
