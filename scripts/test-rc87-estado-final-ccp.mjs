@@ -38,8 +38,8 @@ assert(
   'prioridad APROBADO_DEC > OBSERVADO_COORDINADOR',
 );
 assert(
-  prioridadEstadoCuadro('PENDIENTE_COORDINADOR') > prioridadEstadoCuadro('OBSERVADO_COORDINADOR'),
-  'prioridad revisión CM > observado CM',
+  prioridadEstadoCuadro('PENDIENTE_COORDINADOR') === prioridadEstadoCuadro('OBSERVADO_COORDINADOR'),
+  'prioridad revisión CM = observado CM (situación, no estado global distinto)',
 );
 
 // Historial completo del caso de regresión
@@ -100,7 +100,8 @@ assert(
 );
 assert(labelCuadroEstado('DERIVADO_CCP') === 'Derivado a CCP', 'BE label DERIVADO_CCP');
 assert(
-  labelEstadoCuadroVigente('OBSERVADO_COORDINADOR') === 'C.C. observado por Coordinador CM',
+  labelEstadoCuadroVigente('OBSERVADO_COORDINADOR') === 'C.C. en Coordinación CM - Observado'
+    || labelEstadoCuadroVigente('OBSERVADO_COORDINADOR') === 'C.C. observado por Coordinador CM',
   'historial conserva etiqueta de observación',
 );
 

@@ -74,15 +74,33 @@ function updateSelectionUi() {
 }
 
 function renderEstadoCell(row) {
+  // Preferir contrato central; no reconstruir prioridad con solo flags CCP.
+  if (row.estadoVigente?.codigo || row.estado_vigente) {
+    return renderBadgeEstadoVigenteHtml({
+      ...row,
+      codigo_ccp: row.codigo_ccp || '',
+      ccp_activo: !!row.ccp_activo || !!row.tiene_codigo,
+      orden_estado: row.orden_estado || '',
+      enviado_proveedor_at: row.enviado_proveedor_at || null,
+      orden_id: row.orden_id || null,
+      orden_resuelta: row.orden_resuelta,
+      expediente_derivado_pago: row.expediente_derivado_pago,
+    }, esc);
+  }
   const seed = {
     codigo_ccp: row.codigo_ccp || '',
     ccp_activo: !!row.ccp_activo || !!row.tiene_codigo,
-    estado_cuadro: 'DERIVADO_CCP',
-    solicitud_estado: 'EN_CCP',
+    estado_cuadro: row.estado_cuadro || 'DERIVADO_CCP',
+    solicitud_estado: row.solicitud_estado || 'EN_CCP',
     consolidacion_estado: row.consolidacion_estado || '',
     estado_ccp: row.estado_codigo || row.estado_ccp,
+    orden_estado: row.orden_estado || '',
+    enviado_proveedor_at: row.enviado_proveedor_at || null,
+    orden_id: row.orden_id || null,
+    orden_resuelta: row.orden_resuelta,
+    expediente_derivado_pago: row.expediente_derivado_pago,
   };
-  if (row.badge_style || row.ccp_registrado || row.tiene_codigo) {
+  if (row.badge_style || row.ccp_registrado || row.tiene_codigo || row.orden_estado || row.enviado_proveedor_at) {
     return renderBadgeEstadoVigenteHtml(seed, esc);
   }
   const label = row.etiqueta_estado || row.estado_ccp_label || row.estado_ccp || '—';

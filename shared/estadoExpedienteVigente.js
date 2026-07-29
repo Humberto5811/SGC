@@ -1,41 +1,34 @@
 /**
- * OD32 / OD35 / OD36 — Resolución del estado vigente del expediente.
- * Fuente única FE/BE: prioriza avance del workflow sobre observaciones históricas.
+ * Resolvedor único del estado global vigente del expediente SGC.
+ * Usa shared/estadoExpedienteCatalog.js como fuente de prioridad/labels/aliases.
  *
- * Prioridad (mayor gana):
- * EN_EJECUCION > ORDEN_RECEPCION_CONFIRMADA > ORDEN_NOTIFICADA >
- * ORDEN_LISTA_NOTIFICACION > ORDEN_REGISTRADA > REGISTRO_ORDENES >
- * CCP_REGISTRADO > DERIVADO_CCP > …
+ * API pública principal: resolveEstadoExpedienteVigente(evidence)
+ * Compat: resolveEstadoActualExpediente(row, opts) — campos históricos.
  */
+import {
+  normalizeEstadoCode,
+  getEstadoDef,
+  getPrioridad,
+  getLabelEstado,
+  isTerminalEstado,
+  SITUACIONES,
+  SCOPE,
+  getPrioridadLista,
+} from './estadoExpedienteCatalog.js';
 
-/** Mayor índice = más avanzado (reemplaza visualmente a los anteriores). */
-export const PRIORIDAD_ESTADO_CUADRO = Object.freeze([
-  'PENDIENTE_ELABORAR',
-  'BORRADOR',
-  'EN_ELABORACION',
-  'CUADRO_BORRADOR',
-  'GENERADO',
-  'GENERADO_PRELIMINAR',
-  'ADJUDICADO',
-  'OBSERVADO',
-  'OBSERVADO_COORDINADOR',
-  'PENDIENTE_COORDINADOR',
-  'FIRMADO_COORDINADOR',
-  'OBSERVADO_DEC',
-  'PENDIENTE_DEC',
-  'APROBADO_DEC',
-  'PENDIENTE_CCP',
-  'FIRMADO',
-  'DERIVADO_CCP',
-  'ENVIADA_OPPM',
-  'CCP_REGISTRADO',
-  'REGISTRO_ORDENES',
-  'ORDEN_REGISTRADA',
-  'ORDEN_LISTA_NOTIFICACION',
-  'ORDEN_NOTIFICADA',
-  'ORDEN_RECEPCION_CONFIRMADA',
-  'EN_EJECUCION',
-]);
+export {
+  normalizeEstadoCode,
+  getEstadoDef,
+  getPrioridad,
+  getLabelEstado,
+  isTerminalEstado,
+  SITUACIONES,
+  SCOPE,
+  getPrioridadLista,
+} from './estadoExpedienteCatalog.js';
+
+/** @deprecated usar getPrioridadLista / catálogo — conservado por compat. */
+export const PRIORIDAD_ESTADO_CUADRO = Object.freeze(getPrioridadLista());
 
 export const ESTADOS_ORDEN_LABEL = Object.freeze({
   REGISTRO_ORDENES: 'Registro de órdenes',
@@ -45,7 +38,8 @@ export const ESTADOS_ORDEN_LABEL = Object.freeze({
   ORDEN_RECEPCION_CONFIRMADA: 'Recepción de orden confirmada',
   EN_EJECUCION: 'En ejecución',
   ORDEN_ANULADA: 'Orden anulada',
-  // Aliases / legacy mapeados a etiquetas vigentes
+  ORDEN_RESUELTA: 'Orden resuelta',
+  EXPEDIENTE_DERIVADO_PAGO: 'Expediente derivado a pago',
   PENDIENTE_CCP_FIRMADO: 'Registro de órdenes',
   CCP_FIRMADO_RECIBIDO: 'Registro de órdenes',
   PENDIENTE_REGISTRO_ORDEN: 'Registro de órdenes',
@@ -60,28 +54,7 @@ export const ESTADOS_ORDEN_LABEL = Object.freeze({
 });
 
 export function normalizeEstadoOrden(raw) {
-  const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, '_');
-  if (!s) return '';
-  if (s === 'PENDIENTE_CCP_FIRMADO' || s === 'CCP_FIRMADO_RECIBIDO'
-    || s === 'PENDIENTE_REGISTRO_ORDEN' || s === 'REGISTRO_DE_ORDENES') {
-    return 'REGISTRO_ORDENES';
-  }
-  if (s === 'ORDEN_BORRADOR' || s === 'CRONOGRAMA_DEFINIDO') return 'ORDEN_REGISTRADA';
-  if (s === 'ORDEN_FIRMADA' || s === 'LISTA_NOTIFICACION') return 'ORDEN_LISTA_NOTIFICACION';
-  if (s === 'ORDEN_ENVIADA' || s === 'ORDEN_ENVIADA_PENDIENTE_CONFIRMACION'
-    || s === 'PENDIENTE_CONFIRMACION' || s === 'NOTIFICADA') {
-    return 'ORDEN_NOTIFICADA';
-  }
-  if (s === 'RECEPCION_CONFIRMADA') return 'ORDEN_RECEPCION_CONFIRMADA';
-  if (s === 'ORDEN_EN_EJECUCION' || s === 'DERIVADO_EJECUCION' || s === 'EN_EJECUCION') {
-    return 'EN_EJECUCION';
-  }
-  if (ESTADOS_ORDEN_LABEL[s] || s === 'REGISTRO_ORDENES' || s === 'ORDEN_REGISTRADA'
-    || s === 'ORDEN_LISTA_NOTIFICACION' || s === 'ORDEN_NOTIFICADA'
-    || s === 'ORDEN_RECEPCION_CONFIRMADA' || s === 'ORDEN_ANULADA') {
-    return s;
-  }
-  return s;
+  return normalizeEstadoCode(raw);
 }
 
 export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
@@ -92,18 +65,23 @@ export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
   GENERADO: 'C.C. en elaboración',
   GENERADO_PRELIMINAR: 'C.C. en elaboración',
   ADJUDICADO: 'C.C. en elaboración',
-  OBSERVADO: 'C.C. observado por Coordinador CM',
-  OBSERVADO_COORDINADOR: 'C.C. observado por Coordinador CM',
-  PENDIENTE_COORDINADOR: 'C.C. en revisión Coordinador CM',
-  FIRMADO_COORDINADOR: 'C.C. en revisión Coordinador CM',
-  OBSERVADO_DEC: 'C.C. observado por DEC',
-  PENDIENTE_DEC: 'C.C. en revisión DEC',
+  OBSERVADO: 'C.C. en Coordinación CM - Observado',
+  OBSERVADO_COORDINADOR: 'C.C. en Coordinación CM - Observado',
+  PENDIENTE_COORDINADOR: 'C.C. en Coordinación CM',
+  FIRMADO_COORDINADOR: 'C.C. en Coordinación CM',
+  OBSERVADO_DEC: 'C.C. en DEC - Observado',
+  PENDIENTE_DEC: 'C.C. en DEC',
   APROBADO_DEC: 'C.C. aprobado',
   PENDIENTE_CCP: 'C.C. aprobado',
   FIRMADO: 'C.C. aprobado',
+  CUADRO_EN_COORDINACION_CM: 'C.C. en Coordinación CM',
+  CUADRO_EN_DEC: 'C.C. en DEC',
+  CUADRO_COMPARATIVO_APROBADO: 'C.C. aprobado',
+  CUADRO_COMPARATIVO_GENERADO: 'C.C. generado',
   DERIVADO_CCP: 'Derivado a CCP',
   ENVIADA_OPPM: 'Solicitud enviada a OPPM',
-  CCP_REGISTRADO: 'CCP registrado',
+  CCP_REGISTRADO: 'CCP registrada',
+  CCP_REGISTRADA: 'CCP registrada',
   REGISTRO_ORDENES: 'Registro de órdenes',
   ORDEN_REGISTRADA: 'Orden registrada',
   ORDEN_LISTA_NOTIFICACION: 'Orden lista para notificación',
@@ -111,43 +89,135 @@ export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
   ORDEN_RECEPCION_CONFIRMADA: 'Recepción de orden confirmada',
   EN_EJECUCION: 'En ejecución',
   ORDEN_ANULADA: 'Orden anulada',
+  ORDEN_RESUELTA: 'Orden resuelta',
+  EXPEDIENTE_DERIVADO_PAGO: 'Expediente derivado a pago',
   ANULADO: 'Anulado',
 });
 
-const PRIORIDAD_INDEX = Object.freeze(
-  Object.fromEntries(PRIORIDAD_ESTADO_CUADRO.map((c, i) => [c, i])),
-);
-
 export function normalizeEstadoCuadroVigente(raw) {
-  const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, '_');
-  if (!s) return '';
-  if (s === 'DERIVADO_A_CCP' || s === 'EN_CCP' || s === 'CCP') return 'DERIVADO_CCP';
-  if (s === 'ENVIADO_OPPM' || s === 'SOLICITUD_ENVIADA_OPPM') return 'ENVIADA_OPPM';
-  if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP') return 'CCP_REGISTRADO';
-  if (s === 'PENDIENTE' || s === 'PENDIENTE_DE_ELABORAR') return 'PENDIENTE_ELABORAR';
-  if (s === 'ELABORACION') return 'CUADRO_BORRADOR';
-  const orden = normalizeEstadoOrden(s);
-  if (ESTADOS_ORDEN_LABEL[orden]) return orden;
-  if (PRIORIDAD_INDEX[s] != null || ESTADOS_CUADRO_VIGENTE_LABEL[s]) return s;
-  return s;
+  return normalizeEstadoCode(raw);
 }
 
 export function prioridadEstadoCuadro(code) {
-  const n = normalizeEstadoCuadroVigente(code);
-  return PRIORIDAD_INDEX[n] != null ? PRIORIDAD_INDEX[n] : -1;
+  return getPrioridad(code);
 }
 
 export function labelEstadoCuadroVigente(code, opts = {}) {
-  const e = normalizeEstadoCuadroVigente(code);
-  if (e === 'CCP_REGISTRADO') return 'CCP registrado';
-  if (e === 'ENVIADA_OPPM') return 'Solicitud enviada a OPPM';
-  if (e === 'DERIVADO_CCP') return 'Derivado a CCP';
+  const raw = String(code || '').trim().toUpperCase().replace(/\s+/g, '_');
+  // Etiquetas históricas de observación (para trazabilidad / historial)
+  if (raw === 'OBSERVADO_COORDINADOR' || raw === 'OBSERVADO') {
+    return 'C.C. en Coordinación CM - Observado';
+  }
+  if (raw === 'OBSERVADO_DEC') return 'C.C. en DEC - Observado';
+  const e = normalizeEstadoCode(code);
   const tieneRespuesta = !!(opts.subsanado
     || String(opts.respuesta_observaciones || opts.respuesta || '').trim());
-  if (tieneRespuesta && (e === 'OBSERVADO_COORDINADOR' || e === 'OBSERVADO_DEC' || e === 'OBSERVADO')) {
-    return 'C.C. subsanado';
+  if (tieneRespuesta && (e === 'CUADRO_EN_COORDINACION_CM' || e === 'CUADRO_EN_DEC')) {
+    if (opts.situacionObservada) return 'C.C. subsanado';
   }
+  const def = getEstadoDef(e);
+  if (def) return def.label;
   return ESTADOS_CUADRO_VIGENTE_LABEL[e] || e || 'C.C. en elaboración';
+}
+
+/** True si el valor es evidencia real (no solo existencia de campo). */
+export function isTruthyEvidence(v) {
+  if (v === true || v === 1 || v === '1' || v === 'true' || v === 'TRUE') return true;
+  if (v == null || v === false || v === 0 || v === '' || v === '0' || v === 'false') return false;
+  if (v instanceof Date) return !Number.isNaN(v.getTime());
+  if (typeof v === 'string') return String(v).trim().length > 0;
+  if (typeof v === 'number') return Number.isFinite(v) && v !== 0;
+  return !!v;
+}
+
+/**
+ * Normaliza nombres heterogéneos de evidencia a contrato común.
+ */
+export function normalizeEstadoFlags(row = {}, opts = {}) {
+  const r = row && typeof row === 'object' ? row : {};
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const codigoCcp = String(o.codigoCcp || r.codigo_ccp || r.codigoCcp || '').trim();
+  const estadoHint = normalizeEstadoCode(
+    o.estadoCcp || r.estado_ccp || r.estado_codigo || r.estado_vigente || '',
+  );
+  const ccpRegistrada = !!(
+    o.ccpActivo === true || o.ccp_activo === true
+    || r.ccp_activo === true || r.tiene_codigo === true
+    || r.ccp_registrado === true || r.ccpRegistrado === true
+    || estadoHint === 'CCP_REGISTRADA'
+    || codigoCcp
+  );
+  const ordenEstado = normalizeEstadoCode(
+    o.estadoOrden || r.orden_estado || r.estado_orden || r.estado_orden_contratacion || '',
+  );
+  const ordenNotificada = !!(
+    isTruthyEvidence(r.enviado_proveedor_at) || o.ordenEnviada || o.ordenNotificada
+    || ordenEstado === 'ORDEN_NOTIFICADA'
+  );
+  const ordenRegistrada = !!(
+    ordenNotificada
+    || ordenEstado === 'ORDEN_REGISTRADA'
+    || ordenEstado === 'ORDEN_LISTA_NOTIFICACION'
+    || ordenEstado === 'ORDEN_RECEPCION_CONFIRMADA'
+    || ordenEstado === 'EN_EJECUCION'
+    || isTruthyEvidence(r.orden_id) || isTruthyEvidence(o.ordenId)
+  );
+  const ordenResuelta = !!(
+    o.ordenResuelta || r.orden_resuelta === true
+    || isTruthyEvidence(r.orden_resuelta_at) || isTruthyEvidence(r.resuelta_at)
+    || ordenEstado === 'ORDEN_RESUELTA'
+    || normalizeEstadoCode(r.estado_resolucion || '') === 'ORDEN_RESUELTA'
+  );
+  const expedienteDerivadoPago = !!(
+    o.expedienteDerivadoPago || r.expediente_derivado_pago === true
+    || isTruthyEvidence(r.derivado_pago_at) || isTruthyEvidence(r.derivado_a_pago_at)
+    || normalizeEstadoCode(r.estado_pago || r.pago_estado || '') === 'EXPEDIENTE_DERIVADO_PAGO'
+    || ordenEstado === 'EXPEDIENTE_DERIVADO_PAGO'
+    || normalizeEstadoCode(r.recepcion_estado_global || r.estado_recepcion_bienes || '') === 'EXPEDIENTE_DERIVADO_PAGO'
+  );
+
+  const recepcionEstado = normalizeEstadoCode(
+    o.recepcionEstado || r.recepcion_estado_global || r.estado_recepcion_bienes || r.estado_global_recepcion || '',
+  );
+  const recepcionBienesCodes = new Set([
+    'RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+    'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU', 'CONFORMIDAD_EN_COORDINACION_CM',
+  ]);
+  const enRecepcionBienes = !!(
+    recepcionBienesCodes.has(recepcionEstado)
+    || o.recepcionBienesPendiente || r.recepcion_bienes_pendiente
+    || isTruthyEvidence(r.recepcion_bienes_expediente_id)
+  );
+
+  return {
+    requerimientoRegistrado: isTruthyEvidence(r.id || r.requerimiento_id),
+    requerimientoAprobado: !!(o.requerimientoAprobado || r.requerimiento_aprobado),
+    programacionAprobada: !!(o.programacionAprobada || r.programacion_aprobada),
+    invitacionEnviada: !!(o.invitacionEnviada || r.invitacion_enviada),
+    cotizacionesRecibidas: !!(o.cotizacionesRecibidas || r.cotizaciones_recibidas),
+    validacionEnviada: !!(o.validacionEnviada || r.validacion_enviada),
+    validadoPorAu: !!(o.validadoPorAu || r.validado_por_au),
+    cuadroGenerado: !!(o.cuadroGenerado || r.cuadro_generado || r.cuadro_id),
+    cuadroEnCoordinacion: !!(o.cuadroEnCoordinacion
+      || normalizeEstadoCode(r.estado_cuadro || '') === 'CUADRO_EN_COORDINACION_CM'),
+    cuadroEnDec: !!(o.cuadroEnDec
+      || normalizeEstadoCode(r.estado_cuadro || '') === 'CUADRO_EN_DEC'),
+    cuadroAprobado: !!(o.cuadroAprobado
+      || ['CUADRO_COMPARATIVO_APROBADO', 'APROBADO_DEC', 'PENDIENTE_CCP', 'FIRMADO']
+        .includes(normalizeEstadoCode(r.estado_cuadro || r.cuadro_estado || ''))),
+    ccpRegistrada,
+    ordenRegistrada,
+    ordenNotificada,
+    ordenResuelta,
+    expedienteDerivadoPago,
+    enRecepcionBienes,
+    recepcionEstado,
+    ordenEstado,
+    codigoCcp,
+    enviadoProveedorAt: r.enviado_proveedor_at || null,
+    recibidoProveedorAt: r.recibido_proveedor_at || null,
+    derivadoEjecucionAt: r.derivado_ejecucion_at || null,
+  };
 }
 
 function extractWorkflowSnapshot(row = {}) {
@@ -164,17 +234,50 @@ function extractWorkflowSnapshot(row = {}) {
 function resolveWorkflowEtapa(row = {}, snap = null) {
   const s = snap || extractWorkflowSnapshot(row);
   if (s?.etapaActual) return String(s.etapaActual).toUpperCase();
-  const e = String(row.estado_actual || row.estadoActual || row.etapa || '').toUpperCase();
-  return e;
+  return String(row.estado_actual || row.estadoActual || row.etapa || '').toUpperCase();
 }
 
-function pickBestCode(codes) {
+function detectSituacionObservada(row = {}, opts = {}, rawCodes = []) {
+  if (opts.situacion && typeof opts.situacion === 'object') return opts.situacion;
+  if (row.situacion && typeof row.situacion === 'object') return row.situacion;
+
+  const raws = rawCodes.map((x) => String(x || '').trim().toUpperCase());
+  const isObsCoord = raws.some((s) => s === 'OBSERVADO_COORDINADOR' || s === 'OBSERVADO');
+  const isObsDec = raws.some((s) => s === 'OBSERVADO_DEC');
+  if (!isObsCoord && !isObsDec && !opts.observado && !row.observado) return null;
+
+  return {
+    codigo: SITUACIONES.OBSERVADO.codigo,
+    label: SITUACIONES.OBSERVADO.label,
+    observadoPor: opts.observadoPor || row.observado_por || null,
+    origen: opts.origen || row.origen_observacion || (isObsDec ? 'DEC' : 'COORDINACION_CM'),
+    destino: opts.destino || row.destino_observacion || null,
+    motivo: opts.motivo || row.motivo_observacion || row.observacion || null,
+    observadoAt: opts.observadoAt || row.observado_at || null,
+    responsableSubsanacion: opts.responsableSubsanacion || row.responsable_subsanacion || null,
+  };
+}
+
+function composeLabel(codigo, situacion) {
+  const base = getLabelEstado(codigo) || ESTADOS_CUADRO_VIGENTE_LABEL[codigo] || codigo;
+  if (situacion?.codigo === 'OBSERVADO') {
+    if (codigo === 'CUADRO_EN_COORDINACION_CM') return 'C.C. en Coordinación CM - Observado';
+    if (codigo === 'CUADRO_EN_DEC') return 'C.C. en DEC - Observado';
+    return `${base} - Observado`;
+  }
+  return base;
+}
+
+function pickBestByPriority(codes) {
   let best = '';
   let bestPrio = -1;
   for (const raw of codes) {
-    const c = normalizeEstadoCuadroVigente(raw);
-    if (!c || (PRIORIDAD_INDEX[c] == null && c !== 'ANULADO')) continue;
-    const p = c === 'ANULADO' ? 999 : prioridadEstadoCuadro(c);
+    const c = normalizeEstadoCode(raw);
+    if (!c) continue;
+    if (c === 'ANULADO' || c === 'ORDEN_ANULADA') {
+      // Anulado solo gana si no hay nada más; prioridad baja en catálogo
+    }
+    const p = c === 'ANULADO' ? 9999 : getPrioridad(c);
     if (p > bestPrio) {
       bestPrio = p;
       best = c;
@@ -183,39 +286,24 @@ function pickBestCode(codes) {
   return best;
 }
 
-function hasCodigoCcpActivo(row = {}, opts = {}) {
-  if (opts.ccpActivo === true || opts.ccp_activo === true) return true;
-  if (row.ccp_activo === true || row.tiene_codigo === true || row.ccp_registrado === true) return true;
-  const estadoHint = normalizeEstadoCuadroVigente(
-    opts.estadoCcp || row.estado_ccp || row.estado_codigo || row.estado_vigente || '',
-  );
-  if (estadoHint === 'CCP_REGISTRADO') return true;
-  const codigo = String(opts.codigoCcp || row.codigo_ccp || row.codigoCcp || '').trim();
-  return !!codigo;
-}
-
-function hasEnviadaOppm(row = {}, opts = {}) {
-  if (opts.enviadaOppm === true || row.enviada_oppm === true) return true;
-  const e = normalizeEstadoCuadroVigente(
-    opts.consolidacionEstado || row.consolidacion_estado || row.estado_ccp || '',
-  );
-  return e === 'ENVIADA_OPPM';
-}
-
-function resolveEstadoOrdenFromRow(row = {}, opts = {}) {
-  const raw = opts.estadoOrden || row.orden_estado || row.estado_orden || row.estado_orden_contratacion || '';
-  const code = normalizeEstadoOrden(raw);
-  if (code && code !== 'ORDEN_ANULADA' && (
-    ESTADOS_ORDEN_LABEL[code]
-    || ['REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
-      'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION'].includes(code)
-  )) {
+function resolveEstadoOrdenFromFlags(flags, row = {}, opts = {}) {
+  if (flags.ordenResuelta) return 'ORDEN_RESUELTA';
+  if (flags.expedienteDerivadoPago) return 'EXPEDIENTE_DERIVADO_PAGO';
+  const code = flags.ordenEstado;
+  const ordenCodes = new Set([
+    'REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
+    'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION',
+    'ORDEN_ANULADA', 'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
+  ]);
+  if (code && code !== 'ORDEN_ANULADA' && (ESTADOS_ORDEN_LABEL[code] || ordenCodes.has(code))) {
     return code;
   }
-  if (row.derivado_ejecucion_at || opts.derivadoEjecucion) return 'EN_EJECUCION';
-  if (row.recibido_proveedor_at || opts.recepcionConfirmada) return 'ORDEN_RECEPCION_CONFIRMADA';
-  if (row.enviado_proveedor_at || opts.ordenEnviada || opts.ordenNotificada) return 'ORDEN_NOTIFICADA';
-  // Expediente visible en Registro de Órdenes (con o sin CCP firmado)
+  if (isTruthyEvidence(row.derivado_ejecucion_at) || opts.derivadoEjecucion) return 'EN_EJECUCION';
+  if (isTruthyEvidence(row.recibido_proveedor_at) || opts.recepcionConfirmada) {
+    return 'ORDEN_RECEPCION_CONFIRMADA';
+  }
+  if (flags.ordenNotificada) return 'ORDEN_NOTIFICADA';
+  if (flags.ordenRegistrada) return 'ORDEN_REGISTRADA';
   if (opts.enRegistroOrdenes === true || row.en_registro_ordenes === true) {
     return 'REGISTRO_ORDENES';
   }
@@ -225,13 +313,56 @@ function resolveEstadoOrdenFromRow(row = {}, opts = {}) {
   return '';
 }
 
+function buildResult(codigo, {
+  situacion = null,
+  fuente = '',
+  evidencia = null,
+  workflowEtapa = '',
+  estadoInterno = null,
+} = {}) {
+  const def = getEstadoDef(codigo);
+  const label = composeLabel(codigo, situacion);
+  const etapa = def?.etapa || workflowEtapa || '';
+  const prioridad = def ? def.prioridad : getPrioridad(codigo);
+  const isCcpOrLater = prioridad >= getPrioridad('DERIVADO_CCP');
+  const isCcpRegistradaOrLater = prioridad >= getPrioridad('CCP_REGISTRADA');
+  const isOrdenFamily = prioridad >= getPrioridad('REGISTRO_ORDENES')
+    && codigo !== 'CCP_REGISTRADA';
+
+  return {
+    // Contrato nuevo
+    codigo,
+    label,
+    etapa,
+    prioridad,
+    scope: SCOPE.GLOBAL,
+    situacion: situacion || null,
+    fuente,
+    evidencia,
+    estadoInterno: estadoInterno || null,
+    estadoVigente: {
+      codigo,
+      label,
+      etapa,
+      prioridad,
+    },
+    // Compat histórico (resolveEstadoActualExpediente / badges)
+    code: codigo,
+    workflowEtapa: etapa || workflowEtapa,
+    derivadoCcp: isCcpOrLater || isOrdenFamily,
+    ccpRegistrado: isCcpRegistradaOrLater || isOrdenFamily,
+    soloLectura: isCcpOrLater || isTerminalEstado(codigo)
+      || ['CUADRO_EN_COORDINACION_CM', 'CUADRO_EN_DEC', 'ANULADO'].includes(codigo),
+  };
+}
+
 /**
- * Resuelve el estado vigente del expediente.
- * Observaciones históricas NUNCA reemplazan un estado posterior (p. ej. DERIVADO_CCP / CCP_REGISTRADO).
- *
- * @returns {{ code: string, label: string, workflowEtapa: string, derivadoCcp: boolean, ccpRegistrado: boolean, soloLectura: boolean, fuente: string }}
+ * API pública principal.
+ * @param {object} evidence — fila enriquecida o flags normalizados + campos crudos
  */
-export function resolveEstadoActualExpediente(row = {}, opts = {}) {
+export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
+  const row = evidence && typeof evidence === 'object' ? evidence : {};
+  const flags = normalizeEstadoFlags(row, opts);
   const snap = extractWorkflowSnapshot(row);
   const workflowEtapa = String(
     opts.workflowEtapa || resolveWorkflowEtapa(row, snap) || '',
@@ -240,140 +371,206 @@ export function resolveEstadoActualExpediente(row = {}, opts = {}) {
     row.solicitud_estado || row.estado_solicitud || opts.solicitudEstado || '',
   ).toUpperCase();
 
-  // -1) Estados de Registro de Órdenes / Ejecución (prioridad sobre CCP registrado)
-  const ordenCode = resolveEstadoOrdenFromRow(row, opts);
-  if (ordenCode && ESTADOS_ORDEN_LABEL[ordenCode]) {
-    return {
-      code: ordenCode,
-      label: ESTADOS_ORDEN_LABEL[ordenCode],
-      workflowEtapa: workflowEtapa || (ordenCode === 'DERIVADO_EJECUCION' ? 'EJECUCION' : 'ORDEN'),
-      derivadoCcp: true,
-      ccpRegistrado: true,
-      soloLectura: true,
+  const rawCuadroCodes = [
+    opts.estadoCuadro,
+    row.estado_cuadro,
+    row.cuadro_estado,
+    row.estado_cuadro_db,
+    opts.revisionEstado,
+    snap?.revisionEstado,
+    row.estado,
+  ];
+  const situacion = detectSituacionObservada(row, opts, rawCuadroCodes);
+
+  // Terminal / post-orden explícitos
+  if (flags.ordenResuelta) {
+    return buildResult('ORDEN_RESUELTA', {
+      situacion: null, fuente: 'orden_resuelta', evidencia: flags, workflowEtapa: 'RESOLUCION',
+    });
+  }
+  if (flags.expedienteDerivadoPago) {
+    return buildResult('EXPEDIENTE_DERIVADO_PAGO', {
+      situacion: null, fuente: 'derivado_pago', evidencia: flags, workflowEtapa: 'PAGO',
+    });
+  }
+
+  // Recepción de bienes / conformidad (supera ORDEN_NOTIFICADA)
+  const recepcionCodes = [
+    'CONFORMIDAD_EN_COORDINACION_CM',
+    'CONFORMIDAD_RECIBIDA_AU',
+    'CONFORMIDAD_PENDIENTE_AU',
+    'BIEN_RECIBIDO_ALMACEN',
+    'RECEPCION_BIENES_PENDIENTE',
+  ];
+  if (flags.recepcionEstado && recepcionCodes.includes(flags.recepcionEstado)) {
+    const sit = (flags.recepcionEstado === 'CONFORMIDAD_EN_COORDINACION_CM'
+      || flags.recepcionEstado === 'CONFORMIDAD_PENDIENTE_AU'
+      || flags.recepcionEstado === 'CONFORMIDAD_RECIBIDA_AU')
+      ? situacionAplicableAlEstado(flags.recepcionEstado, situacion)
+      : null;
+    return buildResult(flags.recepcionEstado, {
+      situacion: sit,
+      fuente: 'recepcion_bienes',
+      evidencia: flags,
+      workflowEtapa: getEstadoDef(flags.recepcionEstado)?.etapa || 'RECEPCION_BIENES',
+      estadoInterno: row.recepcion_estado_interno
+        ? {
+          codigo: row.recepcion_estado_interno,
+          label: row.recepcion_estado_interno,
+          modulo: 'RECEPCION_BIENES',
+        }
+        : null,
+    });
+  }
+  // OC bienes notificada sin expediente de recepción explícito aún
+  if (flags.enRecepcionBienes && flags.ordenNotificada) {
+    return buildResult('RECEPCION_BIENES_PENDIENTE', {
+      situacion: null, fuente: 'recepcion_bienes_pendiente', evidencia: flags, workflowEtapa: 'RECEPCION_BIENES',
+    });
+  }
+
+  // Órdenes (siempre por encima de CCP)
+  const ordenCode = resolveEstadoOrdenFromFlags(flags, row, opts);
+  if (ordenCode && (ESTADOS_ORDEN_LABEL[ordenCode] || getEstadoDef(ordenCode))) {
+    return buildResult(ordenCode, {
+      situacion: null,
       fuente: 'orden_contratacion',
-    };
+      evidencia: flags,
+      workflowEtapa: ordenCode === 'EN_EJECUCION' ? 'EJECUCION' : 'ORDEN',
+      estadoInterno: ordenCode === 'ORDEN_LISTA_NOTIFICACION'
+        ? { codigo: ordenCode, label: getLabelEstado(ordenCode), modulo: 'REGISTRO_ORDENES' }
+        : null,
+    });
   }
 
-  // 0) CCP registrado (código vigente)
-  if (hasCodigoCcpActivo(row, opts)) {
-    return {
-      code: 'CCP_REGISTRADO',
-      label: 'CCP registrado',
-      workflowEtapa: workflowEtapa || 'CCP',
-      derivadoCcp: true,
-      ccpRegistrado: true,
-      soloLectura: true,
-      fuente: 'ccp_codigo_activo',
-    };
+  // CCP registrada
+  if (flags.ccpRegistrada) {
+    return buildResult('CCP_REGISTRADA', {
+      situacion: null, fuente: 'ccp_codigo_activo', evidencia: flags, workflowEtapa: 'CCP',
+    });
   }
 
-  // 0b) Solicitud CCP enviada a OPPM (sin código aún)
-  if (hasEnviadaOppm(row, opts)) {
-    return {
-      code: 'ENVIADA_OPPM',
-      label: 'Solicitud enviada a OPPM',
-      workflowEtapa: workflowEtapa || 'CCP',
-      derivadoCcp: true,
-      ccpRegistrado: false,
-      soloLectura: true,
-      fuente: 'ccp_enviada_oppm',
-    };
+  // Enviada OPPM
+  const consolidacion = normalizeEstadoCode(
+    opts.consolidacionEstado || row.consolidacion_estado || row.estado_ccp || '',
+  );
+  if (opts.enviadaOppm === true || row.enviada_oppm === true || consolidacion === 'ENVIADA_OPPM') {
+    return buildResult('ENVIADA_OPPM', {
+      situacion: null, fuente: 'ccp_enviada_oppm', evidencia: flags, workflowEtapa: 'CCP',
+    });
   }
 
-  // 1) Última transición oficial / etapa CCP prevalece sobre cualquier obs. histórica
+  // Derivado CCP
   if (
     workflowEtapa === 'CCP'
     || solicitudEstado === 'EN_CCP'
-    || normalizeEstadoCuadroVigente(opts.estadoCuadro) === 'DERIVADO_CCP'
-    || normalizeEstadoCuadroVigente(row.estado_cuadro) === 'DERIVADO_CCP'
-    || normalizeEstadoCuadroVigente(row.cuadro_estado) === 'DERIVADO_CCP'
-    || normalizeEstadoCuadroVigente(row.estado) === 'DERIVADO_CCP'
-    || normalizeEstadoCuadroVigente(opts.revisionEstado) === 'DERIVADO_CCP'
-    || normalizeEstadoCuadroVigente(snap?.revisionEstado) === 'DERIVADO_CCP'
+    || normalizeEstadoCode(opts.estadoCuadro) === 'DERIVADO_CCP'
+    || normalizeEstadoCode(row.estado_cuadro) === 'DERIVADO_CCP'
+    || normalizeEstadoCode(row.cuadro_estado) === 'DERIVADO_CCP'
+    || normalizeEstadoCode(row.estado) === 'DERIVADO_CCP'
+    || normalizeEstadoCode(opts.revisionEstado) === 'DERIVADO_CCP'
+    || normalizeEstadoCode(snap?.revisionEstado) === 'DERIVADO_CCP'
   ) {
-    return {
-      code: 'DERIVADO_CCP',
-      label: 'Derivado a CCP',
-      workflowEtapa: workflowEtapa || 'CCP',
-      derivadoCcp: true,
-      ccpRegistrado: false,
-      soloLectura: true,
-      fuente: 'workflow_ccp',
-    };
+    return buildResult('DERIVADO_CCP', {
+      situacion: null, fuente: 'workflow_ccp', evidencia: flags, workflowEtapa: 'CCP',
+    });
   }
 
-  // 2) Preferir estado documental actual del cuadro (DB) sobre flags históricos
-  const estadoCuadroAuth = pickBestCode([
+  // Cuadro / resto por prioridad de catálogo
+  const estadoCuadroAuth = pickBestByPriority([
     opts.estadoCuadro,
     row.estado_cuadro,
     row.cuadro_estado,
     row.estado_cuadro_db,
   ]);
-  const revisionAuth = pickBestCode([
+  const revisionAuth = pickBestByPriority([
     opts.revisionEstado,
     snap?.revisionEstado,
   ]);
 
   let best = '';
   if (estadoCuadroAuth && revisionAuth) {
-    best = prioridadEstadoCuadro(estadoCuadroAuth) >= prioridadEstadoCuadro(revisionAuth)
+    best = getPrioridad(estadoCuadroAuth) >= getPrioridad(revisionAuth)
       ? estadoCuadroAuth
       : revisionAuth;
   } else {
-    best = estadoCuadroAuth || revisionAuth || pickBestCode([row.estado]);
+    best = estadoCuadroAuth || revisionAuth || pickBestByPriority([row.estado]);
   }
 
   if (!best && workflowEtapa === 'CUADRO_COMPARATIVO') {
     best = 'CUADRO_BORRADOR';
   }
+  if (!best) best = 'PENDIENTE_ELABORAR';
 
-  const datos = row.datos_json || row.cuadro_datos || {};
-  const label = labelEstadoCuadroVigente(best, {
-    respuesta_observaciones: opts.respuesta_observaciones
-      || row.respuesta_observaciones
-      || datos.respuesta_observaciones
-      || '',
-    subsanado: !!opts.subsanado || !!row.subsanado,
+  // Situación OBSERVADO solo adorna estados de cuadro aún en revisión.
+  // No contaminar DERIVADO_CCP / CCP / Órdenes con observaciones históricas.
+  const situacionAplicada = situacionAplicableAlEstado(best, situacion);
+
+  return buildResult(best, {
+    situacion: situacionAplicada,
+    fuente: best ? 'prioridad_catalogo' : 'default',
+    evidencia: flags,
+    workflowEtapa: workflowEtapa || getEstadoDef(best)?.etapa || '',
   });
+}
 
-  return {
-    code: best || 'PENDIENTE_ELABORAR',
-    label: label || 'C.C. en elaboración',
-    workflowEtapa,
-    derivadoCcp: false,
-    ccpRegistrado: false,
-    soloLectura: ['DERIVADO_CCP', 'CCP_REGISTRADO', 'ENVIADA_OPPM', 'ANULADO', 'PENDIENTE_COORDINADOR', 'PENDIENTE_DEC', 'FIRMADO_COORDINADOR'].includes(best),
-    fuente: best ? 'prioridad_cuadro' : 'default',
-  };
+/** OBSERVADO solo si el estado global vigente es aún la etapa observada. */
+function situacionAplicableAlEstado(codigo, situacion) {
+  if (!situacion || situacion.codigo !== 'OBSERVADO') return null;
+  const c = normalizeEstadoCode(codigo);
+  const permite = new Set([
+    'CUADRO_EN_COORDINACION_CM',
+    'CUADRO_EN_DEC',
+    'CUADRO_BORRADOR',
+    'PENDIENTE_ELABORAR',
+    'CUADRO_COMPARATIVO_GENERADO',
+    'EN_COORDINACION_CM',
+    'EN_PROGRAMACION',
+    'REQUERIMIENTO_EN_EVALUACION',
+    'REQUERIMIENTO_EN_DEC',
+    'CONFORMIDAD_PENDIENTE_AU',
+    'CONFORMIDAD_RECIBIDA_AU',
+    'CONFORMIDAD_EN_COORDINACION_CM',
+    'BIEN_RECIBIDO_ALMACEN',
+  ]);
+  return permite.has(c) ? situacion : null;
+}
+
+/**
+ * Compat histórico — mismos campos que antes + contrato nuevo embebido.
+ */
+export function resolveEstadoActualExpediente(row = {}, opts = {}) {
+  return resolveEstadoExpedienteVigente(row, opts);
 }
 
 export function esExpedienteDerivadoCcp(row = {}, opts = {}) {
-  return resolveEstadoActualExpediente(row, opts).derivadoCcp === true;
+  return resolveEstadoExpedienteVigente(row, opts).derivadoCcp === true;
 }
 
 export function esExpedienteCcpRegistrado(row = {}, opts = {}) {
-  return resolveEstadoActualExpediente(row, opts).ccpRegistrado === true
-    || resolveEstadoActualExpediente(row, opts).code === 'CCP_REGISTRADO';
+  const v = resolveEstadoExpedienteVigente(row, opts);
+  return v.ccpRegistrado === true
+    || v.codigo === 'CCP_REGISTRADA'
+    || v.code === 'CCP_REGISTRADA';
 }
 
-/** Mismo morado que Invitaciones / estadoVisualPresenter (CCP / DEC). */
 export const BADGE_COLOR_CCP = '#6f42c1';
-/** Verde institucional para CCP registrado (distinto de Derivado a CCP). */
 export const BADGE_COLOR_CCP_REGISTRADO = '#198754';
 
-/**
- * Atributos visuales del badge para el estado vigente.
- * CCP_REGISTRADO → verde; DERIVADO_CCP → morado.
- */
 export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
   const row = (rowOrCode && typeof rowOrCode === 'object')
     ? rowOrCode
     : { estado_cuadro: rowOrCode, estado: rowOrCode };
-  const vigente = resolveEstadoActualExpediente(row, opts);
+  const vigente = resolveEstadoExpedienteVigente(row, opts);
+  const code = vigente.codigo || vigente.code;
 
-  if (ESTADOS_ORDEN_LABEL[vigente.code]
+  if (ESTADOS_ORDEN_LABEL[code]
     || ['REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
-      'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION'].includes(vigente.code)) {
+      'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION',
+      'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
+      'RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+      'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
+      'CONFORMIDAD_EN_COORDINACION_CM'].includes(code)) {
     const colorMap = {
       EN_EJECUCION: '#212529',
       ORDEN_RECEPCION_CONFIRMADA: '#0d6efd',
@@ -382,11 +579,18 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
       ORDEN_REGISTRADA: '#0dcaf0',
       REGISTRO_ORDENES: '#6f42c1',
       ORDEN_ANULADA: '#6c757d',
+      ORDEN_RESUELTA: '#212529',
+      EXPEDIENTE_DERIVADO_PAGO: '#198754',
+      RECEPCION_BIENES_PENDIENTE: '#fd7e14',
+      BIEN_RECIBIDO_ALMACEN: '#0d6efd',
+      CONFORMIDAD_PENDIENTE_AU: '#6610f2',
+      CONFORMIDAD_RECIBIDA_AU: '#20c997',
+      CONFORMIDAD_EN_COORDINACION_CM: '#6f42c1',
     };
-    const color = colorMap[vigente.code] || '#6f42c1';
+    const color = colorMap[code] || '#6f42c1';
     return {
-      code: vigente.code,
-      label: ESTADOS_ORDEN_LABEL[vigente.code] || vigente.label,
+      code,
+      label: vigente.label,
       className: 'badge badge-estado-mod',
       style: `background:${color};color:#fff`,
       bootstrap: null,
@@ -395,10 +599,10 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
       color,
     };
   }
-  if (vigente.code === 'CCP_REGISTRADO' || vigente.ccpRegistrado) {
+  if (code === 'CCP_REGISTRADA' || code === 'CCP_REGISTRADO' || vigente.ccpRegistrado) {
     return {
-      code: 'CCP_REGISTRADO',
-      label: 'CCP registrado',
+      code: 'CCP_REGISTRADA',
+      label: 'CCP registrada',
       className: 'badge badge-estado-mod',
       style: `background:${BADGE_COLOR_CCP_REGISTRADO};color:#fff`,
       bootstrap: 'success',
@@ -407,19 +611,19 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
       color: BADGE_COLOR_CCP_REGISTRADO,
     };
   }
-  if (vigente.code === 'ENVIADA_OPPM') {
+  if (code === 'ENVIADA_OPPM') {
     return {
       code: 'ENVIADA_OPPM',
       label: 'Solicitud enviada a OPPM',
       className: 'badge badge-estado-mod',
-      style: `background:#0d6efd;color:#fff`,
+      style: 'background:#0d6efd;color:#fff',
       bootstrap: 'primary',
       derivadoCcp: true,
       ccpRegistrado: false,
       color: '#0d6efd',
     };
   }
-  if (vigente.derivadoCcp || vigente.code === 'DERIVADO_CCP') {
+  if (vigente.derivadoCcp || code === 'DERIVADO_CCP') {
     return {
       code: 'DERIVADO_CCP',
       label: 'Derivado a CCP',
@@ -432,7 +636,7 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
     };
   }
   return {
-    code: vigente.code,
+    code,
     label: vigente.label,
     className: 'badge',
     style: '',
@@ -445,9 +649,35 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
 
 export function renderBadgeEstadoVigenteHtml(rowOrCode, escFn = (s) => String(s ?? ''), opts = {}) {
   const v = badgeVisualEstadoVigente(rowOrCode, opts);
-  if (ESTADOS_ORDEN_LABEL[v.code] || v.code === 'CCP_REGISTRADO' || v.code === 'ENVIADA_OPPM' || v.derivadoCcp) {
+  if (ESTADOS_ORDEN_LABEL[v.code] || v.code === 'CCP_REGISTRADA' || v.code === 'CCP_REGISTRADO'
+    || v.code === 'ENVIADA_OPPM' || v.derivadoCcp
+    || ['RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+      'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
+      'CONFORMIDAD_EN_COORDINACION_CM', 'EXPEDIENTE_DERIVADO_PAGO'].includes(v.code)) {
     return `<span class="${v.className}" style="${v.style}">${escFn(v.label)}</span>`;
   }
   const boot = opts.bootstrapClass || opts.fallbackBootstrap || 'secondary';
   return `<span class="badge bg-${boot}">${escFn(v.label || opts.fallbackLabel || '—')}</span>`;
+}
+
+/**
+ * Contrato uniforme API para filas de bandeja.
+ */
+export function buildEstadoApiContract(row = {}, opts = {}) {
+  const v = resolveEstadoExpedienteVigente(row, opts);
+  return {
+    estadoVigente: v.estadoVigente,
+    situacion: v.situacion
+      ? { codigo: v.situacion.codigo, label: v.situacion.label }
+      : null,
+    estadoInterno: v.estadoInterno || null,
+    // Compat temporal
+    estado: v.codigo,
+    estado_label: v.label,
+    estado_visual: v.label,
+    estado_vigente: v.codigo,
+    estado_vigente_label: v.label,
+    estado_codigo: v.codigo,
+    etiqueta_estado: v.label,
+  };
 }

@@ -599,6 +599,18 @@ export async function listarBandejaOrdenes() {
       fecha_maxima_entrega: fechaMax,
       estado: vigente.code || estadoCode,
       estado_label: vigente.label || ESTADOS_ORDEN_LABEL[estadoCode] || estadoCode,
+      estadoVigente: vigente.estadoVigente || {
+        codigo: vigente.codigo || vigente.code,
+        label: vigente.label,
+        etapa: vigente.etapa || vigente.workflowEtapa,
+        prioridad: vigente.prioridad,
+      },
+      situacion: vigente.situacion
+        ? { codigo: vigente.situacion.codigo, label: vigente.situacion.label }
+        : null,
+      estadoInterno: vigente.estadoInterno || null,
+      estado_vigente: vigente.codigo || vigente.code,
+      estado_vigente_label: vigente.label,
       badge_color: badge.color,
       badge_style: badge.style,
       en_registro_ordenes: true,

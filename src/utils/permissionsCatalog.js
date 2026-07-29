@@ -30,8 +30,8 @@ export const MODULOS = [
     id: 'EJECUCION',
     label: 'Ejecución Contractual',
     submodulos: [
-      { id: 'REGISTRO_ORDEN', label: 'Registro de Orden', route: 'ejecucion/registro' },
-      { id: 'ALMACEN', label: 'Almacén', route: 'ejecucion/presentacion' },
+      { id: 'RECEPCION_BIENES', label: 'Recepción de Bienes', route: 'ejecucion/recepcion-bienes' },
+      { id: 'ALMACEN', label: 'Almacén / Presentación Entregable', route: 'ejecucion/presentacion' },
       { id: 'TESORERIA', label: 'Tesorería', route: 'ejecucion/pago' },
       { id: 'AMPLIACION', label: 'Ampliación Resolución', route: 'ejecucion/ampliacion' },
     ],
@@ -68,6 +68,7 @@ ROUTE_TO_SUBMODULO['dec/cotizaciones'] = 'RECEPCION_COTIZACIONES';
 export const LEGACY_ROUTE_REDIRECTS = {
   'dec/consultas': 'contrataciones/consultas-observaciones',
   'dec/cotizaciones': 'contrataciones/recepcion-cotizaciones',
+  'ejecucion/registro': 'ejecucion/recepcion-bienes',
 };
 
 export function resolveCanonicalRoute(route) {

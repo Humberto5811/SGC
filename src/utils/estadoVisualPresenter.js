@@ -11,8 +11,9 @@ import {
 } from '../../shared/observacionesMotor.js';
 import {
   ESTADOS_CUADRO_VIGENTE_LABEL,
-  resolveEstadoActualExpediente,
+  resolveEstadoExpedienteVigente,
 } from '../../shared/estadoExpedienteVigente.js';
+import { presentEstadoExpediente } from './estadoExpedientePresenter.js';
 import { enrichReqRow, ETAPA_LABELS } from './trazabilidad.js';
 import {
   getSubmoduloByLabel,
@@ -31,7 +32,13 @@ const ESTADO_COLORES = Object.freeze({
   CUADRO_COMPARATIVO: { bg: '#495057', fg: '#fff' },
   CCP: { bg: '#6f42c1', fg: '#fff' },
   CCP_REGISTRADO: { bg: '#198754', fg: '#fff' },
+  CCP_REGISTRADA: { bg: '#198754', fg: '#fff' },
   ENVIADA_OPPM: { bg: '#0d6efd', fg: '#fff' },
+  ORDEN: { bg: '#fd7e14', fg: '#fff' },
+  ORDEN_NOTIFICADA: { bg: '#fd7e14', fg: '#fff' },
+  ORDEN_REGISTRADA: { bg: '#0dcaf0', fg: '#055160' },
+  ORDEN_RESUELTA: { bg: '#212529', fg: '#fff' },
+  EXPEDIENTE_DERIVADO_PAGO: { bg: '#198754', fg: '#fff' },
   EJECUCION: { bg: '#495057', fg: '#fff' },
   FINALIZADO: { bg: '#198754', fg: '#fff' },
 });
@@ -122,66 +129,69 @@ export function buildEstadoVisual(row, opts = {}) {
   const pendienteReceptor = resolvePendienteReceptor(enriched);
   const snap = extractWorkflowSnapshot(enriched);
 
-  // OD32/OD35 — estado vigente unificado (CCP_REGISTRADO > DERIVADO_CCP > obs. históricas)
-  const vigente = resolveEstadoActualExpediente(enriched, {
+  // Estado vigente: el backend debe aportar evidencia (CCP + órdenes).
+  // El presentador NO fuerza "CCP registrada" ni recalcula prioridad.
+  const vigente = resolveEstadoExpedienteVigente(enriched, {
     revisionEstado: opts.revisionEstado || snap?.revisionEstado || '',
     estadoCuadro: opts.estadoCuadro || enriched.estado_cuadro || row?.estado_cuadro || '',
     workflowEtapa: workflowActual,
     solicitudEstado: enriched.solicitud_estado || row?.solicitud_estado || '',
     codigoCcp: enriched.codigo_ccp || row?.codigo_ccp || '',
-    ccpActivo: enriched.ccp_activo || row?.ccp_activo || enriched.ccp_registrado || false,
+    ccpActivo: enriched.ccp_activo || row?.ccp_activo || false,
+    ordenEnviada: !!(enriched.enviado_proveedor_at || row?.enviado_proveedor_at),
+    estadoOrden: enriched.orden_estado || row?.orden_estado || '',
   });
+
+  const presentacion = presentEstadoExpediente(vigente.estadoVigente || vigente, vigente.situacion);
+  const codigoVigente = vigente.codigo || vigente.code || '';
 
   const moduloReceptorRaw = pendienteReceptor
     ? String(pendienteReceptor.destino_submodulo || pendienteReceptor.moduloReceptor || pendienteReceptor.moduloDestino || '').trim()
     : '';
 
-  // Tras DERIVADO_CCP / CCP_REGISTRADO no se usa el módulo receptor de obs. históricas
-  const etapaMostrada = vigente.ccpRegistrado
-    ? 'CCP_REGISTRADO'
+  const etapaMostrada = codigoVigente === 'CCP_REGISTRADA' || codigoVigente === 'CCP_REGISTRADO'
+    ? 'CCP_REGISTRADA'
     : (vigente.derivadoCcp
-      ? 'CCP'
+      ? (vigente.etapa || 'CCP')
       : (pendienteReceptor
         ? (etapaFromSubmodulo(moduloReceptorRaw) || workflowActual)
         : workflowActual));
 
-  const labelRevision = CUADRO_REVISION_ESTADO_LABELS[vigente.code] || vigente.label || '';
-  const textoPrincipal = vigente.ccpRegistrado
-    ? 'CCP registrado'
-    : (vigente.code === 'ENVIADA_OPPM'
-      ? 'Solicitud enviada a OPPM'
-      : (vigente.derivadoCcp
-        ? 'Derivado a CCP'
-        : (labelRevision || labelFromEtapa(etapaMostrada))));
+  const labelRevision = CUADRO_REVISION_ESTADO_LABELS[codigoVigente] || vigente.label || '';
+  const textoPrincipal = presentacion.label
+    || labelRevision
+    || labelFromEtapa(etapaMostrada);
 
   const moduloResponsable = vigente.derivadoCcp
-    ? 'CCP'
+    ? (vigente.etapa === 'ORDEN' || String(codigoVigente).startsWith('ORDEN') || codigoVigente === 'EN_EJECUCION'
+      ? 'Registro de Órdenes'
+      : 'CCP')
     : (pendienteReceptor
       ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada) || textoPrincipal)
       : (fullModuloLabelFromEtapa(workflowActual) || textoPrincipal));
 
   const moduloBadgeKey = vigente.derivadoCcp
-    ? 'CCP'
+    ? (vigente.etapa || 'CCP')
     : (pendienteReceptor
       ? (moduloReceptorRaw || fullModuloLabelFromEtapa(etapaMostrada))
       : fullModuloLabelFromEtapa(workflowActual));
 
   const motorBadge = obtenerEstadoObservaciones(enriched, moduloBadgeKey || null);
   const motorActions = obtenerEstadoObservaciones(enriched, opts.moduloContext || null);
-  // Observación histórica NO marca badge principal si el expediente ya avanzó a CCP
-  const badgeObservado = (!vigente.derivadoCcp && pendienteReceptor)
-    ? (motorBadge.requiereBadge === true)
+  const badgeObservado = (!vigente.derivadoCcp && (pendienteReceptor || vigente.situacion?.codigo === 'OBSERVADO'))
+    ? (motorBadge.requiereBadge === true || vigente.situacion?.codigo === 'OBSERVADO')
     : false;
 
-  const color = ESTADO_COLORES[String(etapaMostrada).toUpperCase()]
-    || (vigente.ccpRegistrado
-      ? ESTADO_COLORES.CCP_REGISTRADO
+  const color = ESTADO_COLORES[String(codigoVigente).toUpperCase()]
+    || ESTADO_COLORES[String(etapaMostrada).toUpperCase()]
+    || (presentacion.color
+      ? { bg: presentacion.color.bg, fg: presentacion.color.fg }
       : (vigente.derivadoCcp ? ESTADO_COLORES.CCP : ESTADO_COLORES.REGISTRADO));
 
   return {
     textoPrincipal,
     badgeObservado,
-    workflowActual: vigente.derivadoCcp ? 'CCP' : workflowActual,
+    workflowActual: vigente.derivadoCcp ? (vigente.etapa || 'CCP') : workflowActual,
     moduloResponsable,
     color,
     puedeSubsanar: vigente.derivadoCcp ? false : motorActions.puedeSubsanar,
@@ -190,6 +200,7 @@ export function buildEstadoVisual(row, opts = {}) {
     motor: motorActions,
     motorBadge,
     estadoVigente: vigente,
+    presentacion,
   };
 }
 

@@ -19,6 +19,7 @@ import {
   resolveValidationCentro,
   consolidateCentros,
 } from '../../shared/validacionCentro.js';
+import { resolveEstadoExpedienteVigente } from '../../shared/estadoExpedienteVigente.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'VALIDACIONES', label: 'Validaciones' },
@@ -133,17 +134,32 @@ function mapCotizacionRow(r, ccpFlags = null) {
   const eco = parseJson(r.propuesta_economica, {});
   const inf = parseInforme(r);
   const valEst = r.validacion_estado || '';
-  const solicitudEstado = String(r.solicitud_estado || '').toUpperCase();
-  const estadoCuadro = String(r.estado_cuadro || '').toUpperCase();
-  const derivadoCcp = solicitudEstado === 'EN_CCP'
-    || estadoCuadro === 'DERIVADO_CCP'
-    || estadoCuadro === 'DERIVADO_A_CCP';
   const codigoCcp = String(ccpFlags?.codigo_ccp || r.codigo_ccp || '').trim();
   const ccpActivo = !!(ccpFlags?.ccp_activo || codigoCcp);
   const enviadaOppm = !!(ccpFlags?.enviada_oppm || r.enviada_oppm);
-  let estadoBandeja = derivadoCcp ? 'Derivado a CCP' : estadoDisplayBandejaValidacion(valEst);
-  if (ccpActivo) estadoBandeja = 'CCP registrado';
-  else if (enviadaOppm) estadoBandeja = 'Solicitud enviada a OPPM';
+  const vigente = resolveEstadoExpedienteVigente({
+    solicitud_estado: r.solicitud_estado || '',
+    estado_cuadro: r.estado_cuadro || '',
+    codigo_ccp: codigoCcp,
+    ccp_activo: ccpActivo,
+    enviada_oppm: enviadaOppm,
+    orden_id: ccpFlags?.orden_id || r.orden_id || null,
+    orden_estado: ccpFlags?.orden_estado || r.orden_estado || '',
+    enviado_proveedor_at: ccpFlags?.enviado_proveedor_at || r.enviado_proveedor_at || null,
+    recibido_proveedor_at: ccpFlags?.recibido_proveedor_at || r.recibido_proveedor_at || null,
+    derivado_ejecucion_at: ccpFlags?.derivado_ejecucion_at || r.derivado_ejecucion_at || null,
+    orden_resuelta: !!(ccpFlags?.orden_resuelta || r.orden_resuelta),
+    expediente_derivado_pago: !!(ccpFlags?.expediente_derivado_pago || r.expediente_derivado_pago),
+  });
+  const derivadoCcp = !!vigente.derivadoCcp;
+  let estadoBandeja = estadoDisplayBandejaValidacion(valEst);
+  if (vigente.codigo && (
+    vigente.ccpRegistrado || derivadoCcp
+    || ['ORDEN_NOTIFICADA', 'ORDEN_REGISTRADA', 'REGISTRO_ORDENES', 'ORDEN_RESUELTA',
+      'EXPEDIENTE_DERIVADO_PAGO', 'CCP_REGISTRADA', 'ENVIADA_OPPM', 'DERIVADO_CCP'].includes(vigente.codigo)
+  )) {
+    estadoBandeja = vigente.label;
+  }
   return {
     id: r.id,
     solicitud_id: r.solicitud_id,
@@ -152,13 +168,22 @@ function mapCotizacionRow(r, ccpFlags = null) {
     validacion_estado: valEst,
     solicitud_estado: r.solicitud_estado || '',
     estado_cuadro: r.estado_cuadro || '',
-    derivado_ccp: derivadoCcp || ccpActivo || enviadaOppm,
+    derivado_ccp: derivadoCcp,
     codigo_ccp: codigoCcp,
     ccp_activo: ccpActivo,
-    ccp_registrado: ccpActivo,
+    ccp_registrado: vigente.ccpRegistrado === true || vigente.codigo === 'CCP_REGISTRADA',
     enviada_oppm: enviadaOppm,
-    estado_codigo: ccpActivo ? 'CCP_REGISTRADO' : (enviadaOppm ? 'ENVIADA_OPPM' : (derivadoCcp ? 'DERIVADO_CCP' : '')),
+    estado_codigo: vigente.codigo || '',
     etiqueta_estado: estadoBandeja,
+    estadoVigente: vigente.estadoVigente,
+    situacion: vigente.situacion
+      ? { codigo: vigente.situacion.codigo, label: vigente.situacion.label }
+      : null,
+    estadoInterno: vigente.estadoInterno || null,
+    estado_vigente: vigente.codigo,
+    estado_vigente_label: vigente.label,
+    orden_estado: ccpFlags?.orden_estado || '',
+    enviado_proveedor_at: ccpFlags?.enviado_proveedor_at || null,
     estado_display: estadoDisplayValidacion(valEst, r.estado),
     validacion_responsable: r.validacion_responsable || '',
     fecha_presentacion: r.fecha_presentacion,
@@ -177,7 +202,7 @@ function mapCotizacionRow(r, ccpFlags = null) {
     derivacion: inf.derivacion || null,
     responsable_id: inf.derivacion?.responsable_id || null,
     responsable_nombre: r.validacion_responsable || inf.derivacion?.responsable_nombre || '',
-    // OD33/OD35 — CCP registrado > Derivado a CCP > fallback local
+    // OD33/OD35 — estado global vía resolvedor; fallback local de validación
     estado_bandeja: estadoBandeja,
     estado_bandeja_class: derivadoCcp ? 'ccp-morado' : badgeBandejaClass(valEst),
   };

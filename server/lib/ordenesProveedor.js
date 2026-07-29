@@ -184,22 +184,32 @@ export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
     }
   }
 
-  await registrarEventoOrden({
-    ordenId,
-    requerimientoId: orden.requerimiento_id,
-    tipo: errorMsg ? 'ORDEN_ENVIO_ERROR' : 'ORDEN_NOTIFICADA',
-    estadoAnterior: orden.estado,
-    estadoNuevo: errorMsg ? orden.estado : ESTADOS_ORDEN.ORDEN_NOTIFICADA,
-    usuario,
-    rol,
-    observacion: errorMsg || `Intento ${intento}`,
-    datos: {
-      documento_version: doc.version,
-      cronograma_version: orden.cronograma_version,
-      entregas: entregas.length,
-      email: emailResult,
-    },
-  });
+    await registrarEventoOrden({
+      ordenId,
+      requerimientoId: orden.requerimiento_id,
+      tipo: errorMsg ? 'ORDEN_ENVIO_ERROR' : 'ORDEN_NOTIFICADA',
+      estadoAnterior: orden.estado,
+      estadoNuevo: errorMsg ? orden.estado : ESTADOS_ORDEN.ORDEN_NOTIFICADA,
+      usuario,
+      rol,
+      observacion: errorMsg || `Intento ${intento}`,
+      datos: {
+        documento_version: doc.version,
+        cronograma_version: orden.cronograma_version,
+        entregas: entregas.length,
+        email: emailResult,
+      },
+    });
+
+    // Ingreso automático a Ejecución → Recepción de Bienes (solo OC / bienes)
+    if (!errorMsg) {
+      try {
+        const { asegurarExpedienteRecepcionDesdeOrden } = await import('./recepcionBienes.js');
+        await asegurarExpedienteRecepcionDesdeOrden(ordenId, usuario);
+      } catch (rbErr) {
+        console.error('[recepcion-bienes] ingreso automático:', rbErr?.message || rbErr);
+      }
+    }
 
   return {
     envio: rows[0],

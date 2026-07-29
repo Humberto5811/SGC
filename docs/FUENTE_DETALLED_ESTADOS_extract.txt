@@ -1,0 +1,58 @@
+Registro de Requerimiento
+Evaluación de Requerimientos
+Debe permitir observar
+Debe permitir aprobar
+DEC
+Debe permitir observar
+Debe permitir aprobar
+Programación
+Debe permitir observar
+Debe permitir aprobar
+Coordinación CM
+Debe permitir observar
+Debe permitir aprobar
+Invitaciones
+Debe permitir observar
+Invitación en elaboración
+Invitación enviada
+Consultas y Observaciones
+Consultas recibidas
+Consultas absueltas
+Recepción de cotizaciones
+Cotización recibida
+Validaciones
+Validación enviada
+Validado por AU
+Debe permitir observar
+Validación revisada por AU
+Cuadro comparativo
+C.C. generado
+C.C.en Coordinación CM
+C.C. en Coordinación CM - Observado
+C.C. en DEC
+C.C. en DEC- Observado
+C.C. aprobado
+CCP
+CCP registrada
+Registro de ordenes
+Orden registrada
+Orden notificada
+Recepción de bienes-Bienes
+Debe permitir al almacen la recepción del bien
+Debe permitir que el almacen envie a usuario el acta para conformidad
+Debe permitir que usuario envié acta de conformidad al almacen
+Debe permitir que el almacen derive al coordinador CM la conformidad
+Debe permitir al coordinador CM enviar la conformidad a determinado analista para que tramite pago
+Presentación entregable -Servicios
+Debe permitir al área usuaria registre la recepción del entregable
+Debe permitir que usuario envié acta de conformidad al coordinador CM
+Debe permitir al coordinador CM enviar la conformidad a determinado analista para que tramite pago
+Ampliaciones/Resolución
+Registro de ampliación de plazo permite editar el plazo de entrega lo que va a afectar los tiempos totales
+Resolución permite registrar la documentación de la resolución de la orden debidamente fundamentada, debe permitir agregar la documentación necesaria , la resolución debe de mostrarse como estado ORDEN RESUELTA
+Derivación a pago
+Debe permitir que el analista revise la documentación derivada por el coordinador CM y registre factura
+En caso de observaciones puede observar al almacén como al área usuaria para que envié la documentación necesaria y poder adjuntarla o agregar documentos
+Debe permitir calcular penalidades para bienes y servicios
+Debe permitir calcular penalidades para locadores
+Debe permitir descargar todo el expediente para derivarlos por SGC  para pago

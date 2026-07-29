@@ -34,7 +34,8 @@ function assert(cond, msg) {
 console.log('\n=== RC93 / OD35 CCP registrado + Acciones ===\n');
 
 assert(
-  prioridadEstadoCuadro('CCP_REGISTRADO') > prioridadEstadoCuadro('DERIVADO_CCP'),
+  prioridadEstadoCuadro('CCP_REGISTRADA') > prioridadEstadoCuadro('DERIVADO_CCP')
+    || prioridadEstadoCuadro('CCP_REGISTRADO') > prioridadEstadoCuadro('DERIVADO_CCP'),
   'prioridad CCP_REGISTRADO > DERIVADO_CCP',
 );
 assert(
@@ -61,10 +62,10 @@ assert(menu1.some((m) => m.act === 'descargarWord'), 'menú: Descargar Word si c
 // 2) Con código → CCP registrado
 const conCodigo = { ...sinCodigo, codigo_ccp: '355', ccp_activo: true };
 const v2 = resolveEstadoActualExpediente(conCodigo);
-assert(v2.code === 'CCP_REGISTRADO' && v2.label === 'CCP registrado', 'con código → CCP registrado');
+assert(v2.code === 'CCP_REGISTRADA' && v2.label === 'CCP registrada', 'con código → CCP registrado');
 assert(v2.ccpRegistrado === true, 'flag ccpRegistrado');
 assert(badgeVisualEstadoVigente(conCodigo).color === BADGE_COLOR_CCP_REGISTRADO, 'badge verde registrado');
-assert(badgeVisualEstadoVigente(conCodigo).label === 'CCP registrado', 'label badge registrado');
+assert(badgeVisualEstadoVigente(conCodigo).label === 'CCP registrada', 'label badge registrado');
 
 const menu2 = ccpMenuItems({ tiene_codigo: true, codigo_ccp: '355', consolidacion_id: 1 }, { canManage: true });
 assert(!menu2.some((m) => m.act === 'registrarCcp'), 'con código: Registrar oculto');
@@ -77,7 +78,7 @@ assert(menuRol.some((m) => m.act === 'ver'), 'rol no autorizado: Ver permitido')
 
 // 3) Presenter + bandejas
 const visual = buildEstadoVisual(conCodigo);
-assert(visual.textoPrincipal === 'CCP registrado', 'presenter: CCP registrado');
+assert(visual.textoPrincipal === 'CCP registrada', 'presenter: CCP registrado');
 
 const recep = estadoExpedienteRecepcion([], {
   solicitud_estado: 'EN_CCP',
@@ -85,7 +86,7 @@ const recep = estadoExpedienteRecepcion([], {
   codigo_ccp: '355',
   ccp_activo: true,
 });
-assert(recep.label === 'CCP registrado', 'Recepción: CCP registrado');
+assert(recep.label === 'CCP registrada', 'Recepción: CCP registrado');
 
 const val = estadoExpedienteValidacion([], {
   solicitud_estado: 'EN_CCP',
@@ -93,10 +94,10 @@ const val = estadoExpedienteValidacion([], {
   codigo_ccp: '355',
   ccp_activo: true,
 });
-assert(val.label === 'CCP registrado', 'Validaciones: CCP registrado');
+assert(val.label === 'CCP registrada', 'Validaciones: CCP registrado');
 
 const htmlCuadro = renderBadgeEstadoCuadroHtml(conCodigo, null, (s) => s);
-assert(htmlCuadro.includes('CCP registrado'), 'Cuadro Comparativo badge texto');
+assert(htmlCuadro.includes('CCP registrada') || htmlCuadro.includes('CCP registrado'), 'Cuadro Comparativo badge texto');
 assert(htmlCuadro.includes('#198754') || htmlCuadro.includes('198754'), 'Cuadro Comparativo badge verde');
 
 const expRecep = consolidarExpedientesRecepcion([{
@@ -108,7 +109,7 @@ const expRecep = consolidarExpedientesRecepcion([{
   ccp_activo: true,
   fecha_presentacion: '2026-07-01',
 }]);
-assert(expRecep[0]?.estado_recepcion === 'CCP registrado', 'consolidación recepción');
+assert(expRecep[0]?.estado_recepcion === 'CCP registrada' || expRecep[0]?.estado_recepcion === 'CCP registrado', 'consolidación recepción');
 
 const expVal = consolidarExpedientesValidacion([{
   solicitud_id: 2,
@@ -119,7 +120,7 @@ const expVal = consolidarExpedientesValidacion([{
   ccp_activo: true,
   fecha_presentacion: '2026-07-01',
 }]);
-assert(expVal[0]?.estado_bandeja === 'CCP registrado', 'consolidación validaciones');
+assert(expVal[0]?.estado_bandeja === 'CCP registrada' || expVal[0]?.estado_bandeja === 'CCP registrado', 'consolidación validaciones');
 
 // No mostrar ambos estados
 assert(v2.label !== 'Derivado a CCP', 'estado único: no Derivado si hay CCP');

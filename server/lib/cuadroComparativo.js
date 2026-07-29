@@ -48,6 +48,11 @@ import {
   metaVersionDesdeRow,
 } from './cuadroComparativoVersionado.js';
 import { emitirObservacion } from './observacionesWorkflow.js';
+import {
+  resolveEstadoExpedienteVigente,
+  getLabelEstado,
+  normalizeEstadoCode,
+} from '../../shared/estadoExpedienteVigente.js';
 
 /**
  * RC8.5-D1 — Persiste observación del cuadro en el historial institucional
@@ -205,6 +210,7 @@ export const ESTADOS_CUADRO = Object.freeze({
   DERIVADO_CCP: 'DERIVADO_CCP',
   ENVIADA_OPPM: 'ENVIADA_OPPM',
   CCP_REGISTRADO: 'CCP_REGISTRADO',
+  CCP_REGISTRADA: 'CCP_REGISTRADA',
   ANULADO: 'ANULADO',
 });
 
@@ -217,18 +223,19 @@ export const ESTADOS_CUADRO_LABEL = Object.freeze({
   [ESTADOS_CUADRO.GENERADO]: 'C.C. en elaboración',
   [ESTADOS_CUADRO.GENERADO_PRELIMINAR]: 'C.C. en elaboración',
   [ESTADOS_CUADRO.ADJUDICADO]: 'C.C. en elaboración',
-  [ESTADOS_CUADRO.OBSERVADO]: 'C.C. observado por Coordinador CM',
-  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'C.C. en revisión Coordinador CM',
-  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'C.C. observado por Coordinador CM',
-  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'C.C. en revisión Coordinador CM',
-  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'C.C. en revisión DEC',
-  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'C.C. observado por DEC',
+  [ESTADOS_CUADRO.OBSERVADO]: 'C.C. en Coordinación CM - Observado',
+  [ESTADOS_CUADRO.PENDIENTE_COORDINADOR]: 'C.C. en Coordinación CM',
+  [ESTADOS_CUADRO.OBSERVADO_COORDINADOR]: 'C.C. en Coordinación CM - Observado',
+  [ESTADOS_CUADRO.FIRMADO_COORDINADOR]: 'C.C. en Coordinación CM',
+  [ESTADOS_CUADRO.PENDIENTE_DEC]: 'C.C. en DEC',
+  [ESTADOS_CUADRO.OBSERVADO_DEC]: 'C.C. en DEC - Observado',
   [ESTADOS_CUADRO.APROBADO_DEC]: 'C.C. aprobado',
   [ESTADOS_CUADRO.PENDIENTE_CCP]: 'C.C. aprobado',
   [ESTADOS_CUADRO.FIRMADO]: 'C.C. aprobado',
   [ESTADOS_CUADRO.DERIVADO_CCP]: 'Derivado a CCP',
   [ESTADOS_CUADRO.ENVIADA_OPPM]: 'Solicitud enviada a OPPM',
-  [ESTADOS_CUADRO.CCP_REGISTRADO]: 'CCP registrado',
+  [ESTADOS_CUADRO.CCP_REGISTRADO]: 'CCP registrada',
+  [ESTADOS_CUADRO.CCP_REGISTRADA]: 'CCP registrada',
   [ESTADOS_CUADRO.ANULADO]: 'Anulado',
 });
 
@@ -323,9 +330,13 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'FIRMADO' || s === 'FIRMADA') return ESTADOS_CUADRO.FIRMADO;
   if (s === 'DERIVADO_CCP' || s === 'DERIVADO_A_CCP' || s === 'CCP') return ESTADOS_CUADRO.DERIVADO_CCP;
   if (s === 'ENVIADA_OPPM' || s === 'ENVIADO_OPPM') return ESTADOS_CUADRO.ENVIADA_OPPM;
-  if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP') return ESTADOS_CUADRO.CCP_REGISTRADO;
+  if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP' || s === 'CCP_REGISTRADA') {
+    return ESTADOS_CUADRO.CCP_REGISTRADA;
+  }
   if (s === 'ANULADO') return ESTADOS_CUADRO.ANULADO;
-  if (ESTADOS_CUADRO_LABEL[s]) return s;
+  const canon = normalizeEstadoCode(s);
+  if (ESTADOS_CUADRO_LABEL[canon] || ESTADOS_CUADRO_LABEL[s]) return canon || s;
+  if (getLabelEstado(canon)) return canon;
   return ESTADOS_CUADRO.PENDIENTE_ELABORAR;
 }
 
@@ -337,10 +348,14 @@ export function labelCuadroEstado(code, opts = {}) {
     n === ESTADOS_CUADRO.OBSERVADO_COORDINADOR
     || n === ESTADOS_CUADRO.OBSERVADO_DEC
     || n === ESTADOS_CUADRO.OBSERVADO
+    || n === 'CUADRO_EN_COORDINACION_CM'
+    || n === 'CUADRO_EN_DEC'
   )) {
     return 'C.C. subsanado';
   }
-  return ESTADOS_CUADRO_LABEL[n] || ESTADOS_CUADRO_LABEL[ESTADOS_CUADRO.PENDIENTE_ELABORAR];
+  return getLabelEstado(n)
+    || ESTADOS_CUADRO_LABEL[n]
+    || ESTADOS_CUADRO_LABEL[ESTADOS_CUADRO.PENDIENTE_ELABORAR];
 }
 
 function mapEstadoDbABandeja(estadoDb) {
@@ -586,16 +601,23 @@ export async function listarCuadroComparativoExpedientes() {
     const reqs = reqMap.get(r.solicitud_id) || [];
     const persisted = estadoMap.get(r.solicitud_id);
     const ccpFlags = ccpBySid.get(Number(r.solicitud_id)) || {};
-    // OD32/OD35 — CCP registrado > ENVIADA_OPPM > DERIVADO_CCP
-    let estadoCode = persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
-    if (ccpFlags.ccp_activo) {
-      estadoCode = 'CCP_REGISTRADO';
-    } else if (ccpFlags.enviada_oppm) {
-      estadoCode = 'ENVIADA_OPPM';
-    } else if (String(r.solicitud_estado || '').toUpperCase() === 'EN_CCP'
-      || String(estadoCode).toUpperCase() === 'DERIVADO_CCP') {
-      estadoCode = ESTADOS_CUADRO.DERIVADO_CCP;
-    }
+    // Estado global vía resolvedor central (órdenes > CCP > cuadro)
+    const vigente = resolveEstadoExpedienteVigente({
+      estado_cuadro: persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR,
+      solicitud_estado: r.solicitud_estado || '',
+      codigo_ccp: ccpFlags.codigo_ccp || '',
+      ccp_activo: !!ccpFlags.ccp_activo,
+      enviada_oppm: !!ccpFlags.enviada_oppm,
+      orden_id: ccpFlags.orden_id || null,
+      orden_estado: ccpFlags.orden_estado || '',
+      enviado_proveedor_at: ccpFlags.enviado_proveedor_at || null,
+      recibido_proveedor_at: ccpFlags.recibido_proveedor_at || null,
+      derivado_ejecucion_at: ccpFlags.derivado_ejecucion_at || null,
+      orden_resuelta: !!ccpFlags.orden_resuelta,
+      expediente_derivado_pago: !!ccpFlags.expediente_derivado_pago,
+    });
+    const estadoCode = vigente.codigo || persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
+    const estadoLabel = vigente.label || labelCuadroEstado(estadoCode);
     const area = areaUsuariaFromReqs(reqs, r.area_usuaria);
     const reqTexto = requerimientosTexto(reqs);
     const sidKey = Number(r.solicitud_id);
@@ -642,18 +664,23 @@ export async function listarCuadroComparativoExpedientes() {
         .filter(Boolean)[0] || '—',
       fecha_ingreso_cuadro: r.fecha_ingreso_cuadro || r.solicitud_updated_at || null,
       estado_cuadro: estadoCode,
-      estado_cuadro_label: labelCuadroEstado(estadoCode),
+      estado_cuadro_label: estadoLabel,
       estado_cuadro_badge: badgeClassCuadro(estadoCode),
       estado_codigo: estadoCode,
-      etiqueta_estado: labelCuadroEstado(estadoCode),
+      etiqueta_estado: estadoLabel,
       estado_vigente: estadoCode,
-      estado_vigente_label: labelCuadroEstado(estadoCode),
+      estado_vigente_label: estadoLabel,
+      estadoVigente: vigente.estadoVigente,
+      situacion: vigente.situacion
+        ? { codigo: vigente.situacion.codigo, label: vigente.situacion.label }
+        : null,
+      estadoInterno: vigente.estadoInterno || null,
       codigo_ccp: ccpFlags.codigo_ccp || '',
       ccp_activo: !!ccpFlags.ccp_activo,
-      ccp_registrado: !!ccpFlags.ccp_activo,
-      derivado_ccp: estadoCode === ESTADOS_CUADRO.DERIVADO_CCP
-        || estadoCode === ESTADOS_CUADRO.CCP_REGISTRADO
-        || estadoCode === ESTADOS_CUADRO.ENVIADA_OPPM,
+      ccp_registrado: vigente.ccpRegistrado === true || estadoCode === 'CCP_REGISTRADA',
+      derivado_ccp: !!vigente.derivadoCcp,
+      orden_estado: ccpFlags.orden_estado || '',
+      enviado_proveedor_at: ccpFlags.enviado_proveedor_at || null,
       cuadro_id: persisted?.cuadro_id || null,
       version: persisted?.version != null ? Number(persisted.version) : null,
       fecha_actualizacion: persisted?.actualizado_at || r.fecha_ingreso_cuadro || null,
@@ -667,12 +694,17 @@ export async function listarCuadroComparativoExpedientes() {
           ESTADOS_CUADRO.PENDIENTE_DEC,
           ESTADOS_CUADRO.DERIVADO_CCP,
           ESTADOS_CUADRO.CCP_REGISTRADO,
+          ESTADOS_CUADRO.CCP_REGISTRADA,
           ESTADOS_CUADRO.ENVIADA_OPPM,
           ESTADOS_CUADRO.FIRMADO,
+          'ORDEN_REGISTRADA', 'ORDEN_NOTIFICADA', 'ORDEN_LISTA_NOTIFICACION',
+          'REGISTRO_ORDENES', 'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
+          'EN_EJECUCION', 'ORDEN_RECEPCION_CONFIRMADA',
         ].includes(estadoCode),
       solo_lectura: [
         ESTADOS_CUADRO.DERIVADO_CCP,
         ESTADOS_CUADRO.CCP_REGISTRADO,
+        ESTADOS_CUADRO.CCP_REGISTRADA,
         ESTADOS_CUADRO.ENVIADA_OPPM,
         ESTADOS_CUADRO.FIRMADO,
         ESTADOS_CUADRO.PENDIENTE_COORDINADOR,

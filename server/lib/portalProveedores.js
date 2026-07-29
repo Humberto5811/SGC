@@ -584,14 +584,31 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       requerimientos_codigos: r.requerimientos_texto || '',
       centros_texto: centro,
       centro,
-    }, ccpInfo.ccp_activo ? { codigo_ccp: ccpInfo.codigo_ccp } : null, {
+    }, ccpInfo, {
       ccp_activo: !!ccpInfo.ccp_activo,
       enviada_oppm: !!ccpInfo.enviada_oppm,
+      orden_id: ccpInfo.orden_id || null,
+      orden_estado: ccpInfo.orden_estado || '',
+      enviado_proveedor_at: ccpInfo.enviado_proveedor_at || null,
+      recibido_proveedor_at: ccpInfo.recibido_proveedor_at || null,
+      derivado_ejecucion_at: ccpInfo.derivado_ejecucion_at || null,
+      orden_resuelta: !!ccpInfo.orden_resuelta,
+      expediente_derivado_pago: !!ccpInfo.expediente_derivado_pago,
     });
     return {
       ...enriched,
-      estado_recepcion: enriched.etiqueta_estado
+      estado_recepcion: enriched.estado_vigente_label
+        || enriched.etiqueta_estado
         || (derivadoCcp ? 'Derivado a CCP' : estadoDisplayRecepcion(valEst)),
+      estadoVigente: enriched.estadoVigente || {
+        codigo: enriched.estado_vigente || enriched.estado_codigo,
+        label: enriched.estado_vigente_label || enriched.etiqueta_estado,
+      },
+      estadoInterno: enriched.estadoInterno || (
+        valEst
+          ? { codigo: valEst, label: estadoDisplayRecepcion(valEst), modulo: 'RECEPCION_COTIZACIONES' }
+          : null
+      ),
     };
   });
 }

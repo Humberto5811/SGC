@@ -209,6 +209,14 @@ async function renderApp() {
       content = module.renderRegistroOrdenesView();
       setTimeout(() => module.initRegistroOrdenesView(), 50);
     }
+    else if (currentRoute === 'ejecucion/recepcion-bienes' || currentRoute === 'ejecucion/registro') {
+      const module = await import('./views/ejecucion/recepcionBienesView.js');
+      content = module.renderRecepcionBienesView();
+      setTimeout(() => {
+        if (mySeq !== renderAppSeq) return;
+        module.initRecepcionBienesView();
+      }, 50);
+    }
     else if (currentRoute === 'dec/cuadro') {
       const module = await import('./views/contratacion/cuadroComparativoView.js');
       content = module.renderCuadroComparativoView();
@@ -221,8 +229,7 @@ async function renderApp() {
       setTimeout(() => module.initContratacionesView(currentRoute), 50);
     }
     // ========== EJECUCIÓN Y SUBRUTAS ==========
-    else if (currentRoute === 'ejecucion' || 
-             currentRoute === 'ejecucion/registro' ||
+    else if (currentRoute === 'ejecucion' ||
              currentRoute === 'ejecucion/presentacion' ||
              currentRoute === 'ejecucion/ampliacion' ||
              currentRoute === 'ejecucion/pago') {

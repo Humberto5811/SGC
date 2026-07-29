@@ -28,7 +28,7 @@ import { renderRegistroOrdenesView, initRegistroOrdenesView } from './views/cont
 
 // Ejecución
 import { renderEjecucionView, initEjecucionView } from './views/ejecucion/ejecucionView.js';
-import { renderRegistroOrdenView, initRegistroOrdenView } from './views/ejecucion/registroOrdenView.js';
+import { renderRecepcionBienesView, initRecepcionBienesView } from './views/ejecucion/recepcionBienesView.js';
 import { renderPresentacionEntregableView, initPresentacionEntregableView } from './views/ejecucion/presentacionEntregableView.js';
 import { renderAmpliacionResolucionView, initAmpliacionResolucionView } from './views/ejecucion/ampliacionResolucionView.js';
 import { renderDerivacionPagoView, initDerivacionPagoView } from './views/ejecucion/derivacionPagoView.js';
@@ -94,7 +94,8 @@ const routes = {
 
   // ========== EJECUCIÓN ==========
   'ejecucion': { render: renderEjecucionView, init: initEjecucionView },
-  'ejecucion/registro': { render: renderRegistroOrdenView, init: initRegistroOrdenView },
+  'ejecucion/registro': { render: renderRecepcionBienesView, init: initRecepcionBienesView },
+  'ejecucion/recepcion-bienes': { render: renderRecepcionBienesView, init: initRecepcionBienesView },
   'ejecucion/presentacion': { render: renderPresentacionEntregableView, init: initPresentacionEntregableView },
   'ejecucion/ampliacion': { render: renderAmpliacionResolucionView, init: initAmpliacionResolucionView },
   'ejecucion/pago': { render: renderDerivacionPagoView, init: initDerivacionPagoView },

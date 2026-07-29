@@ -12,7 +12,7 @@ export const ESTADOS_CCP_BANDEJA = Object.freeze({
   ENVIADA_OPPM: 'ENVIADA_OPPM',
   PENDIENTE_CCP: 'PENDIENTE_CCP',
   CCP_REGISTRADO: 'CCP_REGISTRADO',
-  OBSERVADO_OPPM: 'OBSERVADO_OPPM',
+  CCP_REGISTRADA: 'CCP_REGISTRADA',
   ANULADO: 'ANULADO',
 });
 
@@ -21,7 +21,8 @@ export const ESTADOS_CCP_LABEL = Object.freeze({
   SOLICITUD_PREPARADA: 'Solicitud CCP preparada',
   ENVIADA_OPPM: 'Solicitud enviada a OPPM',
   PENDIENTE_CCP: 'Pendiente de CCP',
-  CCP_REGISTRADO: 'CCP registrado',
+  CCP_REGISTRADO: 'CCP registrada',
+  CCP_REGISTRADA: 'CCP registrada',
   OBSERVADO_OPPM: 'Observado por OPPM',
   ANULADO: 'CCP anulado',
 });
@@ -217,6 +218,13 @@ export async function listarBandejaCcp() {
 
   const out = [];
   const seen = new Set();
+  const reqIds = [...new Set(rows.map((r) => r.requerimiento_id).filter(Boolean))];
+  let evidenceByReq = new Map();
+  try {
+    const { loadEstadoExpedienteEvidenceByIds } = await import('./estadoExpedienteEvidence.js');
+    evidenceByReq = await loadEstadoExpedienteEvidenceByIds(reqIds);
+  } catch (_) { /* ok */ }
+
   for (const row of rows) {
     const key = `${row.requerimiento_id}:${row.solicitud_id}`;
     if (seen.has(key)) continue;
@@ -238,16 +246,28 @@ export async function listarBandejaCcp() {
       consolidacionId: row.consolidacion_id,
     });
     const enConsolidacionActiva = !!row.consolidacion_id;
+    const ev = evidenceByReq.get(Number(row.requerimiento_id)) || {};
 
     const seed = {
       solicitud_estado: row.solicitud_estado,
       estado_cuadro: row.cuadro_estado,
-      codigo_ccp: row.codigo_ccp || '',
-      ccp_activo: !!row.codigo_ccp,
+      codigo_ccp: row.codigo_ccp || ev.codigo_ccp || '',
+      ccp_activo: !!(row.codigo_ccp || ev.ccp_activo),
       consolidacion_estado: row.consolidacion_estado,
+      orden_id: ev.orden_id || null,
+      orden_estado: ev.orden_estado || '',
+      enviado_proveedor_at: ev.enviado_proveedor_at || null,
+      recibido_proveedor_at: ev.recibido_proveedor_at || null,
+      derivado_ejecucion_at: ev.derivado_ejecucion_at || null,
+      orden_resuelta: !!ev.orden_resuelta,
+      expediente_derivado_pago: !!ev.expediente_derivado_pago,
     };
     const vigente = resolveEstadoActualExpediente(seed);
     const badge = badgeVisualEstadoVigente(seed);
+    const isCcpReg = vigente.codigo === 'CCP_REGISTRADA' || vigente.code === 'CCP_REGISTRADA';
+    const isOrdenOrLater = ['REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
+      'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION',
+      'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO'].includes(vigente.codigo || vigente.code);
     out.push({
       requerimiento_id: row.requerimiento_id,
       requerimiento_codigo: row.requerimiento_codigo,
@@ -256,11 +276,26 @@ export async function listarBandejaCcp() {
       solicitud_id: row.solicitud_id,
       solicitud_codigo: row.solicitud_codigo,
       centro: centroRes.centro || '',
-      estado_ccp: vigente.code === 'CCP_REGISTRADO' ? ESTADOS_CCP_BANDEJA.CCP_REGISTRADO : estadoCode,
+      estado_ccp: isCcpReg ? ESTADOS_CCP_BANDEJA.CCP_REGISTRADA : estadoCode,
       estado_ccp_label: vigente.label || ESTADOS_CCP_LABEL[estadoCode] || estadoCode,
       estado_actual: vigente.code,
       estado_codigo: vigente.code,
       etiqueta_estado: vigente.label,
+      estadoVigente: vigente.estadoVigente,
+      situacion: vigente.situacion
+        ? { codigo: vigente.situacion.codigo, label: vigente.situacion.label }
+        : null,
+      estadoInterno: vigente.estadoInterno || (
+        (row.codigo_ccp || isCcpReg || isOrdenOrLater)
+          ? {
+            codigo: 'CCP_REGISTRADA',
+            label: 'CCP registrada',
+            modulo: 'CCP',
+          }
+          : null
+      ),
+      estado_vigente: vigente.codigo || vigente.code,
+      estado_vigente_label: vigente.label,
       badge_color: badge.color,
       badge_style: badge.style,
       badge_variante: badge.bootstrap || 'custom',
@@ -268,7 +303,7 @@ export async function listarBandejaCcp() {
       codigo_id: row.codigo_id || null,
       tiene_codigo: !!row.codigo_ccp,
       ccp_activo: !!row.codigo_ccp,
-      ccp_registrado: vigente.code === 'CCP_REGISTRADO',
+      ccp_registrado: isCcpReg || !!vigente.ccpRegistrado,
       cuadro_id: row.cuadro_id,
       monto_adjudicado: monto,
       moneda: 'PEN',
@@ -279,6 +314,11 @@ export async function listarBandejaCcp() {
       puede_seleccionar: !enConsolidacionActiva && monto > 0,
       registrado_por: row.registrado_por || '',
       registrado_at: row.registrado_at || null,
+      orden_id: ev.orden_id || null,
+      orden_estado: ev.orden_estado || '',
+      enviado_proveedor_at: ev.enviado_proveedor_at || null,
+      orden_resuelta: !!ev.orden_resuelta,
+      expediente_derivado_pago: !!ev.expediente_derivado_pago,
     });
   }
   return out;

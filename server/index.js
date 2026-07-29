@@ -51,6 +51,7 @@ import invitacionesRouter from './routes/invitaciones.js';
 import portalRouter, { portalAnalistaRouter } from './routes/portal.js';
 import ccpRouter from './routes/ccp.js';
 import ordenesContratacionRouter from './routes/ordenesContratacion.js';
+import recepcionBienesRouter from './routes/recepcionBienes.js';
 import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
@@ -351,6 +352,7 @@ app.use('/api/contrataciones/invitaciones', invitacionesRouter);
 app.use('/api/contrataciones/portal-analista', portalAnalistaRouter);
 app.use('/api/ccp', ccpRouter);
 app.use('/api/ordenes-contratacion', ordenesContratacionRouter);
+app.use('/api/recepcion-bienes', recepcionBienesRouter);
 
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',

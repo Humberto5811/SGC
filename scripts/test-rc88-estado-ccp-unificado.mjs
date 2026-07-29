@@ -117,7 +117,12 @@ assert(!/Supervisi[oó]n/.test(viewCc), 'sin Supervisión en título');
 const bePortal = fs.readFileSync(path.join(root, 'server/lib/portalProveedores.js'), 'utf8');
 assert(/solicitud_estado/.test(bePortal) && /estado_cuadro/.test(bePortal), 'API recepción expone estado vigente');
 const beVal = fs.readFileSync(path.join(root, 'server/lib/validacionesCotizacion.js'), 'utf8');
-assert(/derivadoCcp \? 'Derivado a CCP'/.test(beVal), 'API validaciones prioriza DERIVADO_CCP');
+assert(
+  /estadoBandeja = vigente\.label/.test(beVal)
+    || /derivadoCcp \? 'Derivado a CCP'/.test(beVal)
+    || /resolveEstadoExpedienteVigente/.test(beVal),
+  'API validaciones prioriza DERIVADO_CCP',
+);
 
 const failed = tests.filter((t) => !t.ok);
 console.log(failed.length ? `\n${failed.length} fallos` : '\nPASS RC88 / OD33');

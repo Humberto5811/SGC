@@ -1,10 +1,15 @@
 /**
- * OD35 — Flags CCP para propagar estado vigente a todas las bandejas.
- * Fuente de datos: ccp_codigos activos (+ consolidación enviada a OPPM).
+ * OD35 — Flags CCP + evidencia de órdenes para propagar estado vigente a todas las bandejas.
+ * Delega en el cargador central (CCP + Registro de Órdenes) — sin N+1.
  */
 import { query } from '../db.js';
 import {
-  resolveEstadoActualExpediente,
+  attachEstadoExpedienteEvidenceToRows,
+  applyEstadoEvidenceToRow,
+  loadEstadoExpedienteEvidenceByIds,
+} from './estadoExpedienteEvidence.js';
+import {
+  resolveEstadoExpedienteVigente,
   badgeVisualEstadoVigente,
 } from '../../shared/estadoExpedienteVigente.js';
 
@@ -41,7 +46,8 @@ export async function loadCcpActivosByRequerimientoIds(requerimientoIds = []) {
 
 /**
  * Por solicitud: si algún requerimiento tiene CCP activo → expediente CCP registrado.
- * @returns {Promise<Map<number, { codigo_ccp: string, ccp_activo: boolean, enviada_oppm: boolean }>>}
+ * Incluye evidencia de orden del requerimiento vinculado (mejor esfuerzo).
+ * @returns {Promise<Map<number, object>>}
  */
 export async function loadCcpFlagsBySolicitudIds(solicitudIds = []) {
   const ids = [...new Set((solicitudIds || [])
@@ -54,7 +60,8 @@ export async function loadCcpFlagsBySolicitudIds(solicitudIds = []) {
       SELECT sr.solicitud_id,
         MAX(cod.codigo_ccp) FILTER (WHERE cod.estado = 'ACTIVO') AS codigo_ccp,
         BOOL_OR(cod.estado = 'ACTIVO') AS ccp_activo,
-        BOOL_OR(sol.estado = 'ENVIADA_OPPM' AND csr.activo = TRUE) AS enviada_oppm
+        BOOL_OR(sol.estado = 'ENVIADA_OPPM' AND csr.activo = TRUE) AS enviada_oppm,
+        ARRAY_AGG(DISTINCT sr.requerimiento_id) AS requerimiento_ids
       FROM solicitud_requerimientos sr
       LEFT JOIN ccp_codigos cod ON cod.requerimiento_id = sr.requerimiento_id
       LEFT JOIN ccp_solicitud_requerimientos csr
@@ -63,67 +70,77 @@ export async function loadCcpFlagsBySolicitudIds(solicitudIds = []) {
       WHERE sr.solicitud_id = ANY($1::int[])
       GROUP BY sr.solicitud_id
     `, [ids]);
+
+    const allReqIds = [];
     rows.forEach((r) => {
+      const reqIds = (r.requerimiento_ids || []).map((x) => Number(x)).filter(Boolean);
+      allReqIds.push(...reqIds);
       map.set(Number(r.solicitud_id), {
         codigo_ccp: r.codigo_ccp || '',
         ccp_activo: !!r.ccp_activo,
         enviada_oppm: !!r.enviada_oppm,
+        requerimiento_ids: reqIds,
       });
     });
+
+    // Adjuntar evidencia de órdenes (batch) a cada solicitud
+    const evidence = await loadEstadoExpedienteEvidenceByIds(allReqIds);
+    for (const [sid, info] of map.entries()) {
+      let bestOrden = null;
+      for (const rid of (info.requerimiento_ids || [])) {
+        const ev = evidence.get(rid);
+        if (!ev) continue;
+        if (!bestOrden) bestOrden = ev;
+        else {
+          // Preferir la evidencia más avanzada (notificada > registrada)
+          const a = ev.enviado_proveedor_at || ev.orden_estado === 'ORDEN_NOTIFICADA';
+          const b = bestOrden.enviado_proveedor_at || bestOrden.orden_estado === 'ORDEN_NOTIFICADA';
+          if (a && !b) bestOrden = ev;
+          else if (ev.orden_id && !bestOrden.orden_id) bestOrden = ev;
+        }
+      }
+      if (bestOrden) {
+        info.orden_id = bestOrden.orden_id;
+        info.orden_estado = bestOrden.orden_estado;
+        info.enviado_proveedor_at = bestOrden.enviado_proveedor_at;
+        info.recibido_proveedor_at = bestOrden.recibido_proveedor_at;
+        info.derivado_ejecucion_at = bestOrden.derivado_ejecucion_at;
+        info.orden_resuelta = bestOrden.orden_resuelta;
+        info.expediente_derivado_pago = bestOrden.expediente_derivado_pago;
+      }
+    }
   } catch (_) { /* migración pendiente */ }
   return map;
 }
 
-/** Adjunta flags CCP a filas de requerimiento (id = requerimiento_id). */
+/** Adjunta flags CCP + evidencia de órdenes a filas de requerimiento. */
 export async function attachCcpFlagsToRows(rows = []) {
-  const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) return list;
-  const map = await loadCcpActivosByRequerimientoIds(list.map((r) => r.id || r.requerimiento_id));
-  return list.map((r) => {
-    const key = Number(r.id || r.requerimiento_id);
-    const info = map.get(key);
-    return applyCcpFlagsToRow(r, info);
-  });
+  return attachEstadoExpedienteEvidenceToRows(rows);
 }
 
 export function applyCcpFlagsToRow(row = {}, info = null, extras = {}) {
-  const codigo = String(info?.codigo_ccp || extras.codigo_ccp || row.codigo_ccp || '').trim();
-  const ccpActivo = !!(info?.codigo_ccp || extras.ccp_activo || codigo);
-  const enviadaOppm = !!(extras.enviada_oppm || row.enviada_oppm);
-  const seeded = {
-    ...row,
-    codigo_ccp: codigo,
-    ccp_activo: ccpActivo,
-    tiene_codigo: ccpActivo,
-    enviada_oppm: enviadaOppm,
-    consolidacion_estado: enviadaOppm
-      ? 'ENVIADA_OPPM'
-      : (row.consolidacion_estado || ''),
-    estado_ccp: ccpActivo
-      ? 'CCP_REGISTRADO'
-      : (enviadaOppm ? 'ENVIADA_OPPM' : (row.estado_ccp || '')),
+  const evidence = {
+    codigo_ccp: String(info?.codigo_ccp || extras.codigo_ccp || row.codigo_ccp || '').trim(),
+    ccp_activo: !!(info?.codigo_ccp || extras.ccp_activo || info?.ccp_activo),
+    enviada_oppm: !!(extras.enviada_oppm || info?.enviada_oppm || row.enviada_oppm),
+    orden_id: info?.orden_id ?? extras.orden_id ?? row.orden_id ?? null,
+    orden_estado: info?.orden_estado || extras.orden_estado || row.orden_estado || '',
+    enviado_proveedor_at: info?.enviado_proveedor_at || extras.enviado_proveedor_at || row.enviado_proveedor_at || null,
+    recibido_proveedor_at: info?.recibido_proveedor_at || extras.recibido_proveedor_at || row.recibido_proveedor_at || null,
+    derivado_ejecucion_at: info?.derivado_ejecucion_at || extras.derivado_ejecucion_at || row.derivado_ejecucion_at || null,
+    orden_resuelta: !!(info?.orden_resuelta || extras.orden_resuelta),
+    expediente_derivado_pago: !!(info?.expediente_derivado_pago || extras.expediente_derivado_pago),
   };
-  const vigente = resolveEstadoActualExpediente(seeded);
-  const badge = badgeVisualEstadoVigente(seeded);
-  // No sobrescribir estado_actual (etapa de workflow / ubicación del expediente).
-  return {
-    ...seeded,
-    estado_codigo: vigente.code,
-    etiqueta_estado: vigente.label,
-    estado_vigente: vigente.code,
-    estado_vigente_label: vigente.label,
-    badge_variante: badge.bootstrap || (badge.color ? 'custom' : 'secondary'),
-    badge_color: badge.color || null,
-    badge_style: badge.style || '',
-    derivado_ccp: vigente.derivadoCcp,
-    ccp_registrado: vigente.ccpRegistrado === true || vigente.code === 'CCP_REGISTRADO',
-  };
+  if (evidence.codigo_ccp) evidence.ccp_activo = true;
+  return applyEstadoEvidenceToRow(row, evidence);
 }
 
 /** Payload estándar post-mutación CCP para el frontend. */
 export function buildCcpEstadoResponse(rowLike = {}) {
   const enriched = applyCcpFlagsToRow(rowLike, {
     codigo_ccp: rowLike.codigo_ccp || '',
+    orden_estado: rowLike.orden_estado || '',
+    enviado_proveedor_at: rowLike.enviado_proveedor_at || null,
   }, {
     ccp_activo: !!rowLike.codigo_ccp,
     enviada_oppm: !!rowLike.enviada_oppm,
@@ -139,5 +156,17 @@ export function buildCcpEstadoResponse(rowLike = {}) {
     badge_variante: enriched.badge_variante,
     derivado_ccp: !!enriched.derivado_ccp,
     ccp_registrado: !!enriched.ccp_registrado,
+    estadoVigente: enriched.estadoVigente || {
+      codigo: enriched.estado_vigente,
+      label: enriched.estado_vigente_label,
+    },
+    situacion: enriched.situacion || null,
+    estadoInterno: enriched.estadoInterno || null,
   };
 }
+
+export {
+  resolveEstadoExpedienteVigente,
+  badgeVisualEstadoVigente,
+  loadEstadoExpedienteEvidenceByIds,
+};

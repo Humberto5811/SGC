@@ -1,6 +1,6 @@
 /** Utilidades compartidas — bandeja Recepción de Cotizaciones. */
 import {
-  resolveEstadoActualExpediente,
+  resolveEstadoExpedienteVigente,
   BADGE_COLOR_CCP,
   renderBadgeEstadoVigenteHtml,
   esExpedienteDerivadoCcp,
@@ -26,47 +26,72 @@ function normValidacion(c) {
   return String(c?.validacion_estado || '').toUpperCase();
 }
 
+const ESTADOS_GLOBAL_AVANZADOS = [
+  'ORDEN_NOTIFICADA', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION', 'REGISTRO_ORDENES',
+  'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION',
+  'CCP_REGISTRADA', 'ENVIADA_OPPM', 'DERIVADO_CCP',
+  'RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+  'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU', 'CONFORMIDAD_EN_COORDINACION_CM',
+];
+
 /** Estado agregado del expediente (solicitud) según sus cotizaciones. */
 export function estadoExpedienteRecepcion(cotizaciones = [], meta = {}) {
   const list = Array.isArray(cotizaciones) ? cotizaciones : [];
+  // Si el backend ya resolvió estadoVigente avanzado, respetarlo
+  const fromBe = meta.estadoVigente || list.find((c) => c?.estadoVigente?.codigo)?.estadoVigente;
+  if (fromBe?.codigo && ESTADOS_GLOBAL_AVANZADOS.includes(fromBe.codigo)) {
+    return {
+      label: fromBe.label,
+      validacion_estado: fromBe.codigo,
+      badge: fromBe.codigo === 'CCP_REGISTRADA' ? 'success' : 'ccp-morado',
+      badgeStyle: fromBe.codigo === 'CCP_REGISTRADA'
+        ? 'background:#198754;color:#fff'
+        : `background:${BADGE_COLOR_CCP};color:#fff`,
+      derivado_ccp: true,
+      ccp_registrado: ['CCP_REGISTRADA', 'ORDEN_NOTIFICADA', 'ORDEN_REGISTRADA', 'REGISTRO_ORDENES',
+        'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
+        'RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+        'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
+        'CONFORMIDAD_EN_COORDINACION_CM'].includes(fromBe.codigo),
+      codigo_ccp: meta.codigo_ccp || list[0]?.codigo_ccp || '',
+      estadoVigente: fromBe,
+    };
+  }
   const seed = {
     solicitud_estado: meta.solicitud_estado || list[0]?.solicitud_estado || '',
     estado_cuadro: meta.estado_cuadro || list[0]?.estado_cuadro || '',
     estado: meta.estado_cuadro || list[0]?.estado_cuadro || '',
     derivado_ccp: meta.derivado_ccp || list[0]?.derivado_ccp,
     codigo_ccp: meta.codigo_ccp || list[0]?.codigo_ccp || '',
-    ccp_activo: meta.ccp_activo || list[0]?.ccp_activo || list[0]?.ccp_registrado,
+    ccp_activo: meta.ccp_activo || list[0]?.ccp_activo || false,
     enviada_oppm: meta.enviada_oppm || list[0]?.enviada_oppm,
+    orden_estado: meta.orden_estado || list[0]?.orden_estado || '',
+    enviado_proveedor_at: meta.enviado_proveedor_at || list[0]?.enviado_proveedor_at || null,
+    orden_id: meta.orden_id || list[0]?.orden_id || null,
+    orden_resuelta: meta.orden_resuelta || list[0]?.orden_resuelta,
+    expediente_derivado_pago: meta.expediente_derivado_pago || list[0]?.expediente_derivado_pago,
+    recepcion_estado_global: meta.recepcion_estado_global || list[0]?.recepcion_estado_global || '',
+    recepcion_bienes_expediente_id: meta.recepcion_bienes_expediente_id
+      || list[0]?.recepcion_bienes_expediente_id || null,
   };
-  // OD33/OD35 — CCP_REGISTRADO > DERIVADO_CCP > fallback local
-  const vigente = resolveEstadoActualExpediente(seed);
-  if (vigente.code === 'CCP_REGISTRADO' || vigente.ccpRegistrado) {
+  const vigente = resolveEstadoExpedienteVigente(seed);
+  if (vigente.codigo && (
+    vigente.ccpRegistrado || vigente.derivadoCcp
+    || ESTADOS_GLOBAL_AVANZADOS.includes(vigente.codigo)
+  )) {
     return {
-      label: 'CCP registrado',
-      validacion_estado: 'CCP_REGISTRADO',
-      badge: 'success',
-      badgeStyle: 'background:#198754;color:#fff',
-      derivado_ccp: true,
-      ccp_registrado: true,
+      label: vigente.label,
+      validacion_estado: vigente.codigo,
+      badge: vigente.codigo === 'CCP_REGISTRADA' ? 'success' : 'ccp-morado',
+      badgeStyle: vigente.codigo === 'CCP_REGISTRADA'
+        ? 'background:#198754;color:#fff'
+        : (vigente.codigo === 'ENVIADA_OPPM'
+          ? 'background:#0d6efd;color:#fff'
+          : `background:${BADGE_COLOR_CCP};color:#fff`),
+      derivado_ccp: !!vigente.derivadoCcp,
+      ccp_registrado: !!vigente.ccpRegistrado,
       codigo_ccp: seed.codigo_ccp || '',
-    };
-  }
-  if (vigente.code === 'ENVIADA_OPPM') {
-    return {
-      label: 'Solicitud enviada a OPPM',
-      validacion_estado: 'ENVIADA_OPPM',
-      badge: 'primary',
-      badgeStyle: 'background:#0d6efd;color:#fff',
-      derivado_ccp: true,
-    };
-  }
-  if (vigente.derivadoCcp || esExpedienteDerivadoCcp(seed)) {
-    return {
-      label: 'Derivado a CCP',
-      validacion_estado: 'DERIVADO_CCP',
-      badge: 'ccp-morado',
-      badgeStyle: `background:${BADGE_COLOR_CCP};color:#fff`,
-      derivado_ccp: true,
+      estadoVigente: vigente.estadoVigente,
     };
   }
   if (!list.length) return { label: 'Cotización recibida', validacion_estado: '', badge: 'primary' };
@@ -83,12 +108,24 @@ export function estadoExpedienteRecepcion(cotizaciones = [], meta = {}) {
   return { label: 'Validada por área usuaria', validacion_estado: 'VALIDADA_AU', badge: 'success' };
 }
 
-/** HTML del badge de estado en bandeja Recepción (verde CCP registrado / morado derivado). */
+/** HTML del badge de estado en bandeja Recepción. */
 export function renderBadgeEstadoRecepcionHtml(exp, escFn = (s) => String(s ?? '')) {
-  if (exp?.ccp_registrado || exp?.ccp_activo || exp?.validacion_estado === 'CCP_REGISTRADO'
+  if (exp?.estadoVigente?.codigo || exp?.estado_vigente) {
+    return renderBadgeEstadoVigenteHtml({
+      ...exp,
+      codigo_ccp: exp.codigo_ccp || '',
+      ccp_activo: !!exp.ccp_activo,
+      orden_estado: exp.orden_estado || '',
+      enviado_proveedor_at: exp.enviado_proveedor_at || null,
+      orden_id: exp.orden_id || null,
+    }, escFn);
+  }
+  if (exp?.ccp_registrado || exp?.ccp_activo
+    || exp?.validacion_estado === 'CCP_REGISTRADO' || exp?.validacion_estado === 'CCP_REGISTRADA'
     || exp?.codigo_ccp
     || exp?.derivado_ccp || exp?.validacion_estado === 'DERIVADO_CCP'
     || exp?.validacion_estado === 'ENVIADA_OPPM'
+    || exp?.orden_estado || exp?.enviado_proveedor_at
     || esExpedienteDerivadoCcp(exp || {})) {
     return renderBadgeEstadoVigenteHtml(exp || { estado_cuadro: 'DERIVADO_CCP' }, escFn);
   }
@@ -141,15 +178,30 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
 
   return [...map.values()].map((g) => {
     const seedCot = g.cotizaciones[0] || {};
+    // Preferir cotización con evidencia de orden más avanzada
+    const withOrden = g.cotizaciones.find((c) => c.enviado_proveedor_at || c.orden_estado || c.estadoVigente)
+      || seedCot;
     const meta = {
-      solicitud_estado: seedCot.solicitud_estado || g.solicitud_estado || '',
-      estado_cuadro: seedCot.estado_cuadro || g.estado_cuadro || '',
-      derivado_ccp: !!seedCot.derivado_ccp,
-      codigo_ccp: seedCot.codigo_ccp || g.codigo_ccp || '',
-      ccp_activo: !!seedCot.ccp_activo || !!seedCot.ccp_registrado,
-      enviada_oppm: !!seedCot.enviada_oppm,
+      solicitud_estado: withOrden.solicitud_estado || seedCot.solicitud_estado || g.solicitud_estado || '',
+      estado_cuadro: withOrden.estado_cuadro || seedCot.estado_cuadro || g.estado_cuadro || '',
+      derivado_ccp: !!withOrden.derivado_ccp || !!seedCot.derivado_ccp,
+      codigo_ccp: withOrden.codigo_ccp || seedCot.codigo_ccp || g.codigo_ccp || '',
+      ccp_activo: !!withOrden.ccp_activo || !!withOrden.ccp_registrado
+        || !!seedCot.ccp_activo || !!seedCot.ccp_registrado,
+      enviada_oppm: !!withOrden.enviada_oppm || !!seedCot.enviada_oppm,
+      orden_id: withOrden.orden_id || seedCot.orden_id || null,
+      orden_estado: withOrden.orden_estado || seedCot.orden_estado || '',
+      enviado_proveedor_at: withOrden.enviado_proveedor_at || seedCot.enviado_proveedor_at || null,
+      recibido_proveedor_at: withOrden.recibido_proveedor_at || seedCot.recibido_proveedor_at || null,
+      orden_resuelta: !!(withOrden.orden_resuelta || seedCot.orden_resuelta),
+      expediente_derivado_pago: !!(withOrden.expediente_derivado_pago || seedCot.expediente_derivado_pago),
+      estadoVigente: withOrden.estadoVigente || seedCot.estadoVigente || null,
     };
     const est = estadoExpedienteRecepcion(g.cotizaciones, meta);
+    const vigente = est.estadoVigente || meta.estadoVigente || {
+      codigo: est.validacion_estado,
+      label: est.label,
+    };
     const fechas = g.cotizaciones.map((c) => c.fecha_presentacion || c.created_at).filter(Boolean);
     const fechaUltima = fechas.sort((a, b) => fechaSortKey(b) - fechaSortKey(a))[0] || '';
     return {
@@ -157,13 +209,21 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
       solicitud_estado: meta.solicitud_estado,
       estado_cuadro: meta.estado_cuadro,
       cantidad_cotizaciones: g.cotizaciones.length,
-      estado_recepcion: est.label,
-      validacion_estado: est.validacion_estado,
+      estado_recepcion: vigente.label || est.label,
+      validacion_estado: vigente.codigo || est.validacion_estado,
       badge_estado: est.badge,
       badgeStyle: est.badgeStyle || '',
       derivado_ccp: !!est.derivado_ccp,
       ccp_registrado: !!est.ccp_registrado,
       codigo_ccp: est.codigo_ccp || meta.codigo_ccp || '',
+      orden_id: meta.orden_id,
+      orden_estado: meta.orden_estado,
+      enviado_proveedor_at: meta.enviado_proveedor_at,
+      orden_resuelta: meta.orden_resuelta,
+      expediente_derivado_pago: meta.expediente_derivado_pago,
+      estadoVigente: vigente,
+      estado_vigente: vigente.codigo,
+      estado_vigente_label: vigente.label,
       fecha_ultima_presentacion: fechaUltima,
     };
   }).sort((a, b) => fechaSortKey(b.fecha_ultima_presentacion) - fechaSortKey(a.fecha_ultima_presentacion));

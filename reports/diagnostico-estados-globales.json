@@ -1,0 +1,42 @@
+{
+  "generado_at": "2026-07-29T02:40:56.121Z",
+  "modo": "diagnostico_no_destructivo",
+  "notas": [
+    "Sin conexión DB forzada: analiza reglas del resolvedor y casos sintéticos.",
+    "Para auditoría en vivo, ejecutar con DATABASE_URL y flag --live (opcional futuro)."
+  ],
+  "inconsistencias": [
+    {
+      "id": "bug-bandeja-ccp-vs-orden",
+      "tipo": "evidencia_incompleta_en_bandeja",
+      "descripcion": "Orden notificada pero evidencia solo CCP (bug histórico bandejas)",
+      "estado_sin_orden": {
+        "codigo": "CCP_REGISTRADA",
+        "label": "CCP registrada"
+      },
+      "estado_con_orden": {
+        "codigo": "ORDEN_NOTIFICADA",
+        "label": "Orden notificada"
+      },
+      "correccion": "Usar loadEstadoExpedienteEvidenceByIds en todas las bandejas"
+    }
+  ],
+  "aliases_historicos": [
+    {
+      "codigo_historico": "ORDEN_ENVIADA",
+      "codigo_canonico": "ORDEN_NOTIFICADA",
+      "label": "Orden notificada"
+    },
+    {
+      "codigo_historico": "CCP_REGISTRADO",
+      "codigo_canonico": "CCP_REGISTRADA",
+      "label": "CCP registrada"
+    }
+  ],
+  "codigos_desconocidos": [
+    "CODIGO_RARO_DIAG"
+  ],
+  "reglas_prioridad": [
+    "ORDEN_RESUELTA > EXPEDIENTE_DERIVADO_PAGO > ORDEN_NOTIFICADA > ORDEN_REGISTRADA > CCP_REGISTRADA"
+  ]
+}
