@@ -1,5 +1,5 @@
 import { authService } from './authService.js';
-import { ROUTE_TO_SUBMODULO, normalizePermisos } from '../utils/permissionsCatalog.js';
+import { permissionsService } from './permissionsService.js';
 
 export const userService = {
   findAll: () => JSON.parse(localStorage.getItem('users') || '[]'),
@@ -10,25 +10,14 @@ export const userService = {
   },
 
   /**
-   * Valida permiso por ruta y actividad (VER, CREAR, APROBAR, etc.)
+   * RC119 — delega en permissionsService (misma fuente que menú / sidebar).
    */
   hasPermission(user, route, action = 'VER') {
-    const u = user || authService.getCurrentUser();
-    if (!u) return false;
-    if (u.rol === 'admin') return true;
-    const act = String(action).toUpperCase();
-    const subId = ROUTE_TO_SUBMODULO[route];
-    if (!subId) return true;
-    const permisos = normalizePermisos(u.permisos, u.rol);
-    if (!permisos.submodulos.includes(subId)) return false;
-    return permisos.actividades.includes(act);
+    return permissionsService.canAccessRoute(route, action, user || authService.getCurrentUser());
   },
 
   tieneActividad(actividad, user) {
-    const u = user || authService.getCurrentUser();
-    if (!u) return false;
-    if (u.rol === 'admin') return true;
-    return normalizePermisos(u.permisos, u.rol).actividades.includes(String(actividad).toUpperCase());
+    return permissionsService.tieneActividad(actividad, user || authService.getCurrentUser());
   },
 };
 

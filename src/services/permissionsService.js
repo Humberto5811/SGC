@@ -2,11 +2,11 @@ import { authService } from './authService.js';
 import {
   ROUTE_TO_SUBMODULO,
   SUBMODULO_ID_ALIASES,
-  LEGACY_ROUTE_REDIRECTS,
   resolveCanonicalRoute,
   normalizePermisos,
   permisosFromRol,
   getActividadesForSubmodulo,
+  resolveUserPermissions,
   CONTRATACIONES_NUEVOS_SUBMODULOS,
   CONTRATACIONES_NUEVOS_ACTIVIDADES,
 } from '../utils/permissionsCatalog.js';
@@ -21,16 +21,13 @@ function resolveRouteSubmodulo(route) {
 }
 
 function getPermisos(user) {
-  const u = user || authService.getCurrentUser();
-  if (!u) return { modulos: [], submodulos: [], actividades: [] };
-  if (u.rol === 'admin') return normalizePermisos(u.permisos, 'admin', { explicit: u.permisos != null });
-  if (u.permisos != null && typeof u.permisos === 'object') {
-    return normalizePermisos(u.permisos, u.rol, { explicit: true });
-  }
-  return permisosFromRol(u.rol);
+  return resolveUserPermissions(user || authService.getCurrentUser());
 }
 
 export const permissionsService = {
+  /** Alias público del resolvedor único RC119. */
+  resolveUserPermissions,
+
   getPermisos,
 
   tieneModulo(moduloId, user) {
@@ -61,10 +58,12 @@ export const permissionsService = {
   canAccessRoute(route, actividad = 'VER', user) {
     const u = user || authService.getCurrentUser();
     if (!u) return route === 'login';
-    if (route === 'login' || route === 'dashboard') return true;
+    const OPEN_ROUTES = new Set(['login', 'dashboard', 'cambio-password', 'portal-proveedores']);
+    if (OPEN_ROUTES.has(route)) return true;
     if (u.rol === 'admin') return true;
     const subId = resolveRouteSubmodulo(route);
-    if (!subId) return true;
+    // Sin mapeo a submódulo: no abrir por defecto (evita fugas de menú Mantenimiento)
+    if (!subId) return false;
     const p = getPermisos(u);
     const canonical = resolveSubmoduloId(subId);
     if (!(p.submodulos || []).includes(canonical)) return false;
@@ -91,4 +90,5 @@ export const permissionsService = {
   },
 };
 
+export { resolveUserPermissions, normalizePermisos, permisosFromRol };
 export default permissionsService;

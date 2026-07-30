@@ -1,4 +1,5 @@
-import { permisosFromRol } from '../utils/permissionsCatalog.js';
+import { permisosFromRol, normalizePermisos } from '../utils/permissionsCatalog.js';
+import { authService } from '../services/authService.js';
 
 function renderLoginView() {
   return `
@@ -42,8 +43,21 @@ function initLoginView() {
     const errorMsg = document.getElementById('errorMsg');
 
     const onSuccess = (user) => {
-      if (!user.permisos) user.permisos = permisosFromRol(user.rol || 'usuario');
-      localStorage.setItem('currentUser', JSON.stringify(user));
+      // RC119: reemplaza sesión completa (invalida caché local de permisos anteriores)
+      const raw = user.permisos;
+      const hasGrants = raw && typeof raw === 'object' && (
+        (Array.isArray(raw.modulos) && raw.modulos.length > 0)
+        || (Array.isArray(raw.submodulos) && raw.submodulos.length > 0)
+      );
+      if (hasGrants) {
+        user.permisos = normalizePermisos(raw, user.rol, { explicit: true });
+      } else if (raw != null && typeof raw === 'object') {
+        // Vacío explícito (usuario sin permisos) o plantilla ya resuelta en backend
+        user.permisos = normalizePermisos(raw, user.rol, { explicit: true });
+      } else {
+        user.permisos = permisosFromRol(user.rol || 'usuario');
+      }
+      authService.setCurrentUser(user);
       window.location.hash = user.debeCambiarPassword ? '#/cambio-password' : '#/dashboard';
       window.location.reload();
     };

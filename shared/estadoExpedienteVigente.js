@@ -278,6 +278,8 @@ function pickBestByPriority(codes) {
       // Anulado solo gana si no hay nada más; prioridad baja en catálogo
     }
     const p = c === 'ANULADO' ? 9999 : getPrioridad(c);
+    // Ignorar códigos desconocidos (prioridad -1): no deben “ganar” el fallback
+    if (p < 0 && c !== 'ANULADO') continue;
     if (p > bestPrio) {
       bestPrio = p;
       best = c;
@@ -285,6 +287,58 @@ function pickBestByPriority(codes) {
   }
   return best;
 }
+
+/**
+ * RC118 — mapea etapa de workflow (trazabilidad) → estado canónico.
+ * Evita el fallback histórico a PENDIENTE_ELABORAR (“C.C. en elaboración”)
+ * cuando el expediente aún está en Registro / Evaluación / … sin evidencia de cuadro.
+ */
+function resolveEstadoFromWorkflowEtapa(workflowEtapa, row = {}) {
+  const etapa = String(workflowEtapa || '').toUpperCase();
+  const estadoNegocio = String(row.estado || '').trim();
+  switch (etapa) {
+    case 'REGISTRADO':
+      return 'REQUERIMIENTO_REGISTRADO';
+    case 'EVALUACION':
+      if (/aprobad/i.test(estadoNegocio) && !/observ/i.test(estadoNegocio)) {
+        return 'REQUERIMIENTO_APROBADO';
+      }
+      return 'REQUERIMIENTO_EN_EVALUACION';
+    case 'DEC':
+      if (/aprobado\s*dec/i.test(estadoNegocio)) return 'REQUERIMIENTO_APROBADO_DEC';
+      return 'REQUERIMIENTO_EN_DEC';
+    case 'PROGRAMACION':
+      if (/aprobad.*program/i.test(estadoNegocio)) return 'PROGRAMACION_APROBADA';
+      return 'EN_PROGRAMACION';
+    case 'ACTOS_PREPARATORIOS':
+      if (/aprobad/i.test(estadoNegocio)) return 'COORDINACION_CM_APROBADA';
+      return 'EN_COORDINACION_CM';
+    case 'INVITACIONES':
+      if (/enviad/i.test(estadoNegocio)) return 'INVITACION_ENVIADA';
+      return 'INVITACION_EN_ELABORACION';
+    case 'RECEPCION_COTIZACIONES':
+      return 'COTIZACIONES_RECIBIDAS';
+    case 'VALIDACION_USUARIO':
+      if (/validado/i.test(estadoNegocio)) return 'VALIDADO_POR_AU';
+      return 'VALIDACION_ENVIADA';
+    case 'CUADRO_COMPARATIVO':
+      return 'PENDIENTE_ELABORAR';
+    default:
+      return '';
+  }
+}
+
+/** Etapas anteriores a Cuadro Comparativo: no deben heredar default de C.C. */
+const ETAPAS_PRE_CUADRO = new Set([
+  'REGISTRADO',
+  'EVALUACION',
+  'DEC',
+  'PROGRAMACION',
+  'ACTOS_PREPARATORIOS',
+  'INVITACIONES',
+  'RECEPCION_COTIZACIONES',
+  'VALIDACION_USUARIO',
+]);
 
 function resolveEstadoOrdenFromFlags(flags, row = {}, opts = {}) {
   if (flags.ordenResuelta) return 'ORDEN_RESUELTA';
@@ -490,18 +544,47 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
   ]);
 
   let best = '';
+  let fuente = 'prioridad_catalogo';
   if (estadoCuadroAuth && revisionAuth) {
     best = getPrioridad(estadoCuadroAuth) >= getPrioridad(revisionAuth)
       ? estadoCuadroAuth
       : revisionAuth;
   } else {
-    best = estadoCuadroAuth || revisionAuth || pickBestByPriority([row.estado]);
+    best = estadoCuadroAuth || revisionAuth || '';
+  }
+
+  // Solo usar `row.estado` (negocio) si el catálogo lo reconoce como estado global.
+  // No promover valores desconocidos ni asumir Cuadro Comparativo.
+  if (!best) {
+    const fromEstadoNegocio = pickBestByPriority([row.estado]);
+    if (fromEstadoNegocio) {
+      best = fromEstadoNegocio;
+      fuente = 'estado_negocio';
+    }
+  }
+
+  // RC118: etapa de trazabilidad correlacionada al requerimiento (estado_actual / snapshot)
+  if (!best && workflowEtapa) {
+    const fromEtapa = resolveEstadoFromWorkflowEtapa(workflowEtapa, row);
+    if (fromEtapa) {
+      best = fromEtapa;
+      fuente = 'workflow_etapa';
+    }
   }
 
   if (!best && workflowEtapa === 'CUADRO_COMPARATIVO') {
     best = 'CUADRO_BORRADOR';
+    fuente = 'workflow_cuadro';
   }
-  if (!best) best = 'PENDIENTE_ELABORAR';
+
+  // Fallback controlado: estado inicial de Requerimiento — NUNCA C.C. en elaboración
+  // salvo evidencia real de cuadro / etapa CUADRO_COMPARATIVO (ramas anteriores).
+  if (!best) {
+    best = ETAPAS_PRE_CUADRO.has(workflowEtapa)
+      ? resolveEstadoFromWorkflowEtapa(workflowEtapa, row) || 'REQUERIMIENTO_REGISTRADO'
+      : 'REQUERIMIENTO_REGISTRADO';
+    fuente = 'default_requerimiento_registrado';
+  }
 
   // Situación OBSERVADO solo adorna estados de cuadro aún en revisión.
   // No contaminar DERIVADO_CCP / CCP / Órdenes con observaciones históricas.
@@ -509,7 +592,7 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
 
   return buildResult(best, {
     situacion: situacionAplicada,
-    fuente: best ? 'prioridad_catalogo' : 'default',
+    fuente,
     evidencia: flags,
     workflowEtapa: workflowEtapa || getEstadoDef(best)?.etapa || '',
   });

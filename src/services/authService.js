@@ -1,3 +1,5 @@
+import { resolveUserPermissions, getActividadesForSubmodulo } from '../utils/permissionsCatalog.js';
+
 export const authService = {
   getCurrentUser: () => {
     const user = localStorage.getItem('currentUser');
@@ -12,63 +14,70 @@ export const authService = {
     const u = authService.getCurrentUser();
     return !!(u && u.debeCambiarPassword);
   },
-  
+
   login: (dni, password) => {
     const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const user = users.find(u => u.dni === dni);
+    const user = users.find((u) => u.dni === dni);
     if (user) {
       authService.setCurrentUser(user);
       return { success: true, user };
     }
     return { success: false, error: 'Usuario no encontrado' };
   },
-  
+
   logout: async () => {
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...((() => {
-          try {
-            const u = JSON.parse(localStorage.getItem('currentUser') || 'null');
-            const h = {};
-            if (u?.id) h['x-user-id'] = String(u.id);
-            if (u?.username || u?.dni) h['x-user-name'] = u.username || u.dni;
-            return h;
-          } catch (_) { return {}; }
-        })()) },
+        headers: {
+          'Content-Type': 'application/json',
+          ...((() => {
+            try {
+              const u = JSON.parse(localStorage.getItem('currentUser') || 'null');
+              const h = {};
+              if (u?.id) h['x-user-id'] = String(u.id);
+              if (u?.username || u?.dni) h['x-user-name'] = u.username || u.dni;
+              return h;
+            } catch (_) {
+              return {};
+            }
+          })()),
+        },
       });
     } catch (_) { /* ignore */ }
     localStorage.removeItem('currentUser');
     window.location.hash = '#/login';
   },
-  
-  isAuthenticated: () => {
-    return authService.getCurrentUser() !== null;
-  },
-  
+
+  isAuthenticated: () => authService.getCurrentUser() !== null,
+
   restoreSession: () => {
     const user = authService.getCurrentUser();
-    if (user) {
-      return { success: true, user };
-    }
+    if (user) return { success: true, user };
     return { success: false };
   },
-  
+
   hasRole: (role) => {
     const user = authService.getCurrentUser();
     return user && user.rol === role;
   },
-  
+
   hasAnyRole: (roles) => {
     const user = authService.getCurrentUser();
     return user && roles.includes(user.rol);
   },
 
-  tieneActividad: (actividad) => {
+  /** RC119 — misma fuente que permissionsService / menú. */
+  tieneActividad: (actividad, submoduloId) => {
     const user = authService.getCurrentUser();
     if (!user) return false;
     if (user.rol === 'admin') return true;
-    const p = user.permisos || {};
-    return (p.actividades || []).includes(String(actividad).toUpperCase());
+    const p = resolveUserPermissions(user);
+    const act = String(actividad).toUpperCase();
+    if (submoduloId) return getActividadesForSubmodulo(p, submoduloId).includes(act);
+    if (p.actividadesPorSubmodulo && Object.keys(p.actividadesPorSubmodulo).length) {
+      return Object.values(p.actividadesPorSubmodulo).some((acts) => (acts || []).includes(act));
+    }
+    return (p.actividades || []).includes(act);
   },
 };

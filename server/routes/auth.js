@@ -19,7 +19,14 @@ export function getEstadoPassword(row) {
 }
 
 export function buildSafeUser(row) {
-  const permisos = normalizePermisos(row.permisos, row.rol);
+  const raw = row.permisos;
+  const hasStoredObject = raw != null && typeof raw === 'object';
+  const hasExplicitGrants = hasStoredObject && (
+    (Array.isArray(raw.modulos) && raw.modulos.length > 0)
+    || (Array.isArray(raw.submodulos) && raw.submodulos.length > 0)
+  );
+  // Con grants guardados: respetar JSON. Sin grants: plantilla por rol (compat au/dec).
+  const permisos = normalizePermisos(raw, row.rol, { explicit: hasExplicitGrants });
   const centro = row.centro || row.area_responsable || row.centro_codigo || '';
   return {
     id: row.id,

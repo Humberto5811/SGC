@@ -53,6 +53,8 @@ export const MODULOS = [
       { id: 'GLOSAS_BIENES', label: 'Formato Bienes', route: 'mantenimiento/bienes' },
       { id: 'GLOSAS_SERVICIOS', label: 'Formato Servicios', route: 'mantenimiento/servicios' },
       { id: 'GLOSAS_LOCACION', label: 'Formato Locación', route: 'mantenimiento/locacion' },
+      { id: 'GLOSAS_LICITACIONES', label: 'Formato Licitaciones', route: 'mantenimiento/licitaciones' },
+      { id: 'GLOSAS_CONCURSO', label: 'Formato Concurso', route: 'mantenimiento/concurso' },
       { id: 'LOGOTIPOS', label: 'Logotipos', route: 'mantenimiento/logotipos' },
       { id: 'ENTIDAD', label: 'Datos de la Entidad', route: 'mantenimiento/entidad' },
     ],
@@ -63,6 +65,8 @@ export const ROUTE_TO_SUBMODULO = {};
 MODULOS.forEach((m) => m.submodulos.forEach((s) => { if (s.route) ROUTE_TO_SUBMODULO[s.route] = s.id; }));
 ROUTE_TO_SUBMODULO['dec/consultas'] = 'CONSULTAS_OBSERVACIONES';
 ROUTE_TO_SUBMODULO['dec/cotizaciones'] = 'RECEPCION_COTIZACIONES';
+ROUTE_TO_SUBMODULO['admin/usuarios'] = 'USUARIOS';
+ROUTE_TO_SUBMODULO['ejecucion/registro'] = 'RECEPCION_BIENES';
 
 /** Rutas legacy → ruta canónica (compatibilidad). */
 export const LEGACY_ROUTE_REDIRECTS = {
@@ -98,15 +102,35 @@ export function emptyPermisos() {
 
 export function getActividadesForSubmodulo(permisos, subId) {
   const p = permisos || emptyPermisos();
-  const sid = String(subId || '');
+  const sid = String(SUBMODULO_ID_ALIASES[subId] || subId || '');
   const map = p.actividadesPorSubmodulo;
   if (map && typeof map === 'object' && Object.keys(map).length > 0) {
-    return Array.isArray(map[sid]) ? map[sid].map(String) : [];
+    const acts = Array.isArray(map[sid]) ? map[sid].map(String) : [];
+    if (acts.length) return acts;
+    // Submódulo autorizado sin actividades marcadas → VER mínimo (menú / acceso lectura)
+    if ((p.submodulos || []).includes(sid)) return ['VER'];
+    return [];
   }
   if ((p.submodulos || []).includes(sid) && Array.isArray(p.actividades) && p.actividades.length) {
     return p.actividades.map(String);
   }
+  if ((p.submodulos || []).includes(sid)) return ['VER'];
   return [];
+}
+
+/**
+ * RC119 — Única forma normalizada de permisos efectivos del usuario.
+ * Fuente oficial: usuarios.permisos (JSONB). Admin = catálogo completo.
+ */
+export function resolveUserPermissions(user) {
+  if (!user) return emptyPermisos();
+  if (user.rol === 'admin') {
+    return normalizePermisos(user.permisos, 'admin', { explicit: user.permisos != null });
+  }
+  if (user.permisos != null && typeof user.permisos === 'object') {
+    return normalizePermisos(user.permisos, user.rol, { explicit: true });
+  }
+  return permisosFromRol(user.rol);
 }
 
 function syncFlatActividades(base) {

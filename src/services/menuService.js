@@ -1,6 +1,7 @@
-// Menú principal SGC — fuente única de rutas visibles (Contrataciones reorganizado)
+// Menú principal SGC — fuente única de rutas visibles (filtrado por permisos RC119)
+import { authService } from './authService.js';
 import { permissionsService } from './permissionsService.js';
-import { LEGACY_ROUTE_REDIRECTS, resolveCanonicalRoute } from '../utils/permissionsCatalog.js';
+import { permisosFromRol } from '../utils/permissionsCatalog.js';
 
 /** Submódulos Contrataciones en orden funcional del flujo. */
 export const CONTRATACIONES_SUBMENU = [
@@ -19,11 +20,16 @@ export const CONTRATACIONES_SUBMENU = [
 /** Rutas legacy → misma ruta canónica (compatibilidad). */
 export { LEGACY_ROUTE_REDIRECTS, resolveCanonicalRoute } from '../utils/permissionsCatalog.js';
 
+/**
+ * Estructura de menú. `roles` se conserva solo como documentación legacy;
+ * el filtrado real usa `usuarios.permisos` vía permissionsService (RC119).
+ */
 export const MENU_STRUCTURE = [
   { path: 'dashboard', label: 'Dashboard', icon: 'bi-grid-3x3-gap-fill', roles: ['admin', 'au', 'dec', 'usuario'] },
   {
     label: 'Requerimientos',
     icon: 'bi-file-text',
+    moduloId: 'REQUERIMIENTOS',
     roles: ['au', 'admin'],
     submenu: [
       { path: 'au/requerimientos/registro', label: 'Registro de Requerimientos', icon: 'bi-pencil-square', submoduloId: 'REGISTRO_REQUERIMIENTO' },
@@ -33,12 +39,14 @@ export const MENU_STRUCTURE = [
   {
     label: 'Contrataciones',
     icon: 'bi-cart-check',
+    moduloId: 'CONTRATACIONES',
     roles: ['dec', 'admin'],
     submenu: CONTRATACIONES_SUBMENU,
   },
   {
     label: 'Ejecución',
     icon: 'bi-graph-up',
+    moduloId: 'EJECUCION',
     roles: ['dec', 'admin', 'au'],
     submenu: [
       { path: 'ejecucion/recepcion-bienes', label: 'Recepción de Bienes', icon: 'bi-box-seam', submoduloId: 'RECEPCION_BIENES' },
@@ -56,6 +64,7 @@ export const MENU_STRUCTURE = [
   {
     label: 'Mantenimiento',
     icon: 'bi-wrench',
+    moduloId: 'MANTENIMIENTO',
     roles: ['admin'],
     submenu: [
       {
@@ -106,38 +115,69 @@ export const MENU_STRUCTURE = [
   },
 ];
 
-function canShowRoute(path, userRole) {
+function canShowRoute(path, user) {
   if (!path) return true;
-  if (userRole === 'admin') return true;
-  return permissionsService.canAccessRoute(path, 'VER');
+  return permissionsService.canAccessRoute(path, 'VER', user);
 }
 
-export function filterMenuItems(items, userRole) {
+export function filterMenuItems(items, user) {
   return (items || []).map((item) => {
     if (item.submenu) {
-      const submenu = filterMenuItems(item.submenu, userRole);
+      const submenu = filterMenuItems(item.submenu, user);
       if (!submenu.length) return null;
       return { ...item, submenu };
     }
-    if (item.path && !canShowRoute(item.path, userRole)) return null;
+    if (item.path && !canShowRoute(item.path, user)) return null;
     return item;
   }).filter(Boolean);
 }
 
-export function getMenuForRole(userRole) {
-  return MENU_STRUCTURE.filter((item) => !item.roles || item.roles.includes(userRole))
+/**
+ * Construye el menú lateral según permisos efectivos del usuario (no solo rol).
+ */
+export function getMenuForUser(user) {
+  const u = user || authService.getCurrentUser();
+  if (!u) return [];
+
+  // Admin: menú completo
+  if (u.rol === 'admin') {
+    return MENU_STRUCTURE.map((item) => (
+      item.submenu ? { ...item, submenu: filterMenuItems(item.submenu, u) } : { ...item }
+    ));
+  }
+
+  return MENU_STRUCTURE
     .map((item) => {
-      if (!item.submenu) return item;
-      return { ...item, submenu: filterMenuItems(item.submenu, userRole) };
-    });
+      if (item.submenu) {
+        const submenu = filterMenuItems(item.submenu, u);
+        if (!submenu.length) return null;
+        return { ...item, submenu };
+      }
+      if (item.path && !canShowRoute(item.path, u)) return null;
+      return item;
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Compat: acepta rol string o usa el usuario de sesión.
+ * Si solo se pasa el rol, se sintetiza un usuario con permisosFromRol (legacy).
+ */
+export function getMenuForRole(userOrRole) {
+  if (userOrRole && typeof userOrRole === 'object') {
+    return getMenuForUser(userOrRole);
+  }
+  const session = authService.getCurrentUser();
+  if (session) return getMenuForUser(session);
+  const rol = userOrRole || 'usuario';
+  return getMenuForUser({ rol, permisos: permisosFromRol(rol) });
 }
 
 export const menuService = {
   CONTRATACIONES_SUBMENU,
   MENU_STRUCTURE,
-  LEGACY_ROUTE_REDIRECTS,
-  resolveCanonicalRoute,
   filterMenuItems,
+  getMenuForUser,
   getMenuForRole,
 };
 

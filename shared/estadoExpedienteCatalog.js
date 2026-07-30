@@ -32,7 +32,18 @@ export const SITUACIONES = Object.freeze({
 /** @type {ReadonlyArray<{ codigo: string, label: string, etapa: string, prioridad: number, scope: string, familia: string, tipos: string[], terminal?: boolean, reversible?: boolean, aliases?: string[], descripcion?: string, reserved?: boolean }>} */
 const ESTADOS_DEF = [
   // —— Globales flujo común ——
-  { codigo: 'REQUERIMIENTO_REGISTRADO', label: 'Requerimiento registrado', etapa: 'REGISTRADO', prioridad: 100, scope: SCOPE.GLOBAL, familia: 'requerimiento', tipos: ['todos'] },
+  // Estado inicial canónico al crear requerimiento (bienes / servicios / locación).
+  // Aliases cubren la columna negocio `estado = 'Registrado'` y códigos históricos.
+  {
+    codigo: 'REQUERIMIENTO_REGISTRADO',
+    label: 'Requerimiento registrado',
+    etapa: 'REGISTRADO',
+    prioridad: 100,
+    scope: SCOPE.GLOBAL,
+    familia: 'requerimiento',
+    tipos: ['todos'],
+    aliases: ['REGISTRADO', 'REQUERIMIENTO', 'REGISTRO_REQUERIMIENTO', 'REQUERIMIENTO_REGISTRADO_INICIAL', 'EN_REGISTRO'],
+  },
   { codigo: 'REQUERIMIENTO_EN_EVALUACION', label: 'En evaluación', etapa: 'EVALUACION', prioridad: 110, scope: SCOPE.GLOBAL, familia: 'requerimiento', tipos: ['todos'] },
   { codigo: 'REQUERIMIENTO_APROBADO', label: 'Requerimiento aprobado', etapa: 'EVALUACION', prioridad: 120, scope: SCOPE.GLOBAL, familia: 'requerimiento', tipos: ['todos'] },
   { codigo: 'REQUERIMIENTO_EN_DEC', label: 'En DEC', etapa: 'DEC', prioridad: 200, scope: SCOPE.GLOBAL, familia: 'dec', tipos: ['todos'] },
@@ -162,6 +173,12 @@ const ALIAS_MAP = (() => {
     }
   }
   // Aliases explícitos adicionales
+  // Requerimiento inicial (antes que aliases de cuadro / CCP)
+  m.REGISTRADO = 'REQUERIMIENTO_REGISTRADO';
+  m.REQUERIMIENTO = 'REQUERIMIENTO_REGISTRADO';
+  m.REGISTRO_REQUERIMIENTO = 'REQUERIMIENTO_REGISTRADO';
+  m.REQUERIMIENTO_REGISTRADO_INICIAL = 'REQUERIMIENTO_REGISTRADO';
+  m.EN_REGISTRO = 'REQUERIMIENTO_REGISTRADO';
   m.CCP_REGISTRADO = 'CCP_REGISTRADA';
   m.REGISTRADO_CCP = 'CCP_REGISTRADA';
   m.CCP_CARGADO = 'CCP_REGISTRADA';
@@ -187,6 +204,7 @@ const ALIAS_MAP = (() => {
   m.BORRADOR = 'CUADRO_BORRADOR';
   m.EN_ELABORACION = 'CUADRO_BORRADOR';
   m.PENDIENTE_ELABORAR = 'PENDIENTE_ELABORAR';
+  // "PENDIENTE" solo en contexto cuadro; no usar como estado inicial de requerimiento
   m.PENDIENTE = 'PENDIENTE_ELABORAR';
   m.PENDIENTE_DE_ELABORAR = 'PENDIENTE_ELABORAR';
   m.ELABORACION = 'CUADRO_BORRADOR';
@@ -273,5 +291,14 @@ export function getPrioridadLista() {
     .sort((a, b) => a.prioridad - b.prioridad)
     .map((e) => e.codigo);
 }
+
+/** Código canónico + etiqueta de negocio al crear un requerimiento. */
+export const ESTADO_INICIAL_REQUERIMIENTO = Object.freeze({
+  codigo: 'REQUERIMIENTO_REGISTRADO',
+  label: 'Requerimiento registrado',
+  etapa: 'REGISTRADO',
+  /** Valor histórico en columna `requerimientos.estado` (negocio / trazabilidad). */
+  estadoNegocio: 'Registrado',
+});
 
 export { ESTADOS_DEF as CATALOGO_ESTADOS, ALIAS_MAP, BY_CODE };

@@ -1,6 +1,6 @@
 import { authService } from './services/authService.js';
-import { ROUTE_ROLES } from './utils/constants.js';
-import { userService } from './services/userService.js';
+import { permissionsService } from './services/permissionsService.js';
+import { resolveCanonicalRoute } from './utils/permissionsCatalog.js';
 
 // Vistas principales
 import { renderLoginView, initLoginView } from './views/loginView.js';
@@ -178,10 +178,10 @@ function canAccessRoute(route, action = 'VER') {
   }
   if (route === 'login' || route === 'cambio-password') return false;
   if (route === 'dashboard') return true;
-  const allowedRoles = ROUTE_ROLES[route] || [];
-  const roleOk = allowedRoles.length === 0 || allowedRoles.includes(currentUser.rol);
-  if (!roleOk) return false;
-  return userService.hasPermission(currentUser, route, action);
+  // RC119: fuente única = usuarios.permisos (permissionsService). ROUTE_ROLES ya no bloquea.
+  const canonical = resolveCanonicalRoute(route);
+  return permissionsService.canAccessRoute(canonical, action, currentUser)
+    || permissionsService.canAccessRoute(route, action, currentUser);
 }
 
 function redirectOnDenied(route) {

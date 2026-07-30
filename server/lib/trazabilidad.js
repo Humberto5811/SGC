@@ -226,7 +226,7 @@ export function buildHistorialEntry({
 }
 
 export function initHistorialFromRow(row, usuario) {
-  const etapa = mapEstadoToEtapa(row.estado);
+  const etapa = mapEstadoToEtapa(row.estado || 'Registrado');
   const fecha = row.created_at || new Date().toISOString();
   return [buildHistorialEntry({
     etapa,
@@ -879,10 +879,15 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
   if (!rows.length) return null;
   const row = rows[0];
   if (row.estado_actual && parseHistorial(row.historial_estados).length) {
+    // RC118: si ya hay trazabilidad pero falta estado negocio, completar sin duplicar historial
+    if (!String(row.estado || '').trim()) {
+      await query(`UPDATE requerimientos SET estado = $2 WHERE id = $1`, [requerimientoId, 'Registrado']);
+      return enrichRequerimientoRow({ ...row, estado: 'Registrado' });
+    }
     return enrichRequerimientoRow(row);
   }
   const historial = initHistorialFromRow(row, usuario);
-  const etapa = mapEstadoToEtapa(row.estado);
+  const etapa = mapEstadoToEtapa(row.estado || 'Registrado');
   const subMeta = getSubModuloMeta(etapa);
   const fecha = row.created_at || new Date().toISOString();
   const responsable = ETAPAS[etapa]?.responsable || row.responsable || usuario;
@@ -896,6 +901,7 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
   }));
   await query(`
     UPDATE requerimientos SET
+      estado = COALESCE(NULLIF(TRIM(estado), ''), $8),
       estado_actual = $2,
       sub_modulo_actual = $3,
       responsable_actual = $4,
@@ -903,9 +909,19 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
       historial_estados = $6::jsonb,
       historial_movimientos = $7::jsonb
     WHERE id = $1
-  `, [requerimientoId, etapa, subMeta.subModulo, responsable, fecha, JSON.stringify(historial), JSON.stringify(movimientos)]);
+  `, [
+    requerimientoId,
+    etapa,
+    subMeta.subModulo,
+    responsable,
+    fecha,
+    JSON.stringify(historial),
+    JSON.stringify(movimientos),
+    'Registrado',
+  ]);
   return enrichRequerimientoRow({
     ...row,
+    estado: String(row.estado || '').trim() || 'Registrado',
     estado_actual: etapa,
     responsable_actual: responsable,
     fecha_estado_actual: fecha,

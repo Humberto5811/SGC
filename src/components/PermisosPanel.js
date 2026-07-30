@@ -175,6 +175,8 @@ export function readPermisosFromPanel(container) {
     const subId = subEl.dataset.sub;
     const acts = [];
     root.querySelectorAll(`.perm-act[data-sub="${subId}"]:checked`).forEach((a) => acts.push(a.dataset.act));
+    // RC119: submódulo marcado sin actividades → VER mínimo (acceso al menú)
+    if (!acts.length) acts.push('VER');
     actividadesPorSubmodulo[subId] = [...new Set(acts)];
   });
   p.actividadesPorSubmodulo = actividadesPorSubmodulo;
@@ -218,7 +220,10 @@ export function bindPermPanel(container, onChange) {
     MODULOS.forEach((mod) => {
       panel.querySelectorAll(`.perm-sub[data-mod="${mod.id}"]`).forEach((s) => { s.checked = checked; });
       getSubmodulosOfModulo(mod.id).forEach((sid) => {
-        if (!checked) {
+        if (checked) {
+          const ver = panel.querySelector(`.perm-act[data-sub="${sid}"][data-act="VER"]`);
+          if (ver) ver.checked = true;
+        } else {
           panel.querySelectorAll(`.perm-act[data-sub="${sid}"]`).forEach((a) => { a.checked = false; });
         }
         syncActItemStyle(panel, sid);
@@ -232,7 +237,13 @@ export function bindPermPanel(container, onChange) {
       const modId = el.dataset.mod;
       const subs = getSubmodulosOfModulo(modId);
       panel.querySelectorAll(`.perm-sub[data-mod="${modId}"]`).forEach((s) => { s.checked = el.checked; });
-      if (!el.checked) {
+      if (el.checked) {
+        subs.forEach((sid) => {
+          const ver = panel.querySelector(`.perm-act[data-sub="${sid}"][data-act="VER"]`);
+          if (ver) ver.checked = true;
+          syncActItemStyle(panel, sid);
+        });
+      } else {
         subs.forEach((sid) => {
           panel.querySelectorAll(`.perm-act[data-sub="${sid}"]`).forEach((a) => { a.checked = false; });
           syncActItemStyle(panel, sid);
@@ -255,6 +266,9 @@ export function bindPermPanel(container, onChange) {
       const modId = el.dataset.mod;
       if (el.checked) {
         panel.querySelector(`.perm-mod[data-mod="${modId}"]`).checked = true;
+        // Auto-marcar VER al habilitar submódulo
+        const ver = panel.querySelector(`.perm-act[data-sub="${subId}"][data-act="VER"]`);
+        if (ver) ver.checked = true;
       } else {
         panel.querySelectorAll(`.perm-act[data-sub="${subId}"]`).forEach((a) => { a.checked = false; });
       }

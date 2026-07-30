@@ -1,9 +1,8 @@
-﻿import { getMenuForRole } from '../services/menuService.js';
+﻿import { getMenuForUser } from '../services/menuService.js';
 
 export function renderSidebar(currentRoute) {
   const currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-  const userRole = currentUser?.rol || 'usuario';
-  const menuStructure = getMenuForRole(userRole);
+  const menuStructure = getMenuForUser(currentUser);
 
   function isRouteActive(itemPath, subitems) {
     if (currentRoute === itemPath) return true;

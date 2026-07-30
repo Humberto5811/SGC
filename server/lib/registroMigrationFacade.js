@@ -96,12 +96,22 @@ export async function ejecutarRegistroCrear(requerimientoId, usuario = 'Sistema'
   const row = await fetchRow(requerimientoId);
   if (!row) return null;
 
+  // RC118: estado inicial canónico en columna negocio.
+  // En el alta se ignora cualquier estado de etapa posterior enviado por el cliente.
+  await query(
+    `UPDATE requerimientos SET estado = $2 WHERE id = $1`,
+    [requerimientoId, 'Registrado'],
+  );
+
   const facade = getRegistroMigrationFacade();
-  const result = await facade.crear(row, {
-    requerimientoId,
-    usuario,
-    legacyExecutor: () => inicializarTrazabilidad(requerimientoId, usuario),
-  });
+  const result = await facade.crear(
+    { ...row, estado: 'Registrado' },
+    {
+      requerimientoId,
+      usuario,
+      legacyExecutor: () => inicializarTrazabilidad(requerimientoId, usuario),
+    },
+  );
 
   if (!result.ok) return null;
   return result.legacy;

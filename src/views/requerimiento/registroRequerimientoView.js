@@ -2225,8 +2225,12 @@ async function saveRequerimientoLocador() {
     responsable: state.area.responsable || '',
     denominacion: state.denominacion,
     payload: JSON.stringify(payload),
+    usuario_modificacion: getUserDisplayName(authService.getCurrentUser()) || 'sistema',
   };
-  if (reqShared.editingFromEvaluacion) {
+  // RC118: mismo estado inicial canónico que bienes/servicios (backend también lo fuerza).
+  if (!reqShared.editingFromEvaluacion) {
+    body.estado = 'Registrado';
+  } else {
     body.estado = undefined;
   }
   try {
