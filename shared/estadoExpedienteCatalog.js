@@ -83,6 +83,17 @@ const ESTADOS_DEF = [
     descripcion: 'Orden de compra de bienes notificada, pendiente de recepción en almacén',
   },
   {
+    codigo: 'RECEPCION_BIENES_OBSERVADA',
+    label: 'Recepción observada',
+    etapa: 'RECEPCION_BIENES',
+    prioridad: 905,
+    scope: SCOPE.GLOBAL,
+    familia: 'bienes',
+    tipos: ['bienes'],
+    aliases: ['RECEPCION_OBSERVADA', 'BIEN_RECEPCION_OBSERVADA'],
+    descripcion: 'Recepción física con faltantes, defectos o diferencias de cantidad',
+  },
+  {
     codigo: 'BIEN_RECIBIDO_ALMACEN',
     label: 'Recibido por almacén',
     etapa: 'RECEPCION_BIENES',
@@ -197,6 +208,8 @@ const ALIAS_MAP = (() => {
   m.OBSERVADO = 'CUADRO_EN_COORDINACION_CM'; // situación aparte vía detectSituacion
   m.OC_PENDIENTE_RECEPCION = 'RECEPCION_BIENES_PENDIENTE';
   m.PENDIENTE_RECEPCION_BIENES = 'RECEPCION_BIENES_PENDIENTE';
+  m.RECEPCION_OBSERVADA = 'RECEPCION_BIENES_OBSERVADA';
+  m.BIEN_RECEPCION_OBSERVADA = 'RECEPCION_BIENES_OBSERVADA';
   m.RECIBIDO_ALMACEN = 'BIEN_RECIBIDO_ALMACEN';
   m.RECEPCION_PARCIAL_ALMACEN = 'BIEN_RECIBIDO_ALMACEN';
   m.ACTA_ENVIADA_AU = 'CONFORMIDAD_PENDIENTE_AU';

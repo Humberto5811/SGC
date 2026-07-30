@@ -10,9 +10,11 @@ import { getUserDisplayName } from '../../utils/userDisplay.js';
 import { trazabilidadService } from '../../services/trazabilidadService.js';
 import { renderTimeline, timelineModalStyles } from '../../services/timelineService.js';
 import {
-  estadoActualBadge, diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
+  diasEnEstadoBadge, fmtDateTime, retrasadoIndicator,
 } from '../../utils/trazabilidad.js';
 import { renderEstadoVisualHtml, buildPresenterRow } from '../../utils/estadoVisualPresenter.js';
+import { renderEstadoExpedienteHtml } from '../../utils/estadoExpedientePresenter.js';
+import { renderBadgeEstadoVigenteHtml } from '../../../shared/estadoExpedienteVigente.js';
 import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
 import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId, calcularRondaRaiz } from '../../../shared/observacionesMotor.js';
 import { renderAdjuntosPanel } from '../../utils/adjuntosModal.js';
@@ -542,17 +544,34 @@ export async function showTrazabilidadModal(requerimientoId) {
     const movCount = (data.historialMovimientos || []).length;
     const histCount = (data.historialEstados || []).length;
     const eventCount = movCount || histCount;
+    // Única fuente del badge: expediente.estadoVigente (no workflowSnapshot / no último evento)
+    const estadoVigente = data.expediente?.estadoVigente || data.estadoVigente || {
+      codigo: data.estadoActual,
+      label: data.estadoActualTexto,
+    };
+    const badgeEstadoHtml = estadoVigente?.label
+      ? renderEstadoExpedienteHtml(estadoVigente)
+      : renderBadgeEstadoVigenteHtml({
+        estado_vigente: estadoVigente?.codigo,
+        estado_vigente_label: estadoVigente?.label,
+        recepcion_estado_global: estadoVigente?.codigo,
+      }, esc);
+    const subModuloLabel = (typeof data.expediente?.submoduloVigente === 'object'
+      ? data.expediente.submoduloVigente.label
+      : data.expediente?.submoduloVigente)
+      || data.subModuloActual
+      || '—';
     modal.querySelector('.modal-body').innerHTML = `
       <div class="mb-3">
         <div><strong>${esc(req.codigo || ('#' + requerimientoId))}</strong> — ${esc(req.denominacion || req.tipo || '')}</div>
         <div class="small text-muted">${esc(req.area || '')} · ${esc(req.centro || '')}</div>
       </div>
       <div class="row g-2 mb-3 small">
-        <div class="col-md-3"><strong>Estado actual:</strong><br/>${estadoActualBadge({ ...req, estado_actual: data.estadoActual || req.estado_actual, sub_modulo_actual: data.subModuloActual || req.sub_modulo_actual, payload: req.payload })}</div>
-        <div class="col-md-3"><strong>Submódulo:</strong><br/>${esc(data.subModuloActual || '—')}</div>
-        <div class="col-md-3"><strong>Responsable:</strong><br/>${esc(data.responsableActual || '—')}</div>
-        <div class="col-md-3"><strong>Días en etapa:</strong><br/>${diasEnEstadoBadge({ dias_en_estado: data.diasEnEstado })}${data.retrasado || Number(data.diasEnEstado) > 10 ? retrasadoIndicator({ dias_en_estado: data.diasEnEstado }) : ''}</div>
-        <div class="col-12"><strong>Desde:</strong> ${esc(fmtDateTime(data.fechaEstadoActual || data.fechaIngresoActual))}</div>
+        <div class="col-md-3"><strong>Estado actual:</strong><br/>${badgeEstadoHtml}</div>
+        <div class="col-md-3"><strong>Submódulo:</strong><br/>${esc(subModuloLabel)}</div>
+        <div class="col-md-3"><strong>Responsable:</strong><br/>${esc(data.expediente?.responsableActual || data.responsableActual || '—')}</div>
+        <div class="col-md-3"><strong>Días en etapa:</strong><br/>${diasEnEstadoBadge({ dias_en_estado: data.expediente?.diasEnEtapa ?? data.diasEnEstado })}${data.retrasado || Number(data.diasEnEstado) > 10 ? retrasadoIndicator({ dias_en_estado: data.diasEnEstado }) : ''}</div>
+        <div class="col-12"><strong>Desde:</strong> ${esc(fmtDateTime(data.expediente?.fechaInicioEtapa || data.fechaEstadoActual || data.fechaIngresoActual))}</div>
       </div>
       <hr class="my-2"/>
       <div class="d-flex justify-content-between align-items-center mb-2">

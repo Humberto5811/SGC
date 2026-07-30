@@ -22,6 +22,12 @@ const COLOR_BY_CODE = Object.freeze({
   CUADRO_EN_COORDINACION_CM: { bg: '#495057', fg: '#fff' },
   CUADRO_EN_DEC: { bg: '#6f42c1', fg: '#fff' },
   CUADRO_COMPARATIVO_APROBADO: { bg: '#198754', fg: '#fff' },
+  RECEPCION_BIENES_PENDIENTE: { bg: '#fd7e14', fg: '#fff' },
+  RECEPCION_BIENES_OBSERVADA: { bg: '#dc3545', fg: '#fff' },
+  BIEN_RECIBIDO_ALMACEN: { bg: '#0d6efd', fg: '#fff' },
+  CONFORMIDAD_PENDIENTE_AU: { bg: '#6610f2', fg: '#fff' },
+  CONFORMIDAD_RECIBIDA_AU: { bg: '#20c997', fg: '#fff' },
+  CONFORMIDAD_EN_COORDINACION_CM: { bg: '#6f42c1', fg: '#fff' },
 });
 
 function composeLabel(estadoVigente, situacion) {

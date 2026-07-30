@@ -30,16 +30,28 @@ export function fmtMonto(n, moneda = 'PEN') {
 
 export function fmtFecha(v) {
   if (!v) return '—';
-  const s = String(v).slice(0, 10);
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (!m) return String(v);
-  return `${m[3]}/${m[2]}/${m[1]}`;
+  // Prefer shared dd/mm/yyyy (no locale inglés)
+  try {
+    // lazy sync import avoided — inline ISO parse
+    const s = String(v);
+    const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+    const d = v instanceof Date ? v : new Date(v);
+    if (!Number.isNaN(d.getTime())) {
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+    }
+  } catch (_) { /* fallthrough */ }
+  return String(v);
 }
 
 export function fmtFechaHora(v) {
   if (!v) return '—';
   try {
-    return new Date(v).toLocaleString('es-PE');
+    const d = v instanceof Date ? v : new Date(v);
+    if (Number.isNaN(d.getTime())) return fmtFecha(v);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   } catch (_) {
     return String(v);
   }
@@ -74,6 +86,7 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
 
   // F. Recepción confirmada / ejecución
   if (estado === 'ORDEN_RECEPCION_CONFIRMADA' || estado === 'EN_EJECUCION') {
+    items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
     items.push({ act: 'verConfirmacion', label: 'Ver confirmación', icon: 'bi-check2-circle' });
     items.push({ act: 'verCronograma', label: 'Ver cronograma', icon: 'bi-calendar-week' });
     items.push({ act: 'verFechasMaximas', label: 'Ver fechas máximas', icon: 'bi-calendar-check' });
@@ -86,6 +99,7 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
 
   // E. Orden notificada
   if (estado === 'ORDEN_NOTIFICADA') {
+    items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
     items.push({ act: 'verNotificacion', label: 'Ver notificación', icon: 'bi-envelope' });
     if (can) items.push({ act: 'reenviar', label: 'Reenviar orden', icon: 'bi-arrow-repeat' });
     items.push({ act: 'verConfirmacion', label: 'Ver confirmación de recepción', icon: 'bi-check2-circle' });
@@ -96,6 +110,7 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
 
   // D. Lista para notificación — solo si checklist completo
   if (estado === 'ORDEN_LISTA_NOTIFICACION') {
+    items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
     items.push({ act: 'verOrdenFirmada', label: 'Ver orden firmada', icon: 'bi-file-earmark-pdf' });
     items.push({ act: 'descargarOrden', label: 'Descargar orden', icon: 'bi-download' });
     if (can && row.checklist_completo === false) {
@@ -109,6 +124,7 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
   }
 
   // C. Orden registrada (incluye cronograma parcial / firmada sin cronograma)
+  items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
   items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
   if (can) {
     items.push({ act: 'editarOrden', label: 'Editar orden', icon: 'bi-pencil' });

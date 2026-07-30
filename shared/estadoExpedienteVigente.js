@@ -180,7 +180,7 @@ export function normalizeEstadoFlags(row = {}, opts = {}) {
     o.recepcionEstado || r.recepcion_estado_global || r.estado_recepcion_bienes || r.estado_global_recepcion || '',
   );
   const recepcionBienesCodes = new Set([
-    'RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+    'RECEPCION_BIENES_PENDIENTE', 'RECEPCION_BIENES_OBSERVADA', 'BIEN_RECIBIDO_ALMACEN',
     'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU', 'CONFORMIDAD_EN_COORDINACION_CM',
   ]);
   const enRecepcionBienes = !!(
@@ -400,6 +400,7 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
     'CONFORMIDAD_RECIBIDA_AU',
     'CONFORMIDAD_PENDIENTE_AU',
     'BIEN_RECIBIDO_ALMACEN',
+    'RECEPCION_BIENES_OBSERVADA',
     'RECEPCION_BIENES_PENDIENTE',
   ];
   if (flags.recepcionEstado && recepcionCodes.includes(flags.recepcionEstado)) {
@@ -568,7 +569,7 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
     || ['REGISTRO_ORDENES', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
       'ORDEN_NOTIFICADA', 'ORDEN_RECEPCION_CONFIRMADA', 'EN_EJECUCION',
       'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
-      'RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+      'RECEPCION_BIENES_PENDIENTE', 'RECEPCION_BIENES_OBSERVADA', 'BIEN_RECIBIDO_ALMACEN',
       'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
       'CONFORMIDAD_EN_COORDINACION_CM'].includes(code)) {
     const colorMap = {
@@ -582,6 +583,7 @@ export function badgeVisualEstadoVigente(rowOrCode = {}, opts = {}) {
       ORDEN_RESUELTA: '#212529',
       EXPEDIENTE_DERIVADO_PAGO: '#198754',
       RECEPCION_BIENES_PENDIENTE: '#fd7e14',
+      RECEPCION_BIENES_OBSERVADA: '#dc3545',
       BIEN_RECIBIDO_ALMACEN: '#0d6efd',
       CONFORMIDAD_PENDIENTE_AU: '#6610f2',
       CONFORMIDAD_RECIBIDA_AU: '#20c997',
@@ -651,7 +653,7 @@ export function renderBadgeEstadoVigenteHtml(rowOrCode, escFn = (s) => String(s 
   const v = badgeVisualEstadoVigente(rowOrCode, opts);
   if (ESTADOS_ORDEN_LABEL[v.code] || v.code === 'CCP_REGISTRADA' || v.code === 'CCP_REGISTRADO'
     || v.code === 'ENVIADA_OPPM' || v.derivadoCcp
-    || ['RECEPCION_BIENES_PENDIENTE', 'BIEN_RECIBIDO_ALMACEN',
+    || ['RECEPCION_BIENES_PENDIENTE', 'RECEPCION_BIENES_OBSERVADA', 'BIEN_RECIBIDO_ALMACEN',
       'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
       'CONFORMIDAD_EN_COORDINACION_CM', 'EXPEDIENTE_DERIVADO_PAGO'].includes(v.code)) {
     return `<span class="${v.className}" style="${v.style}">${escFn(v.label)}</span>`;

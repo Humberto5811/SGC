@@ -10,6 +10,12 @@ import {
 } from './ordenesContratacion.js';
 import { calcularFechaMaximaEntrega, normalizeTipoDias } from './diasPlazo.js';
 import { validarCronogramaContraItems, normalizarLineasEntrega } from './ordenesValidaciones.js';
+import {
+  buildEntregaContract,
+  normalizeCodigoEntrega,
+  resolveEtiquetaEntrega,
+  correlativoFromEntrega,
+} from '../../shared/entregaContractual.js';
 
 export { validarCronogramaContraItems };
 
@@ -36,11 +42,28 @@ function assertEditableCronograma(orden) {
   }
 }
 
-function descAuto(e) {
+function descAuto(e, total = 1) {
+  const etiqueta = resolveEtiquetaEntrega(e, { totalEntregas: total });
+  if (etiqueta && etiqueta !== '—') return etiqueta;
   const tipo = String(e.tipo_entrega || 'ENTREGA').toUpperCase();
   const num = Number(e.numero_entrega) || 1;
   const label = tipo === 'ENTREGABLE' ? 'Entregable' : (tipo === 'PRESTACION' ? 'Prestación' : 'Entrega');
-  return String(e.descripcion || '').trim() || `${label} ${num === 1 ? 'única' : num}`;
+  return String(e.descripcion || '').trim() || `${label} ${num === 1 && total === 1 ? 'única' : num}`;
+}
+
+function resolveCodigoYEtiqueta(e, total = 1) {
+  const correlativo = String(e.correlativo || e.codigo_entrega || '').trim().toUpperCase();
+  let codigo = normalizeCodigoEntrega(correlativo || e.codigo_entrega);
+  if (!codigo) {
+    const n = Number(e.numero_entrega) || 1;
+    codigo = (n === 1 && total === 1) ? 'UNICO' : `E${n}`;
+  }
+  let etiqueta = String(e.etiqueta_entrega || '').trim();
+  if (!etiqueta) {
+    if (codigo === 'UNICO') etiqueta = 'ÚNICO';
+    else etiqueta = resolveEtiquetaEntrega({ ...e, codigo_entrega: codigo }, { totalEntregas: total });
+  }
+  return { codigo, etiqueta };
 }
 
 /** Fechas de cronograma con conteo inclusivo (día 1 = fecha efectiva). */
@@ -74,6 +97,7 @@ export async function listarEntregas(ordenId) {
     ORDER BY numero_entrega ASC, id ASC
   `, [ordenId]);
 
+  const total = entregas.length;
   const out = [];
   for (const e of entregas) {
     const { rows: items } = await query(`
@@ -83,12 +107,16 @@ export async function listarEntregas(ordenId) {
       WHERE ei.orden_entrega_id = $1
       ORDER BY oi.orden_item ASC
     `, [e.id]);
+    const contract = buildEntregaContract(e, { totalEntregas: total });
     out.push({
       id: e.id,
       orden_id: e.orden_id,
       numero_entrega: e.numero_entrega,
       tipo_entrega: e.tipo_entrega,
       descripcion: e.descripcion,
+      etiqueta_entrega: contract.etiquetaEntrega,
+      codigo_entrega: contract.codigoEntrega,
+      correlativo: correlativoFromEntrega({ ...e, ...contract }, total),
       dias_plazo: e.dias_plazo,
       tipo_dias: e.tipo_dias,
       evento_inicio_plazo: e.evento_inicio_plazo,
@@ -99,6 +127,7 @@ export async function listarEntregas(ordenId) {
       porcentaje: e.porcentaje != null ? Number(e.porcentaje) : null,
       importe: e.importe != null ? Number(e.importe) : null,
       estado: e.estado,
+      entregaContract: contract,
       items: items.map((it) => ({
         id: it.id,
         orden_item_id: it.orden_item_id,
@@ -156,10 +185,14 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
   const list = Array.isArray(entregasPayload) ? [...entregasPayload]
     : (Array.isArray(entregasPayload.entregas) ? [...entregasPayload.entregas] : []);
 
+  const total = list.length;
   for (const e of list) {
     const tipo = String(e.tipo_entrega || (/servic/i.test(ordenFresh.tipo_contratacion) ? 'ENTREGABLE' : 'ENTREGA')).toUpperCase();
     e.tipo_entrega = ['ENTREGA', 'ENTREGABLE', 'PRESTACION'].includes(tipo) ? tipo : 'ENTREGA';
-    e.descripcion = descAuto(e);
+    const { codigo, etiqueta } = resolveCodigoYEtiqueta(e, total);
+    e.codigo_entrega = codigo;
+    e.etiqueta_entrega = etiqueta;
+    e.descripcion = String(e.descripcion || '').trim() || descAuto(e, total);
     e.tipo_dias = 'calendario';
   }
 
@@ -185,15 +218,18 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
     const { rows } = await query(`
       INSERT INTO orden_entregas (
         orden_id, numero_entrega, tipo_entrega, descripcion,
+        etiqueta_entrega, codigo_entrega,
         dias_plazo, tipo_dias, evento_inicio_plazo, fecha_base, fecha_maxima,
         lugar_entrega, observaciones, porcentaje, importe, estado
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'ACTIVO')
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'ACTIVO')
       RETURNING id
     `, [
       ordenId,
       Number(e.numero_entrega),
       tipoOk,
       e.descripcion,
+      e.etiqueta_entrega || null,
+      e.codigo_entrega || null,
       Number(e.dias_plazo),
       normalizeTipoDias(e.tipo_dias),
       f.condicion,

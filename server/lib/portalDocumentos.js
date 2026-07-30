@@ -546,12 +546,18 @@ export async function resolverDocumentoCotizacionAnalista(cotizacionId, docRef) 
     if (file) return file;
   }
 
-  if (ref === 'anexo05a') {
-    const file = fileFromEntry(anexos.anexo05a_firmado, 'Anexo_05-A_firmado.pdf');
+  if (ref === 'anexo05a' || ref === 'anexo05a_firmado' || ref === 'anexo_tecnico_firmado') {
+    const file = fileFromEntry(
+      anexos.anexo05a_firmado || anexos.anexo_tecnico_firmado || anexos.anexo05a,
+      'Anexo_05-A_firmado.pdf',
+    );
     if (file) return file;
   }
-  if (ref === 'anexo05b') {
-    const file = fileFromEntry(anexos.anexo05b_firmado, 'Anexo_05-B_firmado.pdf');
+  if (ref === 'anexo05b' || ref === 'anexo05b_firmado' || ref === 'anexo_economico_firmado') {
+    const file = fileFromEntry(
+      anexos.anexo05b_firmado || anexos.anexo_economico_firmado || anexos.anexo05b,
+      'Anexo_05-B_firmado.pdf',
+    );
     if (file) return file;
   }
 

@@ -45,6 +45,9 @@ export const ordenesContratacionService = {
   async getDetalle(id) {
     return api.get(`${BASE}/${id}`);
   },
+  async getExpediente(id) {
+    return api.get(`${BASE}/${id}/expediente`);
+  },
   async actualizar(id, body) {
     return api.put(`${BASE}/${id}`, body);
   },

@@ -103,7 +103,12 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
   } catch (_) { /* opcional */ }
 
   const entregas = (det.entregas || []).map((e) => ({
-    correlativo: (det.entregas || []).length === 1 ? 'UNICO' : String(e.numero_entrega),
+    correlativo: e.correlativo
+      || (e.codigo_entrega === 'UNICO' || String(e.etiqueta_entrega || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'UNICO'
+        ? 'UNICO'
+        : ((det.entregas || []).length === 1 ? 'UNICO' : String(e.numero_entrega))),
+    etiqueta_entrega: e.etiqueta_entrega || null,
+    codigo_entrega: e.codigo_entrega || null,
     numero_entrega: e.numero_entrega,
     tipo_entrega: e.tipo_entrega || tipoDefault,
     dias_plazo: e.dias_plazo,
@@ -740,10 +745,16 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
         const tipo = e.tipo_entrega;
         const label = tipo === 'ENTREGABLE' ? 'Entregable' : (tipo === 'PRESTACION' ? 'Prestación' : 'Entrega');
         const num = e.correlativo === 'UNICO' ? 1 : Number(e.numero_entrega);
+        const esUnico = e.correlativo === 'UNICO';
+        const etiqueta = esUnico ? 'ÚNICO' : (e.etiqueta_entrega || `${label} ${num}`);
+        const codigo = esUnico ? 'UNICO' : (e.codigo_entrega || `E${num}`);
         return {
           numero_entrega: num,
           tipo_entrega: tipo,
-          descripcion: `${label} ${e.correlativo === 'UNICO' ? 'única' : num}`,
+          correlativo: e.correlativo,
+          codigo_entrega: codigo,
+          etiqueta_entrega: etiqueta,
+          descripcion: esUnico ? 'ÚNICO' : (e.descripcion || `${label} ${num}`),
           dias_plazo: Number(e.dias_plazo),
           tipo_dias: 'calendario',
           lugar_entrega: String(e.lugar_entrega || '').trim() || null,

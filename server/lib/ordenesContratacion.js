@@ -141,6 +141,26 @@ async function loadPedidos(requerimientoId) {
   return rows;
 }
 
+/** Enriquece ítems de orden con código / pedido / centro desde pedidos SIGAMEF. */
+export async function enrichOrdenItemsConPedidos(items = [], pedidos = []) {
+  const { resolveItemPedidoSigamef } = await import('../../shared/ordenCronogramaContractual.js');
+  return (items || []).map((it, idx) => {
+    const ped = resolveItemPedidoSigamef(it, pedidos, idx);
+    return {
+      ...it,
+      codigo_sigamef: ped.codigo_sigamef,
+      codigo: ped.codigo_sigamef,
+      pedido_sigamef: ped.pedido_sigamef,
+      centro: ped.centro,
+      centro_costo: ped.centro_costo,
+      especifica: ped.especifica || it.especifica_gasto || it.especifica || null,
+      especifica_gasto: ped.especifica || it.especifica_gasto || null,
+      unidad_medida: ped.unidad_medida || it.unidad_medida || null,
+    };
+  });
+}
+
+
 /**
  * Extrae ítems adjudicados del Cuadro Comparativo.
  * Fuente de PU: valor_adjudicado_unitario / oferta del proveedor ganador (NO SIGAMEF ni estimado).
@@ -299,18 +319,67 @@ export async function loadContextoExpediente(requerimientoId) {
   const monto = items.reduce((a, it) => a + Number(it.precio_total || 0), 0)
     || Number(row.valor_adjudicado || 0);
 
+  const { resolveAreaUsuaria } = await import('../../shared/ordenCronogramaContractual.js');
+  const pl = parseJson(row.payload, {});
+  let payloadArea = '';
+  if (pl.area && typeof pl.area === 'object') {
+    payloadArea = pl.area.nombre || pl.area.label || pl.area.descripcion || '';
+  } else {
+    payloadArea = pl.area || pl.area_usuaria || pl.area_nombre || '';
+  }
+
+  let reqArea = '';
+  let solicitudArea = '';
+  try {
+    const { rows: ra } = await query(`SELECT area FROM requerimientos WHERE id = $1`, [id]);
+    reqArea = ra[0]?.area || '';
+  } catch (_) { /* ok */ }
+  try {
+    const { rows: sa } = await query(`
+      SELECT sc.area_usuaria
+      FROM solicitudes_cotizacion sc
+      JOIN solicitud_requerimientos sr ON sr.solicitud_id = sc.id
+      WHERE sr.requerimiento_id = $1
+      ORDER BY sc.id DESC LIMIT 1
+    `, [id]);
+    solicitudArea = sa[0]?.area_usuaria || '';
+  } catch (_) { /* ok */ }
+
   const centroRes = resolveValidationCentro({
     pedidoCentro: pedidos[0]?.centro || '',
-    requerimientoCentro: (() => {
-      const pl = parseJson(row.payload, {});
-      return pl.centro_display || pl.centro_nombre || pl.centro || '';
-    })(),
+    requerimientoCentro: pl.centro_display || pl.centro_nombre || pl.centro || '',
     centroCosto: pedidos[0]?.centro_costo || '',
+  });
+
+  const areaUsuaria = resolveAreaUsuaria({
+    requerimientoArea: reqArea,
+    solicitudAreaUsuaria: solicitudArea,
+    payloadArea,
+    centroCosto: pedidos[0]?.centro_costo || '',
+    centro: centroRes.centro || pedidos[0]?.centro || '',
   });
 
   const tipoRaw = String(row.tipo || row.cuadro_tipo || '').toUpperCase();
   const esServicio = /SERVIC/.test(tipoRaw) || /LOCADOR/.test(tipoRaw);
   const tipoOrdenSugerido = esServicio ? 'OS' : 'OC';
+  const pedidosNorm = pedidos.map((p) => ({
+    id: p.id,
+    pedido_sigamef: p.pedido_sigamef || p.nro_pedido || '',
+    nro_pedido: p.nro_pedido || '',
+    codigo_sigamef: p.codigo_sigamef || '',
+    descripcion: p.descripcion || '',
+    centro: p.centro || '',
+    centro_costo: p.centro_costo || '',
+    meta: p.sec_func || '',
+    fuente_financiamiento: p.fuente_fto || '',
+    especifica_gasto: p.especifica || '',
+    especifica: p.especifica || '',
+    cantidad: p.cant_solicitada,
+    precio_unitario: p.precio_unitario,
+    total: p.total_item,
+    unidad_medida: p.unidad_medida || '',
+  }));
+  const pedidosTexto = [...new Set(pedidosNorm.map((p) => p.pedido_sigamef).filter(Boolean))].join(', ');
 
   return {
     requerimiento_id: row.requerimiento_id,
@@ -338,19 +407,10 @@ export async function loadContextoExpediente(requerimientoId) {
     ccp_firmado_version: row.ccp_firmado_version || null,
     ccp_firmado_at: row.ccp_firmado_at || null,
     centro: centroRes.centro || '',
-    pedidos: pedidos.map((p) => ({
-      id: p.id,
-      pedido_sigamef: p.pedido_sigamef || p.nro_pedido || '',
-      descripcion: p.descripcion || '',
-      centro: p.centro || '',
-      meta: p.sec_func || '',
-      fuente_financiamiento: p.fuente_fto || '',
-      especifica_gasto: p.especifica || '',
-      cantidad: p.cant_solicitada,
-      precio_unitario: p.precio_unitario,
-      total: p.total_item,
-      unidad_medida: p.unidad_medida || '',
-    })),
+    area_usuaria: areaUsuaria,
+    pedido_sigamef: pedidosTexto || null,
+    pedidos_texto: pedidosTexto || null,
+    pedidos: pedidosNorm,
     items_adjudicados: items,
     tipo_orden_sugerido: tipoOrdenSugerido,
     plazo_ofertado_dias: items[0]?.plazo_ofertado_dias ?? null,
@@ -445,7 +505,10 @@ export async function listarBandejaOrdenes() {
       oc.id AS orden_id, oc.tipo_orden, oc.numero_orden, oc.anio_orden,
       oc.fecha_orden, oc.monto_total AS orden_monto, oc.estado AS orden_estado,
       oc.version AS orden_version, oc.enviado_proveedor_at, oc.recibido_proveedor_at,
-      oc.derivado_ejecucion_at, oc.regla_inicio_plazo, oc.tipo_contratacion
+      oc.derivado_ejecucion_at, oc.regla_inicio_plazo, oc.tipo_contratacion,
+      rbe.id AS recepcion_bienes_expediente_id,
+      rbe.estado_global AS recepcion_estado_global,
+      rbe.estado_interno AS recepcion_estado_interno
     FROM cuadros_comparativos cc
     JOIN solicitudes_cotizacion sc ON sc.id = cc.solicitud_id
     JOIN solicitud_requerimientos sr ON sr.solicitud_id = sc.id
@@ -465,6 +528,14 @@ export async function listarBandejaOrdenes() {
       WHERE o.requerimiento_id = r.id AND o.estado <> 'ORDEN_ANULADA'
       ORDER BY o.id DESC LIMIT 1
     ) oc ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT e.id, e.estado_global, e.estado_interno
+      FROM recepcion_bienes_expedientes e
+      WHERE (oc.id IS NOT NULL AND e.orden_id = oc.id)
+         OR e.requerimiento_id = r.id
+      ORDER BY e.id DESC
+      LIMIT 1
+    ) rbe ON TRUE
     WHERE UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
       AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_CUADRO_COMPARATIVO', 'EN_ORDEN', 'EN_EJECUCION')
       AND cod.codigo_ccp IS NOT NULL
@@ -496,16 +567,11 @@ export async function listarBandejaOrdenes() {
 
     let nEntregas = 0;
     let fechaMax = null;
+    let entregaLabel = null;
+    let entregaTooltip = null;
+    let entregasResumen = [];
     if (row.orden_id) {
-      const { rows: ent } = await query(`
-        SELECT COUNT(*)::int AS n,
-          MIN(fecha_maxima) AS fecha_max_min,
-          MAX(fecha_maxima) AS fecha_max_max
-        FROM orden_entregas
-        WHERE orden_id = $1 AND estado <> 'ANULADO'
-      `, [row.orden_id]);
-      nEntregas = ent[0]?.n || 0;
-      fechaMax = ent[0]?.fecha_max_max || ent[0]?.fecha_max_min || null;
+      // placeholder — se completa en batch abajo
     }
 
     const tipoRaw = String(row.tipo || row.cuadro_tipo || '').toUpperCase();
@@ -549,6 +615,7 @@ export async function listarBandejaOrdenes() {
       ccp_activo: true,
       ccp_firmado: !!row.ccp_firmado_id,
       en_registro_ordenes: true,
+      orden_id: row.orden_id || null,
       orden_estado: estadoCode,
       estado_orden: estadoCode,
       derivado_ejecucion_at: row.derivado_ejecucion_at,
@@ -556,6 +623,10 @@ export async function listarBandejaOrdenes() {
       recibido_proveedor_at: row.recibido_proveedor_at,
       solicitud_estado: row.solicitud_estado,
       estado_cuadro: row.cuadro_estado,
+      // Evidencia Recepción de Bienes (misma fuente que el resto del SGC)
+      recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id || null,
+      recepcion_estado_global: row.recepcion_estado_global || null,
+      recepcion_estado_interno: row.recepcion_estado_interno || null,
     };
     const vigente = resolveEstadoActualExpediente(seed);
     const badge = badgeVisualEstadoVigente(seed);
@@ -565,11 +636,16 @@ export async function listarBandejaOrdenes() {
     const pu = multi ? null : (items[0]?.precio_unitario ?? null);
     const pt = Number(Number(montoAdj).toFixed(2));
 
+    const pedidosTexto = pedidos.map((p) => p.pedido_sigamef || p.nro_pedido || '').filter(Boolean).join(', ') || '—';
+    const codigos = [...new Set(pedidos.map((p) => p.codigo_sigamef).filter(Boolean))];
+    const descs = pedidos.map((p) => p.descripcion).filter(Boolean);
+    const itemDescs = items.map((it) => it.descripcion).filter(Boolean);
+
     out.push({
       requerimiento_id: row.requerimiento_id,
       requerimiento_codigo: row.requerimiento_codigo,
       denominacion: row.denominacion || '',
-      pedido_sigamef: pedidos.map((p) => p.pedido_sigamef || p.nro_pedido || '').filter(Boolean).join(', ') || '—',
+      pedido_sigamef: pedidosTexto,
       codigo_ccp: row.codigo_ccp || '',
       ccp_firmado: !!row.ccp_firmado_id,
       ccp_firmado_id: row.ccp_firmado_id || null,
@@ -577,6 +653,25 @@ export async function listarBandejaOrdenes() {
       proveedor_id: row.proveedor_ganador_id,
       proveedor_ruc: proveedor?.ruc || '',
       proveedor_razon_social: proveedor?.razon_social || '',
+      codigo_sigamef: multi
+        ? (codigos.length ? `${items.length} ítems` : `${items.length} ítems`)
+        : (codigos[0] || pedidos[0]?.codigo_sigamef || '—'),
+      codigo_sigamef_tooltip: multi
+        ? (codigos.join(' / ') || itemDescs.join(' / '))
+        : (codigos[0] || ''),
+      item_descripcion: multi
+        ? 'Ver detalle'
+        : (itemDescs[0] || descs[0] || '—'),
+      item_descripcion_tooltip: multi
+        ? itemDescs.join('\n')
+        : (itemDescs[0] || descs[0] || ''),
+      items_detalle: items.map((it, idx) => ({
+        descripcion: it.descripcion,
+        codigo_sigamef: pedidos[idx]?.codigo_sigamef || pedidos[0]?.codigo_sigamef || null,
+        cantidad: it.cantidad,
+        precio_unitario: it.precio_unitario,
+        precio_total: it.precio_total,
+      })),
       tipo: esServicio ? 'Servicio' : 'Bien',
       tipo_contratacion: esServicio ? 'Servicio' : 'Bien',
       items_count: items.length,
@@ -594,11 +689,21 @@ export async function listarBandejaOrdenes() {
       numero_orden: row.numero_orden || '',
       fecha_orden: row.fecha_orden || null,
       entregas_count: nEntregas,
+      entrega_label: entregaLabel,
+      entrega_tooltip: entregaTooltip,
+      entregas_resumen: entregasResumen,
       fecha_envio_proveedor: row.enviado_proveedor_at || null,
+      fecha_notificacion: null, // se completa en batch con fuente canónica
       fecha_recepcion_confirmada: row.recibido_proveedor_at || null,
+      plazo_entrega: null,
+      plazo_entrega_label: null,
       fecha_maxima_entrega: fechaMax,
       estado: vigente.code || estadoCode,
       estado_label: vigente.label || ESTADOS_ORDEN_LABEL[estadoCode] || estadoCode,
+      orden_estado: estadoCode,
+      recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id || null,
+      recepcion_estado_global: row.recepcion_estado_global || null,
+      recepcion_estado_interno: row.recepcion_estado_interno || null,
       estadoVigente: vigente.estadoVigente || {
         codigo: vigente.codigo || vigente.code,
         label: vigente.label,
@@ -627,6 +732,107 @@ export async function listarBandejaOrdenes() {
       }).centro || '',
     });
   }
+
+  // Batch entregas contractuales + notificación canónica (evita N+1)
+  const ordenIds = [...new Set(out.map((r) => r.orden_id).filter(Boolean))];
+  if (ordenIds.length) {
+    const {
+      formatEntregasBandejaLabel,
+      buildEntregaContract,
+    } = await import('../../shared/entregaContractual.js');
+    const {
+      resolveOrdenFechaNotificacion,
+      resolveOrdenCronogramaContractual,
+      formatPlazoLabel,
+    } = await import('../../shared/ordenCronogramaContractual.js');
+
+    let entRows = [];
+    try {
+      const r = await query(`
+        SELECT id, orden_id, numero_entrega, tipo_entrega, descripcion,
+          etiqueta_entrega, codigo_entrega, dias_plazo, fecha_maxima, fecha_base,
+          importe, lugar_entrega, evento_inicio_plazo
+        FROM orden_entregas
+        WHERE orden_id = ANY($1::int[]) AND estado <> 'ANULADO'
+        ORDER BY orden_id, numero_entrega, id
+      `, [ordenIds]);
+      entRows = r.rows;
+    } catch (_) {
+      const r = await query(`
+        SELECT id, orden_id, numero_entrega, tipo_entrega, descripcion,
+          NULL::text AS etiqueta_entrega, NULL::text AS codigo_entrega,
+          dias_plazo, fecha_maxima, fecha_base, importe, lugar_entrega, evento_inicio_plazo
+        FROM orden_entregas
+        WHERE orden_id = ANY($1::int[]) AND estado <> 'ANULADO'
+        ORDER BY orden_id, numero_entrega, id
+      `, [ordenIds]);
+      entRows = r.rows;
+    }
+
+    const { rows: envRows } = await query(`
+      SELECT id, orden_id, enviado_at, estado, intento, correo_destino
+      FROM orden_envios_proveedor
+      WHERE orden_id = ANY($1::int[])
+      ORDER BY orden_id, enviado_at ASC NULLS LAST, id ASC
+    `, [ordenIds]).catch(() => ({ rows: [] }));
+
+    const { rows: ordExtra } = await query(`
+      SELECT id, fecha_orden, enviado_proveedor_at, condicion_inicio, fecha_evento_inicio
+      FROM ordenes_contratacion WHERE id = ANY($1::int[])
+    `, [ordenIds]);
+
+    const byOrden = new Map();
+    for (const e of entRows) {
+      const oid = Number(e.orden_id);
+      if (!byOrden.has(oid)) byOrden.set(oid, []);
+      byOrden.get(oid).push(e);
+    }
+    const envByOrden = new Map();
+    for (const e of envRows) {
+      const oid = Number(e.orden_id);
+      if (!envByOrden.has(oid)) envByOrden.set(oid, []);
+      envByOrden.get(oid).push(e);
+    }
+    const ordMap = new Map(ordExtra.map((o) => [Number(o.id), o]));
+
+    for (const row of out) {
+      if (!row.orden_id) continue;
+      const oid = Number(row.orden_id);
+      const list = byOrden.get(oid) || [];
+      const fmt = formatEntregasBandejaLabel(list);
+      row.entregas_count = fmt.count;
+      row.entrega_label = fmt.label;
+      row.entrega_tooltip = fmt.tooltip;
+      row.entregas_resumen = list.map((e) => buildEntregaContract(e, { totalEntregas: list.length }));
+
+      const oc = ordMap.get(oid) || {};
+      const envios = envByOrden.get(oid) || [];
+      const notif = resolveOrdenFechaNotificacion({
+        ...oc,
+        enviado_proveedor_at: oc.enviado_proveedor_at || row.fecha_envio_proveedor,
+      }, envios);
+      row.fecha_notificacion = notif.fechaNotificacion;
+      row.fecha_notificacion_fuente = notif.fuente;
+      row.fecha_envio_proveedor = notif.fechaNotificacionAt || row.fecha_envio_proveedor;
+
+      const first = list[0] || {};
+      const cron = resolveOrdenCronogramaContractual({
+        fecha_orden: oc.fecha_orden || row.fecha_orden,
+        enviado_proveedor_at: notif.fechaNotificacionAt || oc.enviado_proveedor_at,
+        condicion_inicio: oc.condicion_inicio,
+        fecha_evento_inicio: oc.fecha_evento_inicio,
+      }, first, { envios, totalEntregas: list.length });
+
+      row.plazo_entrega = cron.plazoEntrega ?? first.dias_plazo ?? null;
+      row.plazo_entrega_label = formatPlazoLabel(row.plazo_entrega);
+      row.condicion_inicio = cron.condicionInicio;
+      row.condicion_inicio_label = cron.condicionLabel;
+      row.fecha_efectiva_inicio = cron.fechaEfectiva;
+      row.fecha_maxima_entrega = cron.fechaMaxima
+        || (list.map((e) => e.fecha_maxima).filter(Boolean).map((d) => String(d).slice(0, 10)).sort().pop() || null);
+    }
+  }
+
   return out;
 }
 
@@ -1114,13 +1320,14 @@ export async function registrarOrden(payload, usuario, rol) {
   const { rows: entRows } = await query(`
     INSERT INTO orden_entregas (
       orden_id, numero_entrega, tipo_entrega, descripcion,
+      etiqueta_entrega, codigo_entrega,
       dias_plazo, tipo_dias, evento_inicio_plazo, importe, estado
-    ) VALUES ($1,1,$2,$3,$4,'calendario',$5,$6,'ACTIVO')
+    ) VALUES ($1,1,$2,$3,'ÚNICO','UNICO',$4,'calendario',$5,$6,'ACTIVO')
     RETURNING id
   `, [
     orden.id,
     tipoEntrega,
-    tipoEntrega === 'ENTREGABLE' ? 'Entregable 1' : 'Entrega 1',
+    'ÚNICO',
     Number(plazo) || 0,
     regla,
     ctx.monto_adjudicado,
@@ -1372,7 +1579,8 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
 export async function getDetalleOrden(ordenId) {
   const orden = await getOrdenById(ordenId);
   const ctx = await loadContextoExpediente(orden.requerimiento_id);
-  const items = await sincronizarPreciosItemsDesdeCuadro(ordenId);
+  let items = await sincronizarPreciosItemsDesdeCuadro(ordenId);
+  items = await enrichOrdenItemsConPedidos(items, ctx.pedidos || []);
   const { listarEntregas } = await import('./ordenesEntregas.js');
   const entregas = await listarEntregas(ordenId);
   const { rows: docs } = await query(`
@@ -1396,6 +1604,20 @@ export async function getDetalleOrden(ordenId) {
     requerimientoId: orden.requerimiento_id,
   });
 
+  const {
+    resolveOrdenFechaNotificacion,
+    normalizeCondicionInicio,
+    labelCondicionInicio,
+    resolveOrdenCronogramaContractual,
+  } = await import('../../shared/ordenCronogramaContractual.js');
+
+  const notif = resolveOrdenFechaNotificacion(orden, envios);
+  const condicion = normalizeCondicionInicio(
+    orden.condicion_inicio
+    || entregas[0]?.evento_inicio_plazo
+    || null,
+  ) || 'EMISION_ORDEN';
+
   // Normalizar fechas de orden a YYYY-MM-DD (evitar "Fri Jul 24" al persistir)
   const ordenNorm = {
     ...orden,
@@ -1405,18 +1627,270 @@ export async function getDetalleOrden(ordenId) {
       : null,
     fecha_evento_inicio: toIsoDateString(orden.fecha_evento_inicio) || orden.fecha_evento_inicio,
     fecha_efectiva_inicio: toIsoDateString(orden.fecha_efectiva_inicio) || orden.fecha_efectiva_inicio,
+    condicion_inicio: condicion,
+    condicion_inicio_label: labelCondicionInicio(condicion),
+    fecha_notificacion: notif.fechaNotificacion,
+    fecha_notificacion_at: notif.fechaNotificacionAt,
   };
+
+  const entregasEnriquecidas = entregas.map((e) => {
+    const cron = resolveOrdenCronogramaContractual(ordenNorm, e, {
+      envios,
+      totalEntregas: entregas.length,
+      fechaActaInicio: orden.fecha_evento_inicio,
+    });
+    return {
+      ...e,
+      evento_inicio_plazo: cron.condicionInicio,
+      condicion_inicio_label: cron.condicionLabel,
+      fecha_base_calc: cron.fechaEfectiva,
+      fecha_maxima_calc: cron.fechaMaxima,
+      plazo_label: cron.plazoEntregaLabel,
+      cronogramaContractual: cron,
+    };
+  });
 
   return {
     orden: ordenNorm,
     contexto: { ...ctx, lugar_entrega: lugarRes.lugar, lugar_entrega_fuente: lugarRes.fuente },
     items,
-    entregas,
+    entregas: entregasEnriquecidas,
     documentos: docs,
     envios,
     checklist,
     lugar_entrega: lugarRes.lugar,
     lugar_entrega_fuente: lugarRes.fuente,
+    notificacionCanon: notif,
+  };
+}
+
+/**
+ * Expediente consolidado para "Ver expediente" (sin blobs).
+ * Una sola respuesta: resumen, ítems, entregas (combinaciones), documentos, notificación, recepciones, historial.
+ */
+export async function getExpedienteOrdenCompleto(ordenId) {
+  const detalle = await getDetalleOrden(ordenId);
+  const historialOrden = await listarHistorialOrden(ordenId);
+  const { orden, contexto, items, entregas, documentos, envios, checklist, notificacionCanon } = detalle;
+
+  const {
+    expandItemEntregaCombinaciones,
+    resolveOrdenCronogramaContractual,
+    labelCondicionInicio,
+    formatPlazoLabel,
+  } = await import('../../shared/ordenCronogramaContractual.js');
+
+  const primera = entregas[0] || {};
+  const cronOrden = resolveOrdenCronogramaContractual(orden, primera, {
+    envios,
+    totalEntregas: entregas.length || 1,
+    fechaActaInicio: orden.fecha_evento_inicio,
+  });
+
+  const combinaciones = expandItemEntregaCombinaciones(items, entregas).map((c) => {
+    const ent = entregas.find((e) => Number(e.id) === Number(c.orden_entrega_id)) || primera;
+    const cron = resolveOrdenCronogramaContractual(orden, ent, {
+      envios,
+      totalEntregas: entregas.length,
+      plazoDias: c.dias_plazo,
+      fechaActaInicio: orden.fecha_evento_inicio,
+    });
+    return {
+      ...c,
+      condicion_inicio: cron.condicionInicio,
+      condicion_inicio_label: cron.condicionLabel,
+      fecha_efectiva: cron.fechaEfectiva,
+      fecha_maxima: cron.fechaMaxima || toIsoDateString(c.fecha_maxima),
+      plazo_label: cron.plazoEntregaLabel,
+      pendiente_motivo: cron.pendienteMotivo,
+    };
+  });
+
+  let adjuntosReq = [];
+  try {
+    const { rows } = await query(`
+      SELECT id, nombre_archivo, mime_type, created_at, tamaño_bytes
+      FROM requerimientos_adjuntos
+      WHERE requerimiento_id = $1
+      ORDER BY id DESC
+    `, [orden.requerimiento_id]);
+    adjuntosReq = rows;
+  } catch (_) { /* ok */ }
+
+  // Cotizaciones 5-A / 5-B y adjuntos — solo proveedor adjudicado, sin duplicados
+  let docsCotiz = [];
+  try {
+    const { buildDocsCotizacionAdjudicada } = await import('../../shared/expedienteDocumentos.js');
+    const { rows: cots } = await query(`
+      SELECT cp.id, cp.proveedor_id, cp.anexos, cp.updated_at, cp.created_at,
+        p.razon_social, p.ruc
+      FROM cotizaciones_proveedor cp
+      LEFT JOIN proveedores p ON p.id = cp.proveedor_id
+      WHERE cp.solicitud_id = $1
+        AND ($2::int IS NULL OR cp.proveedor_id = $2)
+      ORDER BY cp.id DESC
+    `, [
+      orden.solicitud_cotizacion_id || contexto.solicitud_id,
+      orden.proveedor_id || contexto.proveedor_id || null,
+    ]);
+    docsCotiz = buildDocsCotizacionAdjudicada(
+      cots,
+      orden.proveedor_id || contexto.proveedor_id,
+    );
+  } catch (_) { /* tabla/columna opcional */ }
+
+  let docsCcp = [];
+  if (contexto.ccp_firmado_id) {
+    docsCcp.push({
+      documentoId: contexto.ccp_firmado_id,
+      id: contexto.ccp_firmado_id,
+      origen: 'CCP',
+      tipo: 'CCP firmado',
+      nombre: contexto.ccp_firmado_nombre || 'CCP-firmado.pdf',
+      created_at: contexto.ccp_firmado_at,
+      fecha: contexto.ccp_firmado_at,
+      kind: 'ccp',
+      version: contexto.ccp_firmado_version,
+      previewDisponible: true,
+      registro_origen_id: contexto.ccp_firmado_id,
+    });
+  }
+
+  let docsRecepcion = [];
+  try {
+    const { rows } = await query(`
+      SELECT d.id, d.tipo, d.nombre, d.mime_type, d.version, d.created_at, d.expediente_recepcion_id
+      FROM recepcion_bienes_documentos d
+      JOIN recepcion_bienes_expedientes e ON e.id = d.expediente_recepcion_id
+      WHERE e.orden_id = $1 AND d.vigente = TRUE
+      ORDER BY d.id DESC
+    `, [orden.id]);
+    docsRecepcion = rows.map((d) => ({
+      documentoId: d.id,
+      id: d.id,
+      origen: 'RECEPCION_BIENES',
+      tipo: d.tipo || 'Documento recepción',
+      nombre: d.nombre,
+      mime_type: d.mime_type,
+      version: d.version,
+      created_at: d.created_at,
+      fecha: d.created_at,
+      kind: 'recepcion_bien',
+      expediente_recepcion_id: d.expediente_recepcion_id,
+      previewDisponible: true,
+      registro_origen_id: d.id,
+    }));
+  } catch (_) { /* ok */ }
+
+  let recepciones = [];
+  try {
+    const { rows } = await query(`
+      SELECT rb.id, rb.fecha_recepcion_guia, rb.fecha_entrega_almacen, rb.monto_liquidar,
+        rb.estado_fisico, rb.estado_interno, rb.responsable, rb.numero_entrega,
+        rb.entrega_programada_id, rb.observaciones, rbe.estado_global, rbe.id AS expediente_recepcion_id,
+        oe.etiqueta_entrega, oe.codigo_entrega, oe.descripcion AS entrega_descripcion
+      FROM recepciones_bienes rb
+      JOIN recepcion_bienes_expedientes rbe ON rbe.id = rb.expediente_recepcion_id
+      LEFT JOIN orden_entregas oe ON oe.id = rb.entrega_programada_id
+      WHERE rb.orden_id = $1
+      ORDER BY rb.id DESC
+    `, [orden.id]);
+    const { resolveEtiquetaEntrega } = await import('../../shared/entregaContractual.js');
+    const totalEnt = entregas.length;
+    recepciones = rows.map((x) => ({
+      ...x,
+      etiqueta_entrega: resolveEtiquetaEntrega({
+        etiqueta_entrega: x.etiqueta_entrega,
+        codigo_entrega: x.codigo_entrega,
+        descripcion: x.entrega_descripcion,
+        numero_entrega: x.numero_entrega,
+      }, { totalEntregas: totalEnt }) || (totalEnt === 1 ? resolveEtiquetaEntrega(entregas[0] || {}, { totalEntregas: 1 }) : null),
+    }));
+  } catch (_) { /* migración recepción pendiente */ }
+
+  const { dedupeDocumentos, consolidateOrdenDocumentos } = await import('../../shared/expedienteDocumentos.js');
+
+  const docs = dedupeDocumentos([
+    ...adjuntosReq.map((a) => ({
+      documentoId: a.id,
+      id: a.id,
+      origen: 'REQUERIMIENTO',
+      tipo: 'Requerimiento / adjunto',
+      nombre: a.nombre_archivo,
+      mime_type: a.mime_type,
+      created_at: a.created_at,
+      fecha: a.created_at,
+      kind: 'adjunto',
+      previewDisponible: true,
+      registro_origen_id: a.id,
+    })),
+    ...docsCotiz,
+    ...docsCcp,
+    ...consolidateOrdenDocumentos(documentos),
+    ...docsRecepcion,
+  ]);
+
+  const ultimoEnvio = envios?.[0] || null;
+  const plazoDias = cronOrden.plazoEntrega
+    ?? primera.dias_plazo
+    ?? items[0]?.plazo_ofertado_dias
+    ?? null;
+
+  return {
+    resumen: {
+      requerimiento_id: orden.requerimiento_id,
+      requerimiento_codigo: contexto.requerimiento_codigo,
+      pedido_sigamef: contexto.pedido_sigamef || contexto.pedidos_texto
+        || [...new Set(items.map((i) => i.pedido_sigamef).filter(Boolean))].join(', ')
+        || null,
+      codigo_ccp: contexto.codigo_ccp,
+      orden_id: orden.id,
+      tipo_orden: orden.tipo_orden,
+      numero_orden: orden.numero_orden,
+      anio_orden: orden.anio_orden,
+      fecha_orden: orden.fecha_orden,
+      fecha_emision: orden.fecha_orden,
+      proveedor_ruc: contexto.proveedor_ruc,
+      proveedor_razon_social: contexto.proveedor_razon_social,
+      monto_total: orden.monto_total,
+      moneda: orden.moneda || 'PEN',
+      estado: orden.estado,
+      estado_global: orden.estado,
+      fecha_notificacion: notificacionCanon?.fechaNotificacion || cronOrden.fechaNotificacion,
+      fecha_notificacion_at: notificacionCanon?.fechaNotificacionAt || null,
+      fecha_notificacion_fuente: notificacionCanon?.fuente || cronOrden.fechaNotificacionFuente,
+      fecha_confirmacion: orden.recibido_proveedor_at,
+      condicion_inicio: cronOrden.condicionInicio,
+      condicion_inicio_label: cronOrden.condicionLabel,
+      fecha_efectiva_inicio: cronOrden.fechaEfectiva,
+      plazo_entrega: plazoDias,
+      plazo_entrega_label: formatPlazoLabel(plazoDias),
+      fecha_maxima: cronOrden.fechaMaxima,
+      centro: contexto.centro || null,
+      area_usuaria: contexto.area_usuaria || null,
+      tipo_proceso: orden.tipo_contratacion,
+      numero_contrato: orden.numero_contrato || null,
+      lugar_entrega: detalle.lugar_entrega,
+    },
+    items,
+    entregas,
+    item_entregas: combinaciones,
+    documentos: docs,
+    notificacion: {
+      envios,
+      ultimo: ultimoEnvio,
+      correo_destino: ultimoEnvio?.correo_destino || null,
+      enviado_at: notificacionCanon?.fechaNotificacionAt || cronOrden.fechaNotificacionAt,
+      fecha_notificacion: notificacionCanon?.fechaNotificacion || cronOrden.fechaNotificacion,
+      fecha_notificacion_fuente: notificacionCanon?.fuente || null,
+      confirmado_at: ultimoEnvio?.confirmado_at || orden.recibido_proveedor_at,
+      estado: ultimoEnvio?.estado || null,
+    },
+    recepciones,
+    historial: historialOrden,
+    historial_orden: historialOrden,
+    requerimiento_id: orden.requerimiento_id,
+    checklist,
   };
 }
 

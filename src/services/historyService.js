@@ -14,27 +14,36 @@ export function normalizeMovimientos(raw) {
   if (!raw?.length) return [];
   return raw.map((m, idx) => ({
     id: m.id || idx + 1,
+    eventoId: m.eventoId || m.id || idx + 1,
     fecha: m.fecha,
     accion: String(m.accion || '').toUpperCase(),
+    etiquetaAccion: m.etiquetaAccion || null,
+    etiquetaEstadoNuevo: m.etiquetaEstadoNuevo || null,
+    estadoAnterior: m.estadoAnterior || m.estado_anterior || null,
+    estadoNuevo: m.estadoNuevo || m.estado_nuevo || null,
     modulo: m.modulo || 'SGC',
     subModulo: normalizeLegacyActosLabel(m.subModulo || m.sub_modulo || '—'),
     subModuloOrigen: normalizeLegacyActosLabel(m.subModuloOrigen || m.sub_modulo_origen || ''),
     subModuloDestino: normalizeLegacyActosLabel(m.subModuloDestino || m.sub_modulo_destino || ''),
     etapa: m.etapa || '',
-    usuario: m.usuario || '—',
+    usuario: m.usuario || m.actor || '—',
+    actor: m.actor || m.usuario || '—',
+    rol: m.rol || '',
     responsable: m.responsable || m.usuario || '—',
     observacion: normalizeLegacyActosLabel(m.observacion || ''),
+    fuente: m.fuente || m.origen || '',
+    ordenId: m.ordenId || m.orden_id || null,
+    recepcionBienesId: m.recepcionBienesId || m.recepcionBienId || null,
     fechaTexto: fmtDateTime(m.fecha),
   }));
 }
 
 export function movimientosToTimelineEvents(movimientos) {
-  return normalizeMovimientos(movimientos).map((m, idx, arr) => ({
+  return normalizeMovimientos(movimientos).map((m) => ({
     ...m,
-    esActual: idx === arr.length - 1,
+    esActual: false,
     fechaIngreso: m.fecha,
-    estadoTexto: m.subModulo,
-    accion: m.accion.toLowerCase(),
+    estadoTexto: m.etiquetaAccion || m.subModulo,
     tipoEvento: m.accion === 'OBSERVADO' ? 'observacion'
       : m.accion === 'SUBSANADO' ? 'subsanacion' : 'etapa',
   }));

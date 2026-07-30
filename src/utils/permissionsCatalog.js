@@ -131,9 +131,9 @@ export function permisosFromRol(rol) {
   if (rol === 'admin') return allPermisos();
   const p = emptyPermisos();
   if (rol === 'au') {
-    p.modulos = ['REQUERIMIENTOS'];
-    p.submodulos = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO'];
-    p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR'];
+    p.modulos = ['REQUERIMIENTOS', 'EJECUCION'];
+    p.submodulos = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO', 'RECEPCION_BIENES'];
+    p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR', 'DESCARGAR'];
     p.actividadesPorSubmodulo = {};
     p.submodulos.forEach((sid) => { p.actividadesPorSubmodulo[sid] = [...p.actividades]; });
   } else if (rol === 'dec') {

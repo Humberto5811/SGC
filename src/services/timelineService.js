@@ -9,11 +9,29 @@ function accionDotClass(accion) {
   if (a === 'RECIBIDO_OBSERVACION') return 'traza-event-obs';
   if (a === 'SUBSANADO' || a === 'RECIBIDO_SUBSANACION' || a === 'REENVIADO') return 'traza-event-sub';
   if (a === 'APROBADO' || a === 'FINALIZADO' || a === 'RECIBIDO') return 'traza-event-ok';
+  if (/ORDEN_|CRONOGRAMA_|RECEPCION_|CONFIRMACION_|INGRESADA_RECEPCION/.test(a)) return 'traza-event-ok';
   return 'traza-event-etapa';
 }
 
+const ACCION_LABELS_UI = Object.freeze({
+  ORDEN_REGISTRADA: 'Orden registrada',
+  CRONOGRAMA_ACTUALIZADO: 'Cronograma actualizado',
+  INICIO_ACTIVIDAD_DEFINIDO: 'Inicio de actividad definido',
+  ORDEN_FIRMADA_ADJUNTADA: 'Orden firmada',
+  ORDEN_LISTA_NOTIFICACION: 'Orden lista para notificación',
+  ORDEN_NOTIFICADA: 'Orden notificada',
+  ORDEN_ENVIADA: 'Orden notificada',
+  ORDEN_REENVIADA: 'Reenvío de notificación',
+  ORDEN_INTENTO_NOTIFICACION: 'Intento de notificación',
+  CONFIRMACION_PROVEEDOR: 'Confirmación del proveedor',
+  ORDEN_INGRESADA_RECEPCION_BIENES: 'Ingresó a Recepción de Bienes',
+  RECEPCION_BIENES_PENDIENTE: 'OC pendiente de recepción',
+});
+
 function formatMovimientoLabel(m) {
+  if (m?.etiquetaAccion) return m.etiquetaAccion;
   const accion = String(m?.accion || '').toUpperCase();
+  if (ACCION_LABELS_UI[accion]) return ACCION_LABELS_UI[accion];
   const sub = String(m?.subModulo || m?.sub_modulo || '').trim();
   if (accion === 'RECIBIDO_OBSERVACION') return `Recibido observación · ${sub}`;
   if (accion === 'RECIBIDO_SUBSANACION') return `Recibido subsanación · ${sub}`;
@@ -22,31 +40,43 @@ function formatMovimientoLabel(m) {
   if (accion === 'OBSERVADO' && sub) return `Observado · ${sub}`;
   if (accion === 'APROBADO' && sub) return `Aprobado · ${sub}`;
   if (accion === 'DERIVADO' && sub) return `Derivado · ${sub}`;
-  if (accion && sub) return `${accion} · ${sub}`;
-  return accion || sub || '—';
+  if (accion && sub) return `${accion.replace(/_/g, ' ')} · ${sub}`;
+  return accion.replace(/_/g, ' ') || sub || '—';
+}
+
+/** Ordena más reciente arriba (fecha DESC). */
+function sortDescByFecha(list) {
+  return [...list].sort((a, b) => {
+    const ta = new Date(a.fecha || a.fechaIngreso || 0).getTime();
+    const tb = new Date(b.fecha || b.fechaIngreso || 0).getTime();
+    return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+  });
 }
 
 /** Timeline desde historialMovimientos (formato bitácora). */
 export function movimientosTimelineHtml(movimientos, escFn = esc) {
-  const list = movimientosToTimelineEvents(movimientos).slice().reverse();
+  const list = sortDescByFecha(movimientosToTimelineEvents(movimientos));
   if (!list.length) {
     return '<p class="text-muted mb-0">Sin movimientos registrados.</p>';
   }
   return list.map((m, idx) => {
-    const isCurrent = m.esActual || idx === 0;
+    const isCurrent = idx === 0;
     const cls = accionDotClass(m.accion);
-    const accionBadgeCls = m.accion === 'OBSERVADO'
+    const accionBadgeCls = String(m.accion || '').toUpperCase() === 'OBSERVADO'
       ? 'badge bg-danger text-white'
       : 'badge bg-secondary text-white';
     const label = formatMovimientoLabel(m);
+    const estadoRes = m.etiquetaEstadoNuevo || m.estadoNuevo || '';
     return `
       <div class="traza-timeline-item ${isCurrent ? 'traza-timeline-current' : ''} ${cls}">
         <div class="traza-dot"></div>
         <div class="traza-content mb-2 pb-2">
           <div class="fw-bold"><span class="${accionBadgeCls} me-1">${escFn(label)}</span></div>
-          <div class="small text-muted">${escFn(m.modulo)}</div>
-          <div class="small mt-1"><i class="bi bi-person"></i> ${escFn(m.usuario)}</div>
+          <div class="small text-muted">${escFn(m.modulo || 'SGC')}${m.subModulo ? ` · ${escFn(m.subModulo)}` : ''}</div>
+          <div class="small mt-1"><i class="bi bi-person"></i> ${escFn(m.usuario || m.actor || '—')}${m.rol ? ` · ${escFn(m.rol)}` : ''}</div>
+          ${m.responsable ? `<div class="small"><i class="bi bi-briefcase"></i> ${escFn(m.responsable)}</div>` : ''}
           <div class="small"><i class="bi bi-clock"></i> ${escFn(fmtDateTime(m.fecha))}</div>
+          ${estadoRes ? `<div class="small">Estado resultante: <strong>${escFn(estadoRes)}</strong></div>` : ''}
           ${isCurrent ? '<div class="small text-success fw-semibold">Etapa vigente</div>' : ''}
           ${m.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(m.observacion))}</div>` : ''}
         </div>
@@ -60,11 +90,14 @@ export function timelineHtml(historial, escFn = esc) {
   if (!historial?.length) {
     return '<p class="text-muted mb-0">Sin historial de movimientos registrado.</p>';
   }
-  const list = historial.slice().reverse();
+  const list = sortDescByFecha(historial.map((h) => ({
+    ...h,
+    fecha: h.fechaIngreso || h.fecha,
+  })));
   return list.map((h, idx) => {
     const label = normalizeLegacyActosLabel(h.estadoTexto || h.estado || '—');
-    const isCurrent = h.esActual || idx === 0;
-    const duracion = h.dias != null ? h.dias : calcDiasEnEstado(h.fechaIngreso);
+    const isCurrent = idx === 0;
+    const duracion = h.dias != null ? h.dias : calcDiasEnEstado(h.fechaIngreso || h.fecha);
     const tipo = h.tipoEvento || 'etapa';
     const tipoClass = tipo === 'observacion' ? 'traza-event-obs' : tipo === 'subsanacion' ? 'traza-event-sub' : 'traza-event-etapa';
     const accionLabel = h.accion ? String(h.accion).replace(/_/g, ' ').toUpperCase() : '';
@@ -75,7 +108,7 @@ export function timelineHtml(historial, escFn = esc) {
           <div class="fw-bold">${escFn(label)}</div>
           ${accionLabel ? `<div class="small"><span class="badge bg-secondary">${escFn(accionLabel)}</span></div>` : ''}
           <div class="small text-muted mt-1">${escFn(h.usuario || '—')}</div>
-          <div class="small">${escFn(fmtDateTime(h.fechaIngreso))}</div>
+          <div class="small">${escFn(fmtDateTime(h.fechaIngreso || h.fecha))}</div>
           ${isCurrent ? `<div class="small text-success">Etapa vigente · ${escFn(diasLabel(duracion))}</div>` : ''}
           ${h.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(h.observacion))}</div>` : ''}
         </div>

@@ -992,6 +992,246 @@ async function collectCuadroRevisionMovimientos(requerimientoId) {
   }
 }
 
+const ETIQUETAS_ACCION_TRAZA = Object.freeze({
+  ORDEN_REGISTRADA: 'Orden registrada',
+  CRONOGRAMA_ACTUALIZADO: 'Cronograma actualizado',
+  INICIO_ACTIVIDAD_DEFINIDO: 'Inicio de actividad definido',
+  ORDEN_FIRMADA_ADJUNTADA: 'Orden firmada',
+  ORDEN_LISTA_NOTIFICACION: 'Orden lista para notificación',
+  ORDEN_NOTIFICADA: 'Orden notificada',
+  ORDEN_ENVIADA: 'Orden notificada',
+  ORDEN_REENVIADA: 'Reenvío de notificación',
+  CONFIRMACION_PROVEEDOR: 'Confirmación del proveedor',
+  ORDEN_INGRESADA_RECEPCION_BIENES: 'Ingresó a Recepción de Bienes',
+  RECEPCION_BIENES_PENDIENTE: 'OC pendiente de recepción',
+  BIEN_RECIBIDO_ALMACEN: 'Bien recibido en almacén',
+  CONFORMIDAD_PENDIENTE_AU: 'Conformidad pendiente AU',
+  CONFORMIDAD_RECIBIDA_AU: 'Conformidad recibida AU',
+  CONFORMIDAD_EN_COORDINACION_CM: 'Conformidad en Coordinación CM',
+  EXPEDIENTE_DERIVADO_PAGO: 'Expediente derivado a pago',
+});
+
+function etiquetaAccionTraza(accion, estadoNuevo) {
+  const a = String(accion || '').toUpperCase();
+  const n = String(estadoNuevo || '').toUpperCase();
+  return ETIQUETAS_ACCION_TRAZA[a] || ETIQUETAS_ACCION_TRAZA[n] || null;
+}
+
+/**
+ * Tras existir eventos reales de Orden/Recepción, descarta movimientos de workflow
+ * (Cotizaciones→CCP) con fecha posterior al primer evento de orden: son reconstrucciones
+ * con fecha_estado_actual desfasada y hacen aparecer "Derivado a CCP" como más reciente.
+ */
+export function sanitizeMovimientosTrasOrden(movimientos = []) {
+  const list = Array.isArray(movimientos) ? movimientos : [];
+  const STALE_ETAPAS = new Set([
+    'RECEPCION_COTIZACIONES', 'VALIDACION_USUARIO', 'CUADRO_COMPARATIVO', 'CCP',
+  ]);
+  const AUTHORITATIVE = new Set(['orden_eventos', 'recepcion_bienes_eventos']);
+  let firstOrdenTs = null;
+  for (const m of list) {
+    const fuente = String(m.fuente || m.origen || '');
+    const etapa = String(m.etapa || '').toUpperCase();
+    const acc = String(m.accion || '').toUpperCase();
+    const isOrdenish = AUTHORITATIVE.has(fuente)
+      || etapa === 'REGISTRO_ORDEN'
+      || etapa === 'RECEPCION_BIENES'
+      || /^ORDEN_|^CRONOGRAMA_|^INICIO_ACTIVIDAD|^CONFIRMACION_/.test(acc);
+    if (!isOrdenish) continue;
+    const ts = new Date(m.fecha || 0).getTime();
+    if (!Number.isFinite(ts)) continue;
+    if (firstOrdenTs == null || ts < firstOrdenTs) firstOrdenTs = ts;
+  }
+  if (firstOrdenTs == null) return list;
+
+  return list.filter((m) => {
+    const fuente = String(m.fuente || m.origen || '');
+    if (AUTHORITATIVE.has(fuente)) return true;
+    const etapa = String(m.etapa || '').toUpperCase();
+    if (!STALE_ETAPAS.has(etapa)) return true;
+    const ts = new Date(m.fecha || 0).getTime();
+    if (!Number.isFinite(ts)) return true;
+    // Conservar solo el recorrido real previo a la orden
+    return ts < firstOrdenTs;
+  });
+}
+
+/** Dedup por fuente+eventoId; fallback accion+fecha+entidad+actor+estadoNuevo. */
+export function dedupeMovimientosTrazabilidad(movimientos = []) {
+  const seen = new Set();
+  const out = [];
+  for (const m of movimientos) {
+    const fuente = String(m.fuente || m.origen || 'historial');
+    const eid = m.eventoId != null ? String(m.eventoId) : (m.id != null ? String(m.id) : '');
+    const key = eid && !/^\d+$/.test(eid)
+      ? `${fuente}|${eid}`
+      : [
+        fuente,
+        String(m.accion || '').toUpperCase(),
+        new Date(m.fecha || 0).toISOString(),
+        String(m.ordenId || m.orden_id || m.recepcionBienId || m.requerimientoId || ''),
+        String(m.usuario || m.actor || ''),
+        String(m.estadoNuevo || m.estado_nuevo || ''),
+      ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(m);
+  }
+  return out;
+}
+
+export function sortMovimientosFechaDesc(movimientos = []) {
+  return [...movimientos].sort((a, b) => {
+    const ta = new Date(a.fecha || 0).getTime();
+    const tb = new Date(b.fecha || 0).getTime();
+    const na = Number.isFinite(ta) ? ta : 0;
+    const nb = Number.isFinite(tb) ? tb : 0;
+    if (nb !== na) return nb - na;
+    const ida = String(a.eventoId || a.id || '');
+    const idb = String(b.eventoId || b.id || '');
+    return idb.localeCompare(ida, undefined, { numeric: true });
+  });
+}
+
+/**
+ * Resuelve la cadena completa de IDs del expediente desde cualquiera de:
+ * requerimientoId | ordenId | recepcionBienesId
+ */
+export async function resolveExpedienteEntityIds({
+  requerimientoId = null,
+  ordenId = null,
+  recepcionBienesId = null,
+} = {}) {
+  let reqId = requerimientoId != null ? Number(requerimientoId) : null;
+  let ordId = ordenId != null ? Number(ordenId) : null;
+  let rbId = recepcionBienesId != null ? Number(recepcionBienesId) : null;
+  let solicitudId = null;
+  let cuadroId = null;
+  let ccpId = null;
+
+  if (rbId && (!ordId || !reqId)) {
+    try {
+      const { rows } = await query(`
+        SELECT id, orden_id, requerimiento_id
+        FROM recepcion_bienes_expedientes WHERE id = $1 LIMIT 1
+      `, [rbId]);
+      if (rows[0]) {
+        ordId = ordId || Number(rows[0].orden_id) || null;
+        reqId = reqId || Number(rows[0].requerimiento_id) || null;
+      }
+    } catch (_) { /* ok */ }
+  }
+
+  if (ordId && !reqId) {
+    try {
+      const { rows } = await query(`
+        SELECT id, requerimiento_id, ccp_codigo_id, solicitud_cotizacion_id, cuadro_comparativo_id
+        FROM ordenes_contratacion WHERE id = $1 LIMIT 1
+      `, [ordId]);
+      if (rows[0]) {
+        reqId = Number(rows[0].requerimiento_id) || null;
+        ccpId = rows[0].ccp_codigo_id != null ? Number(rows[0].ccp_codigo_id) : null;
+        solicitudId = rows[0].solicitud_cotizacion_id != null
+          ? Number(rows[0].solicitud_cotizacion_id) : null;
+        cuadroId = rows[0].cuadro_comparativo_id != null
+          ? Number(rows[0].cuadro_comparativo_id) : null;
+      }
+    } catch (_) { /* ok */ }
+  }
+
+  if (reqId && !ordId) {
+    try {
+      const { rows } = await query(`
+        SELECT id, ccp_codigo_id, solicitud_cotizacion_id, cuadro_comparativo_id
+        FROM ordenes_contratacion
+        WHERE requerimiento_id = $1
+        ORDER BY id DESC LIMIT 1
+      `, [reqId]);
+      if (rows[0]) {
+        ordId = Number(rows[0].id);
+        ccpId = ccpId || (rows[0].ccp_codigo_id != null ? Number(rows[0].ccp_codigo_id) : null);
+        solicitudId = solicitudId || (rows[0].solicitud_cotizacion_id != null
+          ? Number(rows[0].solicitud_cotizacion_id) : null);
+        cuadroId = cuadroId || (rows[0].cuadro_comparativo_id != null
+          ? Number(rows[0].cuadro_comparativo_id) : null);
+      }
+    } catch (_) { /* ok */ }
+  }
+
+  if (ordId && !rbId) {
+    try {
+      const { rows } = await query(`
+        SELECT id FROM recepcion_bienes_expedientes
+        WHERE orden_id = $1 OR requerimiento_id = $2
+        ORDER BY id DESC LIMIT 1
+      `, [ordId, reqId || 0]);
+      if (rows[0]) rbId = Number(rows[0].id);
+    } catch (_) { /* ok */ }
+  }
+
+  if (reqId && !solicitudId) {
+    try {
+      const { rows } = await query(`
+        SELECT id FROM solicitudes_cotizacion
+        WHERE requerimiento_id = $1
+        ORDER BY id DESC LIMIT 1
+      `, [reqId]);
+      if (rows[0]) solicitudId = Number(rows[0].id);
+    } catch (_) { /* ok */ }
+  }
+
+  if (reqId && !cuadroId) {
+    try {
+      const { rows } = await query(`
+        SELECT id FROM cuadros_comparativos
+        WHERE requerimiento_id = $1
+        ORDER BY id DESC LIMIT 1
+      `, [reqId]);
+      if (rows[0]) cuadroId = Number(rows[0].id);
+    } catch (_) {
+      try {
+        const { rows } = await query(`
+          SELECT id FROM cuadro_comparativo
+          WHERE requerimiento_id = $1
+          ORDER BY id DESC LIMIT 1
+        `, [reqId]);
+        if (rows[0]) cuadroId = Number(rows[0].id);
+      } catch (_) { /* ok */ }
+    }
+  }
+
+  if (reqId && !ccpId) {
+    try {
+      const { rows } = await query(`
+        SELECT id FROM ccp_codigos
+        WHERE requerimiento_id = $1
+          AND COALESCE(activo, true) = true
+          AND COALESCE(anulado, false) = false
+        ORDER BY id DESC LIMIT 1
+      `, [reqId]);
+      if (rows[0]) ccpId = Number(rows[0].id);
+    } catch (_) {
+      try {
+        const { rows } = await query(`
+          SELECT id FROM ccp_codigos
+          WHERE requerimiento_id = $1
+          ORDER BY id DESC LIMIT 1
+        `, [reqId]);
+        if (rows[0]) ccpId = Number(rows[0].id);
+      } catch (_) { /* ok */ }
+    }
+  }
+
+  return {
+    requerimientoId: reqId,
+    solicitudCotizacionId: solicitudId,
+    cuadroComparativoId: cuadroId,
+    ccpId,
+    ordenId: ordId,
+    recepcionBienesId: rbId,
+  };
+}
+
 function enrichMovimientoDisplay(m) {
   const obs = String(m.observacion || '');
   const verMatch = obs.match(/\bv(\d+)\b/i) || String(m.version || '').match(/(\d+)/);
@@ -1005,11 +1245,20 @@ function enrichMovimientoDisplay(m) {
     else if (/validaci/i.test(obs)) documento = 'Validación';
     else if (/cotizaci/i.test(obs)) documento = 'Cotización';
   }
+  const etiquetaAccion = m.etiquetaAccion || etiquetaAccionTraza(m.accion, m.estadoNuevo);
+  const etiquetaEstadoNuevo = m.etiquetaEstadoNuevo
+    || etiquetaAccionTraza(null, m.estadoNuevo)
+    || m.estadoNuevo
+    || null;
   return {
     ...m,
     version: version || '—',
     documento: documento || '—',
     estado: m.subModulo || getSubModuloMeta(m.etapa).subModulo || m.etapa || '—',
+    etiquetaAccion: etiquetaAccion || null,
+    etiquetaEstadoNuevo,
+    actor: m.actor || m.usuario || 'Sistema',
+    fecha: m.fecha ? new Date(m.fecha).toISOString() : m.fecha,
   };
 }
 
@@ -1032,14 +1281,174 @@ export async function obtenerTrazabilidad(requerimientoId) {
       : calcDiasBetween(h.fechaIngreso, null),
     esActual: idx === historial.length - 1 && !h.fechaSalida,
   }));
-  const responsableActual = resolveUsuarioNombreSync(enriched.responsable_actual, usuarioMap);
+
+  // Estado vigente central (no usar solo estado_actual histórico de CCP)
+  let vigente = null;
+  let evidence = null;
+  try {
+    const { loadEstadoExpedienteEvidenceByIds, applyEstadoEvidenceToRow } = await import('./estadoExpedienteEvidence.js');
+    const { resolveEstadoExpedienteVigente, getLabelEstado } = await import('../../shared/estadoExpedienteVigente.js');
+    const evMap = await loadEstadoExpedienteEvidenceByIds([requerimientoId]);
+    evidence = evMap.get(Number(requerimientoId)) || {};
+    const seeded = applyEstadoEvidenceToRow({
+      ...enriched,
+      codigo_ccp: evidence.codigo_ccp,
+      ccp_activo: evidence.ccp_activo,
+      orden_id: evidence.orden_id,
+      orden_estado: evidence.orden_estado,
+      enviado_proveedor_at: evidence.enviado_proveedor_at,
+      recibido_proveedor_at: evidence.recibido_proveedor_at,
+      derivado_ejecucion_at: evidence.derivado_ejecucion_at,
+      recepcion_estado_global: evidence.recepcion_estado_global,
+      recepcion_estado_interno: evidence.recepcion_estado_interno,
+      recepcion_bienes_expediente_id: evidence.recepcion_bienes_expediente_id,
+      cuadro_estado: evidence.cuadro_estado,
+    }, evidence);
+    vigente = resolveEstadoExpedienteVigente(seeded);
+    void getLabelEstado;
+  } catch (_) { /* fallback legacy */ }
+
+  const entityIds = await resolveExpedienteEntityIds({
+    requerimientoId: Number(requerimientoId),
+    ordenId: evidence?.orden_id || null,
+    recepcionBienesId: evidence?.recepcion_bienes_expediente_id || null,
+  });
+  const ordenIdResuelto = entityIds.ordenId || evidence?.orden_id || null;
+  const rbIdResuelto = entityIds.recepcionBienesId || evidence?.recepcion_bienes_expediente_id || null;
+
   const cuadroMovs = await collectCuadroRevisionMovimientos(requerimientoId);
-  const movimientos = mergeMovimientos(enriched.historialMovimientos || [], cuadroMovs)
-    .map((m) => enrichMovimientoDisplay({
-      ...m,
-      usuario: resolveUsuarioNombreSync(m.usuario, usuarioMap),
-      responsable: resolveUsuarioNombreSync(m.responsable, usuarioMap),
+  let movimientos = mergeMovimientos(enriched.historialMovimientos || [], cuadroMovs);
+  const fuentesEventos = {
+    requerimiento: (enriched.historialMovimientos || []).length,
+    cuadro: cuadroMovs.length,
+    ccp: 0,
+    orden: 0,
+    recepcionBienes: 0,
+  };
+  fuentesEventos.ccp = movimientos.filter((m) => String(m.etapa || '').toUpperCase() === 'CCP').length;
+
+  // Eventos de Registro de Órdenes (por requerimiento_id u orden_id resuelto)
+  try {
+    const { rows: ordEv } = await query(`
+      SELECT oe.id, oe.orden_id, oe.tipo_evento, oe.estado_anterior, oe.estado_nuevo,
+        oe.usuario_id, oe.rol, oe.observacion, oe.creado_at, oe.datos_json,
+        oc.numero_orden
+      FROM orden_eventos oe
+      LEFT JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      WHERE oe.requerimiento_id = $1
+         OR oe.orden_id IN (SELECT id FROM ordenes_contratacion WHERE requerimiento_id = $1)
+         OR ($2::int IS NOT NULL AND oe.orden_id = $2)
+      ORDER BY oe.creado_at ASC, oe.id ASC
+    `, [requerimientoId, ordenIdResuelto]);
+    fuentesEventos.orden = ordEv.length;
+    const ordenMovs = ordEv.map((e) => ({
+      id: `orden-${e.id}`,
+      eventoId: `orden-${e.id}`,
+      fecha: e.creado_at,
+      etapa: 'REGISTRO_ORDEN',
+      modulo: 'Contrataciones',
+      subModulo: 'Registro de Órdenes',
+      accion: e.tipo_evento,
+      etiquetaAccion: etiquetaAccionTraza(e.tipo_evento, e.estado_nuevo),
+      usuario: e.usuario_id || 'Sistema',
+      actor: e.usuario_id || 'Sistema',
+      rol: e.rol || '',
+      responsable: 'Registro de Órdenes / DEC',
+      observacion: e.observacion || '',
+      estadoAnterior: e.estado_anterior,
+      estadoNuevo: e.estado_nuevo,
+      etiquetaEstadoNuevo: etiquetaAccionTraza(null, e.estado_nuevo),
+      origen: 'orden_eventos',
+      requerimientoId: Number(requerimientoId),
+      ordenId: e.orden_id,
+      documento: e.numero_orden ? `OC ${e.numero_orden}` : '—',
+      documentos: e.numero_orden ? [`OC ${e.numero_orden}`] : [],
+      fuente: 'orden_eventos',
     }));
+    movimientos = mergeMovimientos(movimientos, ordenMovs);
+  } catch (_) { /* ok */ }
+
+  // Eventos de Recepción de Bienes (requerimiento_id, orden_id o expediente)
+  try {
+    const { rows: rbEv } = await query(`
+      SELECT ev.id, ev.tipo, ev.estado_anterior, ev.estado_nuevo, ev.usuario, ev.rol,
+        ev.motivo, ev.created_at, ev.expediente_recepcion_id, ev.orden_id, ev.metadata
+      FROM recepcion_bienes_eventos ev
+      LEFT JOIN recepcion_bienes_expedientes e ON e.id = ev.expediente_recepcion_id
+      WHERE e.requerimiento_id = $1
+         OR ($2::int IS NOT NULL AND (ev.orden_id = $2 OR e.orden_id = $2))
+         OR ($3::int IS NOT NULL AND ev.expediente_recepcion_id = $3)
+      ORDER BY ev.created_at ASC, ev.id ASC
+    `, [requerimientoId, ordenIdResuelto, rbIdResuelto]);
+    fuentesEventos.recepcionBienes = rbEv.length;
+    const rbMovs = rbEv.map((e) => ({
+      id: `rb-${e.id}`,
+      eventoId: `rb-${e.id}`,
+      fecha: e.created_at,
+      etapa: 'RECEPCION_BIENES',
+      modulo: 'Ejecución',
+      subModulo: 'Recepción de Bienes',
+      accion: e.tipo,
+      etiquetaAccion: etiquetaAccionTraza(e.tipo, e.estado_nuevo),
+      usuario: e.usuario || 'Sistema',
+      actor: e.usuario || 'Sistema',
+      rol: e.rol || 'Sistema',
+      responsable: 'Almacén',
+      observacion: e.motivo || '',
+      estadoAnterior: e.estado_anterior,
+      estadoNuevo: e.estado_nuevo,
+      etiquetaEstadoNuevo: etiquetaAccionTraza(null, e.estado_nuevo),
+      origen: 'recepcion_bienes_eventos',
+      requerimientoId: Number(requerimientoId),
+      ordenId: e.orden_id,
+      recepcionBienId: e.expediente_recepcion_id,
+      recepcionBienesId: e.expediente_recepcion_id,
+      documento: '—',
+      documentos: [],
+      fuente: 'recepcion_bienes_eventos',
+    }));
+    movimientos = mergeMovimientos(movimientos, rbMovs);
+  } catch (_) { /* ok */ }
+
+  // Quitar etapas Cotizaciones→CCP con fechas posteriores a la orden real
+  movimientos = sanitizeMovimientosTrasOrden(movimientos);
+  // Colapsar reintentos de notificación (solo una transición global)
+  movimientos = collapseNotificacionDuplicates(movimientos);
+  movimientos = dedupeMovimientosTrazabilidad(movimientos);
+
+  movimientos = movimientos.map((m) => enrichMovimientoDisplay({
+    ...m,
+    usuario: resolveUsuarioNombreSync(m.usuario, usuarioMap),
+    actor: resolveUsuarioNombreSync(m.actor || m.usuario, usuarioMap),
+    responsable: resolveUsuarioNombreSync(m.responsable, usuarioMap) || m.responsable,
+  }));
+
+  // API entrega más reciente primero (fecha DESC)
+  const movimientosAsc = [...movimientos].sort(
+    (a, b) => new Date(a.fecha || 0) - new Date(b.fecha || 0),
+  );
+  const movimientosDesc = sortMovimientosFechaDesc(movimientos);
+
+  // Cabecera desde estado vigente (única fuente del badge)
+  const codigoVigente = vigente?.codigo || enriched.estado_actual;
+  const labelVigente = vigente?.label
+    || enriched.estadoActualTexto
+    || getEstadoActualTexto(enriched.estado_actual);
+  const subModuloVigente = resolveSubmoduloDesdeVigente(vigente, evidence)
+    || enriched.subModuloActual;
+  const responsableVigente = resolveResponsableDesdeVigente(vigente, evidence, enriched);
+  const fechaInicioEtapa = resolveFechaInicioEtapaVigente(movimientosAsc, codigoVigente)
+    || enriched.fecha_estado_actual;
+  const diasEtapa = calcDiasEnEstado(fechaInicioEtapa);
+  const eventoMasReciente = movimientosDesc[0] || null;
+
+  const estadoVigenteContract = vigente?.estadoVigente || {
+    codigo: codigoVigente,
+    label: labelVigente,
+    prioridad: vigente?.prioridad ?? null,
+    etapa: vigente?.workflowEtapa || vigente?.etapa || null,
+  };
+
   return {
     requerimiento: {
       id: enriched.id,
@@ -1050,17 +1459,168 @@ export async function obtenerTrazabilidad(requerimientoId) {
       centro: enriched.centro_nombre || enriched.responsable,
       estado: enriched.estado,
     },
-    estadoActual: enriched.estado_actual,
-    estadoActualTexto: enriched.estadoActualTexto || getEstadoActualTexto(enriched.estado_actual),
-    subModuloActual: enriched.subModuloActual,
-    responsableActual,
-    fechaEstadoActual: enriched.fecha_estado_actual,
-    fechaIngresoActual: enriched.fechaIngresoActual || enriched.fecha_estado_actual,
-    diasEnEstado: enriched.dias_en_estado,
-    retrasado: enriched.retrasado || enriched.dias_en_estado > 10,
+    // Compat: campos legacy + vigentes
+    estadoActual: codigoVigente,
+    estadoActualTexto: labelVigente,
+    estadoVigente: estadoVigenteContract,
+    subModuloActual: subModuloVigente,
+    responsableActual: resolveUsuarioNombreSync(responsableVigente, usuarioMap) || responsableVigente,
+    fechaEstadoActual: fechaInicioEtapa,
+    fechaIngresoActual: fechaInicioEtapa,
+    diasEnEstado: diasEtapa,
+    retrasado: diasEtapa > 10,
     historialEstados: historialConDias,
-    historialMovimientos: movimientos,
+    // Más reciente arriba — contrato único del recorrido
+    historialMovimientos: movimientosDesc,
+    fuentesEventos,
+    ids: entityIds,
+    eventoMasReciente: eventoMasReciente ? {
+      accion: eventoMasReciente.accion,
+      etiquetaAccion: eventoMasReciente.etiquetaAccion,
+      estadoNuevo: eventoMasReciente.estadoNuevo,
+      fecha: eventoMasReciente.fecha,
+      fuente: eventoMasReciente.fuente || eventoMasReciente.origen,
+    } : null,
+    expediente: {
+      requerimientoId: entityIds.requerimientoId || Number(requerimientoId),
+      solicitudCotizacionId: entityIds.solicitudCotizacionId,
+      cuadroComparativoId: entityIds.cuadroComparativoId,
+      ccpId: entityIds.ccpId,
+      ordenId: ordenIdResuelto,
+      recepcionBienesId: rbIdResuelto,
+      estadoVigente: estadoVigenteContract,
+      submoduloVigente: {
+        codigo: String(codigoVigente || '').startsWith('EXPEDIENTE_DERIVADO')
+          ? 'DERIVACION_PAGO'
+          : (String(codigoVigente || '').startsWith('ORDEN_') || codigoVigente === 'REGISTRO_ORDENES'
+            ? 'REGISTRO_ORDENES'
+            : (String(codigoVigente || '').includes('RECEPCION') || String(codigoVigente || '').includes('CONFORMIDAD')
+              || codigoVigente === 'BIEN_RECIBIDO_ALMACEN'
+              ? 'RECEPCION_BIENES'
+              : (String(codigoVigente || '').includes('CCP') ? 'CCP' : null))),
+        label: subModuloVigente,
+      },
+      responsableActual: resolveUsuarioNombreSync(responsableVigente, usuarioMap) || responsableVigente,
+      fechaInicioEtapa,
+      diasEnEtapa: diasEtapa,
+    },
   };
+}
+
+function resolveSubmoduloDesdeVigente(vigente, evidence) {
+  const code = String(vigente?.codigo || '').toUpperCase();
+  if (!code) return null;
+  if (code === 'EXPEDIENTE_DERIVADO_PAGO') return 'Derivación a Pago';
+  if (code.startsWith('RECEPCION_BIENES') || code === 'BIEN_RECIBIDO_ALMACEN'
+    || code.startsWith('CONFORMIDAD_')) {
+    return 'Recepción de Bienes';
+  }
+  if (code.startsWith('ORDEN_') || code === 'EN_EJECUCION' || code === 'REGISTRO_ORDENES') {
+    return 'Registro de Órdenes';
+  }
+  if (code.includes('CCP')) return 'CCP';
+  if (vigente?.workflowEtapa === 'RECEPCION_BIENES') return 'Recepción de Bienes';
+  if (vigente?.workflowEtapa === 'ORDEN') return 'Registro de Órdenes';
+  if (evidence?.recepcion_bienes_expediente_id) return 'Recepción de Bienes';
+  return null;
+}
+
+function resolveResponsableDesdeVigente(vigente, evidence, enriched) {
+  const code = String(vigente?.codigo || '').toUpperCase();
+  if (code === 'RECEPCION_BIENES_PENDIENTE' || code === 'RECEPCION_BIENES_OBSERVADA'
+    || code === 'BIEN_RECIBIDO_ALMACEN') {
+    return 'Almacén';
+  }
+  if (code === 'CONFORMIDAD_PENDIENTE_AU') {
+    return enriched.area || 'Área Usuaria';
+  }
+  if (code === 'CONFORMIDAD_RECIBIDA_AU') {
+    return 'Almacén';
+  }
+  if (code === 'CONFORMIDAD_EN_COORDINACION_CM') {
+    return 'Coordinador CM';
+  }
+  if (code === 'EXPEDIENTE_DERIVADO_PAGO') {
+    return 'Analista de Pago';
+  }
+  if (code.startsWith('ORDEN_') || code === 'REGISTRO_ORDENES' || code === 'EN_EJECUCION') {
+    return 'Registro de Órdenes / DEC';
+  }
+  return enriched.responsable_actual || ETAPAS[enriched.estado_actual]?.responsable || enriched.responsable || '';
+}
+
+function resolveFechaInicioEtapaVigente(movimientos = [], codigoVigente) {
+  const code = String(codigoVigente || '').toUpperCase();
+  if (!code) return null;
+  // Buscar el evento más reciente que ingresó a este estado
+  const hits = (movimientos || []).filter((m) => {
+    const neu = String(m.estadoNuevo || m.estado_nuevo || '').toUpperCase();
+    const acc = String(m.accion || '').toUpperCase();
+    return neu === code
+      || (code === 'RECEPCION_BIENES_PENDIENTE' && /INGRESADA_RECEPCION|RECEPCION_BIENES_PENDIENTE/.test(acc + neu))
+      || (code === 'ORDEN_NOTIFICADA' && /ORDEN_NOTIFICADA|ORDEN_ENVIADA/.test(acc + neu));
+  });
+  if (!hits.length) return null;
+  hits.sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
+  return hits[0].fecha || null;
+}
+
+/**
+ * Solo la primera transición a ORDEN_NOTIFICADA es global.
+ * Reintentos (mismo estado→mismo estado) quedan como subdetalle operativo.
+ */
+function collapseNotificacionDuplicates(movimientos = []) {
+  const sorted = [...movimientos].sort(
+    (a, b) => new Date(a.fecha || 0) - new Date(b.fecha || 0),
+  );
+  const out = [];
+  const globalNotifByOrden = new Set();
+  for (const m of sorted) {
+    const acc = String(m.accion || '').toUpperCase();
+    const ant = String(m.estadoAnterior || m.estado_anterior || '').toUpperCase();
+    const neu = String(m.estadoNuevo || m.estado_nuevo || '').toUpperCase();
+    const isNotifAccion = /ORDEN_NOTIFICADA|ORDEN_ENVIADA|ORDEN_REENVIADA/.test(acc)
+      || (/NOTIFIC/.test(acc) && /ORDEN_NOTIFICADA|ORDEN_ENVIADA/.test(neu));
+    if (!isNotifAccion) {
+      out.push(m);
+      continue;
+    }
+    const ordenKey = String(m.ordenId || m.orden_id || '0');
+    const esTransicionGlobal = neu === 'ORDEN_NOTIFICADA' && ant !== 'ORDEN_NOTIFICADA';
+    const esReintento = neu === 'ORDEN_NOTIFICADA' && ant === 'ORDEN_NOTIFICADA';
+    if (esTransicionGlobal && !globalNotifByOrden.has(ordenKey)) {
+      globalNotifByOrden.add(ordenKey);
+      out.push({
+        ...m,
+        etiquetaAccion: m.etiquetaAccion || 'Orden notificada',
+        _intentos: 1,
+        tipoOperativo: 'notificacion_exitosa',
+      });
+      continue;
+    }
+    if (esReintento || globalNotifByOrden.has(ordenKey)) {
+      const prev = [...out].reverse().find((x) => {
+        const xa = String(x.accion || '').toUpperCase();
+        return String(x.ordenId || x.orden_id || '0') === ordenKey
+          && /ORDEN_NOTIFICADA|ORDEN_ENVIADA/.test(xa);
+      });
+      if (prev) {
+        prev._intentos = (prev._intentos || 1) + 1;
+        prev.observacion = `${prev.observacion || ''} · intento operativo ${prev._intentos}`.trim();
+      } else {
+        out.push({
+          ...m,
+          accion: 'ORDEN_INTENTO_NOTIFICACION',
+          etiquetaAccion: 'Intento de notificación',
+          tipoOperativo: 'intento_notificacion',
+          prioridad: 0,
+        });
+      }
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
 }
 
 export async function rebuildAllHistorial() {

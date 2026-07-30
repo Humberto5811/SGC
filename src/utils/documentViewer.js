@@ -236,6 +236,49 @@ export function openBase64Document({ nombre, mime_type, contenido_base64 }) {
   showInViewer(nombre || 'Documento', resolvedMime, url, textContent);
 }
 
+/** Abre un Blob/File ya obtenido (p. ej. endpoint /preview binario). */
+export async function openBlobDocument({ nombre, mime_type, blob }) {
+  ensureViewerModal();
+  revokeLastBlob();
+  setViewerLoading(true);
+  hideAllViewerPanes();
+  const modalEl = document.getElementById('sgcDocViewerModal');
+  window.bootstrap?.Modal?.getOrCreateInstance(modalEl)?.show();
+  if (!(blob instanceof Blob) || !blob.size) {
+    setViewerLoading(false);
+    throw new Error('Documento sin contenido para visualizar');
+  }
+  const head = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+  const firma = String.fromCharCode(...head);
+  let resolvedMime = mime_type || blob.type || 'application/octet-stream';
+  if (firma === '%PDF-' || isPdfLike(resolvedMime, nombre)) {
+    resolvedMime = 'application/pdf';
+  }
+  const url = URL.createObjectURL(blob);
+  lastBlobUrl = url;
+  setViewerLoading(false);
+  showInViewer(nombre || 'Documento', resolvedMime, url, null);
+}
+
+/** Descarga un Blob con nombre seguro; rechaza JSON disfrazado de PDF. */
+export function downloadBlobFile({ blob, contentType, nombre }) {
+  if (!(blob instanceof Blob) || !blob.size) {
+    throw new Error('Archivo vacío o no disponible');
+  }
+  const ct = String(contentType || blob.type || '').toLowerCase();
+  if (ct.includes('application/json') || ct.includes('text/html')) {
+    throw new Error('El servidor devolvió un error en lugar del archivo');
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre || 'documento.pdf';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
 export async function openAdjuntoDocument(adjuntoId, nombre, mimeType) {
   await previewAdjuntoById(adjuntoId, nombre, mimeType);
 }

@@ -38,7 +38,14 @@ async function request(path, options = {}) {
 
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
-      throw new Error(error.detail || error.error || `Error ${res.status}`);
+      const err = new Error(error.detail?.message || error.message || error.error || error.detail || `Error ${res.status}`);
+      // Si detail es objeto (faltantes), conservar mensaje principal
+      if (typeof error.detail === 'object' && error.detail != null) {
+        err.message = error.message || error.error || err.message;
+        err.detail = error.detail;
+      }
+      if (error.code) err.code = error.code;
+      throw err;
     }
     return res.status === 204 ? null : res.json();
   } catch (error) {
@@ -61,9 +68,20 @@ async function requestBlob(path, options = {}) {
     ...rest,
     headers: { ...authHeaders(), ...(optHeaders || {}) },
   });
+  const contentType = res.headers.get('content-type') || '';
   if (!res.ok) {
+    if (contentType.includes('application/json')) {
+      const error = await res.json().catch(() => ({}));
+      const err = new Error(error.message || error.error || error.detail || `Error ${res.status}`);
+      if (error.code) err.code = error.code;
+      if (error.detail != null) err.detail = error.detail;
+      throw err;
+    }
+    throw new Error(`Error ${res.status}`);
+  }
+  if (contentType.includes('application/json')) {
     const error = await res.json().catch(() => ({}));
-    throw new Error(error.detail || error.error || `Error ${res.status}`);
+    throw new Error(error.message || error.error || 'El servidor devolvió JSON en lugar del archivo');
   }
   const blob = await res.blob();
   if (!(blob instanceof Blob) || !blob.size) {
@@ -71,7 +89,7 @@ async function requestBlob(path, options = {}) {
   }
   return {
     blob,
-    contentType: res.headers.get('content-type') || blob.type || 'application/octet-stream',
+    contentType: contentType || blob.type || 'application/octet-stream',
     contentDisposition: res.headers.get('content-disposition') || '',
   };
 }

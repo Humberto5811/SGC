@@ -1,5 +1,5 @@
 /**
- * Contrataciones → Registro de Órdenes (OD36)
+ * Contrataciones → Registro de Órdenes (OD36 / OD40)
  * Ruta: dec/registro-ordenes · permiso REGISTRO_ORDENES_CONTRATACION
  */
 import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
@@ -22,6 +22,7 @@ import {
   openHistorialOrdenModal,
   openBase64Document,
 } from '../../utils/registroOrdenModal.js';
+import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
 import {
   openChecklistModal,
   validarYMostrarChecklist,
@@ -29,6 +30,7 @@ import {
   fetchChecklistRequerimiento,
   renderChecklistBadge,
 } from '../../utils/expedienteChecklistUi.js';
+import { showTrazabilidadModal } from '../requerimiento/reqShared.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -42,7 +44,7 @@ const VIEW_ID = 'registro-ordenes';
 const SCROLL_SEL = '#roScrollWrap';
 const PREFIX = 'ro';
 const LIST_ID = 'roList';
-const COLS = 18;
+const COLS = 21;
 const loadGuard = createRequestSequenceGuard();
 
 let lifecycle = null;
@@ -67,9 +69,51 @@ function canManage() {
   } catch (_) { return false; }
 }
 
+const RO_BANDEJA_CSS = `
+#${VIEW_ID} .ro-table-wrap { max-height: 68vh; overflow: auto; }
+#${VIEW_ID} table.ro-bandeja {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 10px;
+  table-layout: fixed;
+  width: 100%;
+  min-width: 1480px;
+  border-collapse: collapse;
+}
+#${VIEW_ID} table.ro-bandeja thead th {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  vertical-align: middle;
+  white-space: normal;
+  height: 2.8em;
+  padding: 4px 4px;
+  background: #f8f9fa;
+  text-align: center;
+}
+#${VIEW_ID} table.ro-bandeja tbody td {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 10px;
+  padding: 3px 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#${VIEW_ID} table.ro-bandeja .ro-wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+#${VIEW_ID} table.ro-bandeja .ro-col-wide {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+`;
+
 export function renderRegistroOrdenesView() {
   return `
-    <style>${bandejaTableStyles()}</style>
+    <style>${bandejaTableStyles()}${RO_BANDEJA_CSS}</style>
     <div class="container-fluid py-3" id="${VIEW_ID}">
       <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
         <div>
@@ -99,6 +143,10 @@ export function renderRegistroOrdenesView() {
                 <option value="ORDEN_REGISTRADA">Orden registrada</option>
                 <option value="ORDEN_LISTA_NOTIFICACION">Orden lista para notificación</option>
                 <option value="ORDEN_NOTIFICADA">Orden notificada</option>
+                <option value="RECEPCION_BIENES_PENDIENTE">OC pendiente de recepción</option>
+                <option value="BIEN_RECIBIDO_ALMACEN">Recibido por almacén</option>
+                <option value="CONFORMIDAD_PENDIENTE_AU">Conformidad pendiente AU</option>
+                <option value="CONFORMIDAD_RECIBIDA_AU">Conformidad recibida del AU</option>
                 <option value="ORDEN_RECEPCION_CONFIRMADA">Recepción de orden confirmada</option>
                 <option value="EN_EJECUCION">En ejecución</option>
               </select>
@@ -113,28 +161,54 @@ export function renderRegistroOrdenesView() {
             </div>
           </div>
           <div id="${PREFIX}BgRefresh"></div>
-          <div class="table-responsive" id="roScrollWrap" style="max-height:65vh;overflow:auto;">
-            <table class="table table-sm table-hover align-middle mb-0" id="${PREFIX}Table">
+          <div class="table-responsive ro-table-wrap" id="roScrollWrap">
+            <table class="table table-sm table-hover align-middle mb-0 ro-bandeja" id="${PREFIX}Table">
+              <colgroup>
+                <col style="width:55px">
+                <col style="width:60px">
+                <col style="width:90px">
+                <col style="width:85px">
+                <col style="width:95px">
+                <col style="width:150px">
+                <col style="width:100px">
+                <col style="width:160px">
+                <col style="width:58px">
+                <col style="width:55px">
+                <col style="width:75px">
+                <col style="width:75px">
+                <col style="width:70px">
+                <col style="width:75px">
+                <col style="width:70px">
+                <col style="width:80px">
+                <col style="width:70px">
+                <col style="width:70px">
+                <col style="width:80px">
+                <col style="width:120px">
+                <col style="width:60px">
+              </colgroup>
               <thead class="table-light sticky-top">
                 <tr>
                   <th>CCP</th>
-                  <th>CCP firmado</th>
+                  <th>CCP<br>firmado</th>
                   <th>Requerimiento</th>
-                  <th>Pedido</th>
+                  <th>Pedido<br>SIGAMEF</th>
                   <th>RUC</th>
                   <th>Proveedor</th>
+                  <th>Código<br>SIGAMEF</th>
+                  <th>Descripción<br>del ítem</th>
                   <th>Tipo</th>
                   <th>Cantidad</th>
-                  <th>Precio unitario</th>
+                  <th>Precio<br>unitario</th>
                   <th>Total</th>
-                  <th>N.° orden</th>
-                  <th>Fecha orden</th>
+                  <th>N.° de<br>orden</th>
+                  <th>Fecha de<br>emisión</th>
                   <th>Entrega</th>
-                  <th>Envío de orden</th>
+                  <th>Fecha de<br>notificación</th>
                   <th>Recepción</th>
-                  <th>Fecha máxima de entrega</th>
+                  <th>Plazo de<br>entrega</th>
+                  <th>Fecha máxima<br>de entrega</th>
                   <th>Estado</th>
-                  <th style="min-width:110px">Acciones</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody id="${LIST_ID}">
@@ -155,15 +229,42 @@ export function renderRegistroOrdenesView() {
 }
 
 function renderEstado(row) {
+  // Misma evidencia que el resolvedor central (no forzar solo orden_estado)
   return renderBadgeEstadoVigenteHtml({
-    orden_estado: row.estado,
+    ...row,
+    orden_id: row.orden_id,
+    orden_estado: row.orden_estado || null,
     codigo_ccp: row.codigo_ccp,
     ccp_activo: true,
     ccp_firmado: row.ccp_firmado,
     en_registro_ordenes: true,
-    estado_cuadro: 'DERIVADO_CCP',
-    solicitud_estado: 'EN_CCP',
+    estado_cuadro: row.estado_cuadro || 'DERIVADO_CCP',
+    solicitud_estado: row.solicitud_estado || 'EN_CCP',
+    enviado_proveedor_at: row.fecha_notificacion || row.fecha_envio_proveedor || row.enviado_proveedor_at,
+    recepcion_estado_global: row.recepcion_estado_global
+      || row.estadoVigente?.codigo
+      || row.estado_vigente
+      || null,
+    recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id || null,
   }, esc);
+}
+
+function shouldShowChecklistBadge(row) {
+  const code = String(
+    row?.estado_vigente
+    || row?.estadoVigente?.codigo
+    || row?.estado
+    || '',
+  ).toUpperCase();
+  // El checklist solo aplica a la preparación de la orden, no al estado global posterior
+  if (!code) return true;
+  if (code.startsWith('RECEPCION_') || code.startsWith('CONFORMIDAD_')
+    || code === 'BIEN_RECIBIDO_ALMACEN' || code === 'EXPEDIENTE_DERIVADO_PAGO'
+    || code === 'ORDEN_NOTIFICADA' || code === 'ORDEN_RECEPCION_CONFIRMADA'
+    || code === 'EN_EJECUCION' || code === 'ORDEN_RESUELTA' || code === 'ORDEN_ANULADA') {
+    return false;
+  }
+  return true;
 }
 
 function renderRow(row) {
@@ -175,24 +276,33 @@ function renderRow(row) {
   const cant = row.cantidad_display || '—';
   const pu = row.precio_unitario_display
     || (row.precio_unitario != null ? fmtMonto(row.precio_unitario) : '—');
+  const tipCod = esc(row.codigo_sigamef_tooltip || row.codigo_sigamef || '');
+  const tipDesc = esc(row.item_descripcion_tooltip || row.item_descripcion || '');
+  const tipEnt = esc(row.entrega_tooltip || '');
+  const checklistHtml = shouldShowChecklistBadge(row)
+    ? ` ${renderChecklistBadge(row.checklist || row)}`
+    : '';
   return `<tr data-rid="${row.requerimiento_id}" data-oid="${row.orden_id || ''}">
-    <td>${esc(row.codigo_ccp || '—')}</td>
+    <td title="${esc(row.codigo_ccp || '')}">${esc(row.codigo_ccp || '—')}</td>
     <td>${row.ccp_firmado ? '<span class="badge bg-success">Sí</span>' : '<span class="badge bg-warning text-dark">No</span>'}</td>
-    <td><strong>${esc(row.requerimiento_codigo)}</strong></td>
-    <td class="small">${esc(row.pedido_sigamef || '—')}</td>
+    <td title="${esc(row.requerimiento_codigo)}"><strong>${esc(row.requerimiento_codigo)}</strong></td>
+    <td title="${esc(row.pedido_sigamef || '')}">${esc(row.pedido_sigamef || '—')}</td>
     <td>${esc(row.proveedor_ruc || '—')}</td>
-    <td class="small">${esc(row.proveedor_razon_social || '—')}</td>
+    <td class="ro-col-wide" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</td>
+    <td title="${tipCod}">${esc(row.codigo_sigamef || '—')}</td>
+    <td class="ro-col-wide" title="${tipDesc}">${esc(row.item_descripcion || '—')}</td>
     <td>${esc(row.tipo || '—')}</td>
     <td class="text-end">${esc(cant)}</td>
-    <td class="text-end">${typeof pu === 'string' && pu.startsWith('Ver') ? `<button type="button" class="btn btn-link btn-sm p-0 ro-ver-items" data-rid="${row.requerimiento_id}">Ver detalle</button>` : esc(pu)}</td>
+    <td class="text-end">${typeof pu === 'string' && pu.startsWith('Ver') ? `<button type="button" class="btn btn-link btn-sm p-0 ro-ver-items" data-rid="${row.requerimiento_id}" style="font-size:9px">Ver detalle</button>` : esc(pu)}</td>
     <td class="text-end">${fmtMonto(row.precio_total)}</td>
     <td>${row.numero_orden ? `${esc(row.tipo_orden || '')} ${esc(row.numero_orden)}` : '—'}</td>
     <td>${fmtFecha(row.fecha_orden)}</td>
-    <td class="text-center">${row.entregas_count || '—'}</td>
-    <td class="small">${fmtFechaHora(row.fecha_envio_proveedor)}</td>
-    <td class="small">${fmtFechaHora(row.fecha_recepcion_confirmada)}</td>
+    <td title="${tipEnt}">${esc(row.entrega_label || '—')}</td>
+    <td>${fmtFecha(row.fecha_notificacion || row.fecha_envio_proveedor)}</td>
+    <td>${fmtFecha(row.fecha_recepcion_confirmada)}</td>
+    <td title="${esc(row.condicion_inicio_label || '')}">${esc(row.plazo_entrega_label || (row.plazo_entrega ? `${row.plazo_entrega} días` : '—'))}</td>
     <td>${fmtFecha(row.fecha_maxima_entrega)}</td>
-    <td>${renderEstado(row)} ${renderChecklistBadge(row.checklist || row)}</td>
+    <td class="ro-wrap">${renderEstado(row)}${checklistHtml}</td>
     ${menu}
   </tr>`;
 }
@@ -243,13 +353,33 @@ async function loadBandeja(opts = {}) {
       tbody.querySelectorAll('.ro-ver-items').forEach((btn) => {
         btn.onclick = async () => {
           try {
+            const row = rowsCache.find((r) => String(r.requerimiento_id) === String(btn.dataset.rid));
+            if (row?.orden_id) {
+              await openExpedienteOrdenModal(row);
+              return;
+            }
             const ctx = await ordenesContratacionService.getContexto(btn.dataset.rid);
             const data = ctx?.data || ctx;
             const lines = (data.items_adjudicados || []).map((it, i) =>
               `${i + 1}. ${it.descripcion} · cant ${it.cantidad} · PU ${fmtMonto(it.precio_unitario)} · ${fmtMonto(it.precio_total)}`);
-            alert(lines.join('\n') || 'Sin ítems');
+            // Modal ligero sin alert
+            const wrap = document.createElement('div');
+            wrap.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
+              <div class="modal-dialog"><div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title">Ítems</h6>
+                <button type="button" class="btn-close" id="roItClose"></button></div>
+                <div class="modal-body" style="font-size:12px;font-family:Arial"><pre class="mb-0" style="white-space:pre-wrap">${esc(lines.join('\n') || 'Sin ítems')}</pre></div>
+              </div></div></div>`;
+            document.body.appendChild(wrap);
+            wrap.querySelector('#roItClose').onclick = () => wrap.remove();
+            wrap.querySelector('.modal').onclick = (ev) => { if (ev.target === wrap.querySelector('.modal')) wrap.remove(); };
           } catch (e) {
-            alert(e.message || 'Error');
+            const wrap = document.createElement('div');
+            wrap.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
+              <div class="modal-dialog"><div class="modal-content"><div class="modal-body text-danger">${esc(e.message || 'Error')}</div>
+              <div class="modal-footer"><button class="btn btn-sm btn-secondary" id="roItErr">Cerrar</button></div></div></div></div>`;
+            document.body.appendChild(wrap);
+            wrap.querySelector('#roItErr').onclick = () => wrap.remove();
           }
         };
       });
@@ -289,7 +419,16 @@ function buildActMap() {
     closeBandejaActionMenus();
     const row = findRow(id);
     if (!row) return;
-    try { await fn(row); } catch (err) { alert(err.message || 'Error en la acción'); }
+    try { await fn(row); } catch (err) {
+      const el = document.createElement('div');
+      el.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
+        <div class="modal-dialog"><div class="modal-content">
+          <div class="modal-body text-danger">${esc(err.message || 'Error en la acción')}</div>
+          <div class="modal-footer"><button type="button" class="btn btn-sm btn-secondary" id="roActErrClose">Cerrar</button></div>
+        </div></div></div>`;
+      document.body.appendChild(el);
+      el.querySelector('#roActErrClose').onclick = () => el.remove();
+    }
   };
   const reload = () => loadBandeja({ silent: true });
 
@@ -340,10 +479,30 @@ function buildActMap() {
   };
 
   return {
+    verExpediente: wrap((row) => openExpedienteOrdenModal(row)),
     adjuntarCcpFirmado: wrap((row) => openAdjuntarCcpFirmadoModal(row, { onDone: afterSave(row) })),
     verCcpFirmado: wrap((row) => openCcpFirmadoViewer(row)),
     eliminarCcpFirmado: wrap(async (row) => {
-      const motivo = prompt('Motivo de eliminación del CCP firmado:');
+      const motivoWrap = document.createElement('div');
+      const motivo = await new Promise((resolve) => {
+        motivoWrap.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
+          <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header"><h6 class="modal-title">Eliminar CCP firmado</h6></div>
+            <div class="modal-body"><label class="form-label">Motivo</label>
+              <textarea class="form-control form-control-sm" id="roMotivoCcp" rows="3"></textarea></div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="roMotivoCancel">Cancelar</button>
+              <button type="button" class="btn btn-sm btn-danger" id="roMotivoOk">Eliminar</button>
+            </div>
+          </div></div></div>`;
+        document.body.appendChild(motivoWrap);
+        motivoWrap.querySelector('#roMotivoCancel').onclick = () => { motivoWrap.remove(); resolve(null); };
+        motivoWrap.querySelector('#roMotivoOk').onclick = () => {
+          const v = motivoWrap.querySelector('#roMotivoCcp').value.trim();
+          motivoWrap.remove();
+          resolve(v || null);
+        };
+      });
       if (!motivo) return;
       await ordenesContratacionService.eliminarCcpFirmado(row.requerimiento_id, motivo);
       await afterSave(row)();
@@ -391,34 +550,39 @@ function buildActMap() {
       downloadPdfBase64((full?.data || full)?.contenido_base64, doc.nombre_archivo);
     }),
     verHistorial: wrap(async (row) => {
+      if (row.requerimiento_id) {
+        await showTrazabilidadModal(row.requerimiento_id);
+        return;
+      }
       if (!row.orden_id) throw new Error('Sin historial de orden (aún no registrada).');
       await openHistorialOrdenModal(row.orden_id);
     }),
     verNotificacion: wrap(async (row) => {
-      const env = await ordenesContratacionService.listEnvios(row.orden_id);
-      const last = (env?.data || [])[0];
-      if (!last) throw new Error('Sin notificaciones');
-      alert(`Notificación #${last.id}\n${fmtFechaHora(last.enviado_at)}\nEstado: ${last.estado}\n${last.url_acceso || ''}`);
+      if (row.orden_id) {
+        await openExpedienteOrdenModal(row);
+        return;
+      }
+      throw new Error('Sin orden');
     }),
-    verConfirmacion: wrap(async (row) => {
-      const det = await ordenesContratacionService.getDetalle(row.orden_id);
-      const d = det?.data || det;
-      alert(d.orden?.recibido_proveedor_at
-        ? `Recepción confirmada: ${fmtFechaHora(d.orden.recibido_proveedor_at)}`
-        : 'Aún no hay confirmación de recepción');
-    }),
-    verFechasMaximas: wrap(async (row) => {
-      const det = await ordenesContratacionService.getDetalle(row.orden_id);
-      const d = det?.data || det;
-      alert((d.entregas || []).map((e) => `${e.descripcion}: máx. ${fmtFecha(e.fecha_maxima)} (${e.dias_plazo} días)`).join('\n') || 'Sin fechas');
-    }),
-    verCronograma: wrap(async (row) => {
-      const det = await ordenesContratacionService.getDetalle(row.orden_id);
-      const d = det?.data || det;
-      alert((d.entregas || []).map((e) => `${e.numero_entrega}. ${e.descripcion} · ${e.dias_plazo} días · ${fmtMonto(e.importe)}`).join('\n') || 'Sin cronograma');
-    }),
+    verConfirmacion: wrap(async (row) => openExpedienteOrdenModal(row)),
+    verFechasMaximas: wrap(async (row) => openExpedienteOrdenModal(row)),
+    verCronograma: wrap(async (row) => openExpedienteOrdenModal(row)),
     derivarEjecucion: wrap(async (row) => {
-      if (!confirm('¿Derivar esta orden a Ejecución?')) return;
+      const ok = await new Promise((resolve) => {
+        const w = document.createElement('div');
+        w.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
+          <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-body">¿Derivar esta orden a Ejecución?</div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="n">No</button>
+              <button type="button" class="btn btn-sm btn-primary" id="y">Sí</button>
+            </div>
+          </div></div></div>`;
+        document.body.appendChild(w);
+        w.querySelector('#n').onclick = () => { w.remove(); resolve(false); };
+        w.querySelector('#y').onclick = () => { w.remove(); resolve(true); };
+      });
+      if (!ok) return;
       await ordenesContratacionService.derivarEjecucion(row.orden_id);
       await reload();
     }),

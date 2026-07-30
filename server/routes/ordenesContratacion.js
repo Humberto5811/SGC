@@ -14,6 +14,7 @@ import {
   actualizarOrden,
   anularOrden,
   getDetalleOrden,
+  getExpedienteOrdenCompleto,
   getOrdenItems,
   adjuntarOrdenFirmada,
   getDocumentoOrden,
@@ -226,6 +227,14 @@ router.get('/:id', async (req, res, next) => {
   try {
     assertRol(req);
     const data = await getDetalleOrden(req.params.id);
+    res.json({ data });
+  } catch (err) { sendLibError(res, err, next); }
+});
+
+router.get('/:id/expediente', async (req, res, next) => {
+  try {
+    assertRol(req);
+    const data = await getExpedienteOrdenCompleto(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
 });

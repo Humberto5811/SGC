@@ -375,6 +375,15 @@ app.use((err, _req, res, _next) => {
   console.error('[api] Error:', err.stack || err);
   const status = err.status || err.statusCode || 500;
   const isProduction = process.env.NODE_ENV === 'production';
+  if (status < 500) {
+    res.status(status).json({
+      error: err.message || 'Error de solicitud',
+      message: err.message || 'Error de solicitud',
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.detail != null ? { detail: err.detail } : (isProduction ? {} : { detail: err.message })),
+    });
+    return;
+  }
   res.status(status).json({
     error: 'Error interno del servidor',
     ...(isProduction ? {} : { detail: err.message }),
