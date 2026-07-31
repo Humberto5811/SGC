@@ -11,11 +11,11 @@ export const COTIZACION_POR_TIPO = {
   },
   Servicios: {
     propuestaTecnica: '06-A',
-    propuestaEconomica: '06-B',
+    propuestaEconomica: '11',
     labelTecnica: 'Anexo 06-A',
-    labelEconomica: 'Anexo 06-B',
+    labelEconomica: 'Anexo 11',
     downloadTecnica: 'downloadAnexo06A',
-    downloadEconomica: 'downloadAnexo06B',
+    downloadEconomica: 'downloadAnexo11',
   },
   Locadores: {
     propuestaTecnica: '06-A',
@@ -29,8 +29,9 @@ export const COTIZACION_POR_TIPO = {
 
 export function normalizeTipoCotizacion(tipo) {
   const t = String(tipo || '').trim();
+  // Locadores antes que Servicios: evita clasificar "Locación de servicios" como Servicios
+  if (/locador|locaci[oó]n/i.test(t)) return 'Locadores';
   if (/servicio/i.test(t)) return 'Servicios';
-  if (/locador/i.test(t)) return 'Locadores';
   return 'Bienes';
 }
 

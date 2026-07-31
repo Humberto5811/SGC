@@ -13,7 +13,8 @@ import {
 import {
   getCotizacionConfig, normalizeTipoCotizacion,
 } from '../../utils/proveedorCotizacionConfig.js';
-import { renderStep1ByTipo, initEntregablesEco } from '../../utils/proveedorCotizacionSteps.js';
+import { renderStep1ByTipo, initEntregablesEco, resolveEntregablesFromWorkspace } from '../../utils/proveedorCotizacionSteps.js';
+import { sumPrecioEntregables } from '../../utils/entregablesCotizacion.js';
 
 const STEP_LABELS = ['Información técnica', 'Documentos técnicos', 'Resumen y envío'];
 
@@ -38,11 +39,15 @@ function cotizacionPresentada(ws) {
   return String(ws?.cotizacion_existente?.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA';
 }
 
+function usesEntregablesEco(tipo) {
+  const t = normalizeTipoCotizacion(tipo);
+  return t === 'Locadores' || t === 'Servicios';
+}
+
 function getMontoTotal() {
   const tipo = normalizeTipoCotizacion(workspace?.solicitud?.tipo);
-  if (tipo === 'Locadores') {
-    return Object.values(formState.entregablesEco || {}).flat()
-      .reduce((a, e) => a + parseNum(e.total), 0);
+  if (usesEntregablesEco(tipo)) {
+    return sumPrecioEntregables(Object.values(formState.entregablesEco || {}).flat());
   }
   return Object.values(formState.precios).reduce((a, p) => a + parseNum(p.total), 0);
 }
@@ -143,15 +148,43 @@ function initFormFromWorkspace(ws) {
     };
   });
 
+  const prevEntregables = prevEco.entregables
+    || prevEco.entregables_cotizados
+    || prevPrecios;
   formState.entregablesEco = initEntregablesEco(
     ws.items,
-    prevEco.entregables || prevPrecios,
+    prevEntregables,
     tipo,
+    ws,
   );
+  // Fallback: cotizaciones Servicios antiguas guardaban precio por ítem (Anexo 06-B)
+  if (usesEntregablesEco(tipo)) {
+    const flat = Object.values(formState.entregablesEco || {}).flat();
+    const hasPrice = flat.some((e) => Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) > 0);
+    if (!hasPrice) {
+      ws.items.forEach((it) => {
+        const p = prevPrecios[it.item_key];
+        const v = Number(p?.total || p?.unitario || 0);
+        if (!(v > 0)) return;
+        const list = formState.entregablesEco[it.item_key] || [];
+        if (list[0]) {
+          list[0].precio = v;
+          list[0].precio_unitario = v;
+          list[0].total = v;
+        }
+      });
+    }
+  }
+  const programados = resolveEntregablesFromWorkspace(ws);
+  const ents0 = Object.values(formState.entregablesEco || {})[0] || programados;
+  const savedPlazos = prevEco.plazos_entregables || prev.plazos_entregables || [];
   formState.extra = {
     plazo_ejecucion: prev.plazo_ejecucion || prevEco.plazo_ejecucion || '',
     forma_pago: prev.forma_pago || prevEco.forma_pago || '',
-    plazos_entregables: prevEco.plazos_entregables || prev.plazos_entregables || ['', '', '', '', '', ''],
+    plazos_entregables: (ents0.length ? ents0 : savedPlazos).map((e, i) => {
+      if (typeof e === 'string') return savedPlazos[i] || e || '';
+      return savedPlazos[i] || e.plazo_texto || '';
+    }),
     firma_nombre: prevEco.firma_nombre || '',
     firma_dni: prevEco.firma_dni || '',
   };
@@ -405,7 +438,7 @@ function collectStep1FromDom() {
 
 function recalcPrecios() {
   const tipo = normalizeTipoCotizacion(workspace?.solicitud?.tipo);
-  if (tipo === 'Locadores') {
+  if (usesEntregablesEco(tipo)) {
     document.querySelectorAll('#provCotWizardBody tr[data-eidx]').forEach((tr) => {
       const iidx = parseInt(tr.dataset.eidx, 10);
       const enidx = parseInt(tr.dataset.enidx, 10);
@@ -415,10 +448,14 @@ function recalcPrecios() {
       const total = unit;
       if (!formState.entregablesEco[it.item_key]) formState.entregablesEco[it.item_key] = [];
       if (!formState.entregablesEco[it.item_key][enidx]) {
-        formState.entregablesEco[it.item_key][enidx] = { nro: enidx + 1, um: 'Servicio' };
+        formState.entregablesEco[it.item_key][enidx] = {
+          nro: enidx + 1, numero: enidx + 1, um: 'Servicio',
+        };
       }
+      const prev = formState.entregablesEco[it.item_key][enidx];
       formState.entregablesEco[it.item_key][enidx] = {
-        ...formState.entregablesEco[it.item_key][enidx],
+        ...prev,
+        precio: unit,
         precio_unitario: unit,
         total,
       };
@@ -431,7 +468,7 @@ function recalcPrecios() {
       if (!tr) return;
       const unit = parseNum(tr.querySelector('.prov-p-unit')?.value);
       const cant = parseNum(it.cantidad ?? 1);
-      const total = unit * (tipo === 'Servicios' ? 1 : cant);
+      const total = unit * cant;
       formState.precios[it.item_key] = { unitario: unit, total };
       const totalEl = tr.querySelector('.prov-p-total');
       if (totalEl) totalEl.value = formatPriceDisplay(total);
@@ -481,7 +518,7 @@ function validateStep1() {
     Object.entries(datosReq).forEach(([k, lbl]) => {
       if (!String(formState.datos[k] ?? '').trim()) errors.push(`${config.labelEconomica}: falta ${lbl}`);
     });
-  } else if (tipo === 'Servicios') {
+  } else if (tipo === 'Servicios' || tipo === 'Locadores') {
     if (!String(formState.extra.plazo_ejecucion || '').trim()) errors.push(`${config.labelTecnica}: falta plazo de ejecución`);
     if (!String(formState.extra.forma_pago || '').trim()) errors.push(`${config.labelTecnica}: falta forma de pago`);
     const datos06A = {
@@ -492,27 +529,15 @@ function validateStep1() {
     Object.entries(datos06A).forEach(([k, lbl]) => {
       if (!String(formState.datos[k] ?? '').trim()) errors.push(`${config.labelTecnica}: falta ${lbl}`);
     });
-    workspace.items.forEach((it, idx) => {
-      const p = formState.precios[it.item_key];
-      if (!p?.unitario || p.unitario <= 0) errors.push(`Ítem ${idx + 1}: ingrese precio unitario en ${config.labelEconomica}`);
-    });
-  } else {
-    if (!String(formState.extra.plazo_ejecucion || '').trim()) errors.push(`${config.labelTecnica}: falta plazo de ejecución`);
-    const datos06A = {
-      razon_social: 'Razón Social', ruc: 'Nº R.U.C.', domicilio_fiscal: 'Domicilio fiscal',
-      representante_legal: 'Datos del Representante Legal', persona_contacto: 'Persona de Contacto',
-      celular: 'Teléfono y/o Celular', correo: 'Correo Electrónico',
-    };
-    Object.entries(datos06A).forEach(([k, lbl]) => {
-      if (!String(formState.datos[k] ?? '').trim()) errors.push(`${config.labelTecnica}: falta ${lbl}`);
-    });
-    let hasPrecio = false;
-    Object.values(formState.entregablesEco || {}).flat().forEach((e) => {
-      if (e.precio_unitario > 0) hasPrecio = true;
-    });
-    if (!hasPrecio) errors.push(`${config.labelEconomica}: ingrese al menos un precio unitario por entregable`);
-    if (!String(formState.extra.firma_nombre || '').trim()) errors.push(`${config.labelEconomica}: falta nombre para firma`);
-    if (!String(formState.extra.firma_dni || '').trim()) errors.push(`${config.labelEconomica}: falta DNI`);
+    const ents = Object.values(formState.entregablesEco || {}).flat();
+    if (!ents.length) {
+      errors.push(`${config.labelEconomica}: no hay entregables programados en el TDR`);
+    } else {
+      ents.forEach((e, i) => {
+        const precio = Number(e.precio ?? e.precio_unitario ?? e.total ?? 0);
+        if (!(precio > 0)) errors.push(`${config.labelEconomica}: falta precio del entregable ${e.numero || i + 1}`);
+      });
+    }
   }
   return errors;
 }
@@ -569,7 +594,6 @@ function bindWizardInteractions() {
       const p = dlPayload();
       const tipo = normalizeTipoCotizacion(workspace.solicitud?.tipo);
       if (tipo === 'Bienes') downloadAnexo05B(p);
-      else if (tipo === 'Servicios') downloadAnexo06B(p);
       else downloadAnexo11(p);
     } catch (e) { alert(e.message); }
   });
@@ -647,19 +671,45 @@ function buildPayload() {
         unidad_medida: it.unidad_medida || 'UND',
       })),
     };
-  const propuestaEconomica = tipo === 'Bienes' || tipo === 'Servicios'
-    ? { precios: formState.precios, monto, moneda: 'PEN', datos_proveedor: formState.datos }
-    : {
-      entregables: formState.entregablesEco,
-      plazo_ejecucion: formState.extra.plazo_ejecucion,
-      forma_pago: formState.extra.forma_pago,
-      plazos_entregables: formState.extra.plazos_entregables,
-      firma_nombre: formState.extra.firma_nombre,
-      firma_dni: formState.extra.firma_dni,
+
+  let propuestaEconomica;
+  if (tipo === 'Bienes') {
+    propuestaEconomica = {
+      precios: formState.precios,
       monto,
+      precio_total: monto,
       moneda: 'PEN',
       datos_proveedor: formState.datos,
     };
+  } else {
+    const flat = Object.values(formState.entregablesEco || {}).flat();
+    const entregables_cotizados = flat.map((e, i) => ({
+      id_fuente: e.id_fuente ?? e.nro ?? e.numero ?? i + 1,
+      numero: e.numero ?? e.nro ?? i + 1,
+      tipo_origen: e.tipo_origen || (tipo === 'Servicios' ? 'SERVICIO' : 'LOCACION'),
+      nombre: e.nombre || `Entregable ${i + 1}`,
+      descripcion: e.descripcion || '',
+      plazo_texto: (formState.extra.plazos_entregables || [])[i] || e.plazo_texto || '',
+      cantidad: e.cantidad ?? 1,
+      unidad_medida: e.unidad_medida || e.um || 'Servicio',
+      precio: Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) || 0,
+    }));
+    propuestaEconomica = {
+      // Compatibilidad con borradores previos
+      entregables: formState.entregablesEco,
+      entregables_cotizados,
+      precios: formState.precios,
+      plazo_ejecucion: formState.extra.plazo_ejecucion,
+      forma_pago: formState.extra.forma_pago,
+      plazos_entregables: formState.extra.plazos_entregables,
+      firma_nombre: formState.datos.representante_legal || formState.extra.firma_nombre || '',
+      firma_dni: formState.extra.firma_dni || '',
+      monto,
+      precio_total: monto,
+      moneda: 'PEN',
+      datos_proveedor: formState.datos,
+    };
+  }
   return {
     solicitud_id: workspace.solicitud.id,
     propuesta_tecnica: propuestaTecnica,

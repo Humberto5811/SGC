@@ -5,8 +5,10 @@ import {
   IMPORTANTE_ANEXO11, CONFIRMACION_ANEXO11, GLOSA_LOCADORES_FORMA_PAGO,
   DECLARO_CONOCER_ANEXO11, GLOSA_PENALIDAD_ANEXO11, FORMULA_PENALIDAD_ANEXO11,
   FORMULA_F_ANEXO11, CIERRE_PENALIDAD_ANEXO11, NOTA_COTIZACION_ANEXO11,
-  PLAZOS_ENTREGABLES_LABELS, MAX_ENTREGABLES_LOCADOR, cantidadPorTipo,
+  cantidadPorTipo,
 } from './proveedorCotizacionConfig.js';
+import { sumPrecioEntregables } from './entregablesCotizacion.js';
+import { TZ_LIMA } from './dateTimeLima.js';
 
 const MARGIN = 54;
 const PAGE_W = 612;
@@ -23,6 +25,43 @@ function ensureJsPdf() {
 
 export function money(n) {
   return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Fecha larga en America/Lima p.ej. "Lima, 24 de julio de 2026" */
+export function formatFechaCartaLima(valor = new Date()) {
+  const d = valor instanceof Date ? valor : new Date(valor || Date.now());
+  if (Number.isNaN(d.getTime())) return 'Lima,';
+  try {
+    const fmt = new Intl.DateTimeFormat('es-PE', {
+      timeZone: TZ_LIMA,
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    return `Lima, ${fmt.format(d)}`;
+  } catch (_) {
+    return 'Lima,';
+  }
+}
+
+/** Filas Anexo 11 a partir de entregables reales (sin pads fijos). */
+export function buildAnexo11EntregablesRows(entregables = [], servicioDesc = '') {
+  const list = Array.isArray(entregables) ? entregables.filter((e) => e && (
+    String(e.nombre || e.descripcion || e.plazo_texto || e.plazo || '').trim() !== ''
+    || Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) > 0
+  )) : [];
+  return list.map((e, idx) => {
+    const precio = Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) || 0;
+    const desc = String(e.nombre || e.descripcion || (idx === 0 ? servicioDesc : '') || '').trim();
+    return {
+      nro: e.numero ?? e.nro ?? idx + 1,
+      descripcion: desc,
+      plazo: String(e.plazo_texto || e.plazo || '').trim(),
+      um: e.um || e.unidad_medida || 'Servicio',
+      precio,
+      total: precio,
+    };
+  });
 }
 
 function appendWrappedText(doc, text, x, y, maxWidth, lineHeight = 11) {
@@ -64,7 +103,7 @@ function renderTituloAnexo(doc, num, linea1, linea2, y0 = 36) {
 function renderCartaServicios(doc, asuntoServicio, y) {
   y = ensureSpace(doc, y, 90);
   doc.setFontSize(10);
-  doc.text('Lima,         de                     del  20__', MARGIN, y);
+  doc.text(formatFechaCartaLima(), MARGIN, y);
   y += 15;
   doc.text('Señores:', MARGIN, y);
   y += 13;
@@ -109,13 +148,26 @@ function renderDatosProveedor06A(doc, datos, startY) {
   return y + 6;
 }
 
-function renderFirmaRepresentante(doc, y) {
-  y = ensureSpace(doc, y, 50);
+function renderFirmaRepresentante(doc, y, datos = {}) {
+  y = ensureSpace(doc, y, 100);
   doc.setFontSize(9);
+  // Espacio equivalente a ~4 líneas para firma manuscrita
+  y += 48;
   doc.text('___________________________', MARGIN, y);
   y += 14;
   doc.text('Firma del Representante Legal', MARGIN, y);
-  return y + 10;
+  y += 14;
+  const nombre = String(datos.representante_legal || '').trim();
+  const dni = String(datos.firma_representante || datos.dni || '').trim();
+  if (nombre) {
+    doc.text(nombre, MARGIN, y);
+    y += 12;
+  }
+  if (dni) {
+    doc.text(`DNI: ${dni}`, MARGIN, y);
+    y += 12;
+  }
+  return y + 6;
 }
 
 function appendDatosProveedor(doc, datos, startY) {
@@ -263,7 +315,10 @@ export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, lo
     startY: y,
     head: [['Ítem', 'Nº REQ', descCol, 'Cantidad', 'Unidad de medida']],
     body,
-    styles: { fontSize: 8, cellPadding: 3 },
+    styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak', cellWidth: 'wrap' },
+    columnStyles: {
+      2: { cellWidth: 220 },
+    },
     headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
     margin: { left: MARGIN, right: MARGIN },
   });
@@ -273,17 +328,23 @@ export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, lo
   doc.setFontSize(9);
   y = appendWrappedText(doc, TEXTO_CONFIRMACION_TR_06A, MARGIN, y, CONTENT_W) + 8;
 
-  y = ensureSpace(doc, y, 30);
+  y = ensureSpace(doc, y, 40);
   doc.setFont(undefined, 'bold');
   doc.text('Plazo de ejecución:', MARGIN, y);
   doc.setFont(undefined, 'normal');
-  doc.text(String(extra?.plazo_ejecucion || '[Debe indicar el plazo de ejecución ofertado]'), MARGIN + 110, y);
-  y += 14;
+  y = appendWrappedText(
+    doc,
+    String(extra?.plazo_ejecucion || '[Debe indicar el plazo de ejecución ofertado]'),
+    MARGIN + 110, y, CONTENT_W - 110, 11,
+  ) + 4;
   doc.setFont(undefined, 'bold');
   doc.text('Forma de pago:', MARGIN, y);
   doc.setFont(undefined, 'normal');
-  doc.text(String(extra?.forma_pago || 'De acuerdo a lo indicado en al Requerimiento.'), MARGIN + 80, y);
-  y += 18;
+  y = appendWrappedText(
+    doc,
+    String(extra?.forma_pago || 'De acuerdo a lo indicado en al Requerimiento.'),
+    MARGIN + 80, y, CONTENT_W - 80, 11,
+  ) + 10;
 
   y = renderDatosProveedor06A(doc, {
     razon_social: datos?.razon_social || proveedor?.razon_social,
@@ -298,7 +359,10 @@ export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, lo
   y = ensureSpace(doc, y, 60);
   doc.setFontSize(8);
   y = appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO_06, MARGIN, y, CONTENT_W) + 10;
-  renderFirmaRepresentante(doc, y);
+  renderFirmaRepresentante(doc, y, {
+    representante_legal: datos?.representante_legal,
+    firma_representante: datos?.firma_representante,
+  });
 
   const codigo = solicitud?.codigo || 'SC';
   doc.save(`Anexo_06-A_${codigo.replace(/\s+/g, '_')}.pdf`);
@@ -374,44 +438,45 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
   );
   y -= 4;
   doc.setFontSize(10);
+  doc.text(formatFechaCartaLima(), MARGIN, y);
+  y += 13;
   doc.text('Instituto Nacional de Salud', MARGIN, y);
   y += 13;
   doc.text('Presente. -', MARGIN, y);
   y += 15;
   doc.setFont(undefined, 'bold');
-  doc.text(`SERVICIO: ${servicio}`, MARGIN, y);
+  y = appendWrappedText(doc, `SERVICIO: ${servicio}`, MARGIN, y, CONTENT_W, 11) + 4;
   doc.setFont(undefined, 'normal');
-  y += 16;
   y = appendWrappedText(
     doc,
     'Por medio de la presente, hago de su conocimiento mi propuesta económica, de acuerdo a los términos de referencia solicitados por la Unidad de Adquisiciones, conforme al siguiente detalle:',
     MARGIN, y, CONTENT_W,
   ) + 8;
 
-  const ents = entregablesEco?.[it.item_key] || Array.from({ length: MAX_ENTREGABLES_LOCADOR }, (_, i) => ({
-    nro: i + 1, um: 'Servicio', precio_unitario: 0, total: 0,
-  }));
-  let total = 0;
-  const body = ents.slice(0, MAX_ENTREGABLES_LOCADOR).map((e, idx) => {
-    total += Number(e.total || 0);
-    return [
-      String(idx + 1),
-      idx === 0 ? String(servicio) : '',
-      String(e.nro ?? idx + 1),
-      e.um || 'Servicio',
-      money(e.precio_unitario),
-      money(e.total),
-    ];
-  });
+  const rawEnts = entregablesEco?.[it.item_key]
+    || (Array.isArray(entregablesEco) ? entregablesEco : null)
+    || entregablesEco?.entregables_cotizados
+    || [];
+  const rows = buildAnexo11EntregablesRows(rawEnts, servicio);
+  const total = sumPrecioEntregables(rows);
+  const body = rows.map((e) => [
+    String(e.nro),
+    e.descripcion,
+    e.um,
+    money(e.precio),
+  ]);
 
   doc.autoTable({
     startY: y,
     head: [[
-      'N°', 'Descripción del Servicio', 'N° de entregables', 'Unidad de medida',
-      'Precio Unitario por cada entregable S/\n(Inc. IGV)', 'Precio Total S/\n(Inc. IGV)',
+      'N°', 'Entregable / Descripción', 'Unidad de medida',
+      'Precio S/\n(Inc. IGV)',
     ]],
-    body,
-    styles: { fontSize: 7.5, cellPadding: 3 },
+    body: body.length ? body : [['—', 'Sin entregables programados', '—', '0.00']],
+    styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak', valign: 'top' },
+    columnStyles: {
+      1: { cellWidth: 260 },
+    },
     headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
     margin: { left: MARGIN, right: MARGIN },
   });
@@ -419,7 +484,7 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
   y = doc.lastAutoTable.finalY + 10;
   doc.setFontSize(9);
   doc.setFont(undefined, 'bold');
-  doc.text(`Precio Total S/ (Incluido IGV): ${money(total)}`, MARGIN, y);
+  doc.text(`Precio total de la propuesta: S/ ${money(total)}`, MARGIN, y);
   doc.setFont(undefined, 'normal');
   y += 16;
 
@@ -440,12 +505,14 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
   doc.setFont(undefined, 'normal');
   y += 12;
   const plazos = extra?.plazos_entregables || [];
-  PLAZOS_ENTREGABLES_LABELS.forEach((lbl, i) => {
-    const val = plazos[i] || '…. días calendario contados a partir del día de notificada la o.s.';
-    y = ensureSpace(doc, y, 14);
-    doc.text(`-${lbl} ${val}`, MARGIN + 8, y);
-    y += 11;
-  });
+  if (rows.length) {
+    rows.forEach((e, i) => {
+      const label = e.descripcion || `Entregable ${e.nro}`;
+      const val = plazos[i] || e.plazo || '…. días calendario contados a partir del día de notificada la o.s.';
+      y = ensureSpace(doc, y, 28);
+      y = appendWrappedText(doc, `-${label}: ${val}`, MARGIN + 8, y, CONTENT_W - 8, 11) + 2;
+    });
+  }
   y += 4;
   y = appendWrappedText(doc, GLOSA_LOCADORES_FORMA_PAGO, MARGIN, y, CONTENT_W) + 6;
   y = appendWrappedText(doc, DECLARO_CONOCER_ANEXO11, MARGIN, y, CONTENT_W) + 6;
@@ -456,19 +523,18 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
   y += 11;
   y = appendWrappedText(doc, CIERRE_PENALIDAD_ANEXO11, MARGIN, y, CONTENT_W) + 10;
 
-  doc.text('Lima,   de        de 20…', MARGIN, y);
+  doc.text(formatFechaCartaLima(), MARGIN, y);
   y += 14;
-  doc.text(NOTA_COTIZACION_ANEXO11, MARGIN, y);
-  y += 20;
-  doc.text(`Firma: ${extra?.firma_nombre || ''}`, MARGIN, y);
-  y += 13;
-  doc.text(`Nombres completos: ${extra?.firma_nombre || datos?.representante_legal || ''}`, MARGIN, y);
-  y += 13;
-  doc.text(`DNI: ${extra?.firma_dni || ''}`, MARGIN, y);
+  y = appendWrappedText(doc, NOTA_COTIZACION_ANEXO11, MARGIN, y, CONTENT_W) + 8;
+  renderFirmaRepresentante(doc, y, {
+    representante_legal: datos?.representante_legal || extra?.firma_nombre || '',
+    firma_representante: datos?.firma_representante || extra?.firma_dni || '',
+  });
 
   const codigo = solicitud?.codigo || 'SC';
   doc.save(`Anexo_11_${codigo.replace(/\s+/g, '_')}.pdf`);
 }
+
 
 export function readUploadFile(file) {
   return new Promise((resolve, reject) => {

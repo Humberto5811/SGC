@@ -7,6 +7,33 @@ import {
 } from './cronogramaDatetime.js';
 import { enrichDetalleItemsCentro, resolveCentroDisplay } from './centroDisplay.js';
 
+function extractEntregablesSource(payload, tipo) {
+  let p = payload;
+  if (typeof p === 'string') {
+    try { p = JSON.parse(p || '{}'); } catch (_) { p = {}; }
+  }
+  if (!p || typeof p !== 'object') p = {};
+  const t = String(tipo || '').toLowerCase();
+  if (/locad|locaci/.test(t)) {
+    return {
+      tipo: 'Locadores',
+      locadorInformacion: Array.isArray(p.locadorInformacion) ? p.locadorInformacion : (Array.isArray(p.plazos) ? p.plazos : []),
+      locadorEntregas: Array.isArray(p.locadorEntregas) ? p.locadorEntregas : [],
+    };
+  }
+  if (/servicio/.test(t)) {
+    return {
+      tipo: 'Servicios',
+      servicioInformacion: Array.isArray(p.servicioInformacion) ? p.servicioInformacion : [],
+      servicioEntregas: Array.isArray(p.servicioEntregas) ? p.servicioEntregas : [],
+    };
+  }
+  return {
+    tipo: 'Bienes',
+    entregas: Array.isArray(p.entregas) ? p.entregas : [],
+  };
+}
+
 function parseJson(val, fallback = []) {
   if (Array.isArray(val)) return val;
   if (val && typeof val === 'object') return val;
@@ -226,7 +253,7 @@ export function buildDocumentosConvocatoria(solicitud, requerimientoIds, adjunto
 
 async function loadRequerimientosCentroMap(solicitudId) {
   const { rows } = await query(`
-    SELECT r.id, r.codigo, r.denominacion, r.area, r.cmn, r.responsable, r.payload,
+    SELECT r.id, r.codigo, r.tipo, r.denominacion, r.area, r.cmn, r.responsable, r.payload,
       COALESCE(c.nombre, '') AS catalogo_centro_nombre,
       COALESCE(c.codigo, '') AS catalogo_centro_codigo,
       COALESCE(p2.centro, '') AS pedido_centro
@@ -291,19 +318,38 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
 
 export async function getCotizacionWorkspace(proveedorId, solicitudId) {
   const acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
-  const { map: reqById } = await loadRequerimientosCentroMap(solicitudId);
+  const { rows: reqRows, map: reqById } = await loadRequerimientosCentroMap(solicitudId);
   const items = enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById);
   if (!items.length) throw new Error('La solicitud no tiene ítems configurados');
 
   const reqIds = [...new Set(items.map((it) => it.requerimiento_id).filter(Boolean))];
   const adjuntosMap = await loadAdjuntosPorRequerimiento(reqIds);
+  const tipoSol = acceso.tipo || '';
 
-  const itemsConDocs = items.map((it, idx) => ({
-    ...it,
-    item_key: `${it.requerimiento_id}-${it.item_index ?? idx}`,
-    unidad_medida: it.unidad_medida || it.um || 'UND',
-    documentos_tecnicos: buildDocumentosPorItem(it, adjuntosMap),
-  }));
+  const reqMetaById = {};
+  reqRows.forEach((r) => {
+    const tipoReq = r.tipo || tipoSol;
+    reqMetaById[r.id] = {
+      id: r.id,
+      codigo: r.codigo,
+      tipo: tipoReq,
+      entregables_source: extractEntregablesSource(r.payload, tipoReq || tipoSol),
+    };
+  });
+
+  const itemsConDocs = items.map((it, idx) => {
+    const meta = reqMetaById[it.requerimiento_id] || {};
+    return {
+      ...it,
+      item_key: `${it.requerimiento_id}-${it.item_index ?? idx}`,
+      unidad_medida: it.unidad_medida || it.um || 'UND',
+      documentos_tecnicos: buildDocumentosPorItem(it, adjuntosMap),
+      entregables_source: meta.entregables_source || extractEntregablesSource({}, tipoSol),
+    };
+  });
+
+  // Fuentes agregadas para el normalizador del portal (FE)
+  const entregables_sources = itemsConDocs.map((it) => it.entregables_source).filter(Boolean);
 
   const { rows: cotRows } = await query(`
     SELECT * FROM cotizaciones_proveedor
@@ -331,6 +377,7 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
       requisitos_tecnicos: parseJson(acceso.requisitos_tecnicos),
     },
     items: itemsConDocs,
+    entregables_sources,
     cotizacion_existente: cotRows[0] || null,
     proveedor: provRows[0] || null,
     convocatoria_cerrada: isConvocatoriaCerrada({
