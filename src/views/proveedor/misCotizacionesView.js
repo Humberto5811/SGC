@@ -3,6 +3,8 @@ import {
   esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
   PROVEEDOR_ROUTES, cleanupModalBackdrop, getProveedorSession, renderCronogramaCard,
 } from '../../utils/proveedorShared.js';
+import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
+import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
 import { renderDocumentoLista, bindDocumentoActions, attachSolicitudId } from '../../utils/proveedorDocumentos.js';
 import {
   downloadAnexo05A, downloadAnexo05B, downloadAnexo06A, downloadAnexo06B, downloadAnexo11,
@@ -682,20 +684,25 @@ async function loadCotizacionesList() {
   cont.innerHTML = `
     <table class="table table-sm table-bordered mb-0">
       <thead class="table-light"><tr>
-        <th>Solicitud</th><th>Estado</th><th>Validación</th><th>Fecha envío</th><th>Acciones</th>
+        <th>Solicitud</th><th>N° Inv.</th><th>Estado</th><th>Plazo</th><th>Fecha invitación</th><th>Acciones</th>
       </tr></thead>
-      <tbody>${rows.map((c) => `
-        <tr>
+      <tbody>${rows.map((c) => {
+        const presentada = String(c.cotizacion_estado || c.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA';
+        const puede = c.convocatoria_cerrada === false || presentada;
+        return `<tr>
           <td><strong>${esc(c.solicitud_codigo)}</strong> — ${esc(c.denominacion || c.objeto || '')}</td>
+          <td class="text-center">${esc(c.nro_invitacion ?? '—')}</td>
           <td>${esc(c.estado_participacion || c.estado || '—')}</td>
-          <td>${esc(c.validacion_estado || 'Pendiente')}</td>
-          <td class="small">${fmtDt(c.fecha_presentacion || c.created_at)}</td>
+          <td class="small">${esc(formatCronogramaDisplay(c.cotizaciones_fin))}</td>
+          <td class="small">${esc(formatDateTimeLima(c.fecha_envio || c.fecha_presentacion))}</td>
           <td class="text-nowrap">
-            <button type="button" class="btn btn-sm btn-outline-primary prov-cot-ver" data-id="${c.solicitud_id}">
-              ${String(c.cotizacion_estado || c.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA' ? 'Ver' : 'Ver / Editar'}
+            <button type="button" class="btn btn-sm btn-outline-primary prov-cot-ver" data-id="${c.solicitud_id}"
+              ${puede ? '' : 'disabled title="Convocatoria cerrada"'}>
+              ${presentada ? 'Ver' : (c.cotizacion_estado === 'BORRADOR' ? 'Ver / Editar' : 'Presentar cotización')}
             </button>
           </td>
-        </tr>`).join('')}</tbody>
+        </tr>`;
+      }).join('')}</tbody>
     </table>`;
   cont.querySelectorAll('.prov-cot-ver').forEach((btn) => {
     btn.addEventListener('click', () => openWizardFor(parseInt(btn.dataset.id, 10)));
@@ -760,7 +767,13 @@ async function openWizard() {
     initFormFromWorkspace(resp);
     setWizardMode(true);
     const modo = isReadonly ? ' (solo lectura)' : '';
-    document.getElementById('provCotWizardTitle').textContent = `Presentar cotización — ${resp.solicitud.codigo}${modo}`;
+    const invMeta = resp.invitacion_vigente;
+    const nro = invMeta?.nro_invitacion ? ` · N° Inv. ${invMeta.nro_invitacion}` : '';
+    const plazo = resp.solicitud?.cotizaciones_fin
+      ? ` · Plazo hasta ${formatCronogramaDisplay(resp.solicitud.cotizaciones_fin)}`
+      : '';
+    document.getElementById('provCotWizardTitle').textContent =
+      `Presentar cotización — ${resp.solicitud.codigo}${nro}${plazo}${modo}`;
     renderWizardStep();
   } catch (err) { alert(err.message); }
 }

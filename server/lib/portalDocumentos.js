@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
 import {
   CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
+  INVITACION_VIGENTE_ORDER_SQL,
 } from './cronogramaDatetime.js';
 import { enrichDetalleItemsCentro, resolveCentroDisplay } from './centroDisplay.js';
 
@@ -14,12 +15,23 @@ function parseJson(val, fallback = []) {
 
 export async function assertAccesoSolicitud(proveedorId, solicitudId) {
   const { rows } = await query(`
-    SELECT ip.*, sc.id, sc.codigo, sc.objeto, sc.denominacion, sc.estado, sc.tipo,
+    SELECT
+      ip.id AS invitacion_id,
+      ip.nro_invitacion,
+      ip.fecha_envio,
+      ip.estado AS estado_invitacion,
+      ip.token_acceso,
+      ip.proveedor_id,
+      ip.requerimiento_id,
+      sc.id, sc.codigo, sc.objeto, sc.denominacion, sc.estado, sc.tipo,
+      sc.estado AS solicitud_estado,
       sc.tipo_evaluacion, sc.docs_solicitados, sc.requisitos_tecnicos, sc.detalle_items,
       ${CRONOGRAMA_SELECT_SQL}
     FROM invitacion_proveedores ip
     JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
     WHERE ip.proveedor_id = $1 AND ip.solicitud_id = $2
+    ORDER BY ${INVITACION_VIGENTE_ORDER_SQL}
+    LIMIT 1
   `, [proveedorId, solicitudId]);
   if (!rows.length) throw new Error('Sin acceso a esta convocatoria');
   return normalizeCronogramaRow(rows[0]);
@@ -321,7 +333,15 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
     items: itemsConDocs,
     cotizacion_existente: cotRows[0] || null,
     proveedor: provRows[0] || null,
-    convocatoria_cerrada: isConvocatoriaCerrada(acceso),
+    convocatoria_cerrada: isConvocatoriaCerrada({
+      ...acceso,
+      solicitud_estado: acceso.solicitud_estado || acceso.estado,
+    }),
+    invitacion_vigente: {
+      id: acceso.invitacion_id,
+      nro_invitacion: acceso.nro_invitacion ?? 1,
+      fecha_envio: acceso.fecha_envio || null,
+    },
   };
 }
 
