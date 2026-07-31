@@ -7,6 +7,7 @@
  */
 import {
   normalizeEstadoCode,
+  normalizeEstadoCuadroCode,
   getEstadoDef,
   getPrioridad,
   getLabelEstado,
@@ -18,6 +19,7 @@ import {
 
 export {
   normalizeEstadoCode,
+  normalizeEstadoCuadroCode,
   getEstadoDef,
   getPrioridad,
   getLabelEstado,
@@ -71,12 +73,15 @@ export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
   FIRMADO_COORDINADOR: 'C.C. en Coordinación CM',
   OBSERVADO_DEC: 'C.C. en DEC - Observado',
   PENDIENTE_DEC: 'C.C. en DEC',
+  // APROBADO_DEC como código de revisión de cuadro (contexto estado_cuadro)
   APROBADO_DEC: 'C.C. aprobado',
   PENDIENTE_CCP: 'C.C. aprobado',
   FIRMADO: 'C.C. aprobado',
   CUADRO_EN_COORDINACION_CM: 'C.C. en Coordinación CM',
   CUADRO_EN_DEC: 'C.C. en DEC',
   CUADRO_COMPARATIVO_APROBADO: 'C.C. aprobado',
+  REQUERIMIENTO_APROBADO_DEC: 'Aprobado por DEC',
+
   CUADRO_COMPARATIVO_GENERADO: 'C.C. generado',
   DERIVADO_CCP: 'Derivado a CCP',
   ENVIADA_OPPM: 'Solicitud enviada a OPPM',
@@ -95,11 +100,11 @@ export const ESTADOS_CUADRO_VIGENTE_LABEL = Object.freeze({
 });
 
 export function normalizeEstadoCuadroVigente(raw) {
-  return normalizeEstadoCode(raw);
+  return normalizeEstadoCuadroCode(raw);
 }
 
 export function prioridadEstadoCuadro(code) {
-  return getPrioridad(code);
+  return getPrioridad(normalizeEstadoCuadroCode(code) || code);
 }
 
 export function labelEstadoCuadroVigente(code, opts = {}) {
@@ -109,7 +114,8 @@ export function labelEstadoCuadroVigente(code, opts = {}) {
     return 'C.C. en Coordinación CM - Observado';
   }
   if (raw === 'OBSERVADO_DEC') return 'C.C. en DEC - Observado';
-  const e = normalizeEstadoCode(code);
+  // Dominio cuadro: APROBADO_DEC (DB) → C.C. aprobado; no el alias post-DEC de requerimiento
+  const e = normalizeEstadoCuadroCode(code) || normalizeEstadoCode(code);
   const tieneRespuesta = !!(opts.subsanado
     || String(opts.respuesta_observaciones || opts.respuesta || '').trim());
   if (tieneRespuesta && (e === 'CUADRO_EN_COORDINACION_CM' || e === 'CUADRO_EN_DEC')) {
@@ -117,7 +123,7 @@ export function labelEstadoCuadroVigente(code, opts = {}) {
   }
   const def = getEstadoDef(e);
   if (def) return def.label;
-  return ESTADOS_CUADRO_VIGENTE_LABEL[e] || e || 'C.C. en elaboración';
+  return ESTADOS_CUADRO_VIGENTE_LABEL[e] || ESTADOS_CUADRO_VIGENTE_LABEL[raw] || e || 'C.C. en elaboración';
 }
 
 /** True si el valor es evidencia real (no solo existencia de campo). */
@@ -203,8 +209,8 @@ export function normalizeEstadoFlags(row = {}, opts = {}) {
     cuadroEnDec: !!(o.cuadroEnDec
       || normalizeEstadoCode(r.estado_cuadro || '') === 'CUADRO_EN_DEC'),
     cuadroAprobado: !!(o.cuadroAprobado
-      || ['CUADRO_COMPARATIVO_APROBADO', 'APROBADO_DEC', 'PENDIENTE_CCP', 'FIRMADO']
-        .includes(normalizeEstadoCode(r.estado_cuadro || r.cuadro_estado || ''))),
+      || normalizeEstadoCuadroCode(r.estado_cuadro || r.cuadro_estado || '')
+        === 'CUADRO_COMPARATIVO_APROBADO'),
     ccpRegistrada,
     ordenRegistrada,
     ordenNotificada,
@@ -268,11 +274,11 @@ function composeLabel(codigo, situacion) {
   return base;
 }
 
-function pickBestByPriority(codes) {
+function pickBestByPriority(codes, { normalize = normalizeEstadoCode } = {}) {
   let best = '';
   let bestPrio = -1;
   for (const raw of codes) {
-    const c = normalizeEstadoCode(raw);
+    const c = normalize(raw);
     if (!c) continue;
     if (c === 'ANULADO' || c === 'ORDEN_ANULADA') {
       // Anulado solo gana si no hay nada más; prioridad baja en catálogo
@@ -288,6 +294,11 @@ function pickBestByPriority(codes) {
   return best;
 }
 
+/** Solo códigos del dominio cuadro (estado_cuadro / revisión). */
+function pickBestEstadoCuadro(codes) {
+  return pickBestByPriority(codes, { normalize: normalizeEstadoCuadroCode });
+}
+
 /**
  * RC118 — mapea etapa de workflow (trazabilidad) → estado canónico.
  * Evita el fallback histórico a PENDIENTE_ELABORAR (“C.C. en elaboración”)
@@ -296,6 +307,15 @@ function pickBestByPriority(codes) {
 function resolveEstadoFromWorkflowEtapa(workflowEtapa, row = {}) {
   const etapa = String(workflowEtapa || '').toUpperCase();
   const estadoNegocio = String(row.estado || '').trim();
+  const hints = [
+    estadoNegocio,
+    row.estado_codigo,
+    row.estado_vigente,
+    row.estadoVigente?.codigo,
+  ].filter(Boolean).join(' ');
+  const esPostDec = /aprobado\s*dec/i.test(hints)
+    || /\bAPROBADO_DEC\b/i.test(hints)
+    || /\bREQUERIMIENTO_APROBADO_DEC\b/i.test(hints);
   switch (etapa) {
     case 'REGISTRADO':
       return 'REQUERIMIENTO_REGISTRADO';
@@ -305,10 +325,12 @@ function resolveEstadoFromWorkflowEtapa(workflowEtapa, row = {}) {
       }
       return 'REQUERIMIENTO_EN_EVALUACION';
     case 'DEC':
-      if (/aprobado\s*dec/i.test(estadoNegocio)) return 'REQUERIMIENTO_APROBADO_DEC';
+      if (esPostDec) return 'REQUERIMIENTO_APROBADO_DEC';
       return 'REQUERIMIENTO_EN_DEC';
     case 'PROGRAMACION':
-      if (/aprobad.*program/i.test(estadoNegocio)) return 'PROGRAMACION_APROBADA';
+      if (/aprobad.*program/i.test(hints)) return 'PROGRAMACION_APROBADA';
+      // Post-DEC en bandeja Programación: negocio "Aprobado DEC" ≠ C.C. aprobado
+      if (esPostDec) return 'REQUERIMIENTO_APROBADO_DEC';
       return 'EN_PROGRAMACION';
     case 'ACTOS_PREPARATORIOS':
       if (/aprobad/i.test(estadoNegocio)) return 'COORDINACION_CM_APROBADA';
@@ -531,14 +553,18 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
     });
   }
 
-  // Cuadro / resto por prioridad de catálogo
-  const estadoCuadroAuth = pickBestByPriority([
+  // Prioridad segura (post órdenes/CCP/recepción):
+  // 1) estado_cuadro / revisión de cuadro (evidencia real del dominio)
+  // 2) etapa workflow (estado_actual) — evita que aliases de negocio salten a C.C.
+  // 3) estado de negocio / códigos canónicos de requerimiento
+  const estadoCuadroAuth = pickBestEstadoCuadro([
     opts.estadoCuadro,
     row.estado_cuadro,
     row.cuadro_estado,
     row.estado_cuadro_db,
   ]);
-  const revisionAuth = pickBestByPriority([
+  // Revisión de cuadro (snapshot): también con normalizador de dominio cuadro
+  const revisionAuth = pickBestEstadoCuadro([
     opts.revisionEstado,
     snap?.revisionEstado,
   ]);
@@ -553,17 +579,7 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
     best = estadoCuadroAuth || revisionAuth || '';
   }
 
-  // Solo usar `row.estado` (negocio) si el catálogo lo reconoce como estado global.
-  // No promover valores desconocidos ni asumir Cuadro Comparativo.
-  if (!best) {
-    const fromEstadoNegocio = pickBestByPriority([row.estado]);
-    if (fromEstadoNegocio) {
-      best = fromEstadoNegocio;
-      fuente = 'estado_negocio';
-    }
-  }
-
-  // RC118: etapa de trazabilidad correlacionada al requerimiento (estado_actual / snapshot)
+  // Etapa de trazabilidad antes que negocio ambiguo (p.ej. "Aprobado DEC" en PROGRAMACION)
   if (!best && workflowEtapa) {
     const fromEtapa = resolveEstadoFromWorkflowEtapa(workflowEtapa, row);
     if (fromEtapa) {
@@ -575,6 +591,26 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
   if (!best && workflowEtapa === 'CUADRO_COMPARATIVO') {
     best = 'CUADRO_BORRADOR';
     fuente = 'workflow_cuadro';
+  }
+
+  // Estado de negocio / códigos canónicos (APROBADO_DEC → REQUERIMIENTO_APROBADO_DEC)
+  if (!best) {
+    const fromEstadoNegocio = pickBestByPriority([
+      row.estado_codigo,
+      row.estado_vigente,
+      row.estadoVigente?.codigo,
+      row.estado,
+    ]);
+    if (fromEstadoNegocio) {
+      // Guardrail: nunca promover familia cuadro solo desde row.estado sin evidencia
+      const defNeg = getEstadoDef(fromEstadoNegocio);
+      if (defNeg?.familia === 'cuadro') {
+        // ignorar — requiere estado_cuadro
+      } else {
+        best = fromEstadoNegocio;
+        fuente = 'estado_negocio';
+      }
+    }
   }
 
   // Fallback controlado: estado inicial de Requerimiento — NUNCA C.C. en elaboración

@@ -47,7 +47,17 @@ const ESTADOS_DEF = [
   { codigo: 'REQUERIMIENTO_EN_EVALUACION', label: 'En evaluación', etapa: 'EVALUACION', prioridad: 110, scope: SCOPE.GLOBAL, familia: 'requerimiento', tipos: ['todos'] },
   { codigo: 'REQUERIMIENTO_APROBADO', label: 'Requerimiento aprobado', etapa: 'EVALUACION', prioridad: 120, scope: SCOPE.GLOBAL, familia: 'requerimiento', tipos: ['todos'] },
   { codigo: 'REQUERIMIENTO_EN_DEC', label: 'En DEC', etapa: 'DEC', prioridad: 200, scope: SCOPE.GLOBAL, familia: 'dec', tipos: ['todos'] },
-  { codigo: 'REQUERIMIENTO_APROBADO_DEC', label: 'Aprobado por DEC', etapa: 'DEC', prioridad: 210, scope: SCOPE.GLOBAL, familia: 'dec', tipos: ['todos'] },
+  {
+    codigo: 'REQUERIMIENTO_APROBADO_DEC',
+    label: 'Aprobado por DEC',
+    etapa: 'DEC',
+    prioridad: 210,
+    scope: SCOPE.GLOBAL,
+    familia: 'dec',
+    tipos: ['todos'],
+    // Texto de negocio post-DEC (requerimientos.estado). NO es C.C. aprobado.
+    aliases: ['APROBADO_DEC', 'APROBADO DEC'],
+  },
   { codigo: 'EN_PROGRAMACION', label: 'En programación', etapa: 'PROGRAMACION', prioridad: 220, scope: SCOPE.GLOBAL, familia: 'programacion', tipos: ['todos'], aliases: ['PROGRAMACION'] },
   { codigo: 'PROGRAMACION_APROBADA', label: 'Programación aprobada', etapa: 'PROGRAMACION', prioridad: 230, scope: SCOPE.GLOBAL, familia: 'programacion', tipos: ['todos'] },
   { codigo: 'EN_COORDINACION_CM', label: 'En Coordinación CM', etapa: 'ACTOS_PREPARATORIOS', prioridad: 300, scope: SCOPE.GLOBAL, familia: 'coordinacion_cm', tipos: ['todos'], aliases: ['ACTOS_PREPARATORIOS', 'COORDINACION_CM'] },
@@ -67,7 +77,19 @@ const ESTADOS_DEF = [
   { codigo: 'CUADRO_COMPARATIVO_GENERADO', label: 'C.C. generado', etapa: 'CUADRO_COMPARATIVO', prioridad: 600, scope: SCOPE.GLOBAL, familia: 'cuadro', tipos: ['todos'] },
   { codigo: 'CUADRO_EN_COORDINACION_CM', label: 'C.C. en Coordinación CM', etapa: 'CUADRO_COMPARATIVO', prioridad: 610, scope: SCOPE.GLOBAL, familia: 'cuadro', tipos: ['todos'], aliases: ['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'] },
   { codigo: 'CUADRO_EN_DEC', label: 'C.C. en DEC', etapa: 'CUADRO_COMPARATIVO', prioridad: 620, scope: SCOPE.GLOBAL, familia: 'cuadro', tipos: ['todos'], aliases: ['PENDIENTE_DEC'] },
-  { codigo: 'CUADRO_COMPARATIVO_APROBADO', label: 'C.C. aprobado', etapa: 'CUADRO_COMPARATIVO', prioridad: 630, scope: SCOPE.GLOBAL, familia: 'cuadro', tipos: ['todos'], aliases: ['APROBADO_DEC', 'PENDIENTE_CCP', 'FIRMADO'] },
+  {
+    codigo: 'CUADRO_COMPARATIVO_APROBADO',
+    label: 'C.C. aprobado',
+    etapa: 'CUADRO_COMPARATIVO',
+    prioridad: 630,
+    scope: SCOPE.GLOBAL,
+    familia: 'cuadro',
+    tipos: ['todos'],
+    // APROBADO_DEC NO va aquí: choca con el texto de negocio post-DEC del requerimiento.
+    // El legado de cuadros_comparativos.estado='APROBADO_DEC' se resuelve solo vía
+    // normalizeEstadoCuadroCode (contexto estado_cuadro), no vía ALIAS_MAP global.
+    aliases: ['PENDIENTE_CCP', 'FIRMADO', 'C.C. APROBADO', 'CC_APROBADO'],
+  },
   { codigo: 'DERIVADO_CCP', label: 'Derivado a CCP', etapa: 'CCP', prioridad: 650, scope: SCOPE.GLOBAL, familia: 'ccp', tipos: ['todos'], aliases: ['DERIVADO_A_CCP'] },
   { codigo: 'ENVIADA_OPPM', label: 'Solicitud enviada a OPPM', etapa: 'CCP', prioridad: 680, scope: SCOPE.GLOBAL, familia: 'ccp', tipos: ['todos'], aliases: ['ENVIADO_OPPM', 'SOLICITUD_ENVIADA_OPPM'] },
   { codigo: 'CCP_REGISTRADA', label: 'CCP registrada', etapa: 'CCP', prioridad: 700, scope: SCOPE.GLOBAL, familia: 'ccp', tipos: ['todos'], aliases: ['CCP_REGISTRADO', 'REGISTRADO_CCP', 'CCP_CARGADO'] },
@@ -195,9 +217,12 @@ const ALIAS_MAP = (() => {
   m.PENDIENTE_COORDINADOR = 'CUADRO_EN_COORDINACION_CM';
   m.FIRMADO_COORDINADOR = 'CUADRO_EN_COORDINACION_CM';
   m.PENDIENTE_DEC = 'CUADRO_EN_DEC';
-  m.APROBADO_DEC = 'CUADRO_COMPARATIVO_APROBADO';
+  // Post-DEC (requerimiento) — nunca CUADRO_COMPARATIVO_APROBADO
+  m.APROBADO_DEC = 'REQUERIMIENTO_APROBADO_DEC';
   m.PENDIENTE_CCP = 'CUADRO_COMPARATIVO_APROBADO';
   m.FIRMADO = 'CUADRO_COMPARATIVO_APROBADO';
+  m['C.C._APROBADO'] = 'CUADRO_COMPARATIVO_APROBADO';
+  m.CC_APROBADO = 'CUADRO_COMPARATIVO_APROBADO';
   m.GENERADO = 'CUADRO_BORRADOR';
   m.GENERADO_PRELIMINAR = 'CUADRO_BORRADOR';
   m.ADJUDICADO = 'CUADRO_BORRADOR';
@@ -265,6 +290,10 @@ export function isTerminalEstado(codigo) {
 /**
  * Normaliza cualquier código histórico al canónico.
  * Códigos desconocidos se registran y se devuelven en mayúsculas (no se ocultan).
+ *
+ * Nota: APROBADO_DEC → REQUERIMIENTO_APROBADO_DEC (post-DEC del requerimiento).
+ * Para columnas de cuadro (`estado_cuadro` / `cuadros_comparativos.estado`) usar
+ * {@link normalizeEstadoCuadroCode}.
  */
 export function normalizeEstadoCode(raw) {
   if (raw == null || raw === '') return '';
@@ -274,6 +303,38 @@ export function normalizeEstadoCode(raw) {
   if (BY_CODE[s]) return s;
   UNKNOWN_CODES.add(s);
   return s;
+}
+
+/**
+ * Normaliza códigos del dominio Cuadro Comparativo (estado_cuadro / DB revision).
+ * Aquí sí: APROBADO_DEC (legado de cuadros_comparativos) → CUADRO_COMPARATIVO_APROBADO.
+ * No usar para `requerimientos.estado` ("Aprobado DEC").
+ */
+export function normalizeEstadoCuadroCode(raw) {
+  if (raw == null || raw === '') return '';
+  const s = String(raw).trim().toUpperCase().replace(/\s+/g, '_');
+  if (!s) return '';
+  // Legado DB / revisión de cuadro (antes del alias global post-DEC)
+  if (
+    s === 'APROBADO_DEC'
+    || s === 'PENDIENTE_CCP'
+    || s === 'FIRMADO'
+    || s === 'C.C._APROBADO'
+    || s === 'CC_APROBADO'
+  ) {
+    return 'CUADRO_COMPARATIVO_APROBADO';
+  }
+  const canon = normalizeEstadoCode(raw);
+  const def = BY_CODE[canon];
+  if (def && def.familia === 'cuadro') return canon;
+  // Labels / códigos ya canónicos de cuadro
+  if (canon === 'CUADRO_COMPARATIVO_APROBADO' || canon === 'CUADRO_COMPARATIVO_GENERADO'
+    || canon === 'CUADRO_EN_DEC' || canon === 'CUADRO_EN_COORDINACION_CM'
+    || canon === 'CUADRO_BORRADOR' || canon === 'PENDIENTE_ELABORAR'
+    || canon === 'DERIVADO_CCP') {
+    return canon;
+  }
+  return canon;
 }
 
 export function getUnknownEstadoCodes() {
