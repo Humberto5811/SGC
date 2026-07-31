@@ -68,6 +68,10 @@ const pool = new Pool({
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+// Vite/Nginx envían X-Forwarded-For; express-rate-limit exige trust proxy.
+// Valor 1 = confiar en el primer proxy (Nginx). No usar `true` (abre spoofing).
+app.set('trust proxy', 1);
+
 app.use(helmet());
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174,http://localhost:5177,http://localhost:5178,http://localhost:3000')
   .split(',')
