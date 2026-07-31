@@ -523,8 +523,6 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
   y += 11;
   y = appendWrappedText(doc, CIERRE_PENALIDAD_ANEXO11, MARGIN, y, CONTENT_W) + 10;
 
-  doc.text(formatFechaCartaLima(), MARGIN, y);
-  y += 14;
   y = appendWrappedText(doc, NOTA_COTIZACION_ANEXO11, MARGIN, y, CONTENT_W) + 8;
   renderFirmaRepresentante(doc, y, {
     representante_legal: datos?.representante_legal || extra?.firma_nombre || '',

@@ -13,26 +13,75 @@ function canOpenDoc(d) {
   return d.disponible === true || !!d.adjunto_id || !!d.embedded;
 }
 
+/**
+ * Quita sufijos físicos del título: "Anexo 09 (archivo.docx)" → "Anexo 09"
+ */
+export function cleanDocumentoFuncionalTitle(raw) {
+  let t = String(raw ?? '').trim();
+  if (!t) return '';
+  // Paréntesis finales con extensión o copias: (ANEXOS ….docx), (1), (copia)
+  t = t.replace(/\s*\((?:[^)]*\.(?:docx?|pdf|xlsx?|zip|rar)|(?:\d+|copia|final|v\d+))\)\s*$/i, '');
+  // Si el valor entero es un nombre de archivo, no usarlo como título funcional
+  if (/\.(docx?|pdf|xlsx?|zip|rar)$/i.test(t)) {
+    return '';
+  }
+  return t.trim();
+}
+
+/** Nombre funcional para UI: documento / etiqueta (sin extensión ni archivo físico). */
+export function documentoFuncionalLabel(d = {}) {
+  const candidates = [
+    d.documento,
+    d.etiqueta,
+    d.nombre_documento,
+    d.nombre_funcional,
+    d.requisito,
+  ];
+  for (const c of candidates) {
+    const cleaned = cleanDocumentoFuncionalTitle(c);
+    if (cleaned) return cleaned;
+  }
+  return 'Documento';
+}
+
+/** Nombre físico para Ver/Descargar / adjunto (conserva extensión). */
+export function documentoFisicoNombre(d = {}) {
+  const fisico = d.archivo
+    || d.archivo_nombre
+    || d.nombre_archivo
+    || d.filename
+    || d.nombre_original
+    || d.nombre
+    || '';
+  return String(fisico).trim();
+}
+
+export const FORMATOS_PERMITIDOS_AYUDA = 'Formatos permitidos: PDF, DOC o DOCX';
+
 export function renderDocumentoLista(docs = [], { compact = false } = {}) {
   if (!docs.length) {
     return `<span class="text-muted small">${compact ? '—' : 'Sin documentos'}</span>`;
   }
-  return docs.map((d) => `
+  return docs.map((d) => {
+    const label = d.etiqueta || documentoFuncionalLabel(d);
+    const fisico = documentoFisicoNombre(d) || d.nombre || 'documento';
+    return `
     <div class="prov-doc-row ${compact ? 'mb-1' : 'mb-2 pb-1 border-bottom'}">
       <div class="small d-flex align-items-start gap-1">
-        <i class="bi ${docIcon(d.nombre, d.mime_type)}"></i>
-        <span class="flex-grow-1">${esc(d.nombre)}</span>
+        <i class="bi ${docIcon(fisico, d.mime_type)}"></i>
+        <span class="flex-grow-1">${esc(label)}</span>
       </div>
       ${canOpenDoc(d) ? `
         <div class="mt-1 d-flex gap-1 flex-wrap">
           <button type="button" class="btn btn-outline-primary btn-sm py-0 px-2 prov-doc-ver"
             data-sol-id="${esc(d._solicitudId || '')}" data-ref="${esc(d.ref)}"
-            data-mime="${esc(d.mime_type || '')}">Ver</button>
+            data-mime="${esc(d.mime_type || '')}" data-name="${esc(fisico)}">Ver</button>
           <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 prov-doc-dl"
             data-sol-id="${esc(d._solicitudId || '')}" data-ref="${esc(d.ref)}"
-            data-name="${esc(d.nombre)}" data-mime="${esc(d.mime_type || '')}">Descargar</button>
+            data-name="${esc(fisico)}" data-mime="${esc(d.mime_type || '')}">Descargar</button>
         </div>` : `<div class="small text-muted">${esc(d.fuente || 'Referencia')} — pendiente de adjunto</div>`}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 export function renderRequisitosTecnicos(list = []) {
@@ -90,7 +139,9 @@ export function bindDocumentoActions(root, solicitudId) {
       const sid = btn.dataset.solId || solicitudId;
       const ref = btn.dataset.ref;
       const mime = btn.dataset.mime || '';
-      const name = btn.closest('.prov-doc-row')?.querySelector('span')?.textContent?.trim() || 'Documento';
+      const name = btn.dataset.name
+        || btn.closest('.prov-doc-row')?.querySelector('span')?.textContent?.trim()
+        || 'Documento';
       try {
         const blob = await portalService.fetchDocumentoBlob(sid, ref, 'ver');
         const url = URL.createObjectURL(blob);

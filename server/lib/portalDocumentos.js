@@ -104,17 +104,21 @@ function guessMime(nombre) {
 
 function pushDoc(list, seen, doc) {
   const nombre = String(doc.nombre || '').trim();
-  if (!nombre) return;
+  if (!nombre && !doc.etiqueta) return;
+  const etiqueta = String(doc.etiqueta || '').trim() || nombre;
   const key = doc.ref || `${doc.fuente}|${nombre}|${doc.adjunto_id || ''}`;
   if (seen.has(key)) return;
   seen.add(key);
   const embedded = !!doc.embedded;
   list.push({
     ref: doc.ref || (doc.adjunto_id ? `adj-${doc.adjunto_id}` : key),
-    nombre,
+    nombre: nombre || etiqueta,
+    etiqueta,
+    documento: doc.documento || etiqueta,
+    archivo: doc.archivo || (nombre !== etiqueta ? nombre : null),
     fuente: doc.fuente || 'Documento',
     adjunto_id: doc.adjunto_id || null,
-    mime_type: doc.mime_type || guessMime(nombre),
+    mime_type: doc.mime_type || guessMime(nombre || etiqueta),
     disponible: doc.disponible !== false && (!!doc.adjunto_id || embedded),
     embedded,
   });
@@ -122,12 +126,17 @@ function pushDoc(list, seen, doc) {
 
 function pushDocsFromSolicitudList(list, fuente, prefix, docs, seen, adjuntosMap, reqIds) {
   list.forEach((d, i) => {
-    const nombre = d.archivo || d.documento || d.nombre;
+    const fisico = d.archivo || d.archivo_nombre || d.nombre_archivo || '';
+    const funcional = d.documento || d.etiqueta || d.nombre_documento || d.requisito || '';
+    const nombre = fisico || funcional || d.nombre;
     if (!nombre && !d.contenido_base64) return;
     if (d.contenido_base64) {
       pushDoc(docs, seen, {
         ref: `${prefix}-${i}`,
-        nombre: nombre || d.documento,
+        nombre: nombre || funcional || 'documento',
+        etiqueta: funcional || nombre,
+        documento: funcional || null,
+        archivo: fisico || null,
         mime_type: d.mime_type || guessMime(nombre),
         fuente,
         embedded: true,
@@ -137,12 +146,15 @@ function pushDocsFromSolicitudList(list, fuente, prefix, docs, seen, adjuntosMap
     }
     let match = null;
     for (const reqId of reqIds) {
-      match = matchAdjuntoPorNombre(adjuntosMap[reqId], nombre);
+      match = matchAdjuntoPorNombre(adjuntosMap[reqId], fisico || nombre);
       if (match) break;
     }
     pushDoc(docs, seen, {
       ref: match ? `adj-${match.id}` : `${prefix}-${i}`,
-      nombre,
+      nombre: match?.nombre_archivo || nombre,
+      etiqueta: funcional || nombre,
+      documento: funcional || null,
+      archivo: fisico || match?.nombre_archivo || null,
       adjunto_id: match?.id || null,
       mime_type: match?.mime_type || guessMime(nombre),
       fuente,

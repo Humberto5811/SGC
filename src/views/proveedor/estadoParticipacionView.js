@@ -64,7 +64,7 @@ export async function initEstadoParticipacionView() {
       btn.addEventListener('click', () => {
         sessionStorage.setItem('provCotSolId', btn.dataset.id);
         sessionStorage.setItem('provCotAutoOpen', '1');
-        window.location.hash = '#/proveedor/mis-cotizaciones';
+        window.location.hash = `#/proveedor/mis-cotizaciones?solicitud_id=${encodeURIComponent(btn.dataset.id)}`;
         window.dispatchEvent(new HashChangeEvent('hashchange'));
       });
     });

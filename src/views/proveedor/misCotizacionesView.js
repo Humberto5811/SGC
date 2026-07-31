@@ -5,7 +5,7 @@ import {
 } from '../../utils/proveedorShared.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
-import { renderDocumentoLista, bindDocumentoActions, attachSolicitudId } from '../../utils/proveedorDocumentos.js';
+import { renderDocumentoLista, bindDocumentoActions, attachSolicitudId, documentoFuncionalLabel, FORMATOS_PERMITIDOS_AYUDA } from '../../utils/proveedorDocumentos.js';
 import {
   downloadAnexo05A, downloadAnexo05B, downloadAnexo06A, downloadAnexo06B, downloadAnexo11,
   triggerFileInput, money as moneyPdf,
@@ -246,13 +246,17 @@ function renderUploadSlot(label, fileMeta, inputId) {
     return `
       <div class="prov-upload-row">
         <div class="small fw-semibold">${esc(label)}</div>
-        ${fileMeta ? `<div class="small text-success"><i class="bi bi-paperclip"></i> ${esc(fileMeta.nombre)}</div>` : '<div class="small text-muted">Sin archivo adjunto</div>'}
+        ${fileMeta
+    ? `<div class="small text-success"><i class="bi bi-paperclip"></i> Archivo cargado: ${esc(fileMeta.nombre)}</div>`
+    : '<div class="small text-muted">Sin archivo adjunto</div>'}
       </div>`;
   }
   return `
     <div class="prov-upload-row">
       <div class="small fw-semibold">${esc(label)}</div>
-      ${fileMeta ? `<div class="small text-success"><i class="bi bi-paperclip"></i> ${esc(fileMeta.nombre)}</div>` : '<div class="small text-muted">Sin archivo adjunto</div>'}
+      ${fileMeta
+    ? `<div class="small text-success"><i class="bi bi-paperclip"></i> Archivo cargado: ${esc(fileMeta.nombre)}</div>`
+    : '<div class="small text-muted">Sin archivo adjunto</div>'}
       <button type="button" class="btn btn-outline-primary btn-sm mt-1 prov-upload-btn" data-target="${esc(inputId)}">
         ${fileMeta ? 'Reemplazar' : 'Adjuntar'}
       </button>
@@ -287,12 +291,12 @@ function renderStep2() {
 
   const docsHtml = docsSol.length ? docsSol.map((d, i) => {
     const key = docKey(d, i);
-    return renderUploadSlot(`${d.documento || 'Documento'}${d.archivo ? ` (${d.archivo})` : ''}`, formState.adjuntos.docs[key], key);
+    return renderUploadSlot(documentoFuncionalLabel(d), formState.adjuntos.docs[key], key);
   }).join('') : '<p class="small text-muted">No hay documentos solicitados en la convocatoria.</p>';
 
   const reqHtml = requisitos.length ? requisitos.map((r, i) => {
     const key = reqKey(r, i);
-    const label = `${r.requisito || 'Requisito'}${r.obligatorio !== false ? ' *' : ''}`;
+    const label = `${documentoFuncionalLabel({ documento: r.requisito, requisito: r.requisito })}${r.obligatorio !== false ? ' *' : ''}`;
     return renderUploadSlot(label, formState.adjuntos.requisitos[key], key);
   }).join('') : '<p class="small text-muted">No hay requisitos técnicos mínimos.</p>';
 
@@ -304,12 +308,16 @@ function renderStep2() {
     ${readonlyNote}
     <div class="alert alert-info small py-2 text-start">
       Descargue los documentos de la convocatoria, complételos, fírmelos y adjúntelos. También adjunte los ${esc(config.labelTecnica)} y ${esc(config.labelEconomica)} firmados del paso anterior.
+      <div class="mt-1">${esc(FORMATOS_PERMITIDOS_AYUDA)}</div>
     </div>
     <div class="row g-3">
       <div class="col-lg-6">
         <div class="card h-100 border">
           <div class="card-header py-2 small fw-bold bg-light">Documentos solicitados al proveedor</div>
-          <div class="card-body py-2">${docsHtml}</div>
+          <div class="card-body py-2">
+            <p class="small text-muted mb-2">${esc(FORMATOS_PERMITIDOS_AYUDA)}</p>
+            ${docsHtml}
+          </div>
         </div>
       </div>
       <div class="col-lg-6">
@@ -548,7 +556,7 @@ function validateStep2() {
   const errors = [];
   (workspace.solicitud.docs_solicitados || []).forEach((d, i) => {
     const key = docKey(d, i);
-    if (!formState.adjuntos.docs[key]) errors.push(`Falta adjuntar: ${d.documento || d.archivo || 'documento solicitado'}`);
+    if (!formState.adjuntos.docs[key]) errors.push(`Falta adjuntar: ${documentoFuncionalLabel(d)}`);
   });
   (workspace.solicitud.requisitos_tecnicos || []).forEach((r, i) => {
     if (r.obligatorio === false) return;

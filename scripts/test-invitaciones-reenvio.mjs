@@ -112,8 +112,9 @@ console.log('\n=== Invitaciones — reenvío / N° Inv. ===\n');
 
 {
   const portal = read('server/lib/portalProveedores.js');
-  assert.match(portal, /ORDER BY nro_invitacion DESC/);
-  ok('portal marca cotización en la invitación más reciente');
+  assert.match(portal, /INVITACION_VIGENTE_ORDER_SQL|nro_invitacion/);
+  assert.match(portal, /loadInvitacionVigente/);
+  ok('portal marca cotización en la invitación vigente (nro más alto)');
 }
 
 console.log('\nInvitaciones reenvío OK\n');
