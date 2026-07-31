@@ -64,6 +64,9 @@ function openScSubModal({ title, bodyHtml, submitLabel = 'Guardar', onSubmit }) 
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal fade show d-block';
+    overlay.dataset.sgcDragSkip = '1';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
     overlay.style.background = 'rgba(0,0,0,.45)';
     overlay.style.zIndex = '1090';
     overlay.innerHTML = `
@@ -71,7 +74,7 @@ function openScSubModal({ title, bodyHtml, submitLabel = 'Guardar', onSubmit }) 
         <div class="modal-content">
           <div class="modal-header py-2 bg-light">
             <h6 class="modal-title mb-0">${esc(title)}</h6>
-            <button type="button" class="btn-close" id="scSubClose"></button>
+            <button type="button" class="btn-close" id="scSubClose" aria-label="Cerrar"></button>
           </div>
           <div class="modal-body">
             ${bodyHtml}
@@ -84,7 +87,19 @@ function openScSubModal({ title, bodyHtml, submitLabel = 'Guardar', onSubmit }) 
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    const close = (result) => { overlay.remove(); resolve(result); };
+
+    // Bootstrap enforceFocus del modal padre (#scWizardModal) redirige el foco
+    // a sí mismo y bloquea escritura en este submodal anidado (no registrado en BS).
+    const onFocusIn = (e) => {
+      if (overlay.contains(e.target)) e.stopImmediatePropagation();
+    };
+    document.addEventListener('focusin', onFocusIn, true);
+
+    const close = (result) => {
+      document.removeEventListener('focusin', onFocusIn, true);
+      overlay.remove();
+      resolve(result);
+    };
     const showError = (msg) => {
       const err = overlay.querySelector('#scSubError');
       if (err) { err.textContent = msg; err.classList.remove('d-none'); }
@@ -101,6 +116,12 @@ function openScSubModal({ title, bodyHtml, submitLabel = 'Guardar', onSubmit }) 
         showError(err.message || 'No se pudo completar la operación');
       }
     };
+
+    // Enfocar el primer campo editable sin setTimeout arbitrario
+    queueMicrotask(() => {
+      const first = overlay.querySelector('input:not([type="hidden"]):not([disabled]), textarea, select');
+      first?.focus({ preventScroll: true });
+    });
   });
 }
 
@@ -110,6 +131,30 @@ function fmtRegistro(iso) {
   if (Number.isNaN(dt.getTime())) return '—';
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+/** Normaliza requisito técnico (catálogo o personalizado) para estado / persistencia. */
+function normalizeReqEntry(raw = {}) {
+  const obligatorioRaw = raw.obligatorio;
+  const obligatorio = !(
+    obligatorioRaw === false
+    || obligatorioRaw === 'NO'
+    || obligatorioRaw === 'No'
+    || obligatorioRaw === 0
+    || obligatorioRaw === '0'
+  );
+  return {
+    requisito: String(raw.requisito || raw.nombre || '').trim(),
+    obligatorio,
+    observacion: String(raw.observacion || '').trim(),
+    archivo: raw.archivo || '',
+    custom: raw.custom === true || raw.personalizado === true,
+    personalizado: raw.custom === true || raw.personalizado === true,
+  };
+}
+
+function reqNombreKey(nombre) {
+  return String(nombre || '').trim();
 }
 
 function readFileAsMeta(file) {
@@ -174,8 +219,10 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     currentStep: opts.initialTab || 'general',
     unlocked: { general: true, docs: !!sol, items: !!sol, invitaciones: false },
     completed: { general: !!sol, docs: !!sol, items: false },
-    docsResumen: Array.isArray(sol?.docs_solicitados) ? [...sol.docs_solicitados] : [],
-    reqResumen: Array.isArray(sol?.requisitos_tecnicos) ? [...sol.requisitos_tecnicos] : [],
+    docsResumen: Array.isArray(sol?.docs_solicitados) ? sol.docs_solicitados.map((d) => ({ ...d })) : [],
+    reqResumen: Array.isArray(sol?.requisitos_tecnicos)
+      ? sol.requisitos_tecnicos.map((r) => normalizeReqEntry(r))
+      : [],
     items: Array.isArray(sol?.detalle_items) && sol.detalle_items.length
       ? sol.detalle_items
       : (itemsResp.data || []),
@@ -226,7 +273,17 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       .sc-btn-inst i, .sc-btn-inst .bi { color: #fff !important; }
       .sc-btn-inst:hover { background: #0b5ed7 !important; color: #fff !important; }
       #scWizardModal .modal-header { cursor: move; }
-      .sc-doc-adj { padding: .15rem .4rem !important; font-size: .68rem !important; line-height: 1.2; }
+      .sc-doc-adj { padding: .15rem .4rem !important; font-size: .68rem !important; line-height: 1.2; white-space: nowrap; width: auto !important; }
+      .sc-actions-cell { display: flex; flex-wrap: wrap; gap: .25rem; align-items: center; max-width: 220px; }
+      .sc-actions-cell .btn {
+        padding: .15rem .4rem !important;
+        font-size: .68rem !important;
+        line-height: 1.2 !important;
+        white-space: nowrap !important;
+        width: auto !important;
+        flex: 0 0 auto;
+      }
+      .sc-sel-table th.sc-th-actions, .sc-sel-table td.sc-td-actions { width: 1%; white-space: nowrap; vertical-align: middle; }
       .sc-req-grid { font-size: .72rem; }
       .sc-req-grid .form-check-label { font-size: .72rem; }
       .sc-cronograma-time { max-width: 110px; }
@@ -293,7 +350,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
             <button type="button" class="btn btn-sm sc-btn-inst" id="scAddOtroDoc"><i class="bi bi-plus"></i> Agregar otro documento</button>
             <h6 class="border-bottom pb-1 mt-3 mb-2">Documentos Seleccionados (<span id="scDocsCount">0</span>)</h6>
             <table class="table table-sm table-bordered sc-sel-table mb-0">
-              <thead class="table-light"><tr><th>Documento</th><th>Archivo adjunto</th><th>Fecha registro</th><th>Acciones</th></tr></thead>
+              <thead class="table-light"><tr><th>Documento</th><th>Archivo adjunto</th><th>Fecha registro</th><th class="sc-th-actions">Acciones</th></tr></thead>
               <tbody id="scDocsResumen"></tbody>
             </table>
           </div>
@@ -305,7 +362,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
             <button type="button" class="btn btn-sm btn-outline-primary mb-2" id="scAddOtroReq"><i class="bi bi-plus"></i> Agregar otro requisito</button>
             <h6 class="border-bottom pb-1 mb-2">Requisitos Seleccionados (<span id="scReqCount">0</span>)</h6>
             <table class="table table-sm table-bordered sc-sel-table mb-0">
-              <thead class="table-light"><tr><th>Requisito técnico</th><th>Obligatorio</th><th>Acciones</th></tr></thead>
+              <thead class="table-light"><tr><th>Requisito técnico</th><th>Obligatorio</th><th>Observación</th><th class="sc-th-actions">Acciones</th></tr></thead>
               <tbody id="scReqResumen"></tbody>
             </table>
           </div>
@@ -404,8 +461,9 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
   function pruneSelectionsForTipo() {
     const docs = new Set(getDocsCatalog());
     const reqs = new Set(getReqCatalog());
-    state.docsResumen = state.docsResumen.filter((d) => docs.has(d.documento));
-    state.reqResumen = state.reqResumen.filter((r) => reqs.has(r.requisito));
+    // Conservar personalizados al cambiar de tipo (no están en el catálogo)
+    state.docsResumen = state.docsResumen.filter((d) => docs.has(d.documento) || d.custom || d.personalizado);
+    state.reqResumen = state.reqResumen.filter((r) => reqs.has(r.requisito) || r.custom || r.personalizado);
   }
 
   function bindDocPickEvents() {
@@ -535,11 +593,13 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     tb.innerHTML = state.docsResumen.map((d, i) => `
       <tr><td>${esc(d.documento)}</td><td>${esc(d.archivo || '—')}</td>
       <td class="small">${esc(fmtRegistro(d.fecha_registro))}</td>
-      <td class="text-nowrap">
-        ${d.contenido_base64 ? `
-          <button type="button" class="btn btn-sm btn-outline-primary sc-doc-res-ver" data-i="${i}">Ver</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary sc-doc-res-dl" data-i="${i}">Descargar</button>` : ''}
-        <button type="button" class="btn btn-sm sc-btn-inst sc-doc-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button>
+      <td class="sc-td-actions">
+        <div class="sc-actions-cell">
+          ${d.contenido_base64 ? `
+            <button type="button" class="btn btn-sm btn-outline-primary sc-doc-res-ver" data-i="${i}" title="Ver"><i class="bi bi-eye"></i> Ver</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary sc-doc-res-dl" data-i="${i}" title="Descargar"><i class="bi bi-download"></i> Descargar</button>` : ''}
+          <button type="button" class="btn btn-sm sc-btn-inst sc-doc-del" data-i="${i}" title="Eliminar"><i class="bi bi-trash"></i> Eliminar</button>
+        </div>
       </td></tr>`).join('')
       || '<tr><td colspan="4" class="text-muted small">Sin documentos seleccionados</td></tr>';
     tb.querySelectorAll('.sc-doc-res-ver').forEach((btn) => {
@@ -580,11 +640,26 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     const count = el.querySelector('#scReqCount');
     if (count) count.textContent = state.reqResumen.length;
     if (!tb) return;
-    tb.innerHTML = state.reqResumen.map((d, i) => `
-      <tr><td>${esc(d.requisito)}</td>
-      <td class="text-center">${d.obligatorio !== false ? 'SI' : 'NO'}</td>
-      <td><button type="button" class="btn btn-sm sc-btn-inst sc-req-del" data-i="${i}"><i class="bi bi-trash"></i> Eliminar</button></td></tr>`).join('')
-      || '<tr><td colspan="3" class="text-muted small">Sin requisitos seleccionados</td></tr>';
+    const catalog = new Set(getReqCatalog());
+    tb.innerHTML = state.reqResumen.map((d, i) => {
+      const entry = normalizeReqEntry(d);
+      if (!catalog.has(entry.requisito)) {
+        entry.custom = true;
+        entry.personalizado = true;
+        state.reqResumen[i] = { ...state.reqResumen[i], ...entry };
+      }
+      return `<tr>
+        <td>${esc(entry.requisito)}${entry.custom ? ' <span class="badge bg-secondary" style="font-size:.65rem;">Personalizado</span>' : ''}</td>
+        <td class="text-center">${entry.obligatorio ? 'SI' : 'NO'}</td>
+        <td class="small">${esc(entry.observacion || '—')}</td>
+        <td class="sc-td-actions">
+          <div class="sc-actions-cell">
+            <button type="button" class="btn btn-sm sc-btn-inst sc-req-del" data-i="${i}" title="Eliminar"><i class="bi bi-trash"></i> Eliminar</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('')
+      || '<tr><td colspan="4" class="text-muted small">Sin requisitos seleccionados</td></tr>';
     tb.querySelectorAll('.sc-req-del').forEach((btn) => {
       btn.onclick = () => {
         const removed = state.reqResumen.splice(parseInt(btn.dataset.i, 10), 1)[0];
@@ -815,30 +890,44 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
       submitLabel: 'Agregar requisito',
       bodyHtml: `
         <div class="mb-2">
-          <label class="form-label small mb-1">Nombre del requisito técnico <span class="text-danger">*</span></label>
-          <input type="text" class="form-control form-control-sm" id="scAddReqNombre" maxlength="200">
+          <label class="form-label small mb-1" for="scAddReqNombre">Nombre del requisito técnico <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="scAddReqNombre" name="scAddReqNombre" maxlength="200" autocomplete="off">
         </div>
         <div class="mb-2">
-          <label class="form-label small mb-1">Obligatorio</label>
-          <select class="form-select form-select-sm" id="scAddReqObl">
+          <label class="form-label small mb-1" for="scAddReqObl">Obligatorio</label>
+          <select class="form-select form-select-sm" id="scAddReqObl" name="scAddReqObl">
             <option value="SI" selected>SI</option>
             <option value="NO">NO</option>
           </select>
         </div>
         <div class="mb-0">
-          <label class="form-label small mb-1">Observación</label>
-          <textarea class="form-control form-control-sm" id="scAddReqObs" rows="2" maxlength="500"></textarea>
+          <label class="form-label small mb-1" for="scAddReqObs">Observación</label>
+          <textarea class="form-control form-control-sm" id="scAddReqObs" name="scAddReqObs" rows="2" maxlength="500"></textarea>
         </div>`,
       onSubmit: async (overlay, showError) => {
-        const nombre = overlay.querySelector('#scAddReqNombre')?.value?.trim();
+        const nombre = reqNombreKey(overlay.querySelector('#scAddReqNombre')?.value);
         const obligatorio = overlay.querySelector('#scAddReqObl')?.value === 'SI';
-        const observacion = overlay.querySelector('#scAddReqObs')?.value?.trim() || '';
-        if (!nombre) { showError('El nombre del requisito es obligatorio.'); return false; }
-        if (state.reqResumen.some((r) => r.requisito === nombre)) {
-          showError('Ya existe un requisito con ese nombre.');
+        const observacion = String(overlay.querySelector('#scAddReqObs')?.value || '').trim();
+        if (!nombre) {
+          showError('El nombre del requisito técnico es obligatorio.');
+          overlay.querySelector('#scAddReqNombre')?.focus();
           return false;
         }
-        state.reqResumen.push({ requisito: nombre, obligatorio, observacion, archivo: '' });
+        if (state.reqResumen.some((r) => reqNombreKey(r.requisito) === nombre)) {
+          showError('Ya existe un requisito con ese nombre en esta solicitud.');
+          overlay.querySelector('#scAddReqNombre')?.focus();
+          return false;
+        }
+        state.reqResumen.push(normalizeReqEntry({
+          requisito: nombre,
+          obligatorio,
+          observacion,
+          archivo: '',
+          custom: true,
+          personalizado: true,
+        }));
+        const cb = [...el.querySelectorAll('.sc-req-check')].find((c) => c.value === nombre);
+        if (cb) cb.checked = true;
         renderReqResumen();
         return true;
       },
@@ -1055,14 +1144,19 @@ function showItemDocumentosModal(item, wizardState) {
       tipo_doc: 'Anexo ítem',
     });
   });
-  const reqTecnicos = (wizardState?.reqResumen || []).map((r) => ({
-    requisito: r.requisito,
-    obligatorio: r.obligatorio !== false,
-    archivo: r.archivo || (r.contenido_base64 ? 'Adjunto' : ''),
-    estado: r.archivo || r.contenido_base64 ? 'Cargado' : 'Requerido',
-    contenido_base64: r.contenido_base64 || '',
-    mime_type: r.mime_type || '',
-  }));
+  const reqTecnicos = (wizardState?.reqResumen || []).map((r) => {
+    const n = normalizeReqEntry(r);
+    return {
+      requisito: n.requisito,
+      obligatorio: n.obligatorio,
+      observacion: n.observacion,
+      archivo: r.archivo || (r.contenido_base64 ? 'Adjunto' : ''),
+      estado: r.archivo || r.contenido_base64 ? 'Cargado' : 'Requerido',
+      contenido_base64: r.contenido_base64 || '',
+      mime_type: r.mime_type || '',
+      custom: n.custom,
+    };
+  });
   const wrap = document.createElement('div');
   const renderSolTab = () => {
     const host = wrap.querySelector('#idDocSolicitados');
@@ -1136,3 +1230,4 @@ function showItemDocumentosModal(item, wizardState) {
 }
 
 export { toDatetimeLocalValue } from './cronogramaDatetime.js';
+export { normalizeReqEntry, reqNombreKey, openScSubModal };
