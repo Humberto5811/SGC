@@ -69,7 +69,7 @@ async function showDetalleInvitacion(solicitudId, codigo) {
             <tbody>${items.map((it) => `
               <tr>
                 <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
-                <td>${esc(it.paquete || '—')}</td>
+                <td>${esc(it.centro || it.centro_nombre || '—')}</td>
                 <td>${esc(it.codigo_sigamef || '—')}</td>
                 <td>${esc(it.descripcion || '—')}</td>
                 <td class="text-center">${esc(it.cantidad ?? 1)}</td>
@@ -84,7 +84,7 @@ async function showDetalleInvitacion(solicitudId, codigo) {
         dismissProveedorModal(modal);
         sessionStorage.setItem('provCotSolId', String(solicitudId));
         sessionStorage.setItem('provCotAutoOpen', '1');
-        window.location.hash = '#/proveedor/mis-cotizaciones';
+        window.location.hash = `#/proveedor/mis-cotizaciones?solicitud_id=${encodeURIComponent(solicitudId)}`;
         window.dispatchEvent(new HashChangeEvent('hashchange'));
       };
     }

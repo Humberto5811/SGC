@@ -174,12 +174,19 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
   if (!requerimientoIds?.length) return [];
   const placeholders = requerimientoIds.map((_, i) => `$${i + 1}`).join(', ');
   const { rows } = await query(`
-    SELECT r.id, r.codigo, r.tipo, r.denominacion, r.payload,
+    SELECT r.id, r.codigo, r.tipo, r.denominacion, r.payload, r.cmn, r.responsable,
       COALESCE(paq.codigo_paquete, '') AS codigo_paquete,
-      COALESCE(ped.pedidos_sigamef, '') AS pedidos_sigamef
+      COALESCE(ped.pedidos_sigamef, '') AS pedidos_sigamef,
+      COALESCE(c.nombre, '') AS catalogo_centro_nombre,
+      COALESCE(c.codigo, '') AS catalogo_centro_codigo,
+      COALESCE(ped.pedido_centro, '') AS pedido_centro
     FROM requerimientos r
+    LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+    LEFT JOIN centros c ON a.centro_id = c.id
     LEFT JOIN LATERAL (
-      SELECT string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.pedido_sigamef), ''), CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)), ', ') AS pedidos_sigamef
+      SELECT
+        string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.pedido_sigamef), ''), CONCAT(UPPER(LEFT(COALESCE(p.tipo, 'PB'), 2)), '-', p.nro_pedido)), ', ') AS pedidos_sigamef,
+        MAX(NULLIF(TRIM(p.centro), '')) AS pedido_centro
       FROM requerimiento_pedidos rp
       JOIN pedidos_sigamef p ON rp.pedido_sigamef_id = p.id
       WHERE rp.requerimiento_id = r.id
@@ -192,9 +199,11 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
     WHERE r.id IN (${placeholders})
   `, requerimientoIds);
 
+  const { resolveCentroDisplay } = await import('./centroDisplay.js');
   const items = [];
   for (const r of rows) {
     const payload = parsePayload(r);
+    const centro = resolveCentroDisplay(r);
     const rawItems = r.tipo === 'servicios' ? (payload.servicioItems || [])
       : r.tipo === 'locacion' ? (payload.locadorItems || [])
         : (payload.items || []);
@@ -204,6 +213,8 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
           requerimiento_id: r.id,
           requerimiento_codigo: r.codigo,
           paquete: r.codigo_paquete || '',
+          centro,
+          centro_nombre: centro,
           pedido_sigamef: r.pedidos_sigamef || '',
           codigo_sigamef: it.item_bien || it.codigo || '',
           descripcion: it.nombre_item || it.descripcion || r.denominacion || '',
@@ -223,6 +234,8 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
         requerimiento_id: r.id,
         requerimiento_codigo: r.codigo,
         paquete: r.codigo_paquete || '',
+        centro,
+        centro_nombre: centro,
         pedido_sigamef: r.pedidos_sigamef || '',
         codigo_sigamef: '',
         descripcion: r.denominacion || '',

@@ -136,7 +136,7 @@ export function renderStep1Bienes(ctx) {
             const f = formState.items[idx] || {};
             return `<tr data-idx="${idx}">
               <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
-              <td>${esc(it.paquete || '—')}</td>
+              <td>${esc(it.centro || it.centro_nombre || '—')}</td>
               <td>${esc(it.codigo_sigamef || '—')}</td>
               <td>${esc(it.descripcion || '—')}</td>
               <td class="text-center">${esc(it.cantidad ?? 1)}</td>

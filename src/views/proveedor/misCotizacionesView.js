@@ -676,7 +676,7 @@ async function loadCotizacionesList() {
   const resp = await portalService.listMisCotizaciones();
   const rows = resp.data || [];
   if (!rows.length) {
-    cont.innerHTML = '<div class="small text-muted mb-0">No ha enviado cotizaciones.</div>';
+    cont.innerHTML = '<div class="small text-muted mb-0">No tiene convocatorias disponibles para cotizar.</div>';
     return;
   }
   cont.innerHTML = `
@@ -687,12 +687,12 @@ async function loadCotizacionesList() {
       <tbody>${rows.map((c) => `
         <tr>
           <td><strong>${esc(c.solicitud_codigo)}</strong> — ${esc(c.denominacion || c.objeto || '')}</td>
-          <td>${esc(c.estado)}</td>
+          <td>${esc(c.estado_participacion || c.estado || '—')}</td>
           <td>${esc(c.validacion_estado || 'Pendiente')}</td>
           <td class="small">${fmtDt(c.fecha_presentacion || c.created_at)}</td>
           <td class="text-nowrap">
             <button type="button" class="btn btn-sm btn-outline-primary prov-cot-ver" data-id="${c.solicitud_id}">
-              ${c.estado === 'COTIZACION_PRESENTADA' ? 'Ver' : 'Ver / Editar'}
+              ${String(c.cotizacion_estado || c.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA' ? 'Ver' : 'Ver / Editar'}
             </button>
           </td>
         </tr>`).join('')}</tbody>
@@ -702,24 +702,48 @@ async function loadCotizacionesList() {
   });
 }
 
-async function openWizardFor(solicitudId) {
-  const sel = document.getElementById('provCotSelSol');
-  if (sel) sel.value = String(solicitudId);
-  await openWizard();
+function readSolicitudIdFromHash() {
+  try {
+    const hash = String(window.location.hash || '');
+    const qIdx = hash.indexOf('?');
+    if (qIdx < 0) return null;
+    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const sid = params.get('solicitud_id') || params.get('solicitudId');
+    return sid ? String(sid) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function resolveTargetSolicitudId(rows = []) {
+  const fromHash = readSolicitudIdFromHash();
+  const fromSession = sessionStorage.getItem('provCotSolId');
+  const target = fromHash || fromSession;
+  if (!target) return null;
+  if (rows.some((r) => String(r.solicitud_id) === String(target))) return String(target);
+  return null;
 }
 
 async function loadConvocatoriasSelect() {
-  const inv = await portalService.listMisInvitaciones();
+  const resp = await portalService.listMisCotizaciones();
+  const rows = resp.data || [];
   const sel = document.getElementById('provCotSelSol');
-  const elegibles = (inv.data || []).filter((i) =>
-    !i.convocatoria_cerrada || String(i.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA');
   if (sel) {
-    sel.innerHTML = elegibles.map((i) =>
-      `<option value="${i.solicitud_id}">${esc(i.codigo)} — ${esc(i.denominacion || i.objeto || '')}</option>`)
-      .join('') || '<option value="">Sin convocatorias disponibles</option>';
-    const saved = sessionStorage.getItem('provCotSolId');
-    if (saved && elegibles.some((i) => String(i.solicitud_id) === saved)) sel.value = saved;
+    sel.innerHTML = rows.map((i) => {
+      const label = i.estado_participacion ? ` [${i.estado_participacion}]` : '';
+      return `<option value="${i.solicitud_id}">${esc(i.solicitud_codigo)} — ${esc(i.denominacion || i.objeto || '')}${esc(label)}</option>`;
+    }).join('') || '<option value="">Sin convocatorias disponibles</option>';
+    const saved = resolveTargetSolicitudId(rows);
+    if (saved) sel.value = saved;
   }
+  return rows;
+}
+
+async function openWizardFor(solicitudId) {
+  const sel = document.getElementById('provCotSelSol');
+  if (sel) sel.value = String(solicitudId);
+  sessionStorage.setItem('provCotSolId', String(solicitudId));
+  await openWizard();
 }
 
 async function openWizard() {
@@ -828,11 +852,17 @@ export async function initMisCotizacionesView() {
   bindWizardControlsOnce();
   try {
     await loadCotizacionesList();
-    await loadConvocatoriasSelect();
-    if (sessionStorage.getItem('provCotAutoOpen')) {
+    const rows = await loadConvocatoriasSelect();
+    const auto = sessionStorage.getItem('provCotAutoOpen');
+    const target = resolveTargetSolicitudId(rows);
+    if (auto || target) {
       sessionStorage.removeItem('provCotAutoOpen');
-      sessionStorage.removeItem('provCotSolId');
-      setTimeout(() => openWizard(), 100);
+      if (target) {
+        sessionStorage.setItem('provCotSolId', target);
+        setTimeout(() => openWizardFor(parseInt(target, 10)), 100);
+      } else {
+        sessionStorage.removeItem('provCotSolId');
+      }
     }
   } catch (err) {
     document.getElementById('provCotList').innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;

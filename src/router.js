@@ -142,7 +142,8 @@ function isProveedorPublicRoute(route) {
 }
 
 function parseHash() {
-  const hash = location.hash.replace(/^#\/?/, '');
+  let hash = location.hash.replace(/^#\/?/, '');
+  if (hash.includes('?')) hash = hash.slice(0, hash.indexOf('?'));
   if (!hash) {
     const prov = getProveedorSessionLocal();
     if (prov?.id) return 'proveedor/mis-invitaciones';

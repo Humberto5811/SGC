@@ -111,19 +111,26 @@ function convocatoriaCerrada(solicitud) {
 
 export async function listMisInvitaciones(proveedorId) {
   const { rows } = await query(`
-    SELECT ip.*, sc.codigo, sc.objeto, sc.denominacion, sc.estado AS solicitud_estado,
+    SELECT DISTINCT ON (ip.solicitud_id)
+      ip.*, sc.codigo, sc.objeto, sc.denominacion, sc.estado AS solicitud_estado, sc.tipo,
       ${CRONOGRAMA_SELECT_SQL},
       sc.docs_solicitados, sc.requisitos_tecnicos, sc.lugar_entrega,
       ip.url_invitacion, ip.token_acceso, ip.estado_invitacion, ip.fecha_ultimo_envio
     FROM invitacion_proveedores ip
     JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
-    WHERE ip.proveedor_id = $1 AND ip.estado IN ('ENVIADA', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
-    ORDER BY sc.cotizaciones_fin ASC NULLS LAST
+    WHERE ip.proveedor_id = $1
+      AND UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
+      AND UPPER(COALESCE(sc.estado, '')) NOT IN ('ANULADA', 'ANULADO')
+    ORDER BY ip.solicitud_id, ip.updated_at DESC NULLS LAST, ip.id DESC
   `, [proveedorId]);
   return rows.map((r) => ({
     ...normalizeCronogramaRow(r),
-    convocatoria_cerrada: convocatoriaCerrada(r),
-  }));
+    convocatoria_cerrada: convocatoriaCerrada({
+      ...r,
+      estado: r.solicitud_estado,
+      solicitud_estado: r.solicitud_estado,
+    }),
+  })).sort((a, b) => String(a.cotizaciones_fin || '').localeCompare(String(b.cotizaciones_fin || '')));
 }
 
 export async function getDocumentosConvocatoria(proveedorId, solicitudId) {
@@ -332,22 +339,74 @@ export async function guardarBorradorCotizacion(proveedorId, body, req) {
   return rows[0];
 }
 
+function labelEstadoCotizacionPortal({ cotEstado, validacionEstado, convocatoriaCerrada }) {
+  const est = String(cotEstado || '').toUpperCase();
+  const val = String(validacionEstado || '').toUpperCase();
+  if (val === 'OBSERVADO') return 'Observada';
+  if (val === 'SUBSANADO' || val === 'SUBSANADA') return 'Subsanada';
+  if (est === 'COTIZACION_PRESENTADA') return 'Presentada';
+  if (est === 'BORRADOR') return 'Borrador';
+  if (convocatoriaCerrada) return 'Cerrada / fuera de plazo';
+  return 'Disponible para cotizar';
+}
+
+/**
+ * Mis Cotizaciones: fuente = invitaciones del proveedor + cotización opcional (LEFT JOIN).
+ * No exige fila en cotizaciones_proveedor para listar la solicitud.
+ */
 export async function listMisCotizaciones(proveedorId) {
   const { rows } = await query(`
-    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+    SELECT DISTINCT ON (ip.solicitud_id)
+      cot.id, ip.solicitud_id, ip.proveedor_id, ip.requerimiento_id,
       cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
       cot.validacion_estado, cot.validacion_observacion, cot.validacion_informe,
-      cot.validacion_responsable, cot.historial, cot.created_at, cot.updated_at,
+      cot.validacion_responsable, cot.historial,
+      COALESCE(cot.created_at, ip.created_at) AS created_at,
+      COALESCE(cot.updated_at, ip.updated_at) AS updated_at,
       to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
-      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
-      ip.estado AS estado_invitacion
-    FROM cotizaciones_proveedor cot
-    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
-    LEFT JOIN invitacion_proveedores ip ON ip.solicitud_id = cot.solicitud_id AND ip.proveedor_id = cot.proveedor_id
-    WHERE cot.proveedor_id = $1
-    ORDER BY cot.fecha_presentacion DESC NULLS LAST, cot.created_at DESC
+      cot.estado AS cotizacion_estado,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo,
+      sc.estado AS solicitud_estado,
+      ip.estado AS estado_invitacion,
+      ip.id AS invitacion_id,
+      ${CRONOGRAMA_SELECT_SQL}
+    FROM invitacion_proveedores ip
+    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    LEFT JOIN cotizaciones_proveedor cot
+      ON cot.solicitud_id = sc.id AND cot.proveedor_id = ip.proveedor_id
+    WHERE ip.proveedor_id = $1
+      AND UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
+      AND UPPER(COALESCE(sc.estado, '')) NOT IN ('ANULADA', 'ANULADO')
+    ORDER BY ip.solicitud_id, cot.fecha_presentacion DESC NULLS LAST, cot.updated_at DESC NULLS LAST, ip.updated_at DESC NULLS LAST, ip.id DESC
   `, [proveedorId]);
-  return rows;
+
+  return rows.map((r) => {
+    const norm = normalizeCronogramaRow(r);
+    const cerrada = convocatoriaCerrada({
+      ...norm,
+      estado: r.solicitud_estado,
+      solicitud_estado: r.solicitud_estado,
+    });
+    const estadoUi = labelEstadoCotizacionPortal({
+      cotEstado: r.cotizacion_estado,
+      validacionEstado: r.validacion_estado,
+      convocatoriaCerrada: cerrada,
+    });
+    return {
+      ...norm,
+      id: r.id || null,
+      estado: r.cotizacion_estado || (cerrada ? 'CERRADA' : 'DISPONIBLE'),
+      cotizacion_estado: r.cotizacion_estado || null,
+      estado_participacion: estadoUi,
+      convocatoria_cerrada: cerrada,
+      puede_presentar: !cerrada || String(r.cotizacion_estado || '').toUpperCase() === 'COTIZACION_PRESENTADA',
+      puede_crear_borrador: !cerrada,
+    };
+  }).sort((a, b) => {
+    const ta = a.cotizaciones_fin || a.updated_at || '';
+    const tb = b.cotizaciones_fin || b.updated_at || '';
+    return String(ta).localeCompare(String(tb));
+  });
 }
 
 export async function getEstadoParticipacion(proveedorId) {

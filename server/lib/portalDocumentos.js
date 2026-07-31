@@ -4,6 +4,7 @@ import { registrarTrazaPortal } from './invitaciones.js';
 import {
   CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
 } from './cronogramaDatetime.js';
+import { enrichDetalleItemsCentro, resolveCentroDisplay } from './centroDisplay.js';
 
 function parseJson(val, fallback = []) {
   if (Array.isArray(val)) return val;
@@ -211,17 +212,39 @@ export function buildDocumentosConvocatoria(solicitud, requerimientoIds, adjunto
   return docs;
 }
 
-export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
-  const acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
-  const reqs = await query(`
-    SELECT r.id, r.codigo, r.denominacion, r.area, r.cmn
+async function loadRequerimientosCentroMap(solicitudId) {
+  const { rows } = await query(`
+    SELECT r.id, r.codigo, r.denominacion, r.area, r.cmn, r.responsable, r.payload,
+      COALESCE(c.nombre, '') AS catalogo_centro_nombre,
+      COALESCE(c.codigo, '') AS catalogo_centro_codigo,
+      COALESCE(p2.centro, '') AS pedido_centro
     FROM solicitud_requerimientos sr
     JOIN requerimientos r ON r.id = sr.requerimiento_id
+    LEFT JOIN areas a ON r.area = a.nombre OR a.codigo = r.area
+    LEFT JOIN centros c ON a.centro_id = c.id
+    LEFT JOIN LATERAL (
+      SELECT p.centro FROM requerimiento_pedidos rp
+      JOIN pedidos_sigamef p ON p.id = rp.pedido_sigamef_id
+      WHERE rp.requerimiento_id = r.id
+      ORDER BY rp.id DESC LIMIT 1
+    ) p2 ON TRUE
     WHERE sr.solicitud_id = $1
   `, [solicitudId]);
-  const reqIds = reqs.rows.map((r) => r.id);
+  const map = new Map();
+  rows.forEach((r) => {
+    const centro = resolveCentroDisplay(r);
+    map.set(r.id, { ...r, centro, centro_nombre: centro });
+  });
+  return { rows, map };
+}
+
+export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
+  const acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
+  const { rows: reqRows, map: reqById } = await loadRequerimientosCentroMap(solicitudId);
+  const reqIds = reqRows.map((r) => r.id);
   const adjuntosMap = await loadAdjuntosPorRequerimiento(reqIds);
   const documentos = buildDocumentosConvocatoria(acceso, reqIds, adjuntosMap);
+  const detalle_items = enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById);
 
   return {
     solicitud: {
@@ -238,9 +261,17 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
       cotizaciones_fin: acceso.cotizaciones_fin,
       docs_solicitados: parseJson(acceso.docs_solicitados),
       requisitos_tecnicos: parseJson(acceso.requisitos_tecnicos),
-      detalle_items: parseJson(acceso.detalle_items),
+      detalle_items,
     },
-    requerimientos: reqs.rows,
+    requerimientos: reqRows.map((r) => ({
+      id: r.id,
+      codigo: r.codigo,
+      denominacion: r.denominacion,
+      area: r.area,
+      cmn: r.cmn,
+      centro: r.centro,
+      centro_nombre: r.centro_nombre,
+    })),
     documentos,
     token_acceso: acceso.token_acceso,
   };
@@ -248,7 +279,8 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
 
 export async function getCotizacionWorkspace(proveedorId, solicitudId) {
   const acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
-  const items = parseJson(acceso.detalle_items);
+  const { map: reqById } = await loadRequerimientosCentroMap(solicitudId);
+  const items = enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById);
   if (!items.length) throw new Error('La solicitud no tiene ítems configurados');
 
   const reqIds = [...new Set(items.map((it) => it.requerimiento_id).filter(Boolean))];
