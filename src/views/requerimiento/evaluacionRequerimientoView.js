@@ -12,7 +12,7 @@ import {
 } from '../../utils/trazabilidad.js';
 import { loadEvaluacionBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
-import { evalMenuItems, evalHiddenActions } from '../../utils/bandejaActions.js';
+import { evalMenuItems, evalHiddenActions, estaEnEvaluacion } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -86,7 +86,7 @@ async function loadEvaluacionList(sortOverride = {}, resetPage = false) {
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'Evaluación de Requerimiento',
-        puedeObservar: (r) => /tr[aá]mite/i.test(String(r.estado || '')) && !/aprobad/i.test(String(r.estado || '')),
+        puedeObservar: (r) => estaEnEvaluacion(r) && !/aprobad/i.test(String(r.estado || '')),
         onObservar: async (reqId, data) => {
           await requerimientosService.observarEvaluacion(reqId, {
             ...data,
