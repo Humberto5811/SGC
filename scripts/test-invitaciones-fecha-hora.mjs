@@ -79,7 +79,7 @@ console.log('\n=== Invitaciones — fecha/hora America/Lima ===\n');
   ok('G: misma función para Bienes/Servicios/Locadores');
 }
 
-// H — encabezado visible "Fecha de invitación"
+// H — encabezado visible "Fecha de invitación" + selector Lima
 {
   const view = fs.readFileSync(path.join(root, 'src/views/contratacion/invitacionesView.js'), 'utf8');
   assert.ok(view.includes('Fecha de invitación'), 'debe existir etiqueta Fecha de invitación');
@@ -87,7 +87,11 @@ console.log('\n=== Invitaciones — fecha/hora America/Lima ===\n');
   const modal = fs.readFileSync(path.join(root, 'src/utils/invitacionesModals.js'), 'utf8');
   assert.ok(modal.includes('formatDateTimeLima'), 'wizard usa formatDateTimeLima');
   assert.ok(!modal.includes(".slice(0, 16).replace('T', ' ')"), 'wizard ya no usa slice UTC');
-  ok('H: encabezado Fecha de invitación + wizard corregido');
+  const sel = fs.readFileSync(path.join(root, 'src/utils/invitacionesProveedorSelector.js'), 'utf8');
+  assert.ok(sel.includes('formatDateTimeLima'), 'selector usa formatDateTimeLima');
+  assert.ok(!sel.includes(".slice(0, 16).replace('T', ' ')"), 'selector ya no usa slice UTC');
+  assert.equal(formatDateTimeLima('2026-07-31T17:41:00.000Z'), '2026-07-31 12:41');
+  ok('H: bandeja + wizard + selector Última Part. con formatDateTimeLima');
 }
 
 // Extra: cronograma naive no debe confundirse (sigue siendo wall-clock)

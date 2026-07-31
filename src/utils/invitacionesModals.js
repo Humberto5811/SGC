@@ -892,7 +892,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         <td class="small">${esc(p.persona_contacto || '')}</td><td>${esc(p.rubro || '')}</td>
         <td><span class="badge bg-${enviado ? 'primary' : 'secondary'}">${esc(p.estado_envio)}</span></td>
         <td class="small">${p.fecha_invitacion || p.fecha_envio ? esc(formatDateTimeLima(p.fecha_invitacion || p.fecha_envio)) : '—'}</td>
-        <td class="text-center">${p.cantidad_invitaciones_proveedor ?? 0}</td>
+        <td class="text-center">${p.nro_invitacion ?? p.cantidad_invitaciones_proveedor ?? 0}</td>
         <td class="text-nowrap">
           ${enviado ? '' : `<button type="button" class="btn btn-sm btn-outline-danger sc-prov-del" data-invitacion-id="${p.invitacion_id ?? p.id}">Eliminar</button>`}
           ${enviado ? `<button type="button" class="btn btn-sm btn-outline-primary sc-prov-mail" data-invitacion-id="${p.invitacion_id ?? p.id}"><i class="bi bi-envelope"></i></button>` : ''}

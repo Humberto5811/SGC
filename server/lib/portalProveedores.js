@@ -272,7 +272,12 @@ export async function presentarCotizacion(proveedorId, body, req) {
   ]);
 
   await query(`UPDATE invitacion_proveedores SET estado = 'COTIZACION_PRESENTADA', updated_at = NOW()
-    WHERE proveedor_id = $1 AND solicitud_id = $2`, [proveedorId, solicitud_id]);
+    WHERE id = (
+      SELECT id FROM invitacion_proveedores
+      WHERE proveedor_id = $1 AND solicitud_id = $2
+      ORDER BY nro_invitacion DESC NULLS LAST, id DESC
+      LIMIT 1
+    )`, [proveedorId, solicitud_id]);
 
   await registrarTrazaPortal({
     solicitud_id, proveedor_id: proveedorId, requerimiento_id: inv[0].requerimiento_id,

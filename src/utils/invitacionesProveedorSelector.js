@@ -2,6 +2,7 @@
 import { proveedoresMaestroService } from '../services/proveedoresMaestroService.js';
 import { contratacionesService } from '../services/contratacionesService.js';
 import { openNuevoProveedorModal } from '../views/registroDatos/proveedoresMaestroView.js';
+import { formatDateTimeLima } from './dateTimeLima.js';
 
 const RUBROS = [
   'Medicamentos', 'Reactivos', 'Dispositivos Médicos', 'Equipos', 'Laboratorio',
@@ -12,19 +13,20 @@ function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 }
 
+/** Único formateador de fechas de invitaciones (America/Lima). */
 function fmtDt(v) {
-  if (!v) return '—';
-  return esc(String(v).slice(0, 16).replace('T', ' '));
+  return esc(formatDateTimeLima(v));
 }
 
 function badgeAnterior(p) {
   if (!p.invitado_anteriormente) return '';
   const tip = [
-    `Fecha: ${fmtDt(p.ultima_invitacion)}`,
+    `Fecha: ${formatDateTimeLima(p.ultima_invitacion)}`,
     `Convocatoria: ${p.ultima_convocatoria || '—'}`,
     `Estado: ${p.ultimo_estado_invitacion || '—'}`,
     `Presentó cotización: ${p.presento_cotizacion ? 'Sí' : 'No'}`,
   ].join('\n');
+  // Solo informativo: no deshabilita el checkbox ni impide reinvitar.
   return `<span class="badge bg-warning text-dark ms-1 sc-badge-ant" title="${esc(tip)}">INVITADO ANTERIORMENTE</span>`;
 }
 

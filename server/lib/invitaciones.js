@@ -416,16 +416,36 @@ export async function agregarProveedoresInvitacion(requerimientoId, proveedores 
     const correos = (Array.isArray(p.correos) && p.correos.length)
       ? p.correos
       : (p.correo ? [p.correo] : (prov.correo ? [prov.correo] : (Array.isArray(prov.emails) ? prov.emails : [])));
+
+    // N° Inv. secuencial por solicitud+proveedor (reinvitación = nuevo registro).
+    const { rows: nroRows } = await query(`
+      SELECT COALESCE(MAX(nro_invitacion), 0) + 1 AS next_nro
+      FROM invitacion_proveedores
+      WHERE proveedor_id = $1
+        AND (
+          ($2::int IS NOT NULL AND solicitud_id = $2)
+          OR ($2::int IS NULL AND requerimiento_id = $3)
+        )
+    `, [prov.id, solicitudId, requerimientoId]);
+    const nroInv = nroRows[0]?.next_nro || 1;
+
     const { rows } = await query(`
-      INSERT INTO invitacion_proveedores (solicitud_id, requerimiento_id, proveedor_id, correos, estado)
-      VALUES ($1, $2, $3, $4::jsonb, 'PENDIENTE')
-      ON CONFLICT (requerimiento_id, proveedor_id) DO UPDATE SET
-        solicitud_id = COALESCE(EXCLUDED.solicitud_id, invitacion_proveedores.solicitud_id),
-        correos = EXCLUDED.correos,
-        estado = CASE WHEN ${sqlInvitacionPendiente('invitacion_proveedores')} THEN 'PENDIENTE' ELSE invitacion_proveedores.estado END,
-        updated_at = NOW()
+      INSERT INTO invitacion_proveedores (
+        solicitud_id, requerimiento_id, proveedor_id, correos, estado, nro_invitacion, historial
+      ) VALUES (
+        $1, $2, $3, $4::jsonb, 'PENDIENTE', $5,
+        $6::jsonb
+      )
       RETURNING *
-    `, [solicitudId, requerimientoId, prov.id, JSON.stringify(correos)]);
+    `, [
+      solicitudId, requerimientoId, prov.id, JSON.stringify(correos), nroInv,
+      JSON.stringify([{
+        tipo: 'alta',
+        fecha: new Date().toISOString(),
+        nro_invitacion: nroInv,
+        reinvitacion: nroInv > 1,
+      }]),
+    ]);
     results.push({ ...rows[0], proveedor: prov });
   }
   return results;
@@ -853,7 +873,7 @@ export async function agregarProveedorSolicitud(solicitudId, proveedorData) {
 export async function listarProveedoresSolicitud(solicitudId) {
   const { rows } = await query(`
     SELECT ip.id AS invitacion_id, ip.solicitud_id, ip.requerimiento_id, ip.proveedor_id,
-      ip.estado, ip.correos, ip.fecha_envio,
+      ip.estado, ip.correos, ip.fecha_envio, ip.nro_invitacion, ip.historial, ip.created_at,
       p.ruc, p.razon_social, p.telefono, p.correo, p.persona_contacto, p.rubro,
       p.emails AS proveedor_emails, p.cantidad_invitaciones, p.cantidad_cotizaciones,
       p.ultima_invitacion, p.ultima_cotizacion
@@ -866,12 +886,13 @@ export async function listarProveedoresSolicitud(solicitudId) {
            SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = $1
          )
        )
-    ORDER BY ip.id ASC
+    ORDER BY ip.proveedor_id ASC, ip.nro_invitacion ASC NULLS LAST, ip.id ASC
   `, [solicitudId]);
   return rows.map((r) => ({
     ...r,
     id: r.invitacion_id,
     proveedor_id: r.proveedor_id,
+    nro_invitacion: r.nro_invitacion ?? 1,
     estado_envio: esEstadoInvitacionEnviada(r.estado) ? 'Enviado' : 'Pendiente',
     correo_display: (Array.isArray(r.correos) && r.correos.length ? r.correos : (r.correo ? [r.correo] : r.proveedor_emails || [])).join('; '),
     persona_contacto: r.persona_contacto || '',
