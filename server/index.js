@@ -73,13 +73,28 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 app.set('trust proxy', 1);
 
 app.use(helmet());
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174,http://localhost:5177,http://localhost:5178,http://localhost:3000')
-  .split(',')
-  .map((o) => o.trim());
+// Lista explícita de orígenes (no wildcard) con credentials: true.
+// Incluye VPS + Vite local; CORS_ORIGINS del entorno se une sin reemplazar la base.
+const ALLOWED_ORIGINS = [
+  ...new Set([
+    'http://217.216.54.68',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://localhost:5177',
+    'http://localhost:5178',
+    'http://localhost:3000',
+    ...(process.env.CORS_ORIGINS || '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+  ]),
+];
 app.use(cors({
   origin(origin, cb) {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    cb(new Error('Origen no permitido por CORS'));
+    if (!origin) return cb(null, true); // curl / server-to-server
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(new Error(`Origen no permitido por CORS: ${origin}`));
   },
   credentials: true,
 }));
