@@ -22,6 +22,7 @@ import {
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { printRequerimiento, manageAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
+import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -408,6 +409,12 @@ function fmtDt(v) {
   return esc(formatCronogramaDisplay(v));
 }
 
+/** Fecha de invitación / publicación real (timestamptz → America/Lima). */
+function fmtInvitacionDt(v) {
+  if (!v) return '—';
+  return esc(formatDateTimeLima(v));
+}
+
 function switchToSolicitudesTab() {
   document.querySelectorAll('#invTabs .nav-link').forEach((l) => {
     l.classList.toggle('active', l.dataset.tab === 'solicitudes');
@@ -455,7 +462,7 @@ async function loadSolicitudesTab(resetPage = false) {
             <th>N° Requerimiento</th>
             <th>Descripción de la contratación</th>
             <th>Estado de invitación</th>
-            <th>Fecha publicación</th>
+            <th>Fecha de invitación</th>
             <th>Fecha culminación</th>
             <th class="text-center">Cant. proveedores</th>
             <th class="text-center">Cant. cotizaciones</th>
@@ -467,7 +474,7 @@ async function loadSolicitudesTab(resetPage = false) {
               <td><strong>${esc(s.requerimiento_codigo || '—')}</strong></td>
               <td>${esc(s.descripcion_contratacion || s.denominacion || s.objeto || '—')}</td>
               <td>${solicitudEstadoBadge(s)}</td>
-              <td class="small">${fmtDt(s.fecha_publicacion)}</td>
+              <td class="small">${fmtInvitacionDt(s.fecha_publicacion)}</td>
               <td class="small">${fmtDt(s.fecha_culminacion || s.cotizaciones_fin)}</td>
               <td class="text-center">${s.cantidad_proveedores ?? s.invitados ?? 0}</td>
               <td class="text-center">${s.cotizaciones_recibidas ?? 0}</td>

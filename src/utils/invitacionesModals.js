@@ -19,6 +19,7 @@ import {
   buildSolicitudCotizacionUpdatePayload,
   measureJsonBytes,
 } from './solicitudCotizacionPayload.js';
+import { formatDateTimeLima } from './dateTimeLima.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -890,7 +891,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         <td class="small">${esc(p.correo_display || '')}</td><td>${esc(p.telefono || '')}</td>
         <td class="small">${esc(p.persona_contacto || '')}</td><td>${esc(p.rubro || '')}</td>
         <td><span class="badge bg-${enviado ? 'primary' : 'secondary'}">${esc(p.estado_envio)}</span></td>
-        <td class="small">${p.fecha_invitacion || p.fecha_envio ? esc(String(p.fecha_invitacion || p.fecha_envio).slice(0, 16).replace('T', ' ')) : '—'}</td>
+        <td class="small">${p.fecha_invitacion || p.fecha_envio ? esc(formatDateTimeLima(p.fecha_invitacion || p.fecha_envio)) : '—'}</td>
         <td class="text-center">${p.cantidad_invitaciones_proveedor ?? 0}</td>
         <td class="text-nowrap">
           ${enviado ? '' : `<button type="button" class="btn btn-sm btn-outline-danger sc-prov-del" data-invitacion-id="${p.invitacion_id ?? p.id}">Eliminar</button>`}
