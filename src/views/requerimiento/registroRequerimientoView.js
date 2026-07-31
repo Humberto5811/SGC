@@ -39,7 +39,7 @@ import { loadRegistroBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
-import { getUserDisplayName } from '../../utils/userDisplay.js';
+import { getUserDisplayName, getUserAuditName } from '../../utils/userDisplay.js';
 
 const registroPagination = usePagination('registro', loadRegistroBandeja, { defaultPageSize: 25 });
 
@@ -879,7 +879,7 @@ async function saveRequerimiento() {
   collectInputs();
   setMsg('info', 'Guardando requerimiento…');
   const user = authService.getCurrentUser();
-  const usuario = getUserDisplayName(user) || 'sistema';
+  const usuario = getUserAuditName(user) || 'Sistema';
   await ensureFichaNetOnItems(state.items);
   collectInputs();
 
@@ -1533,7 +1533,7 @@ async function saveRequerimientoServicio() {
   collectServicioInputs();
   setMsg('info', 'Guardando requerimiento de servicios…');
   const user = authService.getCurrentUser();
-  const usuario = getUserDisplayName(user) || 'sistema';
+  const usuario = getUserAuditName(user) || 'Sistema';
 
   const cmnRaw = state.cmn || '';
   const cmnNum = parseInt(cmnRaw.replace(/\D/g, ''), 10);
@@ -2231,7 +2231,7 @@ async function saveRequerimientoLocador() {
     responsable: state.area.responsable || '',
     denominacion: state.denominacion,
     payload: JSON.stringify(payload),
-    usuario_modificacion: getUserDisplayName(authService.getCurrentUser()) || 'sistema',
+    usuario_modificacion: getUserAuditName(authService.getCurrentUser()) || 'Sistema',
   };
   // RC118: mismo estado inicial canónico que bienes/servicios (backend también lo fuerza).
   if (!reqShared.editingFromEvaluacion) {

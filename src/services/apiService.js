@@ -8,10 +8,19 @@ function authHeaders() {
       const user = JSON.parse(raw);
       const h = {};
       if (user && user.id) h['x-user-id'] = String(user.id);
+      // Preferir username para auditoría (WVASQUEZ); no usar user.centro (es centro).
+      const username = String(user?.username || '').trim();
       const fullName = [user.apellidos, user.nombres].filter(Boolean).join(' ').trim();
-      if (fullName) h['x-user-name'] = fullName;
-      else if (user && (user.nombre || user.username || user.dni)) {
-        h['x-user-name'] = String(user.nombre || user.username || user.dni);
+      if (username && !/^\d+$/.test(username)) h['x-user-name'] = username;
+      else if (fullName) h['x-user-name'] = fullName;
+      else if (user && (user.nombre || user.dni)) {
+        const nombre = String(user.nombre || '').trim();
+        const centro = String(user.centro || '').trim();
+        if (nombre && centro && nombre.toLowerCase() === centro.toLowerCase()) {
+          h['x-user-name'] = String(user.dni || username || '');
+        } else {
+          h['x-user-name'] = String(nombre || user.dni);
+        }
       }
       // RC8.5-B1 — cargo/rol reales del usuario autenticado (sin inventar valores).
       h['x-user-cargo'] = String(user.cargo ?? '');

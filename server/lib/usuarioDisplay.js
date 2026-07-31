@@ -18,6 +18,43 @@ export function isIdentificadorGenerico(valor) {
   return GENERICOS.has(v);
 }
 
+/** Valores de centro del expediente (nunca válidos como usuario creador). */
+export function centrosProhibidosFromRow(row) {
+  return new Set(
+    [row?.responsable, row?.centro_nombre, row?.centro_costo_codigo, row?.centro]
+      .map((x) => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+/**
+ * True si el valor es centro, rol genérico o vacío — no usable como usuario creador.
+ * `requerimientos.responsable` es el centro del área (p.ej. CNCC), no una persona.
+ */
+export function isUsuarioCreadorInvalido(valor, row = null, roleLabels = []) {
+  const v = String(valor || '').trim();
+  if (!v) return true;
+  const low = v.toLowerCase();
+  if (isIdentificadorGenerico(v)) return true;
+  if (centrosProhibidosFromRow(row).has(low)) return true;
+  for (const r of roleLabels || []) {
+    if (String(r || '').trim().toLowerCase() === low) return true;
+  }
+  return false;
+}
+
+/**
+ * Resuelve el usuario creador real del requerimiento.
+ * Nunca acepta centro (`row.responsable`), roles ni "Usuario AU".
+ */
+export function resolveUsuarioCreadorRequerimiento(row, ...candidatos) {
+  for (const c of candidatos) {
+    const v = String(c || '').trim();
+    if (!isUsuarioCreadorInvalido(v, row)) return v;
+  }
+  return null;
+}
+
 function parseJsonArray(value) {
   try {
     const parsed = typeof value === 'string' ? JSON.parse(value || '[]') : value;
@@ -45,26 +82,12 @@ export function resolveResponsablePersonaDisplay(row, roleLabels = []) {
       .filter(Boolean),
   );
 
-  // Columna r.responsable en requerimientos = centro del área (label "Centro" en el form), NO persona.
-  const centrosProhibidos = new Set(
-    [row?.responsable, row?.centro_nombre, row?.centro_costo_codigo, row?.centro]
-      .map((x) => String(x || '').trim().toLowerCase())
-      .filter(Boolean),
-  );
-
-  const isInvalidPersona = (valor) => {
-    const v = String(valor || '').trim();
-    if (!v) return true;
-    const low = v.toLowerCase();
-    if (isIdentificadorGenerico(v)) return true;
-    if (roles.has(low)) return true;
-    if (centrosProhibidos.has(low)) return true;
-    return false;
-  };
-
   const pick = (valor) => {
     const v = String(valor || '').trim();
-    return isInvalidPersona(v) ? null : v;
+    if (!v) return null;
+    if (roles.has(v.toLowerCase())) return null;
+    if (isUsuarioCreadorInvalido(v, row)) return null;
+    return v;
   };
 
   // 1) Primer movimiento CREADO

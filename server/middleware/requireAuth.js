@@ -10,7 +10,8 @@ export default async function requireAuth(req, res, next) {
   }
   try {
     const { rows } = await query(
-      'SELECT id, dni, nombre, rol FROM usuarios WHERE id = $1 AND activo = TRUE',
+      `SELECT id, dni, username, nombre, apellidos, nombres, rol
+       FROM usuarios WHERE id = $1 AND activo = TRUE`,
       [userId],
     );
     if (!rows.length) {

@@ -377,8 +377,19 @@ app.use('/api/requerimientos', crudRouter({
     const userId = req.user?.id || req.headers['x-user-id'];
     await assertCanAccessRequirement(userId, row.id, String(req.method || 'GET'));
   },
-  afterCreate: async (row, body) => {
-    await ejecutarRegistroCrear(row.id, body.usuario_modificacion || 'Sistema');
+  afterCreate: async (row, body, req) => {
+    const { resolveUsuarioCreadorRequerimiento } = await import('./lib/usuarioDisplay.js');
+    // Preferir identidad autenticada (username) sobre body; nunca el centro (row.responsable).
+    const fromAuth = req?.user?.username
+      || req?.headers?.['x-user-name']
+      || req?.user?.nombre
+      || req?.user?.dni;
+    const usuarioCreador = resolveUsuarioCreadorRequerimiento(
+      row,
+      body?.usuario_modificacion,
+      fromAuth,
+    ) || 'Sistema';
+    await ejecutarRegistroCrear(row.id, usuarioCreador);
   },
   afterUpdate: async (row, prev, body) => {
     await ejecutarRegistroEditar({ row, prev, body, extractObservacionTrazabilidad });

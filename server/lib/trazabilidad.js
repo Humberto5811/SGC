@@ -1,6 +1,11 @@
 // Sistema transversal de trazabilidad de expedientes (requerimientos)
 import { query } from '../db.js';
-import { getUsuarioMap, aplicarNombresUsuariosHistorial, resolveUsuarioNombreSync } from './usuarioDisplay.js';
+import {
+  getUsuarioMap,
+  aplicarNombresUsuariosHistorial,
+  resolveUsuarioNombreSync,
+  resolveUsuarioCreadorRequerimiento,
+} from './usuarioDisplay.js';
 import { submoduloLabelToEtapa, resolveEstadoFromDestino, resolveResponsableFromDestino, formatSubsanacionTraza } from './observacionDestino.js';
 import {
   getSubModuloMeta,
@@ -228,9 +233,15 @@ export function buildHistorialEntry({
 export function initHistorialFromRow(row, usuario) {
   const etapa = mapEstadoToEtapa(row.estado || 'Registrado');
   const fecha = row.created_at || new Date().toISOString();
+  // Nunca usar row.responsable: es el centro (CNCC), no el usuario creador.
+  const usuarioCreador = resolveUsuarioCreadorRequerimiento(
+    row,
+    usuario,
+    row.usuario_modificacion,
+  ) || 'Sistema';
   return [buildHistorialEntry({
     etapa,
-    usuario: usuario || row.usuario_modificacion || row.responsable || 'Sistema',
+    usuario: usuarioCreador,
     fechaIngreso: fecha,
     observacion: 'Registro inicial del requerimiento',
     accion: 'creacion',
@@ -310,7 +321,8 @@ function collectRawEvents(row) {
   push({
     fecha: row.created_at,
     etapa: 'REGISTRADO',
-    usuario: row.usuario_modificacion || row.responsable || 'Usuario AU',
+    // Nunca row.responsable (centro). Solo persona real o Sistema.
+    usuario: resolveUsuarioCreadorRequerimiento(row, row.usuario_modificacion) || 'Sistema',
     observacion: 'Registro inicial del requerimiento',
     accion: 'creacion',
     tipoEvento: 'etapa',
@@ -886,17 +898,24 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
     }
     return enrichRequerimientoRow(row);
   }
-  const historial = initHistorialFromRow(row, usuario);
+  // Creador real: candidato explícito / usuario_modificacion. Nunca centro (row.responsable).
+  const usuarioCreador = resolveUsuarioCreadorRequerimiento(
+    row,
+    usuario,
+    row.usuario_modificacion,
+  ) || 'Sistema';
+  const historial = initHistorialFromRow(row, usuarioCreador);
   const etapa = mapEstadoToEtapa(row.estado || 'Registrado');
   const subMeta = getSubModuloMeta(etapa);
   const fecha = row.created_at || new Date().toISOString();
-  const responsable = ETAPAS[etapa]?.responsable || row.responsable || usuario;
+  // Rol funcional de etapa (Usuario AU). No usar row.responsable (centro CNCC).
+  const responsableEtapa = ETAPAS[etapa]?.responsable || 'Usuario AU';
   const movimientos = appendMovimiento([], buildMovimientoEntry({
     fecha,
     accion: 'CREADO',
     etapa,
-    usuario,
-    responsable,
+    usuario: usuarioCreador,
+    responsable: responsableEtapa,
     observacion: 'Registro inicial del requerimiento',
   }));
   await query(`
@@ -907,25 +926,29 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
       responsable_actual = $4,
       fecha_estado_actual = $5,
       historial_estados = $6::jsonb,
-      historial_movimientos = $7::jsonb
+      historial_movimientos = $7::jsonb,
+      usuario_modificacion = COALESCE(NULLIF(TRIM(usuario_modificacion), ''), $9)
     WHERE id = $1
   `, [
     requerimientoId,
     etapa,
     subMeta.subModulo,
-    responsable,
+    responsableEtapa,
     fecha,
     JSON.stringify(historial),
     JSON.stringify(movimientos),
     'Registrado',
+    usuarioCreador,
   ]);
   return enrichRequerimientoRow({
     ...row,
     estado: String(row.estado || '').trim() || 'Registrado',
     estado_actual: etapa,
-    responsable_actual: responsable,
+    responsable_actual: responsableEtapa,
     fecha_estado_actual: fecha,
     historial_estados: historial,
+    historial_movimientos: movimientos,
+    usuario_modificacion: row.usuario_modificacion || usuarioCreador,
   });
 }
 

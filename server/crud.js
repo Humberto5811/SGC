@@ -87,7 +87,7 @@ export function crudRouter(cfg) {
       const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
       const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
       const { rows } = await query(sql, values);
-      if (afterCreate) await afterCreate(rows[0], req.body);
+      if (afterCreate) await afterCreate(rows[0], req.body, req);
       res.status(201).json(rows[0]);
     } catch (err) { next(err); }
   });
