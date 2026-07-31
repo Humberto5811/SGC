@@ -43,6 +43,9 @@ export const adjuntosService = {
     return false;
   },
 
+  /** Contenido de un adjunto (para Ver en UI). */
+  getAdjuntoData: (adjuntoId) => api.get(`/adjuntos/descargar/${adjuntoId}`),
+
   // Eliminar un adjunto
   eliminarAdjunto: (adjuntoId) => api.del(`/adjuntos/${adjuntoId}`),
 

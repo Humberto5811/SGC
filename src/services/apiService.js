@@ -47,10 +47,20 @@ async function request(path, options = {}) {
 
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
-      const err = new Error(error.detail?.message || error.message || error.error || error.detail || `Error ${res.status}`);
-      // Si detail es objeto (faltantes), conservar mensaje principal
+      let message = error.detail?.message || error.message || error.error
+        || (typeof error.detail === 'string' ? error.detail : null)
+        || `Error ${res.status}`;
+      if (res.status === 413) {
+        message = 'La solicitud supera el tamaño permitido. Revise los archivos adjuntos.';
+      } else if (res.status >= 500 && !error.message && !error.error) {
+        message = 'Error interno del servidor.';
+      } else if (res.status === 400 && (error.message || error.error)) {
+        message = error.message || error.error;
+      }
+      const err = new Error(message);
+      err.status = res.status;
+      err.body = error;
       if (typeof error.detail === 'object' && error.detail != null) {
-        err.message = error.message || error.error || err.message;
         err.detail = error.detail;
       }
       if (error.code) err.code = error.code;
@@ -59,11 +69,12 @@ async function request(path, options = {}) {
     return res.status === 204 ? null : res.json();
   } catch (error) {
     console.error('❌ Error en request:', error);
+    if (error?.status) throw error;
     const msg = String(error?.message || error || '');
     if (/failed to fetch|networkerror|load failed|fetch.*abort/i.test(msg)) {
-      throw new Error(
-        'No se pudo conectar con el servidor. Verifique que la API esté en ejecución (puerto 3000) e intente nuevamente.',
-      );
+      const netErr = new Error('No se pudo conectar con el servidor.');
+      netErr.isNetworkError = true;
+      throw netErr;
     }
     throw error;
   }

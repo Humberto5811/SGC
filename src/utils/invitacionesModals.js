@@ -1,9 +1,9 @@
 // Modales — Solicitud de Cotización (wizard) e invitaciones a proveedores
 import { contratacionesService } from '../services/contratacionesService.js';
 import { requerimientosService } from '../services/requerimientosService.js';
+import { adjuntosService } from '../services/adjuntosService.js';
 import { makeModalDraggable } from './proveedorShared.js';
 import { openSelectorProveedoresModal, showHistorialProveedorModal } from './invitacionesProveedorSelector.js';
-import { adjuntosService } from '../services/adjuntosService.js';
 import {
   renderAdjuntosTable, bindAdjuntosTable, renderDocumentosTable, bindDocumentosTable,
   openBase64Document,
@@ -13,6 +13,12 @@ import {
   itemCantidadForTipo, mapTipoFromRow,
 } from './solicitudCatalogos.js';
 import { splitDatetimeParts, toDatetimeLocalValue } from './cronogramaDatetime.js';
+import {
+  sanitizeDocSolicitado,
+  sanitizeReqTecnico,
+  buildSolicitudCotizacionUpdatePayload,
+  measureJsonBytes,
+} from './solicitudCotizacionPayload.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -161,6 +167,50 @@ function readFileAsMeta(file) {
   return { nombre: file.name, tipo: file.type, tamano: file.size, fecha_registro: new Date().toISOString() };
 }
 
+/** Caché de sesión para Ver/Descargar sin incluir binarios en el PUT. */
+function createDocContentCache() {
+  /** @type {Map<string, { contenido_base64?: string, mime_type?: string, adjunto_id?: number }>} */
+  const byDoc = new Map();
+  return {
+    set(documento, meta) {
+      if (!documento || !meta) return;
+      byDoc.set(String(documento), meta);
+    },
+    get(documento) {
+      return byDoc.get(String(documento)) || null;
+    },
+  };
+}
+
+function hydrateDocsResumenFromServer(docs) {
+  const cache = createDocContentCache();
+  const list = (Array.isArray(docs) ? docs : []).map((raw) => {
+    const d = { ...raw };
+    if (d.contenido_base64) {
+      cache.set(d.documento, {
+        contenido_base64: d.contenido_base64,
+        mime_type: d.mime_type,
+        adjunto_id: d.adjunto_id,
+      });
+    }
+    return sanitizeDocSolicitado(d);
+  });
+  return { list, cache };
+}
+
+function formatScApiError(err) {
+  const status = err?.status || err?.statusCode;
+  if (status === 413) {
+    return 'La solicitud supera el tamaño permitido. Revise los archivos adjuntos.';
+  }
+  if (status >= 500) return err?.message || 'Error interno del servidor.';
+  if (status === 400) return err?.message || 'Solicitud inválida.';
+  if (err?.isNetworkError) {
+    return 'No se pudo conectar con el servidor.';
+  }
+  return err?.message || 'No se pudo completar la operación';
+}
+
 function readFileWithContent(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -213,15 +263,18 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
   const tiParts = splitDatetimeParts(sol?.cotizaciones_inicio, toDatetimeLocalValue);
   const tfParts = splitDatetimeParts(sol?.cotizaciones_fin, toDatetimeLocalValue);
 
+  const hydratedDocs = hydrateDocsResumenFromServer(sol?.docs_solicitados);
+  const docContentCache = hydratedDocs.cache;
+
   const state = {
     solicitudId: sol?.id || null,
     requerimientoIds: effectiveReqIds,
     currentStep: opts.initialTab || 'general',
     unlocked: { general: true, docs: !!sol, items: !!sol, invitaciones: false },
     completed: { general: !!sol, docs: !!sol, items: false },
-    docsResumen: Array.isArray(sol?.docs_solicitados) ? sol.docs_solicitados.map((d) => ({ ...d })) : [],
+    docsResumen: hydratedDocs.list,
     reqResumen: Array.isArray(sol?.requisitos_tecnicos)
-      ? sol.requisitos_tecnicos.map((r) => normalizeReqEntry(r))
+      ? sol.requisitos_tecnicos.map((r) => sanitizeReqTecnico(normalizeReqEntry(r)))
       : [],
     items: Array.isArray(sol?.detalle_items) && sol.detalle_items.length
       ? sol.detalle_items
@@ -585,44 +638,74 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
     }
   }
 
+  async function openDocResumen(d, mode = 'view') {
+    if (!d) return;
+    const cached = docContentCache.get(d.documento);
+    if (d.adjunto_id) {
+      try {
+        if (mode === 'download') {
+          await adjuntosService.descargarAdjunto(d.adjunto_id, d.archivo || d.archivo_nombre || d.documento);
+          return;
+        }
+        const res = await adjuntosService.getAdjuntoData(d.adjunto_id);
+        if (res?.contenido_base64) {
+          openBase64Document({
+            nombre: d.archivo || d.archivo_nombre || d.documento,
+            mime_type: res.mime_type || d.mime_type,
+            contenido_base64: res.contenido_base64,
+          });
+          return;
+        }
+      } catch (err) {
+        alert(formatScApiError(err));
+        return;
+      }
+    }
+    const b64 = cached?.contenido_base64;
+    const mime = cached?.mime_type || d.mime_type || 'application/octet-stream';
+    if (!b64) {
+      alert('No hay archivo disponible para este documento. Vuelva a adjuntarlo.');
+      return;
+    }
+    if (mode === 'download') {
+      const a = document.createElement('a');
+      a.href = `data:${mime};base64,${b64}`;
+      a.download = d.archivo || d.archivo_nombre || d.documento || 'documento';
+      a.click();
+      return;
+    }
+    openBase64Document({
+      nombre: d.archivo || d.archivo_nombre || d.documento,
+      mime_type: mime,
+      contenido_base64: b64,
+    });
+  }
+
   function renderDocsResumen() {
     const tb = el.querySelector('#scDocsResumen');
     const count = el.querySelector('#scDocsCount');
     if (count) count.textContent = state.docsResumen.length;
     if (!tb) return;
-    tb.innerHTML = state.docsResumen.map((d, i) => `
-      <tr><td>${esc(d.documento)}</td><td>${esc(d.archivo || '—')}</td>
+    tb.innerHTML = state.docsResumen.map((d, i) => {
+      const hasFile = !!(d.adjunto_id || docContentCache.get(d.documento)?.contenido_base64 || d.archivo);
+      return `
+      <tr><td>${esc(d.documento)}</td><td>${esc(d.archivo || d.archivo_nombre || '—')}</td>
       <td class="small">${esc(fmtRegistro(d.fecha_registro))}</td>
       <td class="sc-td-actions">
         <div class="sc-actions-cell">
-          ${d.contenido_base64 ? `
+          ${hasFile ? `
             <button type="button" class="btn btn-sm btn-outline-primary sc-doc-res-ver" data-i="${i}" title="Ver"><i class="bi bi-eye"></i> Ver</button>
             <button type="button" class="btn btn-sm btn-outline-secondary sc-doc-res-dl" data-i="${i}" title="Descargar"><i class="bi bi-download"></i> Descargar</button>` : ''}
           <button type="button" class="btn btn-sm sc-btn-inst sc-doc-del" data-i="${i}" title="Eliminar"><i class="bi bi-trash"></i> Eliminar</button>
         </div>
-      </td></tr>`).join('')
+      </td></tr>`;
+    }).join('')
       || '<tr><td colspan="4" class="text-muted small">Sin documentos seleccionados</td></tr>';
     tb.querySelectorAll('.sc-doc-res-ver').forEach((btn) => {
-      btn.onclick = () => {
-        const d = state.docsResumen[parseInt(btn.dataset.i, 10)];
-        if (d?.contenido_base64) {
-          openBase64Document({
-            nombre: d.archivo || d.documento,
-            mime_type: d.mime_type,
-            contenido_base64: d.contenido_base64,
-          });
-        }
-      };
+      btn.onclick = () => openDocResumen(state.docsResumen[parseInt(btn.dataset.i, 10)], 'view');
     });
     tb.querySelectorAll('.sc-doc-res-dl').forEach((btn) => {
-      btn.onclick = () => {
-        const d = state.docsResumen[parseInt(btn.dataset.i, 10)];
-        if (!d?.contenido_base64) return;
-        const a = document.createElement('a');
-        a.href = `data:${d.mime_type || 'application/octet-stream'};base64,${d.contenido_base64}`;
-        a.download = d.archivo || d.documento || 'documento';
-        a.click();
-      };
+      btn.onclick = () => openDocResumen(state.docsResumen[parseInt(btn.dataset.i, 10)], 'download');
     });
     tb.querySelectorAll('.sc-doc-del').forEach((btn) => {
       btn.onclick = () => {
@@ -673,37 +756,67 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
   }
 
   function addDocToResumen(docName, archivo = '', fecha = new Date().toISOString(), extra = {}) {
-    if (state.docsResumen.some((d) => d.documento === docName)) {
-      const row = state.docsResumen.find((d) => d.documento === docName);
-      if (archivo) row.archivo = archivo;
-      if (fecha) row.fecha_registro = fecha;
-      if (extra.contenido_base64) row.contenido_base64 = extra.contenido_base64;
-      if (extra.mime_type) row.mime_type = extra.mime_type;
-      if (extra.tamano != null) row.tamano = extra.tamano;
-      if (extra.comentario != null) row.comentario = extra.comentario;
-    } else {
-      state.docsResumen.push({
-        documento: docName, archivo, fecha_registro: fecha,
-        contenido_base64: extra.contenido_base64 || null,
-        mime_type: extra.mime_type || null,
-        tamano: extra.tamano || null,
-        comentario: extra.comentario || '',
+    const light = sanitizeDocSolicitado({
+      documento: docName,
+      archivo: archivo || extra.archivo_nombre || '',
+      archivo_nombre: extra.archivo_nombre || archivo || '',
+      fecha_registro: fecha,
+      mime_type: extra.mime_type || null,
+      tamano: extra.tamano != null ? extra.tamano : (extra.tamaño_bytes != null ? extra.tamaño_bytes : null),
+      comentario: extra.comentario || '',
+      adjunto_id: extra.adjunto_id || null,
+      custom: extra.custom === true,
+      personalizado: extra.personalizado === true || extra.custom === true,
+    });
+    // Contenido solo en caché de sesión — nunca en state.docsResumen / PUT
+    if (extra.contenido_base64) {
+      docContentCache.set(docName, {
+        contenido_base64: extra.contenido_base64,
+        mime_type: extra.mime_type,
+        adjunto_id: extra.adjunto_id,
       });
     }
+    const existing = state.docsResumen.find((d) => d.documento === docName);
+    if (existing) {
+      Object.assign(existing, light);
+    } else {
+      state.docsResumen.push(light);
+    }
     renderDocsResumen();
+  }
+
+  async function uploadScAttachment(file) {
+    const reqId = state.requerimientoIds?.[0];
+    if (!reqId) {
+      throw new Error('No hay requerimiento vinculado para subir el adjunto.');
+    }
+    const res = await adjuntosService.uploadAdjunto(reqId, file);
+    return {
+      nombre: file.name,
+      archivo_nombre: res?.adjunto?.nombre_archivo || file.name,
+      mime_type: file.type || '',
+      tamano: file.size,
+      fecha_registro: res?.adjunto?.created_at || new Date().toISOString(),
+      adjunto_id: res?.adjunto?.id || null,
+    };
   }
 
   function attachDocFile(docName) {
     const input = document.createElement('input');
     input.type = 'file';
+    input.accept = SC_FILE_ACCEPT;
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
+      if (!isAllowedScFile(file)) {
+        alert('Formato no permitido. Use PDF, Word, Excel o imagen.');
+        return;
+      }
       try {
-        const meta = await readFileWithContent(file);
-        addDocToResumen(docName, meta.nombre, meta.fecha_registro, meta);
+        const uploaded = await uploadScAttachment(file);
+        addDocToResumen(docName, uploaded.nombre, uploaded.fecha_registro, uploaded);
       } catch (err) {
-        alert(err.message || 'No se pudo adjuntar el archivo');
+        alert(formatScApiError(err) || 'No se pudo adjuntar el archivo');
       }
     };
     input.click();
@@ -876,9 +989,19 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         if (!nombre) { showError('El nombre del documento es obligatorio.'); return false; }
         if (!file) { showError('Debe adjuntar un archivo.'); return false; }
         if (!isAllowedScFile(file)) { showError('Formato no permitido. Use PDF, Word, Excel o imagen.'); return false; }
-        const meta = await readFileWithContent(file);
-        addDocToResumen(nombre, meta.nombre, meta.fecha_registro, { ...meta, comentario });
-        return true;
+        try {
+          const uploaded = await uploadScAttachment(file);
+          addDocToResumen(nombre, uploaded.nombre, uploaded.fecha_registro, {
+            ...uploaded,
+            comentario,
+            custom: true,
+            personalizado: true,
+          });
+          return true;
+        } catch (err) {
+          showError(formatScApiError(err));
+          return false;
+        }
       },
     });
     return result;
@@ -989,10 +1112,18 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
           activateStep('docs');
           finish({ saved: true, solicitudId: state.solicitudId, phase: 'docs' });
         } else if (state.currentStep === 'docs') {
-          await contratacionesService.actualizarSolicitudCotizacion(state.solicitudId, {
-            docs_solicitados: state.docsResumen,
-            requisitos_tecnicos: state.reqResumen,
+          const docsPayload = buildSolicitudCotizacionUpdatePayload({
+            docsResumen: state.docsResumen,
+            reqResumen: state.reqResumen,
           });
+          // Diagnóstico ligero (dev): tamaño del JSON sin binarios
+          if (typeof console !== 'undefined' && console.debug) {
+            console.debug('[SC docs] PUT bytes=', measureJsonBytes(docsPayload));
+          }
+          await contratacionesService.actualizarSolicitudCotizacion(state.solicitudId, docsPayload);
+          // Alinear estado local con lo persistido (sin base64)
+          state.docsResumen = (docsPayload.docs_solicitados || []).map(sanitizeDocSolicitado);
+          state.reqResumen = (docsPayload.requisitos_tecnicos || []).map(sanitizeReqTecnico);
           completeStep('docs');
           unlockStep('items');
           renderItems();
@@ -1017,7 +1148,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
           await renderProveedores();
           finish({ saved: true, solicitudId: state.solicitudId, phase: 'invitaciones' });
         }
-      } catch (err) { alert(err.message); }
+      } catch (err) { alert(formatScApiError(err)); }
     });
 
     el.querySelector('#scProvBuscarBtn')?.addEventListener('click', () => {
@@ -1123,12 +1254,12 @@ function showItemDocumentosModal(item, wizardState) {
   if (!item.documentos_anexos) item.documentos_anexos = {};
   const docsSolicitados = (wizardState?.docsResumen || []).map((d) => ({
     documento: d.documento,
-    archivo: d.archivo || '',
+    archivo: d.archivo || d.archivo_nombre || '',
     mime_type: d.mime_type || 'application/pdf',
     fecha_registro: d.fecha_registro,
     version: d.version || '1.0',
     tamano: d.tamano,
-    contenido_base64: d.contenido_base64 || '',
+    adjunto_id: d.adjunto_id || null,
     tipo_doc: 'Solicitado',
   }));
   Object.entries(item.documentos_anexos || {}).forEach(([tipo, doc]) => {
@@ -1140,7 +1271,7 @@ function showItemDocumentosModal(item, wizardState) {
       fecha_registro: doc.fecha_registro,
       version: '1.0',
       tamano: doc.tamano,
-      contenido_base64: doc.contenido_base64 || '',
+      adjunto_id: doc.adjunto_id || null,
       tipo_doc: 'Anexo ítem',
     });
   });
@@ -1150,9 +1281,9 @@ function showItemDocumentosModal(item, wizardState) {
       requisito: n.requisito,
       obligatorio: n.obligatorio,
       observacion: n.observacion,
-      archivo: r.archivo || (r.contenido_base64 ? 'Adjunto' : ''),
-      estado: r.archivo || r.contenido_base64 ? 'Cargado' : 'Requerido',
-      contenido_base64: r.contenido_base64 || '',
+      archivo: r.archivo || '',
+      estado: r.archivo || r.adjunto_id ? 'Cargado' : 'Requerido',
+      adjunto_id: r.adjunto_id || null,
       mime_type: r.mime_type || '',
       custom: n.custom,
     };
