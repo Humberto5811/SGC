@@ -18,10 +18,25 @@ export function isIdentificadorGenerico(valor) {
   return GENERICOS.has(v);
 }
 
+function parseJsonArray(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value || '[]') : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 /**
  * Persona para columna Responsable (bandeja Registro).
- * Prefiere el creador/modificador real cuando responsable_actual es un rol genérico
- * (p.ej. "Usuario AU" escrito por inicializarTrazabilidad / ETAPAS).
+ *
+ * Prioridad:
+ * 1) usuario del primer movimiento CREADO (creador real del alta)
+ * 2) historial_estados[0].usuario (o entrada accion creacion)
+ * 3) usuario_modificacion (respaldo)
+ * 4) responsable_actual solo si es persona real (no rol ni centro)
+ *
+ * Nunca usa requerimientos.responsable / centro_nombre (son centro, p.ej. CNCC).
  */
 export function resolveResponsablePersonaDisplay(row, roleLabels = []) {
   const roles = new Set(
@@ -29,50 +44,52 @@ export function resolveResponsablePersonaDisplay(row, roleLabels = []) {
       .map((x) => String(x || '').trim().toLowerCase())
       .filter(Boolean),
   );
-  const isRol = (valor) => {
+
+  // Columna r.responsable en requerimientos = centro del área (label "Centro" en el form), NO persona.
+  const centrosProhibidos = new Set(
+    [row?.responsable, row?.centro_nombre, row?.centro_costo_codigo, row?.centro]
+      .map((x) => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  const isInvalidPersona = (valor) => {
     const v = String(valor || '').trim();
     if (!v) return true;
+    const low = v.toLowerCase();
     if (isIdentificadorGenerico(v)) return true;
-    return roles.has(v.toLowerCase());
+    if (roles.has(low)) return true;
+    if (centrosProhibidos.has(low)) return true;
+    return false;
   };
 
-  const candidatos = [];
+  const pick = (valor) => {
+    const v = String(valor || '').trim();
+    return isInvalidPersona(v) ? null : v;
+  };
 
-  // 1) Creador desde historial (entrada inicial / CREACION)
-  try {
-    const raw = row?.historial_estados;
-    const hist = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw || []);
-    if (Array.isArray(hist) && hist.length) {
-      const creacion = hist.find((h) => /creaci[oó]n|creado|create/i.test(String(h?.accion || '')))
-        || hist[0];
-      const u = String(creacion?.usuario || '').trim();
-      if (u) candidatos.push(u);
-    }
-  } catch (_) { /* ignore */ }
+  // 1) Primer movimiento CREADO
+  const movs = parseJsonArray(row?.historial_movimientos);
+  const movCreado = movs.find((m) => /^CREADO$|CREACI[OÓ]N/i.test(String(m?.accion || '').trim()));
+  const fromCreado = pick(movCreado?.usuario || movCreado?.actor);
+  if (fromCreado) return fromCreado;
 
-  try {
-    const movRaw = row?.historial_movimientos;
-    const movs = typeof movRaw === 'string' ? JSON.parse(movRaw || '[]') : (movRaw || []);
-    if (Array.isArray(movs) && movs.length) {
-      const creacion = movs.find((m) => /CREADO|CREACION|CREACIÓN/i.test(String(m?.accion || '')))
-        || movs[0];
-      const u = String(creacion?.usuario || creacion?.actor || '').trim();
-      if (u) candidatos.push(u);
-    }
-  } catch (_) { /* ignore */ }
+  // 2) historial_estados — entrada de creación o [0]
+  const hist = parseJsonArray(row?.historial_estados);
+  const histCreacion = hist.find((h) => /creaci[oó]n|creado|create/i.test(String(h?.accion || '')))
+    || hist[0];
+  const fromHist = pick(histCreacion?.usuario);
+  if (fromHist) return fromHist;
 
-  // 2) Último usuario de modificación persistido en el expediente
-  const um = String(row?.usuario_modificacion || '').trim();
-  if (um) candidatos.push(um);
+  // 3) usuario_modificacion (respaldo; suele ser el creador en el alta)
+  const fromUm = pick(row?.usuario_modificacion);
+  if (fromUm) return fromUm;
 
-  for (const c of candidatos) {
-    if (!isRol(c)) return c;
-  }
+  // 4) responsable_actual solo si es usuario real (nunca rol "Usuario AU" ni centro CNCC)
+  const fromActual = pick(row?.responsable_actual || row?.responsableActual);
+  if (fromActual) return fromActual;
 
-  const actual = String(row?.responsable_actual || row?.responsableActual || '').trim();
-  if (actual && !isRol(actual)) return actual;
-  if (um) return um;
-  return actual || 'Usuario AU';
+  // Sin persona asociada: no inventar centro; rol genérico solo como último recurso visual
+  return 'Usuario AU';
 }
 
 async function buildUsuarioMap() {

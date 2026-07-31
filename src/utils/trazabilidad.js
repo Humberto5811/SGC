@@ -401,7 +401,8 @@ export function enrichReqRow(r) {
     estadoActualTexto,
     estado_actual_texto: estadoActualTexto,
     subModuloActual: subModulo || r.subModuloActual,
-    responsableActual: r.responsable_actual || r.responsableActual || r.responsable || '—',
+    // No usar r.responsable: en requerimientos esa columna guarda el centro (p.ej. CNCC), no la persona.
+    responsableActual: r.responsable_actual || r.responsableActual || '—',
     workflowSnapshot,
     obsMotor,
   };
