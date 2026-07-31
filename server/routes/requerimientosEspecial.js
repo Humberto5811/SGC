@@ -27,6 +27,7 @@ import {
   buildRequerimientoScopeSql,
   assertCanAccessRequirement,
 } from '../lib/userDataScope.js';
+import { resolveResponsablePersonaDisplay } from '../lib/usuarioDisplay.js';
 
 const router = express.Router();
 
@@ -186,7 +187,16 @@ router.get('/listar-con-detalles', async (req, res, next) => {
     `;
 
     const result = await query(dataSql, params);
-    const rows = await enrichRequerimientoRowsWithCcp(result.rows || []);
+    const roleLabels = Object.values(ETAPAS).map((v) => v.responsable);
+    const rows = (await enrichRequerimientoRowsWithCcp(result.rows || [])).map((row) => {
+      // Columna Responsable: persona creadora, no el rol de etapa ("Usuario AU")
+      const persona = resolveResponsablePersonaDisplay(row, roleLabels);
+      return {
+        ...row,
+        responsable_actual: persona,
+        responsableActual: persona,
+      };
+    });
 
     res.json({
       data: rows,

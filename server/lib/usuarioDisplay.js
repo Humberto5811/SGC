@@ -5,7 +5,75 @@ let usuarioMapPromise = null;
 const GENERICOS = new Set([
   'sistema', 'usuario au', 'gerente', 'dec', 'programación', 'programacion',
   'director / gerente', 'programador', 'usuario',
+  'coordinador de contratos menores', 'especialista contrataciones',
+  'área usuaria', 'area usuaria', 'comité de compras públicas', 'comite de compras públicas',
+  'ejecutor contractual', 'registro de órdenes', 'registro de ordenes',
+  'almacén', 'almacen', 'tesorería', 'tesoreria', 'revisión', 'revision', '—', '-',
 ]);
+
+/** True si el texto es rol de etapa / placeholder, no una persona real. */
+export function isIdentificadorGenerico(valor) {
+  const v = String(valor || '').trim().toLowerCase();
+  if (!v) return true;
+  return GENERICOS.has(v);
+}
+
+/**
+ * Persona para columna Responsable (bandeja Registro).
+ * Prefiere el creador/modificador real cuando responsable_actual es un rol genérico
+ * (p.ej. "Usuario AU" escrito por inicializarTrazabilidad / ETAPAS).
+ */
+export function resolveResponsablePersonaDisplay(row, roleLabels = []) {
+  const roles = new Set(
+    (Array.isArray(roleLabels) ? roleLabels : [])
+      .map((x) => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const isRol = (valor) => {
+    const v = String(valor || '').trim();
+    if (!v) return true;
+    if (isIdentificadorGenerico(v)) return true;
+    return roles.has(v.toLowerCase());
+  };
+
+  const candidatos = [];
+
+  // 1) Creador desde historial (entrada inicial / CREACION)
+  try {
+    const raw = row?.historial_estados;
+    const hist = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw || []);
+    if (Array.isArray(hist) && hist.length) {
+      const creacion = hist.find((h) => /creaci[oó]n|creado|create/i.test(String(h?.accion || '')))
+        || hist[0];
+      const u = String(creacion?.usuario || '').trim();
+      if (u) candidatos.push(u);
+    }
+  } catch (_) { /* ignore */ }
+
+  try {
+    const movRaw = row?.historial_movimientos;
+    const movs = typeof movRaw === 'string' ? JSON.parse(movRaw || '[]') : (movRaw || []);
+    if (Array.isArray(movs) && movs.length) {
+      const creacion = movs.find((m) => /CREADO|CREACION|CREACIÓN/i.test(String(m?.accion || '')))
+        || movs[0];
+      const u = String(creacion?.usuario || creacion?.actor || '').trim();
+      if (u) candidatos.push(u);
+    }
+  } catch (_) { /* ignore */ }
+
+  // 2) Último usuario de modificación persistido en el expediente
+  const um = String(row?.usuario_modificacion || '').trim();
+  if (um) candidatos.push(um);
+
+  for (const c of candidatos) {
+    if (!isRol(c)) return c;
+  }
+
+  const actual = String(row?.responsable_actual || row?.responsableActual || '').trim();
+  if (actual && !isRol(actual)) return actual;
+  if (um) return um;
+  return actual || 'Usuario AU';
+}
 
 async function buildUsuarioMap() {
   const { rows } = await query(`
