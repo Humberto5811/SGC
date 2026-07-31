@@ -35,6 +35,7 @@ import {
   sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
 import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
+import { estaEnRegistroAccionable } from '../../utils/estadoAccionesExpediente.js';
 import { loadRegistroBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
@@ -257,11 +258,11 @@ async function loadList(sortOverride = {}, resetPage = false) {
     bindActionMenus(cont, {
       detail: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
-        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, /aprobad/i.test(String(req.estado || ''))) });
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, !estaEnRegistroAccionable(req)) });
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'Registro de Requerimiento',
-        puedeObservar: (r) => !/aprobad/i.test(String(r.estado || '')) && !/tr[aá]mite/i.test(String(r.estado || '')),
+        puedeObservar: (r) => estaEnRegistroAccionable(r),
         onSubsanar: async (reqId, data) => {
           const req = rows.find((x) => String(x.id) === String(reqId));
           if (!req) return;
@@ -275,7 +276,7 @@ async function loadList(sortOverride = {}, resetPage = false) {
         },
         onAdjuntos: (rid) => {
           const req = rows.find((x) => String(x.id) === String(rid));
-          openAdjuntosModal(rid, req && /aprobad/i.test(String(req.estado || '')));
+          openAdjuntosModal(rid, req && !estaEnRegistroAccionable(req));
         },
         onReload: () => loadList(),
         bandejaPrefix: 'req',
@@ -285,13 +286,14 @@ async function loadList(sortOverride = {}, resetPage = false) {
     bindRowDetailPanel(cont, rows, {
       onAdjuntos: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
-        manageAdjuntos(id, req && /aprobad/i.test(String(req.estado || '')));
+        manageAdjuntos(id, req && !estaEnRegistroAccionable(req));
       },
     });
     cont.querySelectorAll('.req-open').forEach((b) => b.onclick = () => openRequerimiento(b.dataset.id));
     cont.querySelectorAll('.req-print').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
-    cont.querySelectorAll('.req-attach').forEach((b) => b.onclick = () => {
-      manageAdjuntos(b.dataset.id, /aprobad/i.test(String(b.dataset.estado || '')));
+    cont.querySelectorAll('.req-attach').forEach((b) => {
+      const req = rows.find((x) => String(x.id) === String(b.dataset.id));
+      b.onclick = () => manageAdjuntos(b.dataset.id, req ? !estaEnRegistroAccionable(req) : false);
     });
     cont.querySelectorAll('.req-approve').forEach((b) => b.onclick = () => solicitarAprobacion(b.dataset.id));
     cont.querySelectorAll('.req-ver-obs').forEach((b) => b.onclick = () => verObservacionesReadOnly(b.dataset.id));
@@ -2513,6 +2515,11 @@ async function cargarContadorAdjuntos(requerimientoId) {
 }
 
 async function solicitarAprobacion(requerimientoId) {
+  const req = (lastListRows || []).find((x) => String(x.id) === String(requerimientoId));
+  if (req && !estaEnRegistroAccionable(req)) {
+    alert('Este requerimiento ya no puede aprobarse desde Registro.');
+    return;
+  }
   if (!confirm('¿Aprobar y enviar este requerimiento a Evaluación de Requerimientos?')) {
     return;
   }

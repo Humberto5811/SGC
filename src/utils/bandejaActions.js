@@ -6,35 +6,27 @@ import {
   hayObservacionPendienteAccion,
   requiereBadgeModulo,
 } from './observacionDestino.js';
+import {
+  estaEnRegistroAccionable,
+  estaEnEvaluacionAccionable,
+  estaAprobadoEnEvaluacion,
+} from './estadoAccionesExpediente.js';
 
 const MODULO_EVAL = 'Evaluación de Requerimiento';
 
-/**
- * Expediente accionable en bandeja Evaluación (legado "En trámite…" + código canónico).
- */
+/** @deprecated Usar estaEnEvaluacionAccionable — se mantiene por compatibilidad de tests/imports. */
 export function estaEnEvaluacion(r = {}) {
-  const estadoNegocio = String(r.estado || '').trim();
-  const etapa = String(r.estado_actual || r.estadoActual || '').trim().toUpperCase();
-  const codigo = String(
-    r.estado_codigo || r.estado_vigente || r.estado || '',
-  ).trim().toUpperCase();
-
-  return /tr[aá]mite/i.test(estadoNegocio)
-    || etapa === 'EVALUACION'
-    || codigo === 'REQUERIMIENTO_EN_EVALUACION';
+  return estaEnEvaluacionAccionable(r);
 }
 
 export function registroMenuItems(r) {
-  const e = String(r.estado || '');
-  const aprobado = /aprobad/i.test(e);
-  const enTramite = /tr[aá]mite/i.test(e);
-  const puedeAprobar = !aprobado && !enTramite;
+  const enRegistro = estaEnRegistroAccionable(r);
   const obsLabel = labelBotonObservaciones(r, 'Registro de Requerimiento');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
-    { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
-    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
-    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
+    { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: !enRegistro },
+    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: !enRegistro },
+    { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !enRegistro },
     { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
@@ -43,26 +35,23 @@ export function registroMenuItems(r) {
 }
 
 export function registroHiddenActions(r, esc) {
-  const e = String(r.estado || '');
-  const aprobado = /aprobad/i.test(e);
+  const enRegistro = estaEnRegistroAccionable(r);
   const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Registro de Requerimiento');
-  const enTramite = /tr[aá]mite/i.test(e);
-  const puedeAprobar = !aprobado && !enTramite;
   return `
-    <button type="button" class="req-open" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
+    <button type="button" class="req-open" data-act-trigger="edit" data-id="${r.id}" ${enRegistro ? '' : 'disabled'}></button>
     <button type="button" class="req-print" data-act-trigger="download" data-id="${r.id}"></button>
-    <button type="button" class="req-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(e)}"></button>
+    <button type="button" class="req-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}"></button>
     <button type="button" class="req-obs-menu" data-act-trigger="obs" data-id="${r.id}"></button>
     ${pendienteSubsanar ? `<button type="button" class="req-observado" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
-    <button type="button" class="req-approve" data-act-trigger="approve" data-id="${r.id}" ${puedeAprobar ? '' : 'disabled'}></button>
-    ${aprobado ? `<button type="button" class="req-ver-obs" data-act-trigger="obs" data-id="${r.id}"></button>` : ''}
+    <button type="button" class="req-approve" data-act-trigger="approve" data-id="${r.id}" ${enRegistro ? '' : 'disabled'}></button>
+    ${enRegistro ? '' : `<button type="button" class="req-ver-obs" data-act-trigger="obs" data-id="${r.id}"></button>`}
     <button type="button" class="req-traza-hidden req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
-    <button type="button" class="req-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>`;
+    <button type="button" class="req-del" data-act-trigger="delete" data-id="${r.id}" ${enRegistro ? '' : 'disabled'}></button>`;
 }
 
 export function evalMenuItems(r) {
-  const enEvaluacion = estaEnEvaluacion(r);
-  const aprobado = /aprobad/i.test(String(r.estado || ''));
+  const enEvaluacion = estaEnEvaluacionAccionable(r);
+  const aprobado = estaAprobadoEnEvaluacion(r);
   const obsLabel = labelBotonObservaciones(r, 'Evaluación de Requerimiento');
   const motorObs = hayObservacionPendienteAccion(r, MODULO_EVAL)
     || requiereBadgeModulo(r, MODULO_EVAL)
@@ -81,8 +70,8 @@ export function evalMenuItems(r) {
 }
 
 export function evalHiddenActions(r, esc) {
-  const enEvaluacion = estaEnEvaluacion(r);
-  const aprobado = /aprobad/i.test(String(r.estado || ''));
+  const enEvaluacion = estaEnEvaluacionAccionable(r);
+  const aprobado = estaAprobadoEnEvaluacion(r);
   const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Evaluación de Requerimiento');
   const obsEnabled = enEvaluacion || aprobado || pendienteSubsanar || requiereBadgeModulo(r, MODULO_EVAL);
   return `
@@ -97,11 +86,54 @@ export function evalHiddenActions(r, esc) {
     <button type="button" class="eval-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>`;
 }
 
+/**
+ * Expediente accionable para “Aprobar DEC” (legado "Aprobado" + canónico REQUERIMIENTO_EN_DEC).
+ * False si ya fue aprobado por DEC o salió a etapas posteriores.
+ */
+export function estaEnDecAccionable(r = {}) {
+  const norm = (v) => String(v || '').trim().toUpperCase();
+  const etapa = norm(r.estado_actual || r.estadoActual || r.estadoVigente?.etapa);
+  const estadoNeg = norm(r.estado);
+  const codigo = norm(
+    r.estado_codigo
+    || r.estado_vigente
+    || r.estadoVigente?.codigo
+    || r.estado,
+  );
+
+  const etapasPosteriores = new Set([
+    'PROGRAMACION',
+    'ACTOS_PREPARATORIOS',
+    'INVITACIONES',
+    'RECEPCION_COTIZACIONES',
+    'VALIDACION_USUARIO',
+    'CUADRO_COMPARATIVO',
+    'CCP',
+    'EJECUCION',
+    'REGISTRO_ORDEN',
+    'ALMACEN',
+    'TESORERIA',
+    'FINALIZADO',
+  ]);
+  if (etapasPosteriores.has(etapa)) return false;
+
+  const estadosNoAccionables = new Set([
+    'APROBADO_DEC',
+    'APROBADO DEC',
+    'REQUERIMIENTO_APROBADO_DEC',
+    'REQUERIMIENTO_EN_PROGRAMACION',
+  ]);
+  if (estadosNoAccionables.has(estadoNeg) || estadosNoAccionables.has(codigo)) return false;
+
+  if (etapa !== 'DEC') return false;
+
+  return estadoNeg === 'APROBADO'
+    || estadoNeg === 'REQUERIMIENTO_EN_DEC'
+    || codigo === 'REQUERIMIENTO_EN_DEC';
+}
+
 export function decMenuItems(r) {
-  const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
-  const enDEC = ubicacion === 'DEC';
-  const estadoNeg = String(r.estado || '');
-  const puedeAprobarDEC = enDEC && /^Aprobado$/i.test(estadoNeg);
+  const puedeAprobarDEC = estaEnDecAccionable(r);
   const obsLabel = labelBotonObservaciones(r, 'DEC');
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
@@ -114,12 +146,13 @@ export function decMenuItems(r) {
 }
 
 export function decHiddenActions(r) {
+  const puedeAprobarDEC = estaEnDecAccionable(r);
   return `
     <button type="button" class="dec-ver" data-act-trigger="download" data-id="${r.id}" data-perm-act="VER"></button>
     <button type="button" class="dec-attach" data-act-trigger="attach" data-id="${r.id}" data-perm-act="VER"></button>
     <button type="button" class="dec-obs-menu" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
     <button type="button" class="dec-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
-    <button type="button" class="dec-aprobar" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>
+    <button type="button" class="dec-aprobar" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR" ${puedeAprobarDEC ? '' : 'disabled'}></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
 }
 

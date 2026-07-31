@@ -12,7 +12,8 @@ import {
 } from '../../utils/trazabilidad.js';
 import { loadEvaluacionBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
-import { evalMenuItems, evalHiddenActions, estaEnEvaluacion } from '../../utils/bandejaActions.js';
+import { evalMenuItems, evalHiddenActions } from '../../utils/bandejaActions.js';
+import { estaEnEvaluacionAccionable, estaAprobadoEnEvaluacion } from '../../utils/estadoAccionesExpediente.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -82,11 +83,11 @@ async function loadEvaluacionList(sortOverride = {}, resetPage = false) {
     bindActionMenus(cont, {
       detail: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
-        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, /aprobad/i.test(String(req.estado || ''))) });
+        if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, estaAprobadoEnEvaluacion(req)) });
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'Evaluación de Requerimiento',
-        puedeObservar: (r) => estaEnEvaluacion(r) && !/aprobad/i.test(String(r.estado || '')),
+        puedeObservar: (r) => estaEnEvaluacionAccionable(r) && !estaAprobadoEnEvaluacion(r),
         onObservar: async (reqId, data) => {
           await requerimientosService.observarEvaluacion(reqId, {
             ...data,
@@ -103,7 +104,7 @@ async function loadEvaluacionList(sortOverride = {}, resetPage = false) {
     bindRowDetailPanel(cont, rows, {
       onAdjuntos: (id) => {
         const req = rows.find((x) => String(x.id) === String(id));
-        manageAdjuntos(id, req && /aprobad/i.test(String(req.estado || '')));
+        manageAdjuntos(id, req && estaAprobadoEnEvaluacion(req));
       },
     });
     cont.querySelectorAll('.eval-edit').forEach((b) => b.onclick = () => editarRequerimiento(b.dataset.id));
@@ -150,9 +151,7 @@ function editarRequerimiento(id) {
 async function observarRequerimiento(id) {
   const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
   if (!req) return;
-  const aprobado = /aprobad/i.test(String(req.estado || ''))
-    && String(req.estado_actual || req.estadoActual || '').toUpperCase() !== 'EVALUACION';
-  if (aprobado) {
+  if (estaAprobadoEnEvaluacion(req) && !estaEnEvaluacionAccionable(req)) {
     await verHistorialObservaciones(req, { title: 'Historial de observaciones — Evaluación' });
     return;
   }
@@ -182,6 +181,11 @@ async function observarRequerimiento(id) {
 }
 
 async function approveRequerimiento(id) {
+  const req = (lastEvalRows || []).find((x) => String(x.id) === String(id));
+  if (req && (!estaEnEvaluacionAccionable(req) || estaAprobadoEnEvaluacion(req))) {
+    alert('Este requerimiento ya no puede aprobarse desde Evaluación.');
+    return;
+  }
   if (!confirm('¿Aprobar este requerimiento?')) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
