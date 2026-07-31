@@ -166,6 +166,11 @@ export function resolveEstadoNegocioFromRow(row) {
 /** Ubicación efectiva del expediente — prioriza `estado_actual` en BD. */
 export function resolveUbicacionExpediente(row) {
   const fromDb = String(row?.estado_actual || row?.estadoActual || '').toUpperCase();
+  const estadoNeg = String(row?.estado || '').trim();
+  // Post-aprobación DEC: ya ingresó a Programación (aunque BD/snapshot queden en DEC)
+  if (/^aprobado\s*dec$/i.test(estadoNeg)) {
+    if (!fromDb || fromDb === 'DEC') return 'PROGRAMACION';
+  }
   if (fromDb) return fromDb;
   const estadoNegocio = resolveEstadoNegocioFromRow(row);
   return mapEstadoToUbicacion(estadoNegocio);

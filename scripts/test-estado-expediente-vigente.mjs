@@ -45,47 +45,64 @@ assert.equal(
   'contexto cuadro: label C.C. aprobado',
 );
 
-// A. Post-DEC en Programación
+// A. Post-DEC en Programación → badge del submódulo actual
 {
   const v = resolveEstadoExpedienteVigente({
     estado: 'Aprobado DEC',
     estado_actual: 'PROGRAMACION',
     estado_cuadro: '',
   });
-  assert.ok(
-    v.codigo === 'REQUERIMIENTO_APROBADO_DEC' || v.codigo === 'EN_PROGRAMACION',
-    `A: codigo seguro, obtuvo ${v.codigo}`,
-  );
+  assert.equal(v.codigo, 'EN_PROGRAMACION', `A: EN_PROGRAMACION, obtuvo ${v.codigo}`);
+  assert.equal(v.label, 'En programación', 'A: label');
   assertNotCcAprobado(v, 'A');
   console.log('A OK', v.codigo, v.label, 'fuente=', v.fuente);
 }
 
-// B. Código legado normalizado
+// B. Código legado normalizado en Programación
 {
   const v = resolveEstadoExpedienteVigente({
     estado: 'APROBADO_DEC',
     estado_actual: 'PROGRAMACION',
   });
-  assert.ok(
-    v.codigo === 'REQUERIMIENTO_APROBADO_DEC' || v.codigo === 'EN_PROGRAMACION',
-    `B: codigo seguro, obtuvo ${v.codigo}`,
-  );
+  assert.equal(v.codigo, 'EN_PROGRAMACION', `B: obtuvo ${v.codigo}`);
   assertNotCcAprobado(v, 'B');
   console.log('B OK', v.codigo, v.label);
 }
 
-// C. Código canónico post-DEC
+// C. Código canónico post-DEC + etapa Programación → submódulo gana
 {
   const v = resolveEstadoExpedienteVigente({
     estado_codigo: 'REQUERIMIENTO_APROBADO_DEC',
     estado_actual: 'PROGRAMACION',
   });
-  assert.ok(
-    v.codigo === 'REQUERIMIENTO_APROBADO_DEC' || v.codigo === 'EN_PROGRAMACION',
-    `C: codigo seguro, obtuvo ${v.codigo}`,
-  );
+  assert.equal(v.codigo, 'EN_PROGRAMACION', `C: obtuvo ${v.codigo}`);
   assertNotCcAprobado(v, 'C');
   console.log('C OK', v.codigo, v.label);
+}
+
+// A2. Snapshot obsoleto en DEC no debe ganar a estado_actual PROGRAMACION
+{
+  const v = resolveEstadoExpedienteVigente({
+    estado: 'Aprobado DEC',
+    estado_actual: 'PROGRAMACION',
+    payload: { workflowSnapshot: { etapaActual: 'DEC' } },
+    workflowSnapshot: { etapaActual: 'DEC' },
+  }, { workflowEtapa: 'DEC' });
+  assert.equal(v.codigo, 'EN_PROGRAMACION', `A2: snapshot DEC obsoleto, obtuvo ${v.codigo}`);
+  assert.notEqual(v.label, 'En DEC', 'A2: no En DEC');
+  console.log('A2 OK', v.codigo, v.label);
+}
+
+// A3. Negocio Aprobado DEC con BD aún en DEC → sincerar a Programación
+{
+  const v = resolveEstadoExpedienteVigente({
+    estado: 'Aprobado DEC',
+    estado_actual: 'DEC',
+  });
+  assert.equal(v.codigo, 'EN_PROGRAMACION', `A3: obtuvo ${v.codigo}`);
+  assert.notEqual(v.label, 'En DEC', 'A3: no En DEC');
+  assertNotCcAprobado(v, 'A3');
+  console.log('A3 OK', v.codigo, v.label);
 }
 
 // D. Programación explícita
@@ -123,13 +140,14 @@ assert.equal(
   console.log('F OK', v.codigo, v.label, '(doc: CCP etapa > estado_cuadro C.C. aprobado)');
 }
 
-// G. Alias ambiguo sin etapa
+// G. Alias ambiguo sin etapa: "Aprobado DEC" implica ya salió a Programación
 {
   const v = resolveEstadoExpedienteVigente({
     estado: 'Aprobado DEC',
   });
-  assert.equal(v.codigo, 'REQUERIMIENTO_APROBADO_DEC', 'G: REQUERIMIENTO_APROBADO_DEC');
+  assert.equal(v.codigo, 'EN_PROGRAMACION', 'G: EN_PROGRAMACION (submódulo destino post-DEC)');
   assertNotCcAprobado(v, 'G');
+  assert.notEqual(v.label, 'En DEC', 'G: no En DEC');
   console.log('G OK', v.codigo, v.label);
 }
 

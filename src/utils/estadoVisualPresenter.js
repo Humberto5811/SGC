@@ -89,10 +89,14 @@ function extractWorkflowSnapshot(row) {
 }
 
 function resolveWorkflowEtapa(row) {
+  // Priorizar ubicación real del expediente (BD / enrich) sobre workflowSnapshot.
+  // Un snapshot obsoleto en DEC hacía mostrar "En DEC" con el REQ ya en Programación.
+  const enriched = enrichReqRow(row);
+  const fromRow = String(enriched.estado_actual || enriched.estadoActual || '').toUpperCase();
+  if (fromRow) return fromRow;
   const snap = extractWorkflowSnapshot(row);
   if (snap?.etapaActual) return String(snap.etapaActual).toUpperCase();
-  const enriched = enrichReqRow(row);
-  return String(enriched.estado_actual || enriched.estadoActual || 'REGISTRADO').toUpperCase();
+  return 'REGISTRADO';
 }
 
 function labelFromEtapa(etapa) {

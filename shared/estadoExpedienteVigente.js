@@ -238,9 +238,12 @@ function extractWorkflowSnapshot(row = {}) {
 }
 
 function resolveWorkflowEtapa(row = {}, snap = null) {
+  // BD / fila enriquecida gana sobre snapshot (puede quedar obsoleto tras derivar)
+  const fromRow = String(row.estado_actual || row.estadoActual || row.etapa || '').toUpperCase();
+  if (fromRow) return fromRow;
   const s = snap || extractWorkflowSnapshot(row);
   if (s?.etapaActual) return String(s.etapaActual).toUpperCase();
-  return String(row.estado_actual || row.estadoActual || row.etapa || '').toUpperCase();
+  return '';
 }
 
 function detectSituacionObservada(row = {}, opts = {}, rawCodes = []) {
@@ -328,9 +331,8 @@ function resolveEstadoFromWorkflowEtapa(workflowEtapa, row = {}) {
       if (esPostDec) return 'REQUERIMIENTO_APROBADO_DEC';
       return 'REQUERIMIENTO_EN_DEC';
     case 'PROGRAMACION':
+      // El badge refleja el submódulo actual (Programación), no el origen DEC.
       if (/aprobad.*program/i.test(hints)) return 'PROGRAMACION_APROBADA';
-      // Post-DEC en bandeja Programación: negocio "Aprobado DEC" ≠ C.C. aprobado
-      if (esPostDec) return 'REQUERIMIENTO_APROBADO_DEC';
       return 'EN_PROGRAMACION';
     case 'ACTOS_PREPARATORIOS':
       if (/aprobad/i.test(estadoNegocio)) return 'COORDINACION_CM_APROBADA';
@@ -440,9 +442,18 @@ export function resolveEstadoExpedienteVigente(evidence = {}, opts = {}) {
   const row = evidence && typeof evidence === 'object' ? evidence : {};
   const flags = normalizeEstadoFlags(row, opts);
   const snap = extractWorkflowSnapshot(row);
-  const workflowEtapa = String(
-    opts.workflowEtapa || resolveWorkflowEtapa(row, snap) || '',
+  // Preferir ubicación de fila (BD) sobre opts/snapshot — evita "En DEC" con REQ en Programación
+  let workflowEtapa = String(
+    row.estado_actual || row.estadoActual
+    || opts.workflowEtapa
+    || resolveWorkflowEtapa(row, snap)
+    || '',
   ).toUpperCase();
+  // Negocio "Aprobado DEC" implica salida de DEC → Programación (sincerar etapa desfasada)
+  const estadoNegRaw = String(row.estado || '').trim();
+  if (/^aprobado\s*dec$/i.test(estadoNegRaw) && (!workflowEtapa || workflowEtapa === 'DEC')) {
+    workflowEtapa = 'PROGRAMACION';
+  }
   const solicitudEstado = String(
     row.solicitud_estado || row.estado_solicitud || opts.solicitudEstado || '',
   ).toUpperCase();
