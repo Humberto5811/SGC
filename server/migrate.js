@@ -131,6 +131,10 @@ async function runPendingMigrations() {
 
     const sql = await loadMigrationSql(file);
     const client = await pool.connect();
+    const onNotice = (msg) => {
+      if (msg?.message) console.log(`[db] ${msg.message}`);
+    };
+    client.on('notice', onNotice);
     try {
       await client.query('BEGIN');
       await client.query(sql);
@@ -148,6 +152,7 @@ async function runPendingMigrations() {
       wrapped.migration = file;
       throw wrapped;
     } finally {
+      client.removeListener('notice', onNotice);
       client.release();
     }
   }

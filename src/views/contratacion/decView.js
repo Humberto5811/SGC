@@ -12,7 +12,7 @@ import {
   renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
   sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
-import { decMenuItems, decHiddenActions } from '../../utils/bandejaActions.js';
+import { decMenuItems, decHiddenActions, estaEnDecAccionable } from '../../utils/bandejaActions.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -115,6 +115,12 @@ async function loadDecList(sortOverride = {}, resetPage = false) {
 }
 
 async function aprobarDec(id) {
+  const req = (lastRows || []).find((x) => String(x.id) === String(id));
+  // Guardia UI; el backend sigue siendo la autoridad final de la transición.
+  if (req && !estaEnDecAccionable(req)) {
+    alert('Este expediente no está pendiente de aprobación en DEC.');
+    return;
+  }
   if (!confirm('Confirmar aprobacion desde DEC? El expediente pasara a Programacion.')) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
