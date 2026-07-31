@@ -359,6 +359,24 @@ app.use('/api/requerimientos', crudRouter({
   columns: ['tipo', 'codigo', 'cmn', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
   searchCols: ['codigo', 'denominacion', 'area', 'responsable', 'tipo'],
   orderBy: 'id DESC',
+  beforeCreate: async (req) => {
+    const { assertAreaWithinScope } = await import('./lib/userDataScope.js');
+    const userId = req.user?.id || req.headers['x-user-id'];
+    let areaPayload = {};
+    try {
+      const p = typeof req.body?.payload === 'string' ? JSON.parse(req.body.payload || '{}') : (req.body?.payload || {});
+      areaPayload = p.area || {};
+    } catch (_) { /* ok */ }
+    await assertAreaWithinScope(userId, {
+      codigo: areaPayload.codigo,
+      nombre: req.body?.area || areaPayload.nombre,
+    });
+  },
+  authorizeRow: async (req, row) => {
+    const { assertCanAccessRequirement } = await import('./lib/userDataScope.js');
+    const userId = req.user?.id || req.headers['x-user-id'];
+    await assertCanAccessRequirement(userId, row.id, String(req.method || 'GET'));
+  },
   afterCreate: async (row, body) => {
     await ejecutarRegistroCrear(row.id, body.usuario_modificacion || 'Sistema');
   },

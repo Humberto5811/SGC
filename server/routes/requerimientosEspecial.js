@@ -22,26 +22,145 @@ import {
   ejecutarRegistroSubsanar,
   esOrigenRegistro,
 } from '../lib/registroMigrationFacade.js';
+import {
+  resolveUserDataScope,
+  buildRequerimientoScopeSql,
+  assertCanAccessRequirement,
+} from '../lib/userDataScope.js';
 
 const router = express.Router();
 
 const BASE_FROM = `
   FROM requerimientos r
-  LEFT JOIN areas a ON r.area = a.nombre
+  LEFT JOIN areas a ON r.area = a.nombre OR UPPER(TRIM(COALESCE(a.codigo,''))) = UPPER(TRIM(COALESCE(r.area,'')))
   LEFT JOIN centros c ON a.centro_id = c.id
 `;
+
+function authUserId(req) {
+  return req.user?.id || req.headers['x-user-id'] || null;
+}
+
+async function guardRequirementAccess(req, res, next) {
+  try {
+    const reqId = req.params.requerimientoId || req.params.id;
+    if (!reqId) return next();
+    const userId = authUserId(req);
+    if (!userId) return res.status(401).json({ error: 'No autenticado' });
+    await assertCanAccessRequirement(userId, reqId, String(req.method || 'GET'));
+    return next();
+  } catch (err) {
+    if (err.status === 403) {
+      return res.status(403).json({
+        code: err.code || 'REQUERIMIENTO_FUERA_DE_ALCANCE',
+        error: err.message,
+        message: err.message,
+      });
+    }
+    return next(err);
+  }
+}
+
+// GET /api/requerimientos/mi-alcance — diagnóstico UX (no seguridad)
+router.get('/mi-alcance', async (req, res, next) => {
+  try {
+    const userId = authUserId(req);
+    if (!userId) return res.status(401).json({ error: 'No autenticado' });
+    const scope = await resolveUserDataScope({
+      userId,
+      moduleCode: 'REGISTRO_REQUERIMIENTO',
+    });
+    res.json({
+      ok: true,
+      scopeType: scope.scopeType,
+      isInstitutional: scope.isInstitutional,
+      skipOrgFilter: scope.skipOrgFilter,
+      centroIds: scope.centroIds,
+      centroCodigos: scope.centroCodigos,
+      centroCostoIds: scope.centroCostoIds,
+      centroCostoCodigos: scope.centroCostoCodigos,
+      areaIds: scope.areaIds,
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/requerimientos/areas-alcance — áreas permitidas para crear/filtrar
+router.get('/areas-alcance', async (req, res, next) => {
+  try {
+    const userId = authUserId(req);
+    if (!userId) return res.status(401).json({ error: 'No autenticado' });
+    const scope = await resolveUserDataScope({ userId, moduleCode: 'REGISTRO_REQUERIMIENTO' });
+    const q = String(req.query.q || req.query.search || '').trim();
+    const params = [];
+    let where = 'WHERE 1=1';
+
+    if (!scope.skipOrgFilter && !scope.isInstitutional) {
+      if (scope.scopeType === 'CENTRO') {
+        if (scope.centroIds?.length) {
+          params.push(scope.centroIds);
+          where += ` AND a.centro_id = ANY($${params.length}::int[])`;
+        } else {
+          return res.json({ data: [], scopeType: scope.scopeType });
+        }
+      } else {
+        const parts = [];
+        if (scope.areaIds?.length) {
+          params.push(scope.areaIds);
+          parts.push(`a.id = ANY($${params.length}::int[])`);
+        }
+        if (scope.centroCostoCodigos?.length) {
+          params.push(scope.centroCostoCodigos);
+          parts.push(`UPPER(TRIM(a.codigo)) = ANY($${params.length}::text[])`);
+        }
+        if (!parts.length) return res.json({ data: [], scopeType: scope.scopeType });
+        where += ` AND (${parts.join(' OR ')})`;
+      }
+    }
+
+    if (q.length >= 2) {
+      params.push(`%${q}%`);
+      const i = params.length;
+      where += ` AND (a.codigo ILIKE $${i} OR a.nombre ILIKE $${i} OR a.responsable ILIKE $${i} OR c.codigo ILIKE $${i})`;
+    }
+
+    params.push(50);
+    const { rows } = await query(`
+      SELECT a.id, a.codigo, a.nombre, a.responsable,
+             c.id AS centro_id, COALESCE(c.codigo, '') AS centro, COALESCE(c.nombre, '') AS centro_nombre,
+             COALESCE(a.codigo, '') AS codigo_centro_costo
+      FROM areas a
+      LEFT JOIN centros c ON a.centro_id = c.id
+      ${where}
+      ORDER BY a.nombre ASC
+      LIMIT $${params.length}
+    `, params);
+    res.json({ data: rows, scopeType: scope.scopeType });
+  } catch (err) { next(err); }
+});
 
 // GET /api/requerimientos/listar-con-detalles
 router.get('/listar-con-detalles', async (req, res, next) => {
   try {
+    const userId = authUserId(req);
+    if (!userId) return res.status(401).json({ error: 'No autenticado' });
+
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize || '100', 10)));
     const offset = (page - 1) * pageSize;
     const { whereExtra, params: filterParams } = buildListFilters(req.query);
 
+    const scope = await resolveUserDataScope({
+      userId,
+      moduleCode: 'REGISTRO_REQUERIMIENTO',
+      actionCode: 'VER',
+    });
+    // Intersección: filtros UI ∩ alcance real (nunca confiar solo en query)
+    const scopeSql = buildRequerimientoScopeSql(scope, filterParams.length + 1);
+
     let where = 'WHERE 1=1';
     const params = [...filterParams];
     if (whereExtra) where += ` AND ${whereExtra}`;
+    where += scopeSql.clause;
+    params.push(...scopeSql.params);
 
     const countSql = `SELECT COUNT(*)::int AS total ${BASE_FROM} ${where}`;
     const countResult = await query(countSql, params);
@@ -56,6 +175,9 @@ router.get('/listar-con-detalles', async (req, res, next) => {
         r.id, r.tipo, r.codigo, r.cmn, r.denominacion, r.area, r.responsable, r.estado,
         r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
         COALESCE(c.nombre, c.codigo, a.responsable, '') AS centro_nombre,
+        c.id AS centro_id,
+        a.id AS area_id,
+        a.codigo AS centro_costo_codigo,
         ${TRAZA_EXTRA_SELECT}
       ${BASE_FROM}
       ${where}
@@ -73,12 +195,24 @@ router.get('/listar-con-detalles', async (req, res, next) => {
       pageSize,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
       etapas: Object.entries(ETAPAS).map(([k, v]) => ({ codigo: k, label: v.label })),
+      alcance: {
+        scopeType: scope.scopeType,
+        isInstitutional: scope.isInstitutional,
+        skipOrgFilter: !!scope.skipOrgFilter,
+      },
     });
   } catch (err) {
     console.error('[requerimientos/listar-con-detalles] Error:', err);
     next(err);
   }
 });
+
+// Guard de alcance en operaciones por id (especiales)
+router.use('/:requerimientoId/trazabilidad', guardRequirementAccess);
+router.use('/:requerimientoId/solicitar-aprobacion', guardRequirementAccess);
+router.use('/:requerimientoId/observar', guardRequirementAccess);
+router.use('/:requerimientoId/subsanar', guardRequirementAccess);
+router.use('/:requerimientoId/aprobar-evaluacion', guardRequirementAccess);
 
 // GET /api/requerimientos/:id/trazabilidad
 router.get('/:requerimientoId/trazabilidad', async (req, res, next) => {

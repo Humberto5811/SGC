@@ -36,6 +36,7 @@ function mapUser(row) {
     idArea: row.area_id,
     codigo_centro_costo: row.codigo_centro_costo || '',
     centro,
+    alcance_datos: row.alcance_datos || null,
     descripcionArea: row.descripcion_area || '',
     descripcion_area: row.descripcion_area || '',
     permisos,
@@ -429,7 +430,8 @@ router.put('/:id', async (req, res, next) => {
         dni = COALESCE($2, dni), username = COALESCE($3, username), apellidos = $4, nombres = $5, nombre = $6,
         email = $7, telefono = $8, cargo = $9, rol = COALESCE($10, rol), activo = $11,
         area_id = $12, codigo_centro_costo = $13, descripcion_area = $14, centro = $15,
-        permisos = $16, auditoria = $17, usuario_modificacion = $18, updated_at = NOW()
+        permisos = $16, auditoria = $17, usuario_modificacion = $18,
+        alcance_datos = COALESCE($19, alcance_datos), updated_at = NOW()
       WHERE id = $1 RETURNING *
     `, [
       req.params.id, b.dni, b.username ? String(b.username).trim().toLowerCase() : null,
@@ -439,6 +441,7 @@ router.put('/:id', async (req, res, next) => {
       b.descripcion_area ?? b.descripcionArea ?? prev.descripcion_area,
       b.centro ?? prev.centro ?? '',
       JSON.stringify(permisos), JSON.stringify(auditoria), actor,
+      b.alcance_datos !== undefined ? (b.alcance_datos || null) : (prev.alcance_datos || null),
     ]);
     res.json(mapUser(rows[0]));
   } catch (err) { next(err); }

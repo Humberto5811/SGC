@@ -1,19 +1,43 @@
 // Rutas para gestionar adjuntos de requerimientos
 import express from 'express';
 import { query } from '../db.js';
+import { assertCanAccessRequirement } from '../lib/userDataScope.js';
 
 const router = express.Router();
+
+async function guardAdjuntoByReq(req, requerimientoId) {
+  const userId = req.user?.id || req.headers['x-user-id'];
+  if (!userId) {
+    const err = new Error('No autenticado');
+    err.status = 401;
+    throw err;
+  }
+  await assertCanAccessRequirement(userId, requerimientoId, 'VER');
+}
 
 // GET /api/adjuntos/descargar/:adjuntoId - Descargar un adjunto (DEBE IR PRIMERO)
 router.get('/descargar/:adjuntoId', async (req, res, next) => {
   try {
     const { adjuntoId } = req.params;
     const res2 = await query(
-      `SELECT id, nombre_archivo, mime_type, contenido_base64 FROM requerimientos_adjuntos WHERE id = $1`,
+      `SELECT id, requerimiento_id, nombre_archivo, mime_type, contenido_base64
+       FROM requerimientos_adjuntos WHERE id = $1`,
       [adjuntoId]
     );
     if (!res2 || res2.rowCount === 0) {
       return res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
+    }
+    try {
+      await guardAdjuntoByReq(req, res2.rows[0].requerimiento_id);
+    } catch (e) {
+      if (e.status === 403) {
+        return res.status(403).json({
+          code: e.code || 'REQUERIMIENTO_FUERA_DE_ALCANCE',
+          error: e.message,
+          message: e.message,
+        });
+      }
+      throw e;
     }
     res.json({ success: true, ...res2.rows[0] });
   } catch (err) {
@@ -46,6 +70,18 @@ router.get('/solicitud/:solicitudId', async (req, res, next) => {
 router.get('/listar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
+    try {
+      await guardAdjuntoByReq(req, requerimientoId);
+    } catch (e) {
+      if (e.status === 403 || e.status === 401) {
+        return res.status(e.status).json({
+          code: e.code || (e.status === 401 ? 'NO_AUTENTICADO' : 'REQUERIMIENTO_FUERA_DE_ALCANCE'),
+          error: e.message,
+          message: e.message,
+        });
+      }
+      throw e;
+    }
     const res2 = await query(
       `SELECT id, nombre_archivo, mime_type, tamaño_bytes, usuario_carga, created_at
        FROM requerimientos_adjuntos
@@ -63,8 +99,20 @@ router.get('/listar/:requerimientoId', async (req, res, next) => {
 router.post('/subir/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
+    try {
+      await guardAdjuntoByReq(req, requerimientoId);
+    } catch (e) {
+      if (e.status === 403 || e.status === 401) {
+        return res.status(e.status).json({
+          code: e.code || (e.status === 401 ? 'NO_AUTENTICADO' : 'REQUERIMIENTO_FUERA_DE_ALCANCE'),
+          error: e.message,
+          message: e.message,
+        });
+      }
+      throw e;
+    }
     const { nombre_archivo, mime_type, contenido_base64, tamaño_bytes } = req.body;
-    const usuario_carga = 'sistema'; // TODO: obtener del usuario autenticado
+    const usuario_carga = req.headers['x-user-name'] || 'sistema';
 
     if (!nombre_archivo || !contenido_base64) {
       return res.status(400).json({ success: false, error: 'Datos incompletos' });

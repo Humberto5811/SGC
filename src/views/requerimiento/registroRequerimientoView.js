@@ -644,13 +644,19 @@ async function buscarAreas() {
   if (q.trim().length < 2) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="text-muted small">Buscando…</div>';
   try {
-    const resp = await api.list('areas', { page: 1, pageSize: 15, search: q.trim() });
+    // Áreas filtradas por alcance organizacional del usuario autenticado (backend)
+    let resp;
+    try {
+      resp = await api.get(`/requerimientos/areas-alcance?q=${encodeURIComponent(q.trim())}`);
+    } catch (_) {
+      resp = await api.list('areas', { page: 1, pageSize: 15, search: q.trim() });
+    }
     const rows = (resp && resp.data) || [];
-    if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin resultados en Metas y Áreas.</div>'; return; }
+    if (!rows.length) { box.innerHTML = '<div class="text-muted small">Sin áreas autorizadas para su alcance.</div>'; return; }
     box.innerHTML = `<div class="list-group mb-2" style="max-height:200px; overflow-y:auto;">${rows.map((r) => `
       <button type="button" class="list-group-item list-group-item-action area-pick"
         data-codigo="${esc(r.codigo)}" data-nombre="${esc(r.nombre)}" data-resp="${esc(r.responsable || '')}">
-        <strong>${esc(r.codigo || '')}</strong> — ${esc(r.nombre || '')} <span class="text-muted small">(${esc(r.responsable || 'sin responsable')})</span>
+        <strong>${esc(r.codigo || '')}</strong> — ${esc(r.nombre || '')} <span class="text-muted small">(${esc(r.responsable || 'sin responsable')}${r.centro ? ` · ${esc(r.centro)}` : ''})</span>
       </button>`).join('')}</div>`;
     box.querySelectorAll('.area-pick').forEach((b) => b.onclick = () => {
       state.area = { codigo: b.dataset.codigo, nombre: b.dataset.nombre, responsable: b.dataset.resp };

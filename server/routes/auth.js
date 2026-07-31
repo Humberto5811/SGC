@@ -43,6 +43,7 @@ export function buildSafeUser(row) {
     codigo_centro_costo: row.codigo_centro_costo || '',
     descripcion_area: row.descripcion_area || '',
     centro,
+    alcance_datos: row.alcance_datos || null,
     permisos,
     debeCambiarPassword: row.debe_cambiar_password !== false,
     estado_password: getEstadoPassword(row),

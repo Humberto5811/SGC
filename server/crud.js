@@ -12,7 +12,25 @@ import { query } from './db.js';
  */
 export function crudRouter(cfg) {
   const router = express.Router();
-  const { table, columns, searchCols = [], orderBy = 'id', afterCreate, afterUpdate } = cfg;
+  const {
+    table, columns, searchCols = [], orderBy = 'id',
+    afterCreate, afterUpdate,
+    /** @type {(req, ctx) => Promise<void>|void} */
+    beforeCreate,
+    /** @type {(req, row) => Promise<void>|void} */
+    authorizeRow,
+  } = cfg;
+
+  function sendAuthError(res, err) {
+    if (err && err.status && err.status < 500) {
+      return res.status(err.status).json({
+        error: err.message || 'No autorizado',
+        message: err.message || 'No autorizado',
+        ...(err.code ? { code: err.code } : {}),
+      });
+    }
+    throw err;
+  }
 
   // LISTAR con ?page=&pageSize=&search=
   router.get('/', async (req, res, next) => {
@@ -50,6 +68,9 @@ export function crudRouter(cfg) {
     try {
       const { rows } = await query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
+      if (authorizeRow) {
+        try { await authorizeRow(req, rows[0]); } catch (e) { return sendAuthError(res, e); }
+      }
       res.json(rows[0]);
     } catch (err) { next(err); }
   });
@@ -57,6 +78,9 @@ export function crudRouter(cfg) {
   // CREAR
   router.post('/', async (req, res, next) => {
     try {
+      if (beforeCreate) {
+        try { await beforeCreate(req, { body: req.body }); } catch (e) { return sendAuthError(res, e); }
+      }
       const keys = columns.filter((c) => req.body[c] !== undefined);
       if (!keys.length) return res.status(400).json({ error: 'Sin datos válidos' });
       const values = keys.map((k) => req.body[k]);
@@ -72,9 +96,11 @@ export function crudRouter(cfg) {
   router.put('/:id', async (req, res, next) => {
     try {
       let prev = null;
-      if (afterUpdate) {
-        const prevRes = await query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
-        prev = prevRes.rows[0] || null;
+      const prevRes = await query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
+      prev = prevRes.rows[0] || null;
+      if (!prev) return res.status(404).json({ error: 'No encontrado' });
+      if (authorizeRow) {
+        try { await authorizeRow(req, prev); } catch (e) { return sendAuthError(res, e); }
       }
       const keys = columns.filter((c) => req.body[c] !== undefined);
       if (!keys.length) return res.status(400).json({ error: 'Sin datos válidos' });
@@ -91,6 +117,12 @@ export function crudRouter(cfg) {
   // ELIMINAR
   router.delete('/:id', async (req, res, next) => {
     try {
+      const prevRes = await query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
+      const prev = prevRes.rows[0];
+      if (!prev) return res.status(404).json({ error: 'No encontrado' });
+      if (authorizeRow) {
+        try { await authorizeRow(req, prev); } catch (e) { return sendAuthError(res, e); }
+      }
       const { rows } = await query(`DELETE FROM ${table} WHERE id = $1 RETURNING *`, [req.params.id]);
       if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
       res.json({ ok: true, deleted: rows[0] });
