@@ -38,7 +38,7 @@ import {
 import { insertWorkflowEvento, appendMovimiento, buildMovimientoEntry } from './workflowHistory.js';
 import { validarPermiso } from './workflowGuards.js';
 import { resolverEtapaLegacy } from './workflowCompatibility.js';
-import { buildContratoUbicacion, buildContratoEstados } from '../../../shared/workflow/workflowContract.js';
+import { buildContratoUbicacion, buildContratoEstados, normalizarActor } from '../../../shared/workflow/workflowContract.js';
 
 /** Verifica flag de escritura global. */
 export function assertWriteEnabled(flags = {}) {
@@ -139,6 +139,9 @@ export async function simulateTransition(context = {}) {
 export async function executeTransition(context = {}, flags = {}, client = null) {
   const fl = { ...FEATURE_FLAGS_DEFAULT, ...(flags || {}) };
   assertWriteEnabled(fl);
+  // Normalización de actor: `req.user` (si viene en `context.user`) tiene prioridad
+  // absoluta; nunca se confía en actor.id/rol del cliente para autorización productiva.
+  const actorNormalizado = normalizarActor(context);
 
   return withTransaction(async (tx) => {
     // 2. SELECT FOR UPDATE
@@ -184,7 +187,7 @@ export async function executeTransition(context = {}, flags = {}, client = null)
       throw err;
     }
 
-    const permisoCheck = validarPermiso(transicion, context);
+    const permisoCheck = validarPermiso(transicion, { ...context, actor_id: actorNormalizado.id, actor_rol: actorNormalizado.rol });
     if (!permisoCheck.valido) {
       const err = new Error(permisoCheck.error);
       err.code = 'PERMISSION_DENIED';
@@ -232,8 +235,8 @@ export async function executeTransition(context = {}, flags = {}, client = null)
       evento_codigo: evento,
       etapa_origen: etapaVigente,
       etapa_destino: destino,
-      actor_id: context.actor_id || null,
-      actor_rol: context.actor_rol || 'SISTEMA',
+      actor_id: actorNormalizado.id ?? null,
+      actor_rol: actorNormalizado.rol || 'SISTEMA',
       responsable_destino: responsable,
       metadata: {
         ...(context.metadata || {}),

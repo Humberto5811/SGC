@@ -103,11 +103,17 @@ router.post('/simular', async (req, res, next) => {
       return res.status(400).json({ error: 'tipo_contratacion y evento son obligatorios' });
     }
     const flags = leerFlags();
+    // Para /simular el actor recibido es SOLO contexto de simulación.
+    // Si además hay sesión autenticada (req.user), sus id/rol tienen prioridad.
+    const actorSimulacion = req.user
+      ? { id: req.user.id, rol: req.user.rol }
+      : (body.actor && typeof body.actor === 'object' ? body.actor : null);
     const result = await simulateTransition({
       tipo_contratacion: body.tipo_contratacion,
       etapa_actual: body.etapa_actual || null,
       estados_dominio: body.estados_dominio || {},
       evento: body.evento,
+      actor: actorSimulacion,
       actor_id: body.actor_id,
       actor_rol: body.actor_rol,
       documentos: body.documentos || [],
@@ -132,14 +138,18 @@ router.post('/transiciones', async (req, res, next) => {
     if (!body.expediente_id || !body.evento) {
       return res.status(400).json({ error: 'expediente_id y evento son obligatorios' });
     }
+    // Escritura productiva: actor SIEMPRE desde req.user (nunca del cuerpo del cliente).
+    // normalizarActor en el motor da prioridad absoluta a `user`.
     const result = await executeTransition(
       {
         expediente_id: body.expediente_id,
         tipo_contratacion: body.tipo_contratacion,
         evento: body.evento,
         idempotency_key: body.idempotency_key,
-        actor_id: body.actor_id || (req.user ? req.user.id : null),
-        actor_rol: body.actor_rol || (req.user ? req.user.rol : 'SISTEMA'),
+        user: req.user || null,
+        actor: body.actor,
+        actor_id: body.actor_id,
+        actor_rol: body.actor_rol,
         permiso: body.permiso,
         metadata: body.metadata || {},
         domainMutator: null,

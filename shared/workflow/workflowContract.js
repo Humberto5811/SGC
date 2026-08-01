@@ -173,6 +173,47 @@ export function buildContratoVisual({
   };
 }
 
+/**
+ * Normaliza el actor a su forma canónica { id, rol }.
+ *
+ * Reglas:
+ * - Formato canónico: `actor: { id, rol }`.
+ * - Compatibilidad temporal: acepta `actor_id` / `actor_rol` planos y los
+ *   convierte internamente a objeto canónico.
+ * - Si se pasa `user` (req.user de una ruta autenticada), sus `id`/`rol`
+ *   tienen prioridad absoluta: el actor NUNCA se toma del cliente para
+ *   autorización productiva. En /simular el actor recibido es solo contexto.
+ *
+ * @param {object} opts
+ * @param {object} [opts.actor]  — formato canónico { id, rol }
+ * @param {string|number} [opts.actor_id]  — compat plano
+ * @param {string} [opts.actor_rol]        — compat plano
+ * @param {object} [opts.user]   — req.user de ruta autenticada (id, rol)
+ */
+export function normalizarActor({ actor, actor_id, actor_rol, user = null } = {}) {
+  // 1. Identidad autenticada gana (nunca confiar en actor del cliente para producción).
+  if (user && (user.id !== undefined && user.id !== null)) {
+    return {
+      id: user.id ?? null,
+      rol: (user.rol || actor_rol || '').trim(),
+    };
+  }
+
+  // 2. Formato canónico anidado.
+  if (actor && typeof actor === 'object') {
+    return {
+      id: actor.id ?? actor_id ?? null,
+      rol: String(actor.rol ?? actor_rol ?? '').trim(),
+    };
+  }
+
+  // 3. Compat plano.
+  return {
+    id: actor_id ?? null,
+    rol: String(actor_rol ?? '').trim(),
+  };
+}
+
 /** Normaliza un código de evento enviado por cliente. */
 export function normalizarEventoCodigo(raw) {
   const s = String(raw || '').trim().toUpperCase();
@@ -199,6 +240,7 @@ export default {
   buildContratoUbicacion,
   buildContratoEstados,
   buildContratoVisual,
+  normalizarActor,
   normalizarEventoCodigo,
   normalizarEtapaCodigo,
   normalizarTipoCodigo,

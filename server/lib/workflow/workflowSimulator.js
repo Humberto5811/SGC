@@ -37,6 +37,7 @@ export function simularTransicion(input = {}) {
     tipo_contratacion: tipo,
     etapa_actual: input.etapa_actual || null,
     evento,
+    actor: input.actor,
     actor_id: input.actor_id,
     actor_rol: input.actor_rol,
     permiso: input.metadata?.permiso,

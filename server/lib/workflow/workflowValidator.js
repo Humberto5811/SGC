@@ -27,6 +27,7 @@ import {
   getTransition,
   getAllowedTransitions,
 } from '../../../shared/workflow/transiciones.js';
+import { normalizarActor } from '../../../shared/workflow/workflowContract.js';
 
 /** Flags por defecto (seguros): viáticos y escritura desactivados. */
 export const FEATURE_FLAGS_DEFAULT = Object.freeze({
@@ -144,9 +145,10 @@ export function validarTransicion(context = {}) {
     errores.push('idempotency_key inválida (8-160 caracteres: alfanuméricos, ":": "-", "_", ".")');
   }
 
-  // 9. Actor presente
-  if (!context.actor_id && !context.actor_rol) {
-    errores.push('actor_id o actor_rol es obligatorio');
+  // 9. Actor presente — formato canónico `actor: { id, rol }` o compat plano
+  const actorNormalizado = normalizarActor(context);
+  if (!actorNormalizado.id && !actorNormalizado.rol) {
+    errores.push('actor es obligatorio ({ id, rol } o actor_id/actor_rol compat)');
   }
 
   // 10. Permiso declarado
