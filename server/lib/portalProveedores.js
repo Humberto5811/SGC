@@ -6,7 +6,6 @@ import {
   CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
   INVITACION_VIGENTE_ORDER_SQL,
 } from './cronogramaDatetime.js';
-import { estadoDisplayRecepcion } from './validacionesCotizacion.js';
 import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
@@ -405,7 +404,7 @@ export async function listMisCotizaciones(proveedorId) {
       cot.validacion_responsable, cot.historial,
       COALESCE(cot.created_at, ip.created_at) AS created_at,
       COALESCE(cot.updated_at, ip.updated_at) AS updated_at,
-      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
+      cot.fecha_presentacion,
       cot.estado AS cotizacion_estado,
       sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo,
       sc.estado AS solicitud_estado,
@@ -581,6 +580,7 @@ export async function responderConsultaAnalista(consultaId, body, usuario) {
 }
 
 export async function listarRecepcionCotizaciones(queryParams = {}) {
+  const { buildEstadoRecepcionContract } = await import('./estadoRecepcionCotizaciones.js');
   const valEstado = String(queryParams.validacion_estado || queryParams.estado || '').trim().toUpperCase();
   const params = [];
   let where = `WHERE cot.estado = 'COTIZACION_PRESENTADA'`;
@@ -596,10 +596,34 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
   }
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado,
-      to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
+      cot.fecha_presentacion,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.estado AS solicitud_estado,
+      (
+        SELECT r.estado_actual
+        FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = cot.solicitud_id
+        ORDER BY
+          CASE UPPER(COALESCE(r.estado_actual, ''))
+            WHEN 'RECEPCION_COTIZACIONES' THEN 1
+            WHEN 'VALIDACION_USUARIO' THEN 2
+            WHEN 'CUADRO_COMPARATIVO' THEN 3
+            WHEN 'CCP' THEN 4
+            ELSE 9
+          END,
+          r.id
+        LIMIT 1
+      ) AS req_estado_actual,
+      (
+        SELECT r.sub_modulo_actual
+        FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = cot.solicitud_id
+        ORDER BY r.id
+        LIMIT 1
+      ) AS req_sub_modulo_actual,
       (
         SELECT cc.estado FROM cuadros_comparativos cc
         WHERE cc.solicitud_id = sc.id AND UPPER(COALESCE(cc.estado, '')) <> 'ANULADO'
@@ -680,7 +704,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       || estadoCuadro === 'DERIVADO_CCP'
       || estadoCuadro === 'DERIVADO_A_CCP';
     const ccpInfo = ccpBySid.get(Number(r.solicitud_id)) || {};
-    const enriched = applyCcpFlagsToRow({
+    const base = applyCcpFlagsToRow({
       id: r.id,
       solicitud_id: r.solicitud_id,
       proveedor_id: r.proveedor_id,
@@ -703,6 +727,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       requerimientos_codigos: r.requerimientos_texto || '',
       centros_texto: centro,
       centro,
+      estado_actual: r.req_estado_actual || '',
+      sub_modulo_actual: r.req_sub_modulo_actual || '',
     }, ccpInfo, {
       ccp_activo: !!ccpInfo.ccp_activo,
       enviada_oppm: !!ccpInfo.enviada_oppm,
@@ -714,22 +740,48 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       orden_resuelta: !!ccpInfo.orden_resuelta,
       expediente_derivado_pago: !!ccpInfo.expediente_derivado_pago,
     });
-    return {
-      ...enriched,
-      estado_recepcion: enriched.estado_vigente_label
-        || enriched.etiqueta_estado
-        || (derivadoCcp ? 'Derivado a CCP' : estadoDisplayRecepcion(valEst)),
-      estadoVigente: enriched.estadoVigente || {
-        codigo: enriched.estado_vigente || enriched.estado_codigo,
-        label: enriched.estado_vigente_label || enriched.etiqueta_estado,
+
+    const contract = buildEstadoRecepcionContract({
+      cotizacion: base,
+      cotizaciones: [base],
+      meta: {
+        solicitud_estado: r.solicitud_estado || '',
+        estado_cuadro: r.estado_cuadro || '',
+        derivado_ccp: derivadoCcp,
+        ccp_activo: !!ccpInfo.ccp_activo,
+        ccp_registrado: !!ccpInfo.ccp_activo,
+        codigo_ccp: ccpInfo.codigo_ccp || '',
+        enviada_oppm: !!ccpInfo.enviada_oppm,
+        estado_actual: r.req_estado_actual || '',
+        sub_modulo_actual: r.req_sub_modulo_actual || '',
+        estadoVigente: (base.estadoVigente && AVANZADO_RECEPCION(base.estadoVigente?.codigo))
+          ? base.estadoVigente
+          : null,
       },
-      estadoInterno: enriched.estadoInterno || (
-        valEst
-          ? { codigo: valEst, label: estadoDisplayRecepcion(valEst), modulo: 'RECEPCION_COTIZACIONES' }
-          : null
-      ),
+    });
+
+    return {
+      ...base,
+      ...contract,
+      // No usar estado_vigente del expediente como badge de recepción
+      estado_recepcion: contract.estado_recepcion_label,
+      estadoInterno: {
+        codigo: contract.estado_cotizacion_codigo,
+        label: contract.estado_cotizacion_label,
+        modulo: 'RECEPCION_COTIZACIONES',
+      },
     };
   });
+}
+
+function AVANZADO_RECEPCION(codigo) {
+  const c = String(codigo || '').toUpperCase();
+  return [
+    'DERIVADO_CCP', 'CCP_REGISTRADA', 'ENVIADA_OPPM',
+    'ORDEN_NOTIFICADA', 'ORDEN_REGISTRADA', 'REGISTRO_ORDENES',
+    'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
+    'PENDIENTE_ELABORAR', 'CUADRO_BORRADOR', 'CUADRO_COMPARATIVO_APROBADO',
+  ].includes(c);
 }
 
 export async function listarValidacionesBandeja() {

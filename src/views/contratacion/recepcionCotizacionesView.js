@@ -11,7 +11,11 @@ import {
   formatCentrosBandeja,
   consolidarExpedientesRecepcion,
   renderBadgeEstadoRecepcionHtml,
+  labelEstadoCotizacion,
+  badgeEstadoCotizacion,
+  fechaPrincipalCotizacion,
 } from '../../utils/recepcionCotizacionUtils.js';
+import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import {
   createViewLifecycle,
@@ -38,8 +42,12 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function fmtFecha(iso) {
-  return String(iso || '').slice(0, 16).replace('T', ' ');
+/** Fecha/hora única America/Lima — prioridad fecha_presentacion. */
+function fmtFecha(isoOrRow) {
+  if (isoOrRow && typeof isoOrRow === 'object') {
+    return formatDateTimeLima(fechaPrincipalCotizacion(isoOrRow));
+  }
+  return formatDateTimeLima(isoOrRow);
 }
 
 function fmtMonto(n, moneda = 'PEN') {
@@ -65,21 +73,14 @@ function authHeaders() {
 }
 
 function labelEstadoRecepcion(c) {
-  return c.estado_recepcion || mapEstadoRecepcion(c.validacion_estado);
+  return labelEstadoCotizacion(c);
 }
 
-function mapEstadoRecepcion(validacionEstado) {
-  const v = String(validacionEstado || '').toUpperCase();
-  if (v === 'DERIVADA' || v === 'EN_PROCESO') return 'Enviada a validación AU';
-  if (['APTO', 'NO_APTO', 'OBSERVADO'].includes(v)) return 'Validada por área usuaria';
-  return 'Cotización presentada';
-}
-
-function badgeEstadoRecepcion(validacionEstado) {
-  const label = mapEstadoRecepcion(validacionEstado);
-  if (label === 'Enviada a validación AU') return 'info text-dark';
-  if (label === 'Validada por área usuaria') return 'success';
-  return 'primary';
+function badgeEstadoRecepcion(cOrValidacion) {
+  if (cOrValidacion && typeof cOrValidacion === 'object') {
+    return badgeEstadoCotizacion(cOrValidacion);
+  }
+  return badgeEstadoCotizacion({ validacion_estado: cOrValidacion });
 }
 
 async function openCotizacionDoc(cotId, ref, inline = false) {
@@ -285,9 +286,9 @@ async function showCotizacionDetalleModal(cotId) {
             </div>
             <div class="col-md-4">
               <span class="text-muted d-block">Fecha de envío</span>
-              <strong>${esc(fmtFecha(c.fecha_presentacion))}</strong>
+              <strong>${esc(fmtFecha(c))}</strong>
               <div class="mt-1">
-                <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(mapEstadoRecepcion(c.validacion_estado))}</span>
+                <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(labelEstadoCotizacion(c))}</span>
               </div>
               ${c.validacion_responsable ? `<div class="text-muted mt-1">Responsable AU: ${esc(c.validacion_responsable)}</div>` : ''}
             </div>
@@ -376,16 +377,16 @@ function showExpedienteDetalleModal(expediente) {
                 </tr></thead>
                 <tbody>
                   ${cots.map((c) => {
-                    const estadoLabel = labelEstadoRecepcion(c);
-                    const responsableHint = c.validacion_responsable && estadoLabel === 'Enviada a validación AU'
+                    const estadoLabel = labelEstadoCotizacion(c);
+                    const responsableHint = c.validacion_responsable && /enviada a validar/i.test(estadoLabel)
                       ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
                     return `
                     <tr>
                       <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
                       <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
-                      <td class="small">${esc(fmtFecha(c.fecha_presentacion || c.created_at))}</td>
+                      <td class="small">${esc(fmtFecha(c))}</td>
                       <td>
-                        <span class="badge bg-${badgeEstadoRecepcion(c.validacion_estado)}">${esc(estadoLabel)}</span>
+                        <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(estadoLabel)}</span>
                         ${responsableHint}
                       </td>
                       <td class="text-center">${renderAccionCotizacion(c)}</td>

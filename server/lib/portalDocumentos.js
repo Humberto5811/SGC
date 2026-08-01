@@ -599,6 +599,17 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
       tiene_archivo: !!(f.adjunto_id || f.base64 || f.contenido_base64),
     }
     : null);
+  const { buildEstadoRecepcionContract } = await import('./estadoRecepcionCotizaciones.js');
+  const cotRow = {
+    estado: cot.estado,
+    validacion_estado: cot.validacion_estado || '',
+    fecha_presentacion: cot.fecha_presentacion,
+  };
+  const contract = buildEstadoRecepcionContract({
+    cotizacion: cotRow,
+    cotizaciones: [cotRow],
+  });
+
   return {
     id: cot.id,
     solicitud_id: cot.solicitud_id,
@@ -622,6 +633,7 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     documentos: buildManifiestoCotizacion(cot),
     docs_solicitados_sc: parseJson(cot.sc_docs_solicitados, []),
     requisitos_tecnicos_sc: parseJson(cot.sc_requisitos_tecnicos, []),
+    ...contract,
     anexos_meta: {
       docs_solicitados: (anexos.docs_solicitados || []).map(stripFile),
       requisitos: (anexos.requisitos || []).map(stripFile),
