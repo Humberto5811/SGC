@@ -197,14 +197,55 @@ router.post('/cotizaciones/borrador', requirePortalProveedor, async (req, res, n
   try {
     const row = await guardarBorradorCotizacion(req.portalProveedor.id, req.body, req);
     res.json({ success: true, cotizacion: row });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.post('/cotizaciones', requirePortalProveedor, async (req, res, next) => {
   try {
     const row = await presentarCotizacion(req.portalProveedor.id, req.body, req);
     res.status(201).json({ success: true, cotizacion: row });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+/** Subida de un archivo de cotización (fuera del JSON de borrador). */
+router.post('/cotizaciones/:solicitudId/adjuntos', requirePortalProveedor, async (req, res, next) => {
+  try {
+    const { uploadCotizacionPortalAdjunto } = await import('../lib/portalCotizacionAdjuntos.js');
+    const adjunto = await uploadCotizacionPortalAdjunto(
+      req.portalProveedor.id,
+      parseInt(req.params.solicitudId, 10),
+      req.body,
+    );
+    res.status(201).json({ success: true, adjunto });
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+router.get('/cotizaciones/:solicitudId/adjuntos/:adjuntoId', requirePortalProveedor, async (req, res, next) => {
+  try {
+    const { getCotizacionPortalAdjunto } = await import('../lib/portalCotizacionAdjuntos.js');
+    const adj = await getCotizacionPortalAdjunto(
+      req.portalProveedor.id,
+      parseInt(req.params.solicitudId, 10),
+      parseInt(req.params.adjuntoId, 10),
+    );
+    const buf = Buffer.from(adj.contenido_base64 || '', 'base64');
+    const disposition = (req.query.download === '1') ? 'attachment' : 'inline';
+    res.setHeader('Content-Type', adj.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${disposition}; filename="${adj.nombre_archivo || 'documento'}"`);
+    res.send(buf);
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.get('/cotizaciones', requirePortalProveedor, async (req, res, next) => {

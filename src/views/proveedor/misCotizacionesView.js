@@ -7,6 +7,11 @@ import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
 import { renderDocumentoLista, bindDocumentoActions, attachSolicitudId, documentoFuncionalLabel, FORMATOS_PERMITIDOS_AYUDA } from '../../utils/proveedorDocumentos.js';
 import {
+  buildPortalCotizacionPayload,
+  assertPortalPayloadSafe,
+  sanitizePortalAdjuntoMeta,
+} from '../../utils/portalCotizacionPayload.js';
+import {
   downloadAnexo05A, downloadAnexo05B, downloadAnexo06A, downloadAnexo06B, downloadAnexo11,
   triggerFileInput, money as moneyPdf,
 } from '../../utils/proveedorPdfCotizacion.js';
@@ -208,14 +213,15 @@ function initFormFromWorkspace(ws) {
   formState.adjuntos = {
     docs: {},
     requisitos: {},
+    // Conservar base64 antiguo en memoria para migrar al primer guardado; el payload lo sanea.
     anexoTecnico: prevAnexos.anexo_tecnico_firmado || prevAnexos.anexo05a_firmado || null,
     anexoEconomico: prevAnexos.anexo_economico_firmado || prevAnexos.anexo05b_firmado || null,
   };
   (prevAnexos.docs_solicitados || []).forEach((a) => {
-    if (a.key) formState.adjuntos.docs[a.key] = a;
+    if (a?.key) formState.adjuntos.docs[a.key] = a;
   });
   (prevAnexos.requisitos || []).forEach((a) => {
-    if (a.key) formState.adjuntos.requisitos[a.key] = a;
+    if (a?.key) formState.adjuntos.requisitos[a.key] = a;
   });
   isReadonly = cotizacionPresentada(ws);
 }
@@ -247,7 +253,7 @@ function renderUploadSlot(label, fileMeta, inputId) {
       <div class="prov-upload-row">
         <div class="small fw-semibold">${esc(label)}</div>
         ${fileMeta
-    ? `<div class="small text-success"><i class="bi bi-paperclip"></i> Archivo cargado: ${esc(fileMeta.nombre)}</div>`
+    ? `<div class="small text-success"><i class="bi bi-paperclip"></i> Archivo cargado: ${esc(fileMeta.nombre || fileMeta.nombre_archivo || 'documento')}</div>`
     : '<div class="small text-muted">Sin archivo adjunto</div>'}
       </div>`;
   }
@@ -255,7 +261,7 @@ function renderUploadSlot(label, fileMeta, inputId) {
     <div class="prov-upload-row">
       <div class="small fw-semibold">${esc(label)}</div>
       ${fileMeta
-    ? `<div class="small text-success"><i class="bi bi-paperclip"></i> Archivo cargado: ${esc(fileMeta.nombre)}</div>`
+    ? `<div class="small text-success"><i class="bi bi-paperclip"></i> Archivo cargado: ${esc(fileMeta.nombre || fileMeta.nombre_archivo || 'documento')}</div>`
     : '<div class="small text-muted">Sin archivo adjunto</div>'}
       <button type="button" class="btn btn-outline-primary btn-sm mt-1 prov-upload-btn" data-target="${esc(inputId)}">
         ${fileMeta ? 'Reemplazar' : 'Adjuntar'}
@@ -615,12 +621,20 @@ function bindWizardInteractions() {
     body.querySelectorAll('.prov-upload-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const target = btn.dataset.target;
-        triggerFileInput('.pdf,.doc,.docx,image/*', (file) => {
-          if (target === 'anexoTecnico') formState.adjuntos.anexoTecnico = file;
-          else if (target === 'anexoEconomico') formState.adjuntos.anexoEconomico = file;
-          else if (target.startsWith('doc-')) formState.adjuntos.docs[target] = { ...file, key: target };
-          else if (target.startsWith('req-')) formState.adjuntos.requisitos[target] = { ...file, key: target };
-          renderWizardStep();
+        triggerFileInput('.pdf,.doc,.docx,image/*', async (fileMeta) => {
+          try {
+            showWizardMsg('Subiendo archivo…', 'info');
+            // triggerFileInput ya entrega metadatos con base64 vía readUploadFile
+            const uploaded = await uploadAdjuntoToPortal(target, fileMeta);
+            if (target === 'anexoTecnico') formState.adjuntos.anexoTecnico = uploaded;
+            else if (target === 'anexoEconomico') formState.adjuntos.anexoEconomico = uploaded;
+            else if (target.startsWith('doc-')) formState.adjuntos.docs[target] = { ...uploaded, key: target };
+            else if (target.startsWith('req-')) formState.adjuntos.requisitos[target] = { ...uploaded, key: target };
+            renderWizardStep();
+            showWizardMsg('Archivo cargado correctamente.', 'success');
+          } catch (err) {
+            alert(err.message || 'No se pudo subir el archivo');
+          }
         });
       });
     });
@@ -646,15 +660,86 @@ function bindWizardInteractions() {
   if (wizardStep === 1) recalcPrecios();
 }
 
+function slotTipo(target) {
+  if (target === 'anexoTecnico') return 'anexo_tecnico';
+  if (target === 'anexoEconomico') return 'anexo_economico';
+  if (String(target).startsWith('req-')) return 'requisitos';
+  return 'docs_solicitados';
+}
+
+function hasEmbeddedBinary(meta) {
+  if (!meta || typeof meta !== 'object') return false;
+  return !!(meta.base64 || meta.contenido_base64 || (typeof meta.contenido === 'string' && meta.contenido.length > 100));
+}
+
+/** Sube un archivo al endpoint de adjuntos y deja solo metadatos en estado. */
+async function uploadAdjuntoToPortal(target, fileMeta) {
+  const solicitudId = workspace?.solicitud?.id;
+  if (!solicitudId) throw new Error('Solicitud no disponible');
+  const resp = await portalService.uploadCotizacionAdjunto(solicitudId, {
+    key: target,
+    slot_key: target,
+    tipo: slotTipo(target),
+    nombre_archivo: fileMeta.nombre || fileMeta.nombre_archivo || 'documento',
+    mime_type: fileMeta.mime_type || 'application/octet-stream',
+    contenido_base64: fileMeta.base64 || fileMeta.contenido_base64,
+    tamaño_bytes: fileMeta.size || fileMeta.tamaño_bytes || 0,
+  });
+  const adj = resp?.adjunto || resp;
+  return sanitizePortalAdjuntoMeta({
+    id: adj.id || adj.adjunto_id,
+    adjunto_id: adj.adjunto_id || adj.id,
+    key: target,
+    nombre: adj.nombre || adj.nombre_archivo || fileMeta.nombre,
+    nombre_archivo: adj.nombre_archivo || fileMeta.nombre,
+    mime_type: adj.mime_type || fileMeta.mime_type,
+    size: adj.size || adj.tamaño_bytes || fileMeta.size,
+    tamano: adj.tamaño_bytes || fileMeta.size,
+    uploaded_at: adj.created_at || new Date().toISOString(),
+  });
+}
+
+async function migrateEmbeddedAdjuntosIfNeeded() {
+  const jobs = [];
+  const enqueue = (target, getter, setter) => {
+    const meta = getter();
+    if (!meta || meta.adjunto_id || !hasEmbeddedBinary(meta)) return;
+    jobs.push(async () => {
+      const uploaded = await uploadAdjuntoToPortal(target, {
+        nombre: meta.nombre || meta.nombre_archivo,
+        mime_type: meta.mime_type,
+        base64: meta.base64 || meta.contenido_base64,
+        size: meta.size || meta.tamaño_bytes,
+      });
+      setter(uploaded);
+    });
+  };
+  Object.entries(formState.adjuntos.docs || {}).forEach(([key, meta]) => {
+    enqueue(key, () => meta, (u) => { formState.adjuntos.docs[key] = u; });
+  });
+  Object.entries(formState.adjuntos.requisitos || {}).forEach(([key, meta]) => {
+    enqueue(key, () => meta, (u) => { formState.adjuntos.requisitos[key] = u; });
+  });
+  enqueue('anexoTecnico', () => formState.adjuntos.anexoTecnico, (u) => { formState.adjuntos.anexoTecnico = u; });
+  enqueue('anexoEconomico', () => formState.adjuntos.anexoEconomico, (u) => { formState.adjuntos.anexoEconomico = u; });
+  for (const job of jobs) await job();
+}
+
 function buildAnexosPayload() {
   const config = getCotConfig();
   return {
-    docs_solicitados: Object.entries(formState.adjuntos.docs).map(([key, f]) => ({ key, ...f })),
-    requisitos: Object.entries(formState.adjuntos.requisitos).map(([key, f]) => ({ key, ...f })),
-    anexo_tecnico_firmado: formState.adjuntos.anexoTecnico,
-    anexo_economico_firmado: formState.adjuntos.anexoEconomico,
-    anexo05a_firmado: formState.adjuntos.anexoTecnico,
-    anexo05b_firmado: formState.adjuntos.anexoEconomico,
+    docs_solicitados: Object.entries(formState.adjuntos.docs).map(([key, f]) => ({
+      ...sanitizePortalAdjuntoMeta(f),
+      key,
+    })).filter(Boolean),
+    requisitos: Object.entries(formState.adjuntos.requisitos).map(([key, f]) => ({
+      ...sanitizePortalAdjuntoMeta(f),
+      key,
+    })).filter(Boolean),
+    anexo_tecnico_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoTecnico),
+    anexo_economico_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoEconomico),
+    anexo05a_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoTecnico),
+    anexo05b_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoEconomico),
     tipo_anexo_tecnico: config.propuestaTecnica,
     tipo_anexo_economico: config.propuestaEconomica,
     datos_proveedor: formState.datos,
@@ -718,16 +803,19 @@ function buildPayload() {
       datos_proveedor: formState.datos,
     };
   }
-  return {
+  return buildPortalCotizacionPayload({
     solicitud_id: workspace.solicitud.id,
     propuesta_tecnica: propuestaTecnica,
     propuesta_economica: propuestaEconomica,
     anexos: buildAnexosPayload(),
-  };
+  });
 }
 
 async function guardarBorradorSilencioso() {
-  await portalService.guardarBorradorCotizacion(buildPayload());
+  await migrateEmbeddedAdjuntosIfNeeded();
+  const payload = buildPayload();
+  assertPortalPayloadSafe(payload);
+  await portalService.guardarBorradorCotizacion(payload);
 }
 
 async function loadCotizacionesList() {
@@ -854,7 +942,10 @@ async function enviarCotizacion() {
   if (wizardBusy) return;
   wizardBusy = true;
   try {
-    await portalService.presentarCotizacion(buildPayload());
+    await migrateEmbeddedAdjuntosIfNeeded();
+    const payload = buildPayload();
+    assertPortalPayloadSafe(payload);
+    await portalService.presentarCotizacion(payload);
     closeWizard();
     await loadCotizacionesList();
     alert('Cotización enviada correctamente. Consulte su estado en la pestaña Estado de Participación.');

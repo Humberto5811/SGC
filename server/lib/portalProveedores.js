@@ -10,6 +10,7 @@ import { estadoDisplayRecepcion } from './validacionesCotizacion.js';
 import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
+import { prepareCotizacionPortalBody } from './portalCotizacionAdjuntos.js';
 
 function clientIp(req) {
   return String(req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '').split(',')[0].trim();
@@ -252,7 +253,16 @@ export async function registrarObservacion(proveedorId, body, req) {
 }
 
 export async function presentarCotizacion(proveedorId, body, req) {
-  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos, certificados } = body || {};
+  let light;
+  try {
+    light = prepareCotizacionPortalBody(body);
+  } catch (e) {
+    if (e.code === 'PORTAL_PAYLOAD_BINARY' || e.code === 'PORTAL_PAYLOAD_TOO_LARGE') {
+      e.status = 400;
+    }
+    throw e;
+  }
+  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos, certificados } = light;
   if (!solicitud_id) throw new Error('Solicitud requerida');
   if (!propuesta_tecnica || !propuesta_economica) throw new Error('Propuesta técnica y económica obligatorias');
 
@@ -283,8 +293,15 @@ export async function presentarCotizacion(proveedorId, body, req) {
   `, [
     solicitud_id, proveedorId, invRow.requerimiento_id,
     JSON.stringify(propuesta_tecnica), JSON.stringify(propuesta_economica),
-    JSON.stringify(anexos || []), JSON.stringify(certificados || []),
+    JSON.stringify(anexos || {}), JSON.stringify(certificados || []),
   ]);
+
+  // Vincular adjuntos portal a la cotización
+  await query(`
+    UPDATE cotizaciones_proveedor_adjuntos
+    SET cotizacion_id = $3, updated_at = NOW()
+    WHERE solicitud_id = $1 AND proveedor_id = $2
+  `, [solicitud_id, proveedorId, rows[0].id]).catch(() => {});
 
   await query(`UPDATE invitacion_proveedores SET estado = 'COTIZACION_PRESENTADA', updated_at = NOW()
     WHERE id = $1`, [invRow.id]);
@@ -322,7 +339,16 @@ export async function presentarCotizacion(proveedorId, body, req) {
 
 /** Guarda borrador sin presentar cotización final */
 export async function guardarBorradorCotizacion(proveedorId, body, req) {
-  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos } = body || {};
+  let light;
+  try {
+    light = prepareCotizacionPortalBody(body);
+  } catch (e) {
+    if (e.code === 'PORTAL_PAYLOAD_BINARY' || e.code === 'PORTAL_PAYLOAD_TOO_LARGE') {
+      e.status = 400;
+    }
+    throw e;
+  }
+  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos } = light;
   if (!solicitud_id) throw new Error('Solicitud requerida');
 
   const invRow = await loadInvitacionVigente(proveedorId, solicitud_id);
@@ -343,8 +369,14 @@ export async function guardarBorradorCotizacion(proveedorId, body, req) {
   `, [
     solicitud_id, proveedorId, invRow.requerimiento_id,
     JSON.stringify(propuesta_tecnica || {}), JSON.stringify(propuesta_economica || {}),
-    JSON.stringify(anexos || []),
+    JSON.stringify(anexos || {}),
   ]);
+
+  await query(`
+    UPDATE cotizaciones_proveedor_adjuntos
+    SET cotizacion_id = $3, updated_at = NOW()
+    WHERE solicitud_id = $1 AND proveedor_id = $2
+  `, [solicitud_id, proveedorId, rows[0].id]).catch(() => {});
 
   return rows[0];
 }

@@ -18,8 +18,13 @@ async function portalRequest(path, options = {}) {
     ...options,
   });
   if (!res.ok) {
+    if (res.status === 413) {
+      throw new Error(
+        'La solicitud supera el tamaño permitido porque contiene archivos embebidos. Los archivos deben cargarse por separado.',
+      );
+    }
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Error ${res.status}`);
+    throw new Error(err.error || err.message || `Error ${res.status}`);
   }
   return res.status === 204 ? null : res.json();
 }
@@ -108,6 +113,30 @@ export const portalService = {
   },
   async guardarBorradorCotizacion(body) {
     return portalRequest('/cotizaciones/borrador', { method: 'POST', body: JSON.stringify(body) });
+  },
+  /** Sube un archivo de cotización (un archivo por request; no embeber en borrador). */
+  async uploadCotizacionAdjunto(solicitudId, fileBody) {
+    return portalRequest(`/cotizaciones/${solicitudId}/adjuntos`, {
+      method: 'POST',
+      body: JSON.stringify(fileBody),
+    });
+  },
+  async fetchCotizacionAdjuntoBlob(solicitudId, adjuntoId, download = false) {
+    const q = download ? '?download=1' : '';
+    const res = await fetch(
+      `${BASE}/cotizaciones/${solicitudId}/adjuntos/${adjuntoId}${q}`,
+      { headers: { ...portalHeaders() } },
+    );
+    if (!res.ok) {
+      if (res.status === 413) {
+        throw new Error(
+          'La solicitud supera el tamaño permitido porque contiene archivos embebidos. Los archivos deben cargarse por separado.',
+        );
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Error ${res.status}`);
+    }
+    return res.blob();
   },
   async listMisOrdenes() {
     return portalRequest('/ordenes');

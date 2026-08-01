@@ -493,78 +493,74 @@ function parseCotizacionAnexos(val) {
 }
 
 function fileFromEntry(f, fallbackNombre = 'documento') {
+  if (!f || typeof f !== 'object') return null;
   const b64 = f?.base64 || f?.contenido_base64;
-  if (!b64) return null;
+  if (!b64 && !f.adjunto_id) return null;
   const nombre = f.nombre || f.nombre_archivo || fallbackNombre;
   return {
     nombre_archivo: nombre,
     mime_type: f.mime_type || guessMime(nombre),
-    contenido_base64: b64,
+    contenido_base64: b64 || null,
+    adjunto_id: f.adjunto_id || f.id || null,
   };
+}
+
+async function resolveFileContent(f, fallbackNombre = 'documento') {
+  const entry = fileFromEntry(f, fallbackNombre);
+  if (!entry) return null;
+  if (entry.contenido_base64) return entry;
+  if (entry.adjunto_id) {
+    const { loadCotizacionAdjuntoById } = await import('./portalCotizacionAdjuntos.js');
+    const row = await loadCotizacionAdjuntoById(entry.adjunto_id);
+    if (!row?.contenido_base64) return null;
+    return {
+      nombre_archivo: row.nombre_archivo || entry.nombre_archivo,
+      mime_type: row.mime_type || entry.mime_type,
+      contenido_base64: row.contenido_base64,
+      adjunto_id: row.id,
+    };
+  }
+  return null;
 }
 
 export function buildManifiestoCotizacion(cot) {
   const docs = [];
   const anexos = parseCotizacionAnexos(cot?.anexos);
+  const pushMeta = (f, ref, grupo, opts = {}) => {
+    if (!f || typeof f !== 'object') return;
+    const hasBin = !!(f.base64 || f.contenido_base64 || f.adjunto_id);
+    if (!hasBin && !(f.nombre || f.nombre_archivo)) return;
+    docs.push({
+      ref,
+      nombre: f.nombre || f.nombre_archivo || `Documento`,
+      grupo,
+      mime_type: f.mime_type || guessMime(f.nombre || f.nombre_archivo),
+      key: f?.key || null,
+      adjunto_id: f.adjunto_id || null,
+      disponible: hasBin,
+      ...opts,
+    });
+  };
   (anexos.docs_solicitados || []).forEach((f, i) => {
-    const file = fileFromEntry(f, `Documento solicitado ${i + 1}`);
-    if (file) {
-      docs.push({
-        ref: `docs-${i}`,
-        nombre: file.nombre_archivo,
-        grupo: 'Documentos solicitados',
-        mime_type: file.mime_type,
-        key: f?.key || null,
-        disponible: true,
-      });
-    }
+    pushMeta(f, `docs-${i}`, 'Documentos solicitados');
   });
   (anexos.requisitos || []).forEach((f, i) => {
-    const file = fileFromEntry(f, `Requisito técnico ${i + 1}`);
-    if (file) {
-      docs.push({
-        ref: `req-${i}`,
-        nombre: file.nombre_archivo,
-        grupo: 'Requisitos técnicos',
-        mime_type: file.mime_type,
-        key: f?.key || null,
-        disponible: true,
-      });
-    }
+    pushMeta(f, `req-${i}`, 'Requisitos técnicos');
   });
-  const a05a = fileFromEntry(anexos.anexo05a_firmado, 'Anexo 05-A firmado');
-  if (a05a) {
-    docs.push({
-      ref: 'anexo05a',
-      nombre: a05a.nombre_archivo,
-      grupo: 'Anexos firmados',
-      mime_type: a05a.mime_type,
-      disponible: true,
-    });
-  }
-  const a05b = fileFromEntry(anexos.anexo05b_firmado, 'Anexo 05-B firmado');
-  if (a05b) {
-    docs.push({
-      ref: 'anexo05b',
-      nombre: a05b.nombre_archivo,
-      grupo: 'Propuesta económica',
-      mime_type: a05b.mime_type,
-      economico: true,
-      disponible: true,
-    });
-  }
+  pushMeta(
+    anexos.anexo05a_firmado || anexos.anexo_tecnico_firmado,
+    'anexo05a',
+    'Anexos firmados',
+  );
+  pushMeta(
+    anexos.anexo05b_firmado || anexos.anexo_economico_firmado,
+    'anexo05b',
+    'Propuesta económica',
+    { economico: true },
+  );
   const certs = parseJson(cot?.certificados, []);
   (Array.isArray(certs) ? certs : []).forEach((f, i) => {
-    const file = fileFromEntry(f, `Certificado ${i + 1}`);
-    if (file) {
-      docs.push({
-        ref: `cert-${i}`,
-        nombre: file.nombre_archivo,
-        grupo: 'Certificados',
-        mime_type: file.mime_type,
-        disponible: true,
-      });
-    }
+    pushMeta(f, `cert-${i}`, 'Certificados');
   });
   return docs;
 }
@@ -599,7 +595,8 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
       nombre: f.nombre || f.nombre_archivo || '',
       mime_type: f.mime_type || '',
       size: f.size || f.tamaño_bytes || f.tamano || null,
-      tiene_archivo: !!(f.base64 || f.contenido_base64),
+      adjunto_id: f.adjunto_id || null,
+      tiene_archivo: !!(f.adjunto_id || f.base64 || f.contenido_base64),
     }
     : null);
   return {
@@ -628,10 +625,14 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     anexos_meta: {
       docs_solicitados: (anexos.docs_solicitados || []).map(stripFile),
       requisitos: (anexos.requisitos || []).map(stripFile),
-      tiene_anexo_tecnico: !!(anexos.anexo05a_firmado?.base64 || anexos.anexo05a_firmado?.contenido_base64
-        || anexos.anexo_tecnico_firmado?.base64 || anexos.anexo_tecnico_firmado?.contenido_base64),
-      tiene_anexo_economico: !!(anexos.anexo05b_firmado?.base64 || anexos.anexo05b_firmado?.contenido_base64
-        || anexos.anexo_economico_firmado?.base64 || anexos.anexo_economico_firmado?.contenido_base64),
+      tiene_anexo_tecnico: !!(
+        anexos.anexo05a_firmado?.adjunto_id || anexos.anexo05a_firmado?.base64 || anexos.anexo05a_firmado?.contenido_base64
+        || anexos.anexo_tecnico_firmado?.adjunto_id || anexos.anexo_tecnico_firmado?.base64 || anexos.anexo_tecnico_firmado?.contenido_base64
+      ),
+      tiene_anexo_economico: !!(
+        anexos.anexo05b_firmado?.adjunto_id || anexos.anexo05b_firmado?.base64 || anexos.anexo05b_firmado?.contenido_base64
+        || anexos.anexo_economico_firmado?.adjunto_id || anexos.anexo_economico_firmado?.base64 || anexos.anexo_economico_firmado?.contenido_base64
+      ),
     },
   };
 }
@@ -646,26 +647,26 @@ export async function resolverDocumentoCotizacionAnalista(cotizacionId, docRef) 
   const docsMatch = ref.match(/^docs-(\d+)$/);
   if (docsMatch) {
     const f = (anexos.docs_solicitados || [])[parseInt(docsMatch[1], 10)];
-    const file = fileFromEntry(f);
+    const file = await resolveFileContent(f);
     if (file) return file;
   }
 
   const reqMatch = ref.match(/^req-(\d+)$/);
   if (reqMatch) {
     const f = (anexos.requisitos || [])[parseInt(reqMatch[1], 10)];
-    const file = fileFromEntry(f);
+    const file = await resolveFileContent(f);
     if (file) return file;
   }
 
   if (ref === 'anexo05a' || ref === 'anexo05a_firmado' || ref === 'anexo_tecnico_firmado') {
-    const file = fileFromEntry(
+    const file = await resolveFileContent(
       anexos.anexo05a_firmado || anexos.anexo_tecnico_firmado || anexos.anexo05a,
       'Anexo_05-A_firmado.pdf',
     );
     if (file) return file;
   }
   if (ref === 'anexo05b' || ref === 'anexo05b_firmado' || ref === 'anexo_economico_firmado') {
-    const file = fileFromEntry(
+    const file = await resolveFileContent(
       anexos.anexo05b_firmado || anexos.anexo_economico_firmado || anexos.anexo05b,
       'Anexo_05-B_firmado.pdf',
     );
@@ -676,7 +677,7 @@ export async function resolverDocumentoCotizacionAnalista(cotizacionId, docRef) 
   if (certMatch) {
     const certs = parseJson(cot.certificados, []);
     const f = (Array.isArray(certs) ? certs : [])[parseInt(certMatch[1], 10)];
-    const file = fileFromEntry(f);
+    const file = await resolveFileContent(f);
     if (file) return file;
   }
 
