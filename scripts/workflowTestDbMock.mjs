@@ -1,21 +1,18 @@
 // Cliente PostgreSQL simulado para probar executeTransition sin BD real.
-// Emula fielmente el comportamiento de PostgreSQL en concurrencia:
-//
-// 1. Cada `connect()` devuelve una conexión/transacción independiente.
-// 2. `SELECT ... FOR UPDATE` adquiere un lock por expediente: si otra
-//    transacción ya tiene el lock, la query se encola y espera hasta que
-//    esa transacción haga COMMIT/ROLLBACK (exclusión mutua real de PG).
-// 3. Las escrituras de una transacción NO commiteada viven en un buffer local;
-//    no son visibles para otras transacciones (aislamiento READ COMMITTED).
-// 4. El COMMIT publica el buffer (fila + workflow_eventos) y libera el lock.
-//    A partir de ese momento las demás transacciones ven el resultado.
-// 5. El ROLLBACK descarta el buffer y libera el lock sin publicar nada.
-//
-// Con esto, la 2ª transacción concurrente con la misma idempotency_key:
-//   - se bloquea en SELECT FOR UPDATE hasta el COMMIT de la 1ª;
-//   - lee la fila ya actualizada y el workflow_eventos ya visible;
-//   - devuelve idempotente=true; NO crea un segundo evento.
-export function createDbMock({ tipo = 'BIEN', estadoInicial = 'REGISTRO' } = {}) {
+// Emula el aislamiento READ COMMITTED + bloqueo FOR UPDATE de PostgreSQL.
+// Soporta: BEGIN/COMMIT/ROLLBACK, lock por expediente, buffer invisible hasta
+// COMMIT, workflow_eventos, workflow_observaciones, historial_movimientos,
+// UPDATE de payload compat, UPDATE de responsable sin cambio de etapa,
+// y modos de fallo para probar rollback (observaciones, payload, eventos).
+
+export function createDbMock({
+  tipo = 'BIEN',
+  estadoInicial = 'REGISTRO',
+  failInsertObservaciones = false,
+  failUpdatePayload = false,
+  failInsertEventos = false,
+  payloadInicial = '{"campos_ajenos":{"a":1,"b":"x"},"historial_evaluacion":[],"observaciones":[]}',
+} = {}) {
   // Estado COMMITEADO (visible para todas las transacciones).
   let fila = {
     id: 1,
@@ -25,25 +22,24 @@ export function createDbMock({ tipo = 'BIEN', estadoInicial = 'REGISTRO' } = {})
     sub_modulo_actual: 'Registro de Requerimiento',
     responsable_actual: 'Usuario AU',
     fecha_estado_actual: new Date().toISOString(),
-    payload: '{}',
+    payload: payloadInicial,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
-  const eventos = [];
+  const eventos = [];       // workflow_eventos commiteados
+  const observaciones = []; // workflow_observaciones commiteadas
+  let movimientos = 0;      // contador de appendMovimiento (historial_movimientos)
+  let payloadUpdates = 0;   // contador de UPDATE payload (diagnóstico)
 
-  // Control del lock por expediente.
-  let lockHolder = null; // id de transacción con el lock
-  const waiters = [];    // { txnId, resolve } esperando el lock
-  let seqId = 1;
+  let lockHolder = null;
+  const waiters = [];
   let seqTxn = 1;
+  let seqEv = 1;
+  let seqObs = 1;
 
   function adquirirLock(txnId) {
-    if (lockHolder === null) {
-      lockHolder = txnId;
-      return Promise.resolve();
-    }
+    if (lockHolder === null) { lockHolder = txnId; return Promise.resolve(); }
     if (lockHolder === txnId) return Promise.resolve();
-    // Se encola; la query espera hasta que la transacción con el lock COMMIT/ROLLBACK.
     return new Promise((resolve) => waiters.push({ txnId, resolve }));
   }
 
@@ -51,114 +47,144 @@ export function createDbMock({ tipo = 'BIEN', estadoInicial = 'REGISTRO' } = {})
     if (lockHolder !== txnId) return;
     lockHolder = null;
     const next = waiters.shift();
-    if (next) {
-      lockHolder = next.txnId;
-      next.resolve();
-    }
+    if (next) { lockHolder = next.txnId; next.resolve(); }
   }
 
-  /**
-   * Abre una nueva conexión/transacción. El caller gestiona BEGIN/COMMIT/ROLLBACK
-   * (igual que con un client real de pg cuando se pasa `client` a executeTransition).
-   */
   function connect() {
     const txnId = `txn-${seqTxn++}`;
     let begun = false;
-    let filaLocal = null;      // snapshot de la fila al adquirir el lock
-    let eventosLocales = [];   // escrituras pendientes (no visibles hasta COMMIT)
+    let filaLocal = null;      // snapshot al adquirir lock (vector de cambio)
+    let eventosLocales = [];
+    let obsLocales = [];
 
     const client = {
       async query(text, params) {
         const q = String(text);
         const upper = q.trim().toUpperCase();
 
-        if (upper === 'BEGIN') {
-          begun = true;
-          return { rows: [] };
-        }
+        if (upper === 'BEGIN') { begun = true; return { rows: [] }; }
 
         if (upper === 'COMMIT') {
           if (!begun) return { rows: [] };
-          // Publicar buffer: fila + eventos.
+          // Publicar buffer commiteado.
           if (filaLocal) fila = { ...filaLocal };
           for (const ev of eventosLocales) eventos.push(ev);
-          filaLocal = null;
-          eventosLocales = [];
+          for (const ob of obsLocales) observaciones.push(ob);
+          filaLocal = null; eventosLocales = []; obsLocales = [];
           begun = false;
           liberarLock(txnId);
           return { rows: [] };
         }
 
         if (upper === 'ROLLBACK') {
-          filaLocal = null;
-          eventosLocales = [];
+          filaLocal = null; eventosLocales = []; obsLocales = [];
           begun = false;
           liberarLock(txnId);
           return { rows: [] };
         }
 
-        if (!begun) {
-          throw new Error('mock: query ejecutada fuera de transacción (falta BEGIN)');
-        }
+        if (!begun) throw new Error('mock: query fuera de transacción (falta BEGIN)');
 
-        // SELECT ... FOR UPDATE: espera el lock y lee estado COMMITEADO.
+        // SELECT ... FOR UPDATE: espera lock; lee el estado commiteado.
         if (q.includes('FOR UPDATE') && q.includes('FROM requerimientos')) {
           await adquirirLock(txnId);
-          filaLocal = { ...fila }; // lectura de la fila ya confirmada
+          filaLocal = { ...fila };
           return { rows: [filaLocal] };
         }
 
-        // SELECT por idempotency_key: solo ve eventos COMMITEADOS + los de esta txn.
+        // SELECT por idempotency_key: ve eventos commiteados + locales de esta txn.
         if (q.includes('FROM workflow_eventos') && q.includes('idempotency_key')) {
-          const encontrados = [
-            ...eventosLocales,
-            ...eventos,
-          ].filter((e) => e.idempotency_key === params[0]);
-          return { rows: encontrados.slice(0, 1) };
+          const found = [...eventosLocales, ...eventos].filter((e) => e.idempotency_key === params[0]);
+          return { rows: found.slice(0, 1) };
         }
 
-        // INSERT workflow_eventos → buffer local (no visible hasta COMMIT).
+        // INSERT workflow_eventos → buffer local.
         if (q.includes('INSERT INTO workflow_eventos')) {
+          if (failInsertEventos) {
+            const err = new Error('mock: fallo forzado al insertar workflow_eventos');
+            err.code = '23505';
+            throw err;
+          }
           const ev = {
-            id: seqId++,
-            expediente_id: params[0],
-            tipo_contratacion: params[1],
-            evento_codigo: params[2],
-            etapa_origen: params[3],
-            etapa_destino: params[4],
-            actor_id: params[5],
-            actor_rol: params[6],
-            responsable_destino: params[7],
-            metadata: params[8],
-            idempotency_key: params[9],
+            id: seqEv++, expediente_id: params[0], tipo_contratacion: params[1],
+            evento_codigo: params[2], etapa_origen: params[3], etapa_destino: params[4],
+            actor_id: params[5], actor_rol: params[6], responsable_destino: params[7],
+            metadata: params[8], idempotency_key: params[9],
             created_at: new Date().toISOString(),
           };
           eventosLocales.push(ev);
           return { rows: [ev] };
         }
 
-        // UPDATE requerimientos con estado_actual → buffer local.
+        // UPDATE requerimientos SET payload = $2, updated_at = NOW() (compat domainMutator)
+        if (q.includes('UPDATE requerimientos') && q.includes('payload = $2')) {
+          if (failUpdatePayload) {
+            const err = new Error('mock: fallo forzado al actualizar payload');
+            err.code = '23503';
+            throw err;
+          }
+          payloadUpdates += 1;
+          filaLocal = { ...filaLocal, payload: params[1], updated_at: new Date().toISOString() };
+          return { rows: [] };
+        }
+
+        // UPDATE requerimientos SET updated_at = NOW() WHERE id = $1 (con historial_movimientos)
+        if (q.includes('UPDATE requerimientos') && q.includes('SET updated_at = NOW()') && q.includes('historial_movimientos')) {
+          if (filaLocal) filaLocal = { ...filaLocal, updated_at: new Date().toISOString() };
+          return { rows: [] };
+        }
+
+        // INSERT workflow_observaciones → buffer local (o error forzado → ROLLBACK)
+        if (q.includes('INSERT INTO workflow_observaciones')) {
+          if (failInsertObservaciones) {
+            const err = new Error('mock: fallo forzado al insertar workflow_observaciones');
+            err.code = '23505'; // unique violation tipo real
+            throw err;
+          }
+          const ob = {
+            id: seqObs++, expediente_id: params[0], origen: params[1], estado: params[2],
+            emitida_por: params[3], responsable_subsanacion: params[4],
+            motivo: params[5], documentos: params[6], dias_plazo: params[7],
+            emitida_at: params[8],
+          };
+          obsLocales.push(ob);
+          return { rows: [{ id: ob.id }] };
+        }
+
+        // UPDATE requerimientos con estado_actual (cambia ubicación)
         if (q.includes('UPDATE requerimientos') && q.includes('estado_actual = $2')) {
           filaLocal = {
             ...filaLocal,
-            estado_actual: params[1],
-            sub_modulo_actual: params[2],
-            responsable_actual: params[3],
+            estado_actual: params[1], sub_modulo_actual: params[2],
+            responsable_actual: params[3], fecha_estado_actual: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          return { rows: [] };
+        }
+
+        // UPDATE requerimientos SOLO responsable (sin cambio de etapa, ej. EVALUACION_OBSERVADA)
+        if (q.includes('UPDATE requerimientos') && q.includes('responsable_actual = $2')) {
+          filaLocal = {
+            ...filaLocal,
+            responsable_actual: params[1],
             fecha_estado_actual: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
           return { rows: [] };
         }
 
-        // UPDATE historial_movimientos / updated_at → buffer local (solo updated_at).
-        if (q.includes('historial_movimientos') || q.includes('SET updated_at')) {
-          if (filaLocal) {
-            filaLocal = { ...filaLocal, updated_at: new Date().toISOString() };
-          }
+        // UPDATE historial_movimientos / updated_at → contar appendMovimiento
+        if (q.includes('historial_movimientos')) {
+          movimientos += 1;
+          if (filaLocal) filaLocal = { ...filaLocal, updated_at: new Date().toISOString() };
+          return { rows: [] };
+        }
+        if (q.includes('SET updated_at')) {
+          if (filaLocal) filaLocal = { ...filaLocal, updated_at: new Date().toISOString() };
           return { rows: [] };
         }
 
-        // SELECT fila por id (reread tras UPDATE).
+        // SELECT fila por id (reread tras UPDATE)
         if (q.includes('FROM requerimientos') && q.includes('WHERE id = $1')) {
           return { rows: [filaLocal] };
         }
@@ -166,10 +192,8 @@ export function createDbMock({ tipo = 'BIEN', estadoInicial = 'REGISTRO' } = {})
         return { rows: [] };
       },
       release() {
-        // Si se libera sin COMMIT/ROLLBACK, descartar (equivalente a rollback implícito).
         if (begun) {
-          filaLocal = null;
-          eventosLocales = [];
+          filaLocal = null; eventosLocales = []; obsLocales = [];
           begun = false;
           liberarLock(txnId);
         }
@@ -181,11 +205,10 @@ export function createDbMock({ tipo = 'BIEN', estadoInicial = 'REGISTRO' } = {})
 
   return {
     connect,
-    get row() {
-      return fila;
-    },
-    get eventos() {
-      return eventos;
-    },
+    get row() { return fila; },
+    get eventos() { return eventos; },
+    get observaciones() { return observaciones; },
+    get movimientos() { return movimientos; },
+    get payloadUpdates() { return payloadUpdates; },
   };
 }

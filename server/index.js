@@ -412,7 +412,9 @@ app.use('/api/requerimientos', crudRouter({
       body?.usuario_modificacion,
       fromAuth,
     ) || 'Sistema';
-    await ejecutarRegistroCrear(row.id, usuarioCreador);
+    // Fase 1A — transición A: crear (REQUERIMIENTO_REGISTRADO). Se pasa req para
+    // que el adaptador construya el actor desde req.user (nunca del body).
+    await ejecutarRegistroCrear(row.id, usuarioCreador, req);
   },
   afterUpdate: async (row, prev, body) => {
     await ejecutarRegistroEditar({ row, prev, body, extractObservacionTrazabilidad });

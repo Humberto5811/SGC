@@ -178,9 +178,15 @@ export async function executeTransition(context = {}, flags = {}, client = null)
     const tipo = tipoDeRequerimiento(row) || String(context.tipo_contratacion || '').toUpperCase();
     const etapaVigente = etapaDeRequerimiento(row) || 'REGISTRO';
 
-    // 5-7. Transición desde catálogo + validación de evento/permiso (nunca destino del cliente)
+    // 5-7. Transición desde catálogo + validación de evento/permiso (nunca destino del cliente).
+    // Si no existe desde la etapa vigente, se intenta el origen de creación (null → '')
+    // para eventos como REQUERIMIENTO_REGISTRADO que se emiten justo tras el INSERT
+    // (la etapa vigente en BD ya es REGISTRO). Mismo comportamiento con PostgreSQL real.
     const evento = String(context.evento || '').trim().toUpperCase();
-    const transicion = getTransition({ tipoContratacion: tipo, etapaOrigen: etapaVigente, eventoCodigo: evento });
+    let transicion = getTransition({ tipoContratacion: tipo, etapaOrigen: etapaVigente, eventoCodigo: evento });
+    if (!transicion && etapaVigente === 'REGISTRO') {
+      transicion = getTransition({ tipoContratacion: tipo, etapaOrigen: '', eventoCodigo: evento });
+    }
     if (!transicion) {
       const err = new Error(`Transición no existe: ${tipo} ${etapaVigente} ${evento}`);
       err.code = 'TRANSITION_NOT_FOUND';
@@ -222,6 +228,16 @@ export async function executeTransition(context = {}, flags = {}, client = null)
           updated_at = NOW()
         WHERE id = $1
       `, [context.expediente_id, destino, meta.submoduloLabel, responsable]);
+    } else if (context.responsable_destino) {
+      // Evento sin cambio de ubicación con responsable explícito (ej. EVALUACION_OBSERVADA):
+      // se actualiza responsable_actual (responsable de subsanación) sin mover etapa.
+      await tx.query(`
+        UPDATE requerimientos SET
+          responsable_actual = $2,
+          fecha_estado_actual = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+      `, [context.expediente_id, context.responsable_destino]);
     } else {
       await tx.query(`
         UPDATE requerimientos SET updated_at = NOW() WHERE id = $1
