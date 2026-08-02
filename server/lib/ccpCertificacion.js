@@ -261,6 +261,10 @@ export async function listarBandejaCcp() {
       derivado_ejecucion_at: ev.derivado_ejecucion_at || null,
       orden_resuelta: !!ev.orden_resuelta,
       expediente_derivado_pago: !!ev.expediente_derivado_pago,
+      // RC8.1B — evidencia de recepción de bienes (el cargador central ya la trae).
+      recepcion_estado_global: ev.recepcion_estado_global || '',
+      recepcion_estado_interno: ev.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: ev.recepcion_bienes_expediente_id ?? null,
     };
     const vigente = resolveEstadoActualExpediente(seed);
     const badge = badgeVisualEstadoVigente(seed);
@@ -319,6 +323,10 @@ export async function listarBandejaCcp() {
       enviado_proveedor_at: ev.enviado_proveedor_at || null,
       orden_resuelta: !!ev.orden_resuelta,
       expediente_derivado_pago: !!ev.expediente_derivado_pago,
+      // RC8.1B — propagar recepción de bienes en el JSON final.
+      recepcion_estado_global: ev.recepcion_estado_global || '',
+      recepcion_estado_interno: ev.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: ev.recepcion_bienes_expediente_id ?? null,
     });
   }
   return out;

@@ -68,9 +68,15 @@ export function renderBadgeEstadoRecepcionHtml(exp, escFn = (s) => String(s ?? '
     'ORDEN_NOTIFICADA', 'ORDEN_REGISTRADA', 'REGISTRO_ORDENES',
     'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
     'PENDIENTE_ELABORAR', 'CUADRO_BORRADOR', 'CUADRO_COMPARATIVO_APROBADO',
+    // RC8.1B — evidencia global de recepción de bienes
+    'BIEN_RECIBIDO_ALMACEN', 'RECIBIDO_ALMACEN', 'RECIBIDO_POR_ALMACEN',
+    'RECEPCION_BIENES_PENDIENTE', 'RECEPCION_BIENES_OBSERVADA',
+    'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
+    'CONFORMIDAD_EN_COORDINACION_CM',
   ];
   if (
     avanzados.includes(codigo)
+    || exp?.recepcion_estado_global
     || exp?.ccp_registrado || exp?.ccp_activo || exp?.codigo_ccp
     || exp?.derivado_ccp
     || exp?.orden_estado || exp?.enviado_proveedor_at
@@ -85,6 +91,10 @@ export function renderBadgeEstadoRecepcionHtml(exp, escFn = (s) => String(s ?? '
       orden_estado: exp.orden_estado || '',
       enviado_proveedor_at: exp.enviado_proveedor_at || null,
       orden_id: exp.orden_id || null,
+      // RC8.1B — preservar evidencia de recepción de bienes al delegar al resolvedor.
+      recepcion_estado_global: exp.recepcion_estado_global || '',
+      recepcion_estado_interno: exp.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: exp.recepcion_bienes_expediente_id ?? null,
     }, escFn);
   }
 
@@ -150,6 +160,13 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
       orden_id: withOrden.orden_id || seedCot.orden_id || null,
       orden_estado: withOrden.orden_estado || seedCot.orden_estado || '',
       enviado_proveedor_at: withOrden.enviado_proveedor_at || seedCot.enviado_proveedor_at || null,
+      // RC8.1B — preservar evidencia de recepción de bienes en la consolidación.
+      recepcion_estado_global: withOrden.recepcion_estado_global
+        || seedCot.recepcion_estado_global || '',
+      recepcion_estado_interno: withOrden.recepcion_estado_interno
+        || seedCot.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: withOrden.recepcion_bienes_expediente_id
+        ?? seedCot.recepcion_bienes_expediente_id ?? null,
       estado_actual: withOrden.estado_actual || seedCot.estado_actual || '',
       sub_modulo_actual: withOrden.sub_modulo_actual || seedCot.sub_modulo_actual || '',
       estadoVigente: withOrden.estado_recepcion_codigo && [
@@ -184,6 +201,10 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
       orden_id: meta.orden_id,
       orden_estado: meta.orden_estado,
       enviado_proveedor_at: meta.enviado_proveedor_at,
+      // RC8.1B — propagar evidencia de recepción de bienes en la fila consolidada.
+      recepcion_estado_global: meta.recepcion_estado_global,
+      recepcion_estado_interno: meta.recepcion_estado_interno,
+      recepcion_bienes_expediente_id: meta.recepcion_bienes_expediente_id,
       fecha_ultima_presentacion: fechaUltima,
     };
   }).sort((a, b) => fechaSortKey(b.fecha_ultima_presentacion) - fechaSortKey(a.fecha_ultima_presentacion));

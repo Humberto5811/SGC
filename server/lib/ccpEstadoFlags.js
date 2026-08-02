@@ -107,6 +107,10 @@ export async function loadCcpFlagsBySolicitudIds(solicitudIds = []) {
         info.derivado_ejecucion_at = bestOrden.derivado_ejecucion_at;
         info.orden_resuelta = bestOrden.orden_resuelta;
         info.expediente_derivado_pago = bestOrden.expediente_derivado_pago;
+        // Evidencia de recepción de bienes (RC8.1B): preservar junto a la orden.
+        info.recepcion_estado_global = bestOrden.recepcion_estado_global;
+        info.recepcion_estado_interno = bestOrden.recepcion_estado_interno;
+        info.recepcion_bienes_expediente_id = bestOrden.recepcion_bienes_expediente_id;
       }
     }
   } catch (_) { /* migración pendiente */ }
@@ -130,6 +134,16 @@ export function applyCcpFlagsToRow(row = {}, info = null, extras = {}) {
     derivado_ejecucion_at: info?.derivado_ejecucion_at || extras.derivado_ejecucion_at || row.derivado_ejecucion_at || null,
     orden_resuelta: !!(info?.orden_resuelta || extras.orden_resuelta),
     expediente_derivado_pago: !!(info?.expediente_derivado_pago || extras.expediente_derivado_pago),
+    // RC8.1B — evidencia de recepción de bienes (info → extras → row → vacío).
+    recepcion_estado_global: info?.recepcion_estado_global
+      || extras.recepcion_estado_global
+      || row.recepcion_estado_global || '',
+    recepcion_estado_interno: info?.recepcion_estado_interno
+      || extras.recepcion_estado_interno
+      || row.recepcion_estado_interno || '',
+    recepcion_bienes_expediente_id: info?.recepcion_bienes_expediente_id
+      ?? extras.recepcion_bienes_expediente_id
+      ?? row.recepcion_bienes_expediente_id ?? null,
   };
   if (evidence.codigo_ccp) evidence.ccp_activo = true;
   return applyEstadoEvidenceToRow(row, evidence);
