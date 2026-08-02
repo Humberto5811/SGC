@@ -451,7 +451,61 @@ export async function agregarProveedoresInvitacion(requerimientoId, proveedores 
   return results;
 }
 
-export async function enviarInvitaciones(requerimientoId, { solicitud_id, invitacion_ids, usuario, ip } = {}) {
+/**
+ * Fase 2A.3A — envío de correos de invitación (responsabilidad única).
+ * No modifica BD. Devuelve resultado o lanza error (el orquestador propaga).
+ */
+export async function enviarCorreosInvitacion({ proveedor, solicitud, correos, credenciales, urlInvitacion, token }) {
+  await enviarInvitacionProveedorEmail({
+    proveedor,
+    solicitud: solicitud || { codigo: '', objeto: '' },
+    correos,
+    credenciales,
+    urlInvitacion,
+    token,
+  });
+  return { enviado: true };
+}
+
+/**
+ * Fase 2A.3C — registra el resultado SMTP en invitacion_proveedores.historial (JSONB).
+ * Sin migración: solo append a historial. NO cambia invitacion_proveedores.estado
+ * (eso rompería sqlInvitacionPendiente). Usa pool si no hay client.
+ */
+export async function registrarResultadoSmtp(invitacionId, { dispatch_key, estado, intento = 1, error = null }, client = null) {
+  const entry = {
+    tipo: 'smtp',
+    dispatch_key,
+    estado, // PENDIENTE | ENVIADO | ERROR
+    intento: Number(intento) || 1,
+    fecha: new Date().toISOString(),
+    ...(error ? { error: String(error) } : {}),
+  };
+  const run = client && typeof client.query === 'function' ? client.query.bind(client) : query;
+  await run(
+    `UPDATE invitacion_proveedores SET historial = historial || $2::jsonb, updated_at = NOW() WHERE id = $1`,
+    [invitacionId, JSON.stringify([entry])],
+  );
+  return entry;
+}
+
+/** Ejecuta SQL con client de transacción si se provee; si no, usa el pool. */
+function runDb(client, text, params) {
+  return client && typeof client.query === 'function'
+    ? client.query(text, params)
+    : query(text, params);
+}
+
+/**
+ * Fase 2A.3A — persistencia SQL de invitaciones (responsabilidad única).
+ * - UPDATE invitacion_proveedores / proveedores / solicitudes_cotizacion /
+ *   payload.historial_invitaciones + trazabilidad SQL.
+ * - NO envía correos salvo que se provea onEmail (orquestación compatible con el
+ *   comportamiento actual cuando se pasa enviarCorreosInvitacion).
+ * - NO llama registrarMovimiento ni executeTransition.
+ * - Acepta client opcional para poder ejecutarse dentro del tx del Workflow Engine.
+ */
+export async function persistirInvitaciones(client, { requerimientoId, solicitud_id, invitacion_ids, usuario, ip } = {}, onEmail = null) {
   let idFilter = '';
   const params = [requerimientoId];
   if (invitacion_ids?.length) {
@@ -459,20 +513,20 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
     params.push(...invitacion_ids.map(Number));
     idFilter = ` AND ip.id IN (${ph})`;
   }
-  const { rows: invRows } = await query(`
+  const invRes = await runDb(client, `
     SELECT ip.*, p.ruc, p.razon_social, p.emails AS proveedor_emails
     FROM invitacion_proveedores ip
     JOIN proveedores p ON p.id = ip.proveedor_id
     WHERE ip.requerimiento_id = $1 AND ${sqlInvitacionPendiente('ip')} ${idFilter}
   `, params);
-
+  const invRows = invRes.rows;
   if (!invRows.length) throw new Error('No hay proveedores pendientes de invitación');
 
   let solicitud = null;
   if (solicitud_id) {
-    solicitud = (await query('SELECT * FROM solicitudes_cotizacion WHERE id = $1', [solicitud_id])).rows[0];
+    solicitud = (await runDb(client, 'SELECT * FROM solicitudes_cotizacion WHERE id = $1', [solicitud_id])).rows[0];
   } else {
-    solicitud = (await query(`
+    solicitud = (await runDb(client, `
       SELECT sc.* FROM solicitudes_cotizacion sc
       JOIN solicitud_requerimientos sr ON sr.solicitud_id = sc.id
       WHERE sr.requerimiento_id = $1 ORDER BY sc.id DESC LIMIT 1
@@ -480,6 +534,7 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
   }
 
   const enviados = [];
+  const solicitudDigest = solicitud || { codigo: '', objeto: '' };
   for (const inv of invRows) {
     const clave = generarClaveTemporal(inv.ruc);
     const correos = (Array.isArray(inv.correos) && inv.correos.length) ? inv.correos : inv.proveedor_emails || [];
@@ -492,7 +547,7 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       emails: correos,
     });
 
-    await query(`
+    await runDb(client, `
       UPDATE invitacion_proveedores SET
         estado = 'ENVIADA',
         fecha_envio = NOW(),
@@ -518,14 +573,16 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       }]),
     ]);
 
-    await enviarInvitacionProveedorEmail({
-      proveedor: inv,
-      solicitud: solicitud || { codigo: '', objeto: '' },
-      correos,
-      credenciales: { usuario: inv.ruc, clave },
-      urlInvitacion: portalPrep.url,
-      token: portalPrep.token,
-    });
+    if (typeof onEmail === 'function') {
+      await onEmail({
+        proveedor: inv,
+        solicitud: solicitudDigest,
+        correos,
+        credenciales: { usuario: inv.ruc, clave },
+        urlInvitacion: portalPrep.url,
+        token: portalPrep.token,
+      });
+    }
 
     await registrarTrazaPortal({
       solicitud_id: solicitud?.id,
@@ -537,7 +594,7 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       ip,
     });
 
-    await query(`
+    await runDb(client, `
       UPDATE proveedores SET
         cantidad_invitaciones = COALESCE(cantidad_invitaciones, 0) + 1,
         ultima_invitacion = NOW(),
@@ -556,11 +613,27 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       }]),
     ]);
 
-    enviados.push({ ruc: inv.ruc, correos, url: portalPrep.url, token: portalPrep.token });
+    const dispatchKey = `env:${requerimientoId}:${inv.id}:${solicitud?.id || 'n'}:${usuario || 'sis'}`;
+    enviados.push({
+      id: inv.id,
+      proveedor_id: inv.proveedor_id,
+      solicitud_id: solicitud?.id || null,
+      requerimiento_id: requerimientoId,
+      ruc: inv.ruc,
+      razon_social: inv.razon_social,
+      proveedor_emails: inv.proveedor_emails || [],
+      correos,
+      url: portalPrep.url,
+      token: portalPrep.token,
+      dispatch_key: dispatchKey,
+    });
   }
 
+  let contadorEnvios = 0;
+  let codigo = '';
+  let estadoNuevo = '';
   if (solicitud) {
-    const { rows: updSol } = await query(`
+    const updSol = (await runDb(client, `
       UPDATE solicitudes_cotizacion SET
         contador_envios = COALESCE(contador_envios, 0) + 1,
         estado = CASE WHEN estado = 'BORRADOR' THEN 'PUBLICADA' ELSE estado END,
@@ -568,37 +641,27 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
         updated_at = NOW()
       WHERE id = $1
       RETURNING contador_envios, codigo
-    `, [solicitud.id]);
-    const contador = updSol[0]?.contador_envios || 1;
-    const codigo = updSol[0]?.codigo || solicitud.codigo;
-    const estadoNuevo = `Sol.Cot. Enviada (${contador})`;
+    `, [solicitud.id])).rows;
+    contadorEnvios = updSol[0]?.contador_envios || 1;
+    codigo = updSol[0]?.codigo || solicitud.codigo;
+    estadoNuevo = `Sol.Cot. Enviada (${contadorEnvios})`;
 
-    const { rows: reqRows } = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    const reqRows = (await runDb(client, 'SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId])).rows;
     if (reqRows.length) {
-      let payload = parsePayload(reqRows[0]);
+      const payload = parsePayload(reqRows[0]);
       if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
       payload.historial_invitaciones.push({
         tipo: 'convocatoria_enviada',
         usuario: usuario || SUBMODULO_INVITACIONES,
         fecha: new Date().toISOString(),
-        contador,
+        contador: contadorEnvios,
         codigo,
         estado: estadoNuevo,
         proveedores: enviados.length,
         ip: ip || '',
       });
-      await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+      await runDb(client, 'UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
     }
-
-    await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo,
-      usuario: usuario || SUBMODULO_INVITACIONES,
-      accion: 'invitacion_enviada',
-      observacion: `${estadoNuevo} — ${codigo} (${enviados.length} proveedor${enviados.length === 1 ? '' : 'es'})`,
-      responsable: SUBMODULO_INVITACIONES,
-      etapaEjecutor: 'INVITACIONES',
-    });
 
     await registrarTrazaPortal({
       solicitud_id: solicitud.id,
@@ -608,13 +671,46 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
       usuario: usuario || SUBMODULO_INVITACIONES,
       ip: ip || '',
     });
+
+    contadorEnvios = (await runDb(client, 'SELECT contador_envios FROM solicitudes_cotizacion WHERE id = $1', [solicitud.id])).rows[0]?.contador_envios || contadorEnvios;
   }
 
   return {
     enviados,
     total: enviados.length,
-    contador_envios: solicitud ? (await query('SELECT contador_envios FROM solicitudes_cotizacion WHERE id = $1', [solicitud.id])).rows[0]?.contador_envios : 0,
-    mensaje: solicitud ? 'Solicitud de Cotización enviada correctamente.' : '',
+    contador_envios: contadorEnvios,
+    codigo,
+    estadoNuevo,
+    solicitud,
+    requerimientoId,
+  };
+}
+
+/**
+ * Fase 2A.3A — orquestador: persistencia → correo → respuesta.
+ * Conserva EXACTAMENTE la respuesta anterior y el orden de escrituras.
+ * Con flag WORKFLOW_ENGINE_INVITACIONES off, el flujo es idéntico al legacy.
+ */
+export async function enviarInvitaciones(requerimientoId, { solicitud_id, invitacion_ids, usuario, ip } = {}) {
+  const persisted = await persistirInvitaciones(null, { requerimientoId, solicitud_id, invitacion_ids, usuario, ip }, enviarCorreosInvitacion);
+
+  if (persisted.solicitud) {
+    await registrarMovimiento({
+      requerimientoId,
+      estadoNuevo: persisted.estadoNuevo,
+      usuario: usuario || SUBMODULO_INVITACIONES,
+      accion: 'invitacion_enviada',
+      observacion: `${persisted.estadoNuevo} — ${persisted.codigo} (${persisted.enviados.length} proveedor${persisted.enviados.length === 1 ? '' : 'es'})`,
+      responsable: SUBMODULO_INVITACIONES,
+      etapaEjecutor: 'INVITACIONES',
+    });
+  }
+
+  return {
+    enviados: persisted.enviados,
+    total: persisted.total,
+    contador_envios: persisted.contador_envios,
+    mensaje: persisted.solicitud ? 'Solicitud de Cotización enviada correctamente.' : '',
   };
 }
 
@@ -801,7 +897,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
   };
 }
 
-async function getPrimaryRequerimientoId(solicitudId) {
+export async function getPrimaryRequerimientoId(solicitudId) {
   const { rows } = await query(
     'SELECT requerimiento_id FROM solicitud_requerimientos WHERE solicitud_id = $1 ORDER BY requerimiento_id LIMIT 1',
     [solicitudId],

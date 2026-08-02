@@ -6,6 +6,10 @@ import { registrarMovimiento, ETAPAS, getEstadoNegocioFromEtapa } from './trazab
 
 import { getSubModuloMeta } from './movimientos.js';
 
+import { runWorkflowTransition } from './workflow/workflowIntegration.js';
+import { leerFlags } from './workflow/workflowGuards.js';
+import { normalizarTipo } from '../../shared/workflow/tiposContratacion.js';
+
 
 
 const ESTADO_NEGOCIO_ETAPA = {
@@ -139,9 +143,12 @@ export async function syncRequerimientosSolicitudWorkflow(solicitudId, {
 
 
 
+  const flags = leerFlags();
+  const useEngine = flags.WORKFLOW_ENGINE_RECEPCION === true && flags.WORKFLOW_ENGINE_WRITE_ENABLED === true;
+
   for (const requerimientoId of reqIds) {
 
-    const { rows } = await query('SELECT estado_actual FROM requerimientos WHERE id = $1', [requerimientoId]);
+    const { rows } = await query('SELECT estado_actual, tipo FROM requerimientos WHERE id = $1', [requerimientoId]);
 
     if (!rows.length) continue;
 
@@ -155,7 +162,63 @@ export async function syncRequerimientosSolicitudWorkflow(solicitudId, {
 
     }
 
+    // Resolver tipo de contratación REAL (nunca asumir 'BIEN' silenciosamente).
+    const tipoReal = normalizarTipo(rows[0]?.tipo || '');
+    if (!tipoReal) {
+      // Si no puede resolverse, no asumir — advertencia controlada y omitir motor.
+      // eslint-disable-next-line no-console
+      console.warn(`[workflowSync] tipo_contratacion ausente para requerimiento ${requerimientoId}; se omite efecto motor`);
+      omitidos += 1;
+      continue;
+    }
 
+    // Fase 2A — efecto de ubicación de COTIZACION_PRESENTADA / derivaciones.
+    // Con flags on + write on, el motor decide SOLO la ubicación, responsable,
+    // evento e historial. La lógica del portal (adjuntos, convocatoria,
+    // presentación) permanece íntegra en el flujo legacy que llamó a este sync.
+    if (useEngine) {
+      try {
+        await runWorkflowTransition({
+          moduleFlag: 'WORKFLOW_ENGINE_RECEPCION',
+          eventoCodigo: destino === 'RECEPCION_COTIZACIONES' ? 'COTIZACION_PRESENTADA'
+            : destino === 'VALIDACIONES' || destino === 'VALIDACION_USUARIO' ? 'COTIZACIONES_DERIVADAS_VALIDACION'
+              : destino === 'CCP' ? 'LOCACION_APROBADA_RECEPCION'
+                : null,
+          expedienteId: requerimientoId,
+          req: null,
+          metadata: {
+            tipo_contratacion: tipoReal,
+            client_request_id: `sync:${requerimientoId}:${destino}:${usuario}`,
+            observacion,
+          },
+          legacyHandler: async () => {
+            // Nunca debe ejecutarse con motor; el try/catch upstream evita mezclar.
+            await registrarMovimiento({
+              requerimientoId,
+              estadoNuevo,
+              usuario,
+              accion: 'derivado',
+              observacion,
+              responsable: responsableFinal,
+              etapaEjecutor: etapaEjecutor || actual || 'INVITACIONES',
+              etapaDestino: destino,
+            });
+            await persistWorkflowSnapshot(requerimientoId, destino, responsableFinal);
+            return { ok: true };
+          },
+        });
+        // Con motor activo, el motor escribió workflow_eventos + historial_movimientos
+        // y actualizó estado_actual. No se llama registrarMovimiento legacy.
+        actualizados += 1;
+        continue;
+      } catch (err) {
+        if (err?.code === 'TRANSITION_NOT_FOUND' || err?.message?.includes('WORKFLOW_FEATURE_DISABLED')) {
+          // Fallback: el evento no aplica desde esta etapa → usar legacy (graceful).
+        } else {
+          throw err;
+        }
+      }
+    }
 
     await registrarMovimiento({
 

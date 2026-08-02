@@ -291,6 +291,7 @@ export async function executeTransition(context = {}, flags = {}, client = null)
       evento: eventoRow,
       expediente_actualizado: freshRow,
       contrato: await buildContratoDesdeRow(freshRow),
+      domain_results: domainResults,
     };
   }, client);
 }
@@ -298,11 +299,13 @@ export async function executeTransition(context = {}, flags = {}, client = null)
 /**
  * Mapea el código de etapa canónico de la matriz al código de estado_actual
  * esperado por los lectores legacy en BD.
- * - COORDINACION_CM → ACTOS_PREPARATORIOS (bandeja de Actos usa este código).
+ * - COORDINACION_CM → ACTOS_PREPARATORIOS (bandeja Actos).
+ * - VALIDACIONES → VALIDACION_USUARIO (bandeja de Validaciones usa ese código).
  * - El resto se conserva igual.
  */
 function mapEtapaDestinoBD(destino) {
   if (destino === 'COORDINACION_CM') return 'ACTOS_PREPARATORIOS';
+  if (destino === 'VALIDACIONES') return 'VALIDACION_USUARIO';
   return destino;
 }
 

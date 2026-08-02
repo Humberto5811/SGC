@@ -180,17 +180,31 @@ export function buildContratoVisual({
  * - Formato canónico: `actor: { id, rol }`.
  * - Compatibilidad temporal: acepta `actor_id` / `actor_rol` planos y los
  *   convierte internamente a objeto canónico.
- * - Si se pasa `user` (req.user de una ruta autenticada), sus `id`/`rol`
+ * - Si se pasa `user` (req.user de ruta autenticada), sus `id`/`rol`
  *   tienen prioridad absoluta: el actor NUNCA se toma del cliente para
  *   autorización productiva. En /simular el actor recibido es solo contexto.
+ * - Si se pasa `portalProveedor` (req.portalProveedor del Portal de Proveedores,
+ *   proveedor autenticado contra BD), tiene prioridad sobre el cliente para
+ *   eventos del portal (COTIZACION_PRESENTADA, confirmación de orden).
  *
  * @param {object} opts
  * @param {object} [opts.actor]  — formato canónico { id, rol }
  * @param {string|number} [opts.actor_id]  — compat plano
  * @param {string} [opts.actor_rol]        — compat plano
  * @param {object} [opts.user]   — req.user de ruta autenticada (id, rol)
+ * @param {object} [opts.portalProveedor] — req.portalProveedor (id, razon_social, ruc)
  */
-export function normalizarActor({ actor, actor_id, actor_rol, user = null } = {}) {
+export function normalizarActor({ actor, actor_id, actor_rol, user = null, portalProveedor = null } = {}) {
+  // 0. Proveedor de portal autenticado gana sobre actor del cliente (eventos portal).
+  if (portalProveedor && (portalProveedor.id !== undefined && portalProveedor.id !== null)) {
+    return {
+      id: portalProveedor.id ?? null,
+      rol: 'PORTAL_PROVEEDOR',
+      portalProveedorId: portalProveedor.id ?? null,
+      portalRuc: portalProveedor.ruc || portalProveedor.razon_social || null,
+    };
+  }
+
   // 1. Identidad autenticada gana (nunca confiar en actor del cliente para producción).
   if (user && (user.id !== undefined && user.id !== null)) {
     return {
@@ -214,6 +228,83 @@ export function normalizarActor({ actor, actor_id, actor_rol, user = null } = {}
   };
 }
 
+/**
+ * Builder backend mínimo del tramo Recepción/Cotizaciones (Fase 2A.2).
+ *
+ * Contrato:
+ * {
+ *   workflow: { etapa_codigo, etapa_label, submodulo_codigo, submodulo_label,
+ *               responsable_codigo, responsable_label },
+ *   estados: { expediente, recepcion, cotizacion },
+ *   fechas: { fecha_presentacion, fecha_presentacion_lima }
+ * }
+ *
+ * Reglas:
+ * - Cada dominio se resuelve por separado; dominio ausente = null.
+ * - recepcion NO usa expediente como fallback.
+ * - cotizacion NO usa workflow como fallback.
+ * - workflowSnapshot nunca sobrescribe estado_actual.
+ * - No toca frontend; solo backend reutilizable.
+ *
+ * @param {object} opts
+ * @param {string} opts.tipo_contratacion
+ * @param {string} opts.etapa_codigo / etapa_label / submodulo_codigo / submodulo_label
+ * @param {string} opts.responsable_codigo / responsable_label
+ * @param {object} [opts.estados] — { expediente?, recepcion?, cotizacion? } (codigo/label o null)
+ * @param {object} [opts.fechas] — { fecha_presentacion? } (ISO real)
+ * @returns {object} contrato con workflow/estados/fechas
+ */
+export function buildContratoRecepcionCotizacion({
+  tipo_contratacion,
+  etapa_codigo,
+  etapa_label,
+  submodulo_codigo,
+  submodulo_label,
+  responsable_codigo,
+  responsable_label,
+  estados = {},
+  fechas = {},
+} = {}) {
+  const normEstado = (v) => (v && typeof v === 'object' && v.codigo
+    ? { codigo: String(v.codigo), label: String(v.label || v.codigo) }
+    : null);
+
+  // Conversión a America/Lima (UTC-5, sin DST). El timestamp real se guarda
+  // en BD; aquí solo se formatea la representación para UI.
+  let fechaPresentacionLima = null;
+  const iso = fechas.fecha_presentacion && String(fechas.fecha_presentacion);
+  if (iso && !Number.isNaN(new Date(iso).getTime())) {
+    const lima = new Date(new Date(iso).getTime() - 5 * 3600 * 1000);
+    const dd = String(lima.getUTCDate()).padStart(2, '0');
+    const mm = String(lima.getUTCMonth() + 1).padStart(2, '0');
+    const yyyy = lima.getUTCFullYear();
+    const hh = String(lima.getUTCHours()).padStart(2, '0');
+    const min = String(lima.getUTCMinutes()).padStart(2, '0');
+    fechaPresentacionLima = `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+  }
+
+  return {
+    workflow: {
+      tipo_contratacion: stringOrNull(tipo_contratacion),
+      etapa_codigo: stringOrNull(etapa_codigo),
+      etapa_label: stringOrNull(etapa_label),
+      submodulo_codigo: stringOrNull(submodulo_codigo),
+      submodulo_label: stringOrNull(submodulo_label),
+      responsable_codigo: stringOrNull(responsable_codigo),
+      responsable_label: stringOrNull(responsable_label),
+    },
+    estados: {
+      expediente: normEstado(estados.expediente),
+      recepcion: normEstado(estados.recepcion),
+      cotizacion: normEstado(estados.cotizacion),
+    },
+    fechas: {
+      fecha_presentacion: fechas.fecha_presentacion || null,
+      fecha_presentacion_lima: fechaPresentacionLima,
+    },
+  };
+}
+
 /** Normaliza un código de evento enviado por cliente. */
 export function normalizarEventoCodigo(raw) {
   const s = String(raw || '').trim().toUpperCase();
@@ -230,7 +321,7 @@ export function normalizarEtapaCodigo(raw) {
   if (s === 'ORDEN_COMPRA') return ETAPAS.REGISTRO_ORDEN;
   if (s === 'REGISTRO') return ETAPAS.REGISTRO;
   if (s === 'CONSULTAS' || s === 'PORTAL_PROVEEDORES') return ETAPAS.INVITACIONES;
-  if (s === 'VALIDACION') return ETAPAS.VALIDACIONES;
+  if (s === 'VALIDACION' || s === 'VALIDACION_USUARIO') return ETAPAS.VALIDACIONES;
   if (s === 'LIQUIDACION' || s === 'ARCHIVO') return ETAPAS.FINALIZADO;
   return (s || null);
 }
@@ -249,6 +340,7 @@ export default {
   buildContratoUbicacion,
   buildContratoEstados,
   buildContratoVisual,
+  buildContratoRecepcionCotizacion,
   normalizarActor,
   normalizarEventoCodigo,
   normalizarEtapaCodigo,

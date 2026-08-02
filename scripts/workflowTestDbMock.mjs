@@ -12,7 +12,21 @@ export function createDbMock({
   failUpdatePayload = false,
   failInsertEventos = false,
   payloadInicial = '{"campos_ajenos":{"a":1,"b":"x"},"historial_evaluacion":[],"observaciones":[]}',
+  solicitudEstado = 'PUBLICADA',
+  solicitudContador = 2,
+  cotizacionesValidacionEstado = ['NO_APTO', 'NO_APTO'],
 } = {}) {
+  // Fase 2A.4D — solicitud de cotización simulada (usada por buildRetornoInvalidasDomainMutator).
+  let solicitud = {
+    id: 99,
+    estado: solicitudEstado,
+    contador_envios: solicitudContador,
+    fecha_publicacion: '2026-07-01T12:00:00.000Z',
+    consultas_inicio: '2026-07-01T12:00:00.000Z',
+    cotizaciones_fin: '2026-07-20T12:00:00.000Z',
+    updated_at: new Date().toISOString(),
+  };
+
   // Estado COMMITEADO (visible para todas las transacciones).
   let fila = {
     id: 1,
@@ -90,6 +104,27 @@ export function createDbMock({
           await adquirirLock(txnId);
           filaLocal = { ...fila };
           return { rows: [filaLocal] };
+        }
+
+        // SELECT cotizaciones_proveedor (mutator real de validaciones).
+        if (q.includes('FROM cotizaciones_proveedor') && q.includes('solicitud_id = $1')) {
+          return {
+            rows: cotizacionesValidacionEstado.map((v) => ({ ve: String(v || '').toUpperCase() })),
+          };
+        }
+
+        // Fase 2A.4D — SELECT solicitudes_cotizacion (mutator real).
+        if (q.includes('FROM solicitudes_cotizacion') && q.includes('WHERE id = $1')) {
+          return { rows: [{ ...solicitud }] };
+        }
+
+        // Fase 2A.4D — UPDATE solicitudes_cotizacion SET estado='PUBLICADA' (salvo CERRADA).
+        if (q.includes('UPDATE solicitudes_cotizacion') && q.includes("SET estado = 'PUBLICADA'")) {
+          if (String(solicitud.estado || '').toUpperCase() === 'CERRADA') {
+            return { rows: [] };
+          }
+          solicitud = { ...solicitud, estado: 'PUBLICADA', updated_at: new Date().toISOString() };
+          return { rows: [{ id: solicitud.id, estado: solicitud.estado, contador_envios: solicitud.contador_envios }] };
         }
 
         // SELECT por idempotency_key: ve eventos commiteados + locales de esta txn.
@@ -206,6 +241,7 @@ export function createDbMock({
   return {
     connect,
     get row() { return fila; },
+    get solicitud() { return solicitud; },
     get eventos() { return eventos; },
     get observaciones() { return observaciones; },
     get movimientos() { return movimientos; },

@@ -200,6 +200,7 @@ export async function runWorkflowTransition({
   req,
   metadata = {},
   domainMutator = null,
+  afterCommit = null,
   legacyHandler,
   flagsOverride = null,
 }) {
@@ -253,7 +254,25 @@ export async function runWorkflowTransition({
     flags, // incluye WORKFLOW_ENGINE_WRITE_ENABLED
   );
 
-  // 4. Respuesta compatible (motor): ok + workflow + evento.
+  // 3b. Tras COMMIT (executeTransition ya hizo COMMIT/ROLLBACK): efecto externo.
+  // Un rollback NUNCA llega aquí (executeTransition lanzó y el código no continúa).
+  let afterCommitResult = null;
+  let afterCommitError = null;
+  if (typeof afterCommit === 'function') {
+    try {
+      afterCommitResult = await afterCommit({
+        resultado: motor,
+        req,
+        metadata,
+        idempotency_key,
+      });
+    } catch (err) {
+      // El COMMIT ya ocurrió; no revertimos la persistencia ni el evento.
+      afterCommitError = err;
+    }
+  }
+
+  // 4. Respuesta compatible (motor): ok + workflow + evento + efecto poscommit.
   return {
     ok: true,
     workflow: motor.contrato
@@ -271,6 +290,14 @@ export async function runWorkflowTransition({
       idempotente: motor.idempotente === true,
     },
     data: motor.expediente_actualizado || null,
+    // Resultados del domainMutator (plan de correos, contadores, payload, etc.)
+    domainResults: motor.domain_results || null,
+    afterCommit:
+      afterCommitError
+        ? { ok: false, error: afterCommitError.message }
+        : afterCommitResult
+          ? { ok: true, resultado: afterCommitResult }
+          : null,
     codigoCamino: process.env.NODE_ENV === 'development' ? 'ENGINE' : undefined,
   };
 }
