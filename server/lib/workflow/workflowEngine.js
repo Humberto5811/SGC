@@ -211,8 +211,12 @@ export async function executeTransition(context = {}, flags = {}, client = null)
       });
     }
 
-    // 10-13. Actualizar ubicación SOLO si cambia_ubicacion
+    // 10-13. Actualizar ubicación SOLO si cambia_ubicacion.
+    // Se usa `mapEtapaDestinoBD` para que el estado_actual escrito sea el código que
+    // los lectores legacy esperan (ej.: COORDINACION_CM → ACTOS_PREPARATORIOS).
+    // El contrato y el evento conservan el código canónico de la matriz.
     const destino = transicion.etapa_destino;
+    const destinoBD = mapEtapaDestinoBD(destino);
     const meta = getEtapaMeta(destino) || getEtapaMeta('REGISTRO');
     const cambia = transicion.cambia_ubicacion;
     const responsable = context.responsable_destino || transicion.responsable_destino
@@ -227,7 +231,7 @@ export async function executeTransition(context = {}, flags = {}, client = null)
           fecha_estado_actual = NOW(),
           updated_at = NOW()
         WHERE id = $1
-      `, [context.expediente_id, destino, meta.submoduloLabel, responsable]);
+      `, [context.expediente_id, destinoBD, meta.submoduloLabel, responsable]);
     } else if (context.responsable_destino) {
       // Evento sin cambio de ubicación con responsable explícito (ej. EVALUACION_OBSERVADA):
       // se actualiza responsable_actual (responsable de subsanación) sin mover etapa.
@@ -289,6 +293,17 @@ export async function executeTransition(context = {}, flags = {}, client = null)
       contrato: await buildContratoDesdeRow(freshRow),
     };
   }, client);
+}
+
+/**
+ * Mapea el código de etapa canónico de la matriz al código de estado_actual
+ * esperado por los lectores legacy en BD.
+ * - COORDINACION_CM → ACTOS_PREPARATORIOS (bandeja de Actos usa este código).
+ * - El resto se conserva igual.
+ */
+function mapEtapaDestinoBD(destino) {
+  if (destino === 'COORDINACION_CM') return 'ACTOS_PREPARATORIOS';
+  return destino;
 }
 
 async function buildContratoDesdeRow(row) {

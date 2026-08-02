@@ -220,10 +220,19 @@ export function normalizarEventoCodigo(raw) {
   return EVENTOS[s] ? EVENTOS[s] : (s || null);
 }
 
-/** Normaliza un código de etapa enviado por cliente. */
+/** Normaliza un código de etapa (canónico + alias legacy BD). */
 export function normalizarEtapaCodigo(raw) {
   const s = String(raw || '').trim().toUpperCase();
-  return ETAPAS[s] ? ETAPAS[s] : (s || null);
+  if (ETAPAS[s]) return ETAPAS[s];
+  // Mapeo de códigos legacy que la BD guarda pero que no son canónicos de la
+  // matriz. Al leer estado_actual, traducimos al canónico de la matriz.
+  if (s === 'ACTOS_PREPARATORIOS') return ETAPAS.COORDINACION_CM;
+  if (s === 'ORDEN_COMPRA') return ETAPAS.REGISTRO_ORDEN;
+  if (s === 'REGISTRO') return ETAPAS.REGISTRO;
+  if (s === 'CONSULTAS' || s === 'PORTAL_PROVEEDORES') return ETAPAS.INVITACIONES;
+  if (s === 'VALIDACION') return ETAPAS.VALIDACIONES;
+  if (s === 'LIQUIDACION' || s === 'ARCHIVO') return ETAPAS.FINALIZADO;
+  return (s || null);
 }
 
 /** Normaliza código de tipo de contratación. */
