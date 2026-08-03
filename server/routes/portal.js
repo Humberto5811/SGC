@@ -38,6 +38,9 @@ import {
   getDestinosSalidaPorResultado,
   resolverPdfValidacionFirmada,
 } from '../lib/validacionesCotizacion.js';
+import { buildRetornoInvalidasDomainMutator } from '../lib/workflow/validacionesAgregadas.js';
+import { runWorkflowTransition } from '../lib/workflow/workflowIntegration.js';
+import { getPrimaryRequerimientoId } from '../lib/invitaciones.js';
 import {
   listarCuadroComparativo,
   listarCuadroComparativoExpedientes,
@@ -504,6 +507,81 @@ portalAnalistaRouter.post('/validaciones/:id/devolver', async (req, res, next) =
     }
     if (/ya está|ya fue/i.test(msg)) {
       return res.status(409).json({ error: msg });
+    }
+    next(err);
+  }
+});
+
+// Fase 2A.4B — devolución AGREGADA de Validaciones a Invitaciones.
+// Ruta nueva separada del endpoint individual (:id/devolver) para NO confundir
+// reapertura individual con retorno agregado. Trabaja con la solicitud.
+portalAnalistaRouter.post('/validaciones/solicitudes/:solicitudId/devolver-todas-invalidas', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    if (!usuario) return res.status(401).json({ error: 'No autenticado' });
+    const solicitudId = parseInt(req.params.solicitudId, 10);
+    if (!solicitudId) return res.status(400).json({ error: 'solicitudId inválido' });
+
+    // Resolver requerimiento principal (el motor trabaja sobre requerimientos).
+    const requerimientoId = await getPrimaryRequerimientoId(solicitudId);
+    if (!requerimientoId) return res.status(400).json({ error: 'Sin requerimiento asociado' });
+
+    // Política: como la capacidad agregada no existía en legacy (solo reapertura individual),
+    // con WORKFLOW_ENGINE_VALIDACIONES=false esta ruta nueva responde feature disabled (503)
+    // sin escrituras; el endpoint individual :id/devolver queda intacto.
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_VALIDACIONES',
+      eventoCodigo: 'COTIZACIONES_INVALIDAS_DEVUELTAS',
+      expedienteId: requerimientoId,
+      req,
+      metadata: {
+        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+        solicitud_id: solicitudId,
+        client_request_id: req.body?.client_request_id || null,
+        observacion: 'Todas las cotizaciones fueron declaradas NO_APTO',
+      },
+      domainMutator: buildRetornoInvalidasDomainMutator({
+        solicitudId,
+        usuario,
+        observacion: req.body?.observacion || '',
+      }),
+      legacyHandler: async () => {
+        // Política recomendada: la acción agregada no existía en legacy.
+        const err = new Error('WORKFLOW_FEATURE_DISABLED:WORKFLOW_ENGINE_VALIDACIONES');
+        err.code = 'WORKFLOW_FEATURE_DISABLED';
+        err.status = 503;
+        throw err;
+      },
+    });
+
+    const resVal = result.domainResults || {};
+    res.json({
+      success: true,
+      mensaje: 'El expediente fue devuelto a Invitaciones porque todas las cotizaciones fueron declaradas no aptas.',
+      workflow: result.workflow || undefined,
+      evento: result.evento,
+      resultado_validacion: {
+        total_consideradas: resVal.total_consideradas ?? null,
+        total_evaluadas: resVal.total_evaluadas ?? null,
+        aptas: resVal.aptas ?? null,
+        no_aptas: resVal.no_aptas ?? null,
+        pendientes: resVal.pendientes ?? null,
+        todas_no_aptas: resVal.todas_no_aptas ?? null,
+      },
+      acciones_pendientes: {
+        requiere_reinvitacion: true,
+        reinvitacion_creada: false,
+        correo_enviado: false,
+      },
+    });
+  } catch (err) {
+    const msg = String(err?.message || '');
+    const code = err?.code || '';
+    if (/VALIDACIONES_|WORKFLOW_STAGE|TIPO_CONTRATACION|WORKFLOW_FEATURE/i.test(code)) {
+      return res.status(409).json({ error: msg, code });
+    }
+    if (err?.status === 503 || code === 'WORKFLOW_FEATURE_DISABLED' || code === 'WORKFLOW_WRITE_DISABLED') {
+      return res.status(503).json({ error: msg, code });
     }
     next(err);
   }

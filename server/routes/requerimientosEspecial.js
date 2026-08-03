@@ -22,6 +22,7 @@ import {
   ejecutarRegistroSubsanar,
   esOrigenRegistro,
 } from '../lib/registroMigrationFacade.js';
+import { runWorkflowTransition, buildObservacionDomainMutator } from '../lib/workflow/workflowIntegration.js';
 import {
   resolveUserDataScope,
   buildRequerimientoScopeSql,
@@ -243,40 +244,66 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Requerimiento no encontrado' });
     }
 
-    let payload = {};
-    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-    payload.historial_evaluacion.push({
-      tipo: 'derivacion',
-      usuario: usuario || 'Usuario AU',
-      fecha: new Date().toISOString(),
-      observacion: 'Solicitud de aprobación enviada a evaluación',
-    });
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+    // Fase 1A — transición B: REGISTRO → EVALUACION
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
+      eventoCodigo: 'REQUERIMIENTO_ENVIADO_EVALUACION',
+      expedienteId: requerimientoId,
+      req,
+      metadata: { tipo_contratacion: req.body?.tipo_contratacion || 'BIEN' },
+      legacyHandler: async () => {
+        let payload = {};
+        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+        if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+        payload.historial_evaluacion.push({
+          tipo: 'derivacion',
+          usuario: usuario || 'Usuario AU',
+          fecha: new Date().toISOString(),
+          observacion: 'Solicitud de aprobación enviada a evaluación',
+        });
+        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const updated = await ejecutarRegistroDerivar({
-      requerimientoId,
-      usuario: usuario || 'Usuario AU',
-      legacyExecutor: () => registrarMovimiento({
-        requerimientoId,
-        estadoNuevo: 'En tramite de aprobación',
-        usuario: usuario || 'Usuario AU',
-        accion: 'derivado',
-        observacion: 'Solicitud de aprobación enviada a evaluación',
-        responsable: ETAPAS.EVALUACION.responsable,
-        etapaEjecutor: 'REGISTRADO',
-        etapaDestino: 'EVALUACION',
-      }),
+        const updated = await ejecutarRegistroDerivar({
+          requerimientoId,
+          usuario: usuario || 'Usuario AU',
+          legacyExecutor: () => registrarMovimiento({
+            requerimientoId,
+            estadoNuevo: 'En tramite de aprobación',
+            usuario: usuario || 'Usuario AU',
+            accion: 'derivado',
+            observacion: 'Solicitud de aprobación enviada a evaluación',
+            responsable: ETAPAS.EVALUACION.responsable,
+            etapaEjecutor: 'REGISTRADO',
+            etapaDestino: 'EVALUACION',
+          }),
+        });
+
+        if (!updated) {
+          return { ok: false, error: 'Transición no permitida por Workflow Engine' };
+        }
+        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+      },
     });
 
-    if (!updated) {
-      return res.status(409).json({
-        success: false,
-        error: 'Transición no permitida por Workflow Engine',
-      });
+    if (result.ok !== true) {
+      return res.status(result.error ? 409 : 200).json({ success: false, error: result.error || 'Transición no permitida' });
     }
 
-    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+    if (result.evento) {
+      // Camino motor: respuesta compatible con contrato workflow + evento.
+      return res.json({
+        success: true,
+        requerimiento: {
+          id: result.data?.id ?? Number(requerimientoId),
+          codigo: result.data?.codigo ?? null,
+          estado: result.data?.estado ?? null,
+        },
+        workflow: result.workflow || undefined,
+        evento: result.evento,
+      });
+    }
+    // Camino legacy: resultado exacto anterior.
+    return res.json({ success: true, requerimiento: result.requerimiento });
   } catch (err) { next(err); }
 });
 
@@ -307,39 +334,98 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
 
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo de observación requerido' });
 
-    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-    payload.historial_evaluacion.push({
-      tipo: 'observacion',
-      motivo,
-      usuario: usuario || '',
-      fecha: new Date().toISOString(),
+    // Fase 1A.2 — transición D: observación de evaluación (NO cambia ubicación).
+    // Idempotencia estable: client_request_id si llega; si no, fallback
+    // expediente+evento+actor+motivo_hash+ciclo (sin timestamp aleatorio).
+    const responsableSubsanacion = destino_persona || req.body?.responsable_subsanacion || '';
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
+      eventoCodigo: 'EVALUACION_OBSERVADA',
+      expedienteId: requerimientoId,
+      req,
+      metadata: {
+        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+        client_request_id: req.body?.client_request_id || null,
+        motivo,
+        ciclo_observacion: req.body?.ciclo_observacion ?? null,
+        // responsable de subsanación: actualiza responsable_actual sin mover etapa.
+        responsable_destino: responsableSubsanacion,
+      },
+      // En el camino motor, el domainMutator ejecuta DENTRO de la misma transacción:
+      //  1. inserta workflow_observaciones;
+      //  2. actualiza payload.observaciones + payload.historial_evaluacion (compat,
+      //     reutilizando emitirObservacion como función pura sobre el objeto en memoria);
+      //  3. persiste el payload con el mismo tx.
+      // workflow_eventos + historial_movimientos + expediente comparten la transacción:
+      // si algo falla → ROLLBACK completo.
+      domainMutator: buildObservacionDomainMutator({
+        motivo,
+        usuarioEmisor: usuario || (req.user && (req.user.username || req.user.dni)) || 'SISTEMA',
+        responsableSubsanacion,
+        destinoSubmodulo: destino_submodulo || 'Registro de Requerimiento',
+        destinoEtapa: destino_etapa || 'REGISTRADO',
+        destinoPersona,
+        origenSubmodulo: origen_submodulo || 'Evaluación de Requerimiento',
+        documentos: req.body?.documentos_subsanacion || [],
+        origen: 'EVALUACION',
+      }),
+      legacyHandler: async () => {
+        let payload = {};
+        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+
+        if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+        payload.historial_evaluacion.push({
+          tipo: 'observacion',
+          motivo,
+          usuario: usuario || '',
+          fecha: new Date().toISOString(),
+        });
+
+        emitirObservacion(payload, {
+          motivo,
+          gerente: usuario || 'Gerente',
+          origen: 'GERENTE',
+          origen_submodulo: origen_submodulo || 'Evaluación de Requerimiento',
+          destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
+          destino_etapa: destino_etapa || 'REGISTRADO',
+          destino_persona: destino_persona || '',
+          observacion_padre_id: observacion_padre_id || observacionPadreId || null,
+        });
+
+        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+
+        const updated = await registrarMovimiento({
+          requerimientoId,
+          estadoNuevo: 'Observado',
+          usuario: usuario || 'Gerente',
+          accion: 'observado',
+          observacion: motivo,
+          responsable: ETAPAS.REGISTRADO.responsable,
+          etapaEjecutor: 'EVALUACION',
+          etapaDestinoEvento: 'REGISTRADO',
+        });
+
+        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+      },
     });
 
-    emitirObservacion(payload, {
-      motivo,
-      gerente: usuario || 'Gerente',
-      origen: 'GERENTE',
-      origen_submodulo: origen_submodulo || 'Evaluación de Requerimiento',
-      destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
-      destino_etapa: destino_etapa || 'REGISTRADO',
-      destino_persona: destino_persona || '',
-      observacion_padre_id: observacion_padre_id || observacionPadreId || null,
-    });
+    if (result.ok !== true) {
+      return res.status(409).json({ success: false, error: result.error || 'Transición no permitida' });
+    }
 
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
-
-    const updated = await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo: 'Observado',
-      usuario: usuario || 'Gerente',
-      accion: 'observado',
-      observacion: motivo,
-      responsable: ETAPAS.REGISTRADO.responsable,
-      etapaEjecutor: 'EVALUACION',
-      etapaDestinoEvento: 'REGISTRADO',
-    });
-
-    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+    if (result.evento) {
+      return res.json({
+        success: true,
+        requerimiento: {
+          id: result.data?.id ?? Number(requerimientoId),
+          codigo: result.data?.codigo ?? null,
+          estado: result.data?.estado ?? null,
+        },
+        workflow: result.workflow || undefined,
+        evento: result.evento,
+      });
+    }
+    return res.json({ success: true, requerimiento: result.requerimiento });
   } catch (err) { next(err); }
 });
 
@@ -420,29 +506,57 @@ router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
-    let payload = {};
-    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-    payload.historial_evaluacion.push({
-      tipo: 'aprobacion',
-      usuario: usuario || '',
-      fecha: new Date().toISOString(),
-    });
-    autoCerrarObservacionesEmisorAlContinuar(payload, 'Evaluación de Requerimiento', usuario || 'Gerente');
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+    // Fase 1A — transición C: EVALUACION → DEC
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
+      eventoCodigo: 'EVALUACION_APROBADA',
+      expedienteId: requerimientoId,
+      req,
+      metadata: { tipo_contratacion: req.body?.tipo_contratacion || 'BIEN' },
+      legacyHandler: async () => {
+        let payload = {};
+        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+        if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+        payload.historial_evaluacion.push({
+          tipo: 'aprobacion',
+          usuario: usuario || '',
+          fecha: new Date().toISOString(),
+        });
+        autoCerrarObservacionesEmisorAlContinuar(payload, 'Evaluación de Requerimiento', usuario || 'Gerente');
+        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const updated = await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo: 'Aprobado',
-      usuario: usuario || 'Gerente',
-      accion: 'aprobado',
-      observacion: 'Aprobado en evaluación — derivado a DEC',
-      responsable: ETAPAS.DEC.responsable,
-      etapaEjecutor: 'EVALUACION',
-      etapaDestino: 'DEC',
+        const updated = await registrarMovimiento({
+          requerimientoId,
+          estadoNuevo: 'Aprobado',
+          usuario: usuario || 'Gerente',
+          accion: 'aprobado',
+          observacion: 'Aprobado en evaluación — derivado a DEC',
+          responsable: ETAPAS.DEC.responsable,
+          etapaEjecutor: 'EVALUACION',
+          etapaDestino: 'DEC',
+        });
+
+        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+      },
     });
 
-    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+    if (result.ok !== true) {
+      return res.status(result.error ? 409 : 200).json({ success: false, error: result.error || 'Transición no permitida' });
+    }
+
+    if (result.evento) {
+      return res.json({
+        success: true,
+        requerimiento: {
+          id: result.data?.id ?? Number(requerimientoId),
+          codigo: result.data?.codigo ?? null,
+          estado: result.data?.estado ?? null,
+        },
+        workflow: result.workflow || undefined,
+        evento: result.evento,
+      });
+    }
+    return res.json({ success: true, requerimiento: result.requerimiento });
   } catch (err) { next(err); }
 });
 

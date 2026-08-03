@@ -33,6 +33,67 @@ import {
   REQUERIMIENTO_BANDEJA_FROM,
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
 } from '../lib/bandejaRequerimientoSql.js';
+import { runWorkflowTransition } from '../lib/workflow/workflowIntegration.js';
+import { getObservacionesAbiertas } from '../../shared/observacionesMotor.js';
+
+/**
+ * Fase 1B — domainMutator para transiciones del tramo DEC/Programación.
+ * Con motor activo, actualiza SOLO el payload histórico legacy (para que los
+ * lectores de bandeja no se rompan) usando el MISMO tx del motor. NO llama a
+ * registrarMovimiento (el motor escribirá workflow_eventos + historial_movimientos).
+ */
+function buildTramo1bPayloadMutator({ accionHistorial, submoduloLabel, camposExtras = {} }) {
+  return async function payloadMutator(client, { expediente_id, row }) {
+    let payload = {};
+    try { payload = JSON.parse(row?.payload || '{}'); } catch (_) { payload = {}; }
+    const now = new Date().toISOString();
+    const arrayKey = accionHistorial; // historial_dec | historial_programacion | historial_actos
+    if (!Array.isArray(payload[arrayKey])) payload[arrayKey] = [];
+    payload[arrayKey].push({
+      ...(camposExtras.entrada || {}),
+      tipo: camposExtras.tipo,
+      usuario: camposExtras.usuario || '',
+      fecha: now,
+    });
+    // Arrays históricos adicionales (compat legacy, misma transacción).
+    // Ej.: aprobar Coordinación CM agregaba también payload.historial_invitaciones
+    // (ingreso_invitaciones) que la vista de Invitaciones usa para detectar ingreso.
+    for (const [arrayExtra, entradaExtra] of Object.entries(camposExtras.arraysExtras || {})) {
+      if (!Array.isArray(payload[arrayExtra])) payload[arrayExtra] = [];
+      payload[arrayExtra].push({ ...entradaExtra, fecha: now });
+    }
+    // Cerrar observaciones del submódulo al continuar (mismo comportamiento legacy).
+    await import('../lib/observacionesWorkflow.js').then(({ autoCerrarObservacionesEmisorAlContinuar }) => {
+      autoCerrarObservacionesEmisorAlContinuar(payload, submoduloLabel, camposExtras.usuario || 'Sistema');
+    });
+    await client.query(
+      'UPDATE requerimientos SET payload = $2, updated_at = NOW() WHERE id = $1',
+      [Number(expediente_id), JSON.stringify(payload)],
+    );
+    return { compat_payload_actualizado: true };
+  };
+}
+
+/** Fase 1B — respuestas compatibles: motor añade workflow+evento sin romper consumidores. */
+function responderTransicionMotor(res, result, requerimientoId) {
+  if (result.ok !== true) {
+    return res.status(result.error ? 409 : 200).json({ success: false, error: result.error || 'Transición no permitida' });
+  }
+  if (result.evento) {
+    return res.json({
+      success: true,
+      requerimiento: {
+        id: result.data?.id ?? Number(requerimientoId),
+        codigo: result.data?.codigo ?? null,
+        estado: result.data?.estado ?? result.data?.estado_actual ?? null,
+        estado_actual: result.data?.estado_actual ?? null,
+      },
+      workflow: result.workflow || undefined,
+      evento: result.evento,
+    });
+  }
+  return res.json({ success: true, requerimiento: result.requerimiento });
+}
 
 const router = express.Router();
 
@@ -100,25 +161,46 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
-    let payload = {};
-    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (!Array.isArray(payload.historial_dec)) payload.historial_dec = [];
-    payload.historial_dec.push({ tipo: 'aprobacion_dec', usuario: usuario || '', fecha: new Date().toISOString() });
-    autoCerrarObservacionesEmisorAlContinuar(payload, 'DEC', usuario || 'DEC');
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+    // Fase 1B — DEC_APROBADO: DEC → PROGRAMACION.
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_DEC',
+      eventoCodigo: 'DEC_APROBADO',
+      expedienteId: requerimientoId,
+      req,
+      metadata: {
+        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+        client_request_id: req.body?.client_request_id || null,
+        observacion: 'DEC aprobado — derivado a Programación',
+      },
+      domainMutator: buildTramo1bPayloadMutator({
+        accionHistorial: 'historial_dec',
+        submoduloLabel: 'DEC',
+        camposExtras: { tipo: 'aprobacion_dec', usuario: usuario || 'DEC' },
+      }),
+      legacyHandler: async () => {
+        let payload = {};
+        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+        if (!Array.isArray(payload.historial_dec)) payload.historial_dec = [];
+        payload.historial_dec.push({ tipo: 'aprobacion_dec', usuario: usuario || '', fecha: new Date().toISOString() });
+        autoCerrarObservacionesEmisorAlContinuar(payload, 'DEC', usuario || 'DEC');
+        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const updated = await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo: 'Aprobado DEC',
-      usuario: usuario || 'DEC',
-      accion: 'aprobado',
-      observacion: 'Aprobado por DEC — derivado a Programación',
-      responsable: ETAPAS.PROGRAMACION.responsable,
-      etapaEjecutor: 'DEC',
-      etapaDestino: 'PROGRAMACION',
+        const updated = await registrarMovimiento({
+          requerimientoId,
+          estadoNuevo: 'Aprobado DEC',
+          usuario: usuario || 'DEC',
+          accion: 'aprobado',
+          observacion: 'Aprobado por DEC — derivado a Programación',
+          responsable: ETAPAS.PROGRAMACION.responsable,
+          etapaEjecutor: 'DEC',
+          etapaDestino: 'PROGRAMACION',
+        });
+
+        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+      },
     });
 
-    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+    return responderTransicionMotor(res, result, requerimientoId);
   } catch (err) { next(err); }
 });
 
@@ -194,30 +276,64 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
     const { requerimientoId } = req.params;
     const { usuario } = req.body || {};
     const reqCheck = await query(
-      `SELECT id, payload FROM requerimientos WHERE id = $1 AND estado IN ('Aprobado DEC', 'En Programación')`,
+      `SELECT id, payload, estado FROM requerimientos WHERE id = $1 AND estado IN ('Aprobado DEC', 'En Programación')`,
       [requerimientoId],
     );
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado o estado inválido' });
 
+    // Fase 1B — Guards mínimos de Programación (igual para legacy y motor).
+    const { rows: pedidos } = await query(
+      'SELECT 1 FROM requerimiento_pedidos WHERE requerimiento_id = $1 LIMIT 1',
+      [requerimientoId],
+    );
+    if (!pedidos.length) return res.status(409).json({ success: false, error: 'Debe asociar al menos un pedido SIGAMEF' });
+
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (!Array.isArray(payload.historial_programacion)) payload.historial_programacion = [];
-    payload.historial_programacion.push({ tipo: 'aprobacion_programacion', usuario: usuario || '', fecha: new Date().toISOString() });
-    autoCerrarObservacionesEmisorAlContinuar(payload, 'Programación', usuario || 'Programación');
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+    if (getObservacionesAbiertas(payload).length > 0) {
+      return res.status(409).json({ success: false, error: 'Existen observaciones abiertas que impiden aprobar' });
+    }
 
-    const updated = await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo: 'Programado',
-      usuario: usuario || 'Programación',
-      accion: 'aprobado',
-      observacion: 'Aprobado en Programación — derivado a Coordinación CM',
-      responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
-      etapaEjecutor: 'PROGRAMACION',
-      etapaDestino: 'ACTOS_PREPARATORIOS',
+    // Fase 1B — PROGRAMACION_APROBADA: PROGRAMACION → COORDINACION_CM.
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_PROGRAMACION',
+      eventoCodigo: 'PROGRAMACION_APROBADA',
+      expedienteId: requerimientoId,
+      req,
+      metadata: {
+        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+        client_request_id: req.body?.client_request_id || null,
+        observacion: 'Programación aprobada — derivado a Coordinación CM',
+      },
+      domainMutator: buildTramo1bPayloadMutator({
+        accionHistorial: 'historial_programacion',
+        submoduloLabel: 'Programación',
+        camposExtras: { tipo: 'aprobacion_programacion', usuario: usuario || 'Programación' },
+      }),
+      legacyHandler: async () => {
+        let payload = {};
+        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+        if (!Array.isArray(payload.historial_programacion)) payload.historial_programacion = [];
+        payload.historial_programacion.push({ tipo: 'aprobacion_programacion', usuario: usuario || '', fecha: new Date().toISOString() });
+        autoCerrarObservacionesEmisorAlContinuar(payload, 'Programación', usuario || 'Programación');
+        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+
+        const updated = await registrarMovimiento({
+          requerimientoId,
+          estadoNuevo: 'Programado',
+          usuario: usuario || 'Programación',
+          accion: 'aprobado',
+          observacion: 'Aprobado en Programación — derivado a Coordinación CM',
+          responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
+          etapaEjecutor: 'PROGRAMACION',
+          etapaDestino: 'ACTOS_PREPARATORIOS',
+        });
+
+        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+      },
     });
 
-    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
+    return responderTransicionMotor(res, result, requerimientoId);
   } catch (err) { next(err); }
 });
 
@@ -361,8 +477,44 @@ router.put('/actos/aprobar/:requerimientoId', async (req, res, next) => {
     const { requerimientoId } = req.params;
     const { responsable_destino, usuario } = req.body || {};
     if (!responsable_destino) return res.status(400).json({ success: false, error: 'Responsable destino en Invitaciones requerido' });
-    const updated = await aprobarActosInvitaciones(requerimientoId, { responsableDestino: responsable_destino, usuario });
-    res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado, estado_actual: updated.estado_actual } });
+
+    // Fase 1B — COORDINACION_CM_APROBADA: COORDINACION_CM → INVITACIONES.
+    // Puede provenir del endpoint propio de actos (aprobación) o del asistente de
+    // rutas de contrataciones. El destino se genera en el motor (INVITACIONES).
+    const result = await runWorkflowTransition({
+      moduleFlag: 'WORKFLOW_ENGINE_COORDINACION_CM',
+      eventoCodigo: 'COORDINACION_CM_APROBADA',
+      expedienteId: requerimientoId,
+      req,
+      metadata: {
+        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+        client_request_id: req.body?.client_request_id || null,
+        responsable_destino,
+        observacion: `Coordinación CM aprobada — derivado a Invitaciones (resp: ${responsable_destino})`,
+      },
+      domainMutator: buildTramo1bPayloadMutator({
+        accionHistorial: 'historial_actos',
+        submoduloLabel: 'Coordinación CM',
+        camposExtras: {
+          tipo: 'aprobacion_invitaciones',
+          usuario: usuario || 'Coordinador de Contratos Menores',
+          entrada: { responsable_destino },
+          // La vista de Invitaciones detecta el ingreso vía historial_invitaciones.
+          arraysExtras: {
+            historial_invitaciones: {
+              tipo: 'ingreso_invitaciones',
+              usuario: usuario || 'Coordinador de Contratos Menores',
+            },
+          },
+        },
+      }),
+      legacyHandler: async () => {
+        const updated = await aprobarActosInvitaciones(requerimientoId, { responsableDestino: responsable_destino, usuario });
+        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado, estado_actual: updated.estado_actual } };
+      },
+    });
+
+    return responderTransicionMotor(res, result, requerimientoId);
   } catch (err) { next(err); }
 });
 

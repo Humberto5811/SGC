@@ -13,6 +13,7 @@ import {
   buildDocsCotizacionAdjudicada,
   dedupeDocumentos,
   toDocumentoContrato,
+  seleccionarActaVigente,
 } from '../../shared/expedienteDocumentos.js';
 import { generateActaRecepcionPdfServer } from './recepcionActaPdfServer.js';
 import { buildActaRecepcionData } from '../../shared/recepcionActaData.js';
@@ -23,6 +24,14 @@ import {
 } from '../../shared/calendarDate.js';
 import { canRegistrarRecepcion } from '../../shared/recepcionSaldo.js';
 import { normalizePermisos } from './permissionsCatalog.js';
+import {
+  resolverCentroDesdeRequerimiento,
+  resolveCentroExpediente,
+  esAlcanceGlobal,
+  puedeAccederRecepcionBienes,
+  assertAccesoRecepcionBienes,
+  validarResponsableCentro,
+} from './recepcionBienesAlcance.js';
 
 function httpError(message, status = 400, code = null) {
   const err = new Error(message);
@@ -244,10 +253,19 @@ function mapBandejaRow(row) {
   };
 }
 
-export async function listarBandejaRecepcionBienes({ rol = 'ALMACEN', usuario = '', userId = null } = {}) {
+export async function listarBandejaRecepcionBienes({ rol = 'ALMACEN', usuario = '', userId = null, userCtx = null } = {}) {
   await sincronizarOrdenesElegibles(usuario || 'Sistema');
 
+  // RB8.1D — contexto de usuario obligatorio; nunca se fabrica DEC/ALMACEN.
+  const ctx = (userCtx && typeof userCtx === 'object') ? userCtx : null;
+  if (!ctx) {
+    const err = new Error('Autenticación requerida');
+    err.code = 'AUTH_REQUIRED';
+    err.status = 401;
+    throw err;
+  }
   const actor = resolveRolActor({ rol }, rol);
+  const global = esAlcanceGlobal(ctx);
   let whereBandeja = 'TRUE';
   const params = [];
 
@@ -272,11 +290,13 @@ export async function listarBandejaRecepcionBienes({ rol = 'ALMACEN', usuario = 
       )`;
   }
 
+  const sqlLimit = (ctx && !global) ? '' : 'LIMIT 500';
   const { rows } = await query(`
     SELECT rbe.*,
       oc.numero_orden, oc.fecha_orden, oc.monto_total, oc.moneda, oc.tipo_orden,
       oc.estado AS orden_estado, oc.enviado_proveedor_at, oc.enviado_proveedor_por,
-      oc.proveedor_id, r.codigo AS requerimiento_codigo,
+      oc.proveedor_id, r.codigo AS requerimiento_codigo, r.cmn AS requerimiento_cmn,
+      r.payload AS requerimiento_payload, r.area AS req_area,
       p.ruc AS proveedor_ruc, p.razon_social AS proveedor_razon_social,
       (
         SELECT string_agg(DISTINCT oi.plazo_ofertado, ' / ')
@@ -369,8 +389,30 @@ export async function listarBandejaRecepcionBienes({ rol = 'ALMACEN', usuario = 
     LEFT JOIN proveedores p ON p.id = oc.proveedor_id
     WHERE (${whereBandeja})
     ORDER BY rbe.updated_at DESC, rbe.id DESC
-    LIMIT 500
+    ${sqlLimit}
   `, params);
+
+  // RB8.1B: alcance por centro. Global/admin conserva todo; restringido filtra
+  // resolviendo el centro real desde requerimiento (cmn/payload) en servidor.
+  // El LIMIT se aplica DESPUÉS del filtro por centro (restringidos leen sin LIMIT
+  // en SQL y se recorta aquí) para no ocultar expedientes del propio centro.
+  if (ctx && !global) {
+    const filtradas = [];
+    for (const row of rows) {
+      let centro;
+      try {
+        centro = resolverCentroDesdeRequerimiento({
+          cmn: row.requerimiento_cmn,
+          area: row.req_area,
+          payload: row.requerimiento_payload,
+        });
+      } catch (_) {
+        continue; // centro no resoluble → no se muestra al operador restringido
+      }
+      if (puedeAccederRecepcionBienes(ctx, centro)) filtradas.push(row);
+    }
+    return filtradas.slice(0, 500).map(mapBandejaRow);
+  }
 
   return rows.map(mapBandejaRow);
 }
@@ -390,6 +432,7 @@ async function getExpedienteOrThrow(id) {
         LIMIT 1
       ) AS orden_lugar_entrega,
       r.codigo AS requerimiento_codigo, r.denominacion, r.tipo AS req_tipo, r.area AS req_area,
+      r.cmn AS requerimiento_cmn, r.payload AS requerimiento_payload,
       p.ruc AS proveedor_ruc, p.razon_social AS proveedor_razon_social
     FROM recepcion_bienes_expedientes rbe
     JOIN ordenes_contratacion oc ON oc.id = rbe.orden_id
@@ -403,8 +446,16 @@ async function getExpedienteOrThrow(id) {
   return row;
 }
 
-export async function getDetalleRecepcionBienes(id) {
+export async function getDetalleRecepcionBienes(id, userCtx = null) {
   const exp = await getExpedienteOrThrow(id);
+  if (userCtx && typeof userCtx === 'object' && !esAlcanceGlobal(userCtx)) {
+    const centro = resolverCentroDesdeRequerimiento({
+      cmn: exp.requerimiento_cmn,
+      area: exp.req_area,
+      payload: exp.requerimiento_payload,
+    });
+    assertAccesoRecepcionBienes(userCtx, centro);
+  }
   const [items, entregas, recepciones, docsOrden, docsRec, actas, historial, docsExp, adjuntosReq] = await Promise.all([
     query('SELECT * FROM orden_items WHERE orden_id = $1 ORDER BY id', [exp.orden_id]),
     query(`SELECT * FROM orden_entregas WHERE orden_id = $1 AND estado <> 'ANULADO' ORDER BY id`, [exp.orden_id]),
@@ -451,7 +502,7 @@ export async function getDetalleRecepcionBienes(id) {
       FROM recepcion_bienes_actas
       WHERE expediente_recepcion_id = $1
         AND eliminado_at IS NULL
-      ORDER BY id DESC
+      ORDER BY version DESC, generado_at DESC, id DESC
     `, [exp.id]),
     query(`
       SELECT id, tipo, estado_anterior, estado_nuevo, usuario, rol, motivo, created_at, metadata
@@ -655,7 +706,7 @@ export async function getDetalleRecepcionBienes(id) {
     montoTotal: exp.monto_total,
     montoLiquidarAcumulado: exp.monto_liquidar_acumulado,
   });
-  const actaVigente = (actas.rows || [])[0] || null;
+  const actaVigente = seleccionarActaVigente(actas.rows || []);
   const { listarVisadosDetalle, tieneActaVisadaVigente } = await import('./recepcionActaVisada.js');
   const actasVisadas = await listarVisadosDetalle(exp.id);
   const visadaVigente = await tieneActaVisadaVigente(exp.id, actaVigente?.id || null);
@@ -727,8 +778,16 @@ export async function getDetalleRecepcionBienes(id) {
 }
 
 /** Contenido documental lazy (visor). tipo: orden|recepcion|guia|acta|acta_firmada|cotizacion */
-export async function getDocumentoRecepcionBienes(expedienteId, tipo, docId) {
+export async function getDocumentoRecepcionBienes(expedienteId, tipo, docId, userCtx = null) {
   const exp = await getExpedienteOrThrow(expedienteId);
+  if (userCtx && typeof userCtx === 'object' && !esAlcanceGlobal(userCtx)) {
+    const centro = resolverCentroDesdeRequerimiento({
+      cmn: exp.requerimiento_cmn,
+      area: exp.req_area,
+      payload: exp.requerimiento_payload,
+    });
+    assertAccesoRecepcionBienes(userCtx, centro);
+  }
   const t = String(tipo || '').toLowerCase();
 
   if (t === 'cotizacion' || t.startsWith('cotizacion')) {
@@ -817,8 +876,8 @@ export async function getDocumentoRecepcionBienes(expedienteId, tipo, docId) {
 }
 
 /** Bytes reales para preview/download (Content-Type binario, no JSON). */
-export async function getDocumentoRecepcionBienesBytes(expedienteId, tipo, docId) {
-  const doc = await getDocumentoRecepcionBienes(expedienteId, tipo, docId);
+export async function getDocumentoRecepcionBienesBytes(expedienteId, tipo, docId, userCtx = null) {
+  const doc = await getDocumentoRecepcionBienes(expedienteId, tipo, docId, userCtx);
   let raw = String(doc.contenido_base64 || doc.base64 || '');
   if (raw.includes('base64,')) raw = raw.split('base64,').pop();
   raw = raw.replace(/\s+/g, '');
@@ -1401,11 +1460,27 @@ export {
   ensureActaVisadosTable,
 } from './recepcionActaVisada.js';
 
-export async function listDestinatariosAreaUsuaria(search = '') {
+export async function listDestinatariosAreaUsuaria(expedienteId, { search = '', userCtx = null } = {}) {
+  const eid = parseInt(expedienteId, 10);
+  if (!Number.isFinite(eid)) throw httpError('expediente_id inválido', 422);
+  const centro = await resolveCentroExpediente(eid);
+  if (userCtx && typeof userCtx === 'object') assertAccesoRecepcionBienes(userCtx, centro);
+
+  // Filtro por área destino cuando corresponda (área real del requerimiento)
+  const areaFiltro = centro.area_id ? Number(centro.area_id) : null;
+
   let rows = [];
   try {
     const params = ['admin'];
-    let where = 'WHERE u.activo = TRUE AND u.rol <> $1';
+    let where = `WHERE u.activo = TRUE AND u.rol <> $1
+      AND (
+        COALESCE(u.centro, '') = $2 OR COALESCE(u.codigo_centro_costo, '') = $2
+      )`;
+    params.push(centro.centro_codigo);
+    if (areaFiltro) {
+      params.push(areaFiltro);
+      where += ` AND (u.area_id IS NULL OR u.area_id = $${params.length})`;
+    }
     if (String(search || '').trim()) {
       params.push(`%${String(search).trim()}%`);
       where += ` AND (
@@ -1427,14 +1502,16 @@ export async function listDestinatariosAreaUsuaria(search = '') {
     `, params);
     rows = res.rows;
   } catch (_) {
+    // Fallback: solo mismo centro por código (sin área)
     const res = await query(`
       SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo,
-        u.rol, u.permisos
+        u.rol, u.permisos, u.correo
       FROM usuarios u
       WHERE u.activo = TRUE AND u.rol <> 'admin'
-      ORDER BY u.id ASC
+        AND (COALESCE(u.centro, '') = $1 OR COALESCE(u.codigo_centro_costo, '') = $1)
+      ORDER BY u.apellidos ASC NULLS LAST, u.nombres ASC NULLS LAST
       LIMIT 200
-    `);
+    `, [centro.centro_codigo]);
     rows = res.rows;
   }
 
@@ -1464,11 +1541,20 @@ export async function listDestinatariosAreaUsuaria(search = '') {
     .map(({ permisosNorm, ...rest }) => rest);
 }
 
-export async function derivarAreaUsuaria(expedienteId, body = {}, usuario = '', rol = '') {
+export async function derivarAreaUsuaria(expedienteId, body = {}, usuario = '', rol = '', userCtx = null) {
   const exp = await getExpedienteOrThrow(expedienteId);
   const actor = resolveRolActor({}, rol);
   if (actor !== 'ALMACEN' && !['admin', 'dec'].includes(String(rol).toLowerCase())) {
     throw httpError('Solo Almacén puede derivar al Área Usuaria', 403);
+  }
+  // RB8.1B: alcance por centro — el operador debe pertenecer al centro del expediente
+  if (userCtx && typeof userCtx === 'object') {
+    const centro = resolverCentroDesdeRequerimiento({
+      cmn: exp.requerimiento_cmn,
+      area: exp.req_area,
+      payload: exp.requerimiento_payload,
+    });
+    assertAccesoRecepcionBienes(userCtx, centro);
   }
   if (!['BIEN_RECIBIDO_ALMACEN', 'RECEPCION_BIENES_OBSERVADA'].includes(exp.estado_global)) {
     throw httpError('Estado no permite derivación al AU', 409);
@@ -1535,6 +1621,15 @@ export async function derivarAreaUsuaria(expedienteId, body = {}, usuario = '', 
   const destNombre = body.destinatario_nombre || body.responsable || null;
   if (!destId && !destNombre) {
     throw httpError('Debe seleccionar la persona responsable del Área Usuaria', 400, 'DESTINATARIO_REQUERIDO');
+  }
+  // RB8.1B: validar que el responsable pertenece al centro real del expediente
+  if (destId) {
+    const centroResp = resolverCentroDesdeRequerimiento({
+      cmn: exp.requerimiento_cmn,
+      area: exp.req_area,
+      payload: exp.requerimiento_payload,
+    });
+    await validarResponsableCentro(destId, centroResp, centroResp.area_id ?? null);
   }
 
   const estadoAnterior = exp.estado_global;
@@ -1922,8 +2017,16 @@ export async function derivarPago(expedienteId, body = {}, usuario = '', rol = '
   return getDetalleRecepcionBienes(exp.id);
 }
 
-export async function getHistorialRecepcionBienes(id) {
-  await getExpedienteOrThrow(id);
+export async function getHistorialRecepcionBienes(id, userCtx = null) {
+  const exp = await getExpedienteOrThrow(id);
+  if (userCtx && typeof userCtx === 'object' && !esAlcanceGlobal(userCtx)) {
+    const centro = resolverCentroDesdeRequerimiento({
+      cmn: exp.requerimiento_cmn,
+      area: exp.req_area,
+      payload: exp.requerimiento_payload,
+    });
+    assertAccesoRecepcionBienes(userCtx, centro);
+  }
   const { rows } = await query(`
     SELECT * FROM recepcion_bienes_eventos
     WHERE expediente_recepcion_id = $1

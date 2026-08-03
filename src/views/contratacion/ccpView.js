@@ -85,6 +85,10 @@ function renderEstadoCell(row) {
       orden_id: row.orden_id || null,
       orden_resuelta: row.orden_resuelta,
       expediente_derivado_pago: row.expediente_derivado_pago,
+      // RC8.1B — preservar evidencia de recepción de bienes para el badge global.
+      recepcion_estado_global: row.recepcion_estado_global || '',
+      recepcion_estado_interno: row.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id ?? null,
     }, esc);
   }
   const seed = {
@@ -99,8 +103,13 @@ function renderEstadoCell(row) {
     orden_id: row.orden_id || null,
     orden_resuelta: row.orden_resuelta,
     expediente_derivado_pago: row.expediente_derivado_pago,
+    // RC8.1B — preservar evidencia de recepción de bienes en el seed de fallback.
+    recepcion_estado_global: row.recepcion_estado_global || '',
+    recepcion_estado_interno: row.recepcion_estado_interno || '',
+    recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id ?? null,
   };
-  if (row.badge_style || row.ccp_registrado || row.tiene_codigo || row.orden_estado || row.enviado_proveedor_at) {
+  if (row.badge_style || row.ccp_registrado || row.tiene_codigo || row.orden_estado
+    || row.enviado_proveedor_at || row.recepcion_estado_global) {
     return renderBadgeEstadoVigenteHtml(seed, esc);
   }
   const label = row.etiqueta_estado || row.estado_ccp_label || row.estado_ccp || '—';

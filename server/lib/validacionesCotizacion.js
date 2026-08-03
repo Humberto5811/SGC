@@ -137,6 +137,13 @@ function mapCotizacionRow(r, ccpFlags = null) {
   const codigoCcp = String(ccpFlags?.codigo_ccp || r.codigo_ccp || '').trim();
   const ccpActivo = !!(ccpFlags?.ccp_activo || codigoCcp);
   const enviadaOppm = !!(ccpFlags?.enviada_oppm || r.enviada_oppm);
+  // RC8.1G — evidencia de recepción de bienes (desde ccpFlags, con fallback a fila).
+  const recepcionEstadoGlobal = ccpFlags?.recepcion_estado_global
+    || r.recepcion_estado_global || '';
+  const recepcionEstadoInterno = ccpFlags?.recepcion_estado_interno
+    || r.recepcion_estado_interno || '';
+  const recepcionBienesExpedienteId = ccpFlags?.recepcion_bienes_expediente_id
+    ?? r.recepcion_bienes_expediente_id ?? null;
   const vigente = resolveEstadoExpedienteVigente({
     solicitud_estado: r.solicitud_estado || '',
     estado_cuadro: r.estado_cuadro || '',
@@ -150,6 +157,9 @@ function mapCotizacionRow(r, ccpFlags = null) {
     derivado_ejecucion_at: ccpFlags?.derivado_ejecucion_at || r.derivado_ejecucion_at || null,
     orden_resuelta: !!(ccpFlags?.orden_resuelta || r.orden_resuelta),
     expediente_derivado_pago: !!(ccpFlags?.expediente_derivado_pago || r.expediente_derivado_pago),
+    recepcion_estado_global: recepcionEstadoGlobal,
+    recepcion_estado_interno: recepcionEstadoInterno,
+    recepcion_bienes_expediente_id: recepcionBienesExpedienteId,
   });
   const derivadoCcp = !!vigente.derivadoCcp;
   let estadoBandeja = estadoDisplayBandejaValidacion(valEst);
@@ -182,6 +192,10 @@ function mapCotizacionRow(r, ccpFlags = null) {
     estadoInterno: vigente.estadoInterno || null,
     estado_vigente: vigente.codigo,
     estado_vigente_label: vigente.label,
+    // RC8.1G — propagar evidencia de recepción de bienes en el JSON de la fila.
+    recepcion_estado_global: recepcionEstadoGlobal,
+    recepcion_estado_interno: recepcionEstadoInterno,
+    recepcion_bienes_expediente_id: recepcionBienesExpedienteId,
     orden_estado: ccpFlags?.orden_estado || '',
     enviado_proveedor_at: ccpFlags?.enviado_proveedor_at || null,
     estado_display: estadoDisplayValidacion(valEst, r.estado),

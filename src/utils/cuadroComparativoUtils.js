@@ -127,7 +127,16 @@ export function labelCuadroEstadoVisible(code, opts = {}) {
  * OD32 — usa resolveEstadoActualExpediente (DERIVADO_CCP > observaciones históricas).
  */
 export function labelEstadoExpedienteUnificado(row = {}) {
-  const vigente = resolveEstadoActualExpediente(row);
+  // RC8.1B — evidencia de recepción de bienes gana sobre órdenes si está presente.
+  // Nota: derivadoCcp es true para post-orden (recepción>CCP>órdenes), por lo que
+  // la evidencia de recepción debe verificarse ANTES del shortcut "Derivado a CCP".
+  const vigente = resolveEstadoActualExpediente({
+    ...row,
+    recepcion_estado_global: row.recepcion_estado_global || '',
+    recepcion_estado_interno: row.recepcion_estado_interno || '',
+    recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id ?? null,
+  });
+  if (row.recepcion_estado_global) return vigente?.label || 'Recibido por almacén';
   if (vigente?.derivadoCcp) return 'Derivado a CCP';
   if (vigente?.code && ESTADOS_CUADRO_LABEL[normalizeCuadroEstado(vigente.code)]) {
     return vigente.label || labelEstadoCuadroVigente(vigente.code, {
@@ -217,7 +226,7 @@ export function badgeStyleCuadro(code) {
   return '';
 }
 
-/** Badge unificado: CCP registrado (verde) / DERIVADO_CCP (morado). */
+/** Badge unificado: CCP registrado (verde) / DERIVADO_CCP (morado) / recepción de bienes. */
 export function renderBadgeEstadoCuadroHtml(rowOrCode, label, escFn = (s) => String(s ?? '')) {
   const code = (rowOrCode && typeof rowOrCode === 'object')
     ? (rowOrCode.estado_cuadro || rowOrCode.estado_vigente || rowOrCode.estado || '')
@@ -228,8 +237,19 @@ export function renderBadgeEstadoCuadroHtml(rowOrCode, label, escFn = (s) => Str
   const n = normalizeCuadroEstado(code);
   if (row.ccp_activo || row.ccp_registrado || row.codigo_ccp
     || n === 'CCP_REGISTRADO' || n === 'CCP_REGISTRADA' || n === 'ENVIADA_OPPM'
-    || esExpedienteDerivadoCcp(row) || n === ESTADOS_CUADRO.DERIVADO_CCP) {
-    return renderBadgeEstadoVigenteHtml(row, escFn);
+    || esExpedienteDerivadoCcp(row) || n === ESTADOS_CUADRO.DERIVADO_CCP
+    // RC8.1B — evidencia global de recepción de bienes
+    || row.recepcion_estado_global
+    || ['BIEN_RECIBIDO_ALMACEN', 'RECIBIDO_ALMACEN', 'RECIBIDO_POR_ALMACEN',
+      'RECEPCION_BIENES_PENDIENTE', 'RECEPCION_BIENES_OBSERVADA',
+      'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
+      'CONFORMIDAD_EN_COORDINACION_CM'].includes(n)) {
+    return renderBadgeEstadoVigenteHtml({
+      ...row,
+      recepcion_estado_global: row.recepcion_estado_global || '',
+      recepcion_estado_interno: row.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id ?? null,
+    }, escFn);
   }
   const text = label != null
     ? label

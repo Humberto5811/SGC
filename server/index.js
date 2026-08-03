@@ -52,6 +52,7 @@ import portalRouter, { portalAnalistaRouter } from './routes/portal.js';
 import ccpRouter from './routes/ccp.js';
 import ordenesContratacionRouter from './routes/ordenesContratacion.js';
 import recepcionBienesRouter from './routes/recepcionBienes.js';
+import workflowRouter from './routes/workflow.js';
 import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
@@ -373,6 +374,9 @@ app.use('/api/ccp', ccpRouter);
 app.use('/api/ordenes-contratacion', ordenesContratacionRouter);
 app.use('/api/recepcion-bienes', recepcionBienesRouter);
 
+// Workflow Engine — FASE BASE (lectura + simulación; write deshabilitado).
+app.use('/api/workflow', workflowRouter);
+
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',
   columns: ['tipo', 'codigo', 'cmn', 'denominacion', 'area', 'responsable', 'estado', 'payload', 'usuario_modificacion'],
@@ -408,7 +412,9 @@ app.use('/api/requerimientos', crudRouter({
       body?.usuario_modificacion,
       fromAuth,
     ) || 'Sistema';
-    await ejecutarRegistroCrear(row.id, usuarioCreador);
+    // Fase 1A — transición A: crear (REQUERIMIENTO_REGISTRADO). Se pasa req para
+    // que el adaptador construya el actor desde req.user (nunca del body).
+    await ejecutarRegistroCrear(row.id, usuarioCreador, req);
   },
   afterUpdate: async (row, prev, body) => {
     await ejecutarRegistroEditar({ row, prev, body, extractObservacionTrazabilidad });

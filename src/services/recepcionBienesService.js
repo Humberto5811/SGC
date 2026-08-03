@@ -60,9 +60,13 @@ export const recepcionBienesService = {
   eliminarAdjuntoDerivacion(id, documentoId, body = {}) {
     return api.del(`${BASE}/${id}/adjunto-derivacion/${documentoId}`, body);
   },
-  listDestinatariosAu(search = '') {
-    const q = search ? `?search=${encodeURIComponent(search)}` : '';
-    return api.get(`${BASE}/destinatarios-au${q}`);
+  listDestinatariosAu(expedienteId, { search = '', area_id = null } = {}) {
+    const q = new URLSearchParams();
+    if (expedienteId != null) q.set('expediente_id', String(expedienteId));
+    if (search) q.set('search', String(search));
+    if (area_id != null) q.set('area_id', String(area_id));
+    const qs = q.toString() ? `?${q}` : '';
+    return api.get(`${BASE}/destinatarios-au${qs}`);
   },
   derivarAu(id, body = {}) {
     return api.post(`${BASE}/${id}/derivar-area-usuaria`, body);

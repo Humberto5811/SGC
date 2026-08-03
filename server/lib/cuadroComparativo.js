@@ -601,6 +601,10 @@ export async function listarCuadroComparativoExpedientes() {
     const reqs = reqMap.get(r.solicitud_id) || [];
     const persisted = estadoMap.get(r.solicitud_id);
     const ccpFlags = ccpBySid.get(Number(r.solicitud_id)) || {};
+    // RC8.1G — evidencia de recepción de bienes (desde ccpFlags).
+    const recepcionEstadoGlobal = ccpFlags.recepcion_estado_global || '';
+    const recepcionEstadoInterno = ccpFlags.recepcion_estado_interno || '';
+    const recepcionBienesExpedienteId = ccpFlags.recepcion_bienes_expediente_id ?? null;
     // Estado global vía resolvedor central (órdenes > CCP > cuadro)
     const vigente = resolveEstadoExpedienteVigente({
       estado_cuadro: persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR,
@@ -615,6 +619,9 @@ export async function listarCuadroComparativoExpedientes() {
       derivado_ejecucion_at: ccpFlags.derivado_ejecucion_at || null,
       orden_resuelta: !!ccpFlags.orden_resuelta,
       expediente_derivado_pago: !!ccpFlags.expediente_derivado_pago,
+      recepcion_estado_global: recepcionEstadoGlobal,
+      recepcion_estado_interno: recepcionEstadoInterno,
+      recepcion_bienes_expediente_id: recepcionBienesExpedienteId,
     });
     const estadoCode = vigente.codigo || persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
     const estadoLabel = vigente.label || labelCuadroEstado(estadoCode);
@@ -675,6 +682,10 @@ export async function listarCuadroComparativoExpedientes() {
         ? { codigo: vigente.situacion.codigo, label: vigente.situacion.label }
         : null,
       estadoInterno: vigente.estadoInterno || null,
+      // RC8.1G — propagar evidencia de recepción de bienes en el JSON de la fila.
+      recepcion_estado_global: recepcionEstadoGlobal,
+      recepcion_estado_interno: recepcionEstadoInterno,
+      recepcion_bienes_expediente_id: recepcionBienesExpedienteId,
       codigo_ccp: ccpFlags.codigo_ccp || '',
       ccp_activo: !!ccpFlags.ccp_activo,
       ccp_registrado: vigente.ccpRegistrado === true || estadoCode === 'CCP_REGISTRADA',

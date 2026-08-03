@@ -13,6 +13,7 @@ import {
   inferAccion,
   ETAPAS,
 } from './trazabilidad.js';
+import { runWorkflowTransition } from './workflow/workflowIntegration.js';
 
 export const MODULO_REGISTRO = 'Registro de Requerimiento';
 export const DESTINO_EVALUACION = 'Evaluación de Requerimiento';
@@ -91,30 +92,48 @@ async function fetchRow(requerimientoId) {
   return rows[0] || null;
 }
 
-/** R1 — alta de requerimiento (afterCreate). */
-export async function ejecutarRegistroCrear(requerimientoId, usuario = 'Sistema') {
+/**
+ * R1 — alta de requerimiento (afterCreate).
+ *
+ * Fase 1A — transición A: REQUERIMIENTO_REGISTRADO.
+ * Si WORKFLOW_ENGINE_REGISTRO=true y WRITE_ENABLED=true, la creación pasa por
+ * el motor (ubicación REGISTRO, responsable Usuario AU, workflow_eventos,
+ * historial_movimientos). En caso contrario, ejecuta el flujo legacy exacto
+ * (MigrationFacade + inicializarTrazabilidad). Nunca ambos.
+ */
+export async function ejecutarRegistroCrear(requerimientoId, usuario = 'Sistema', req = null) {
   const row = await fetchRow(requerimientoId);
   if (!row) return null;
 
-  // RC118: estado inicial canónico en columna negocio.
-  // En el alta se ignora cualquier estado de etapa posterior enviado por el cliente.
+  // RC118: estado inicial canónico en columna negocio (compatibilidad lectura).
   await query(
     `UPDATE requerimientos SET estado = $2 WHERE id = $1`,
     [requerimientoId, 'Registrado'],
   );
 
-  const facade = getRegistroMigrationFacade();
-  const result = await facade.crear(
-    { ...row, estado: 'Registrado' },
-    {
-      requerimientoId,
-      usuario,
-      legacyExecutor: () => inicializarTrazabilidad(requerimientoId, usuario),
+  return runWorkflowTransition({
+    moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
+    eventoCodigo: 'REQUERIMIENTO_REGISTRADO',
+    expedienteId: requerimientoId,
+    req,
+    metadata: {
+      tipo_contratacion: row?.tipo || 'BIEN',
+      observacion: 'Registro inicial del requerimiento',
     },
-  );
-
-  if (!result.ok) return null;
-  return result.legacy;
+    legacyHandler: async () => {
+      const facade = getRegistroMigrationFacade();
+      const result = await facade.crear(
+        { ...row, estado: 'Registrado' },
+        {
+          requerimientoId,
+          usuario,
+          legacyExecutor: () => inicializarTrazabilidad(requerimientoId, usuario),
+        },
+      );
+      if (!result.ok) return { ok: false, error: 'Transición no permitida por Workflow Engine' };
+      return { ok: true, requerimiento: result.legacy };
+    },
+  });
 }
 
 /**

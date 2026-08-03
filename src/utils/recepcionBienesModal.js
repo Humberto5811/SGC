@@ -17,7 +17,7 @@ import {
   toCalendarIso,
   validateFechaRecepcionVsEmision,
 } from '../../shared/calendarDate.js';
-import { dedupeDocumentos } from '../../shared/expedienteDocumentos.js';
+import { dedupeDocumentos, seleccionarActaVigente } from '../../shared/expedienteDocumentos.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -316,26 +316,30 @@ export async function openExpedienteRecepcionModal(row) {
       _kind: 'guia',
     }));
   });
-  const actas = (d.actas || []).flatMap((a) => {
-    const rows = [{
-      ...a,
-      id: a.id,
-      nombre: a.documento_nombre || a.numero_acta || `Proyecto Acta v${a.version}`,
-      tipo: a.estado_documental || 'Proyecto de Acta',
-      created_at: a.generado_at,
+  // RB8.1C.1 — Solo la última versión vigente se muestra en la pestaña "Acta de recepción".
+  // Las versiones anteriores permanecen en BD y son accesibles por historial/trazabilidad.
+  const actaVigente = seleccionarActaVigente(d.actas || []);
+  const actasVisibles = actaVigente
+    ? [{
+      ...actaVigente,
+      id: actaVigente.id,
+      nombre: actaVigente.documento_nombre || actaVigente.numero_acta || `Acta de recepción v${actaVigente.version}`,
+      tipo: actaVigente.estado_documental || 'Acta de recepción',
+      created_at: actaVigente.generado_at,
       _kind: 'acta',
-    }];
-    if (a.acta_firmada_nombre) {
-      rows.push({
-        ...a,
-        nombre: a.acta_firmada_nombre,
-        tipo: 'Acta firmada AU',
-        created_at: a.firmado_au_at,
-        _kind: 'acta_firmada',
-      });
-    }
-    return rows;
-  });
+    }]
+    : [];
+  // Anexar el acta firmada solo si pertenece a la versión vigente
+  if (actaVigente?.acta_firmada_nombre) {
+    actasVisibles.push({
+      ...actaVigente,
+      nombre: actaVigente.acta_firmada_nombre,
+      tipo: 'Acta firmada AU',
+      created_at: actaVigente.firmado_au_at,
+      _kind: 'acta_firmada',
+    });
+  }
+  const actas = actasVisibles;
 
   const { modalEl } = showModal(`
     <div class="modal fade" tabindex="-1">
@@ -363,7 +367,7 @@ export async function openExpedienteRecepcionModal(row) {
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rbExp05b" type="button">Cotización 5-B</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rbExpTec" type="button">Documentos Técnicos</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rbExpGuias" type="button">Guías</button></li>
-              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rbExpActas" type="button">Proyecto o Actas</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rbExpActas" type="button">Acta de recepción</button></li>
               <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rbExpHist" type="button">Historial</button></li>
             </ul>
             <div class="tab-content border border-top-0 p-3">
@@ -381,13 +385,13 @@ export async function openExpedienteRecepcionModal(row) {
               </div>
               <div class="tab-pane fade" id="rbExpTec">
                 <p class="small text-muted mb-2">Documentos técnicos del proveedor adjudicado y adjuntos de recepción.</p>
-                ${docsTableHtml([...docsTecCot, ...docsRec], { tipo: 'cotizacion', empty: 'Sin documentos técnicos', fechaLabel: 'Fecha de envío' })}
+                ${docsTableHtml(dedupeDocumentos([...docsTecCot, ...docsRec]), { tipo: 'cotizacion', empty: 'Sin documentos técnicos', fechaLabel: 'Fecha de envío' })}
               </div>
               <div class="tab-pane fade" id="rbExpGuias">
                 ${docsTableHtml(guias, { tipo: 'guia', empty: 'Sin guías registradas' })}
               </div>
               <div class="tab-pane fade" id="rbExpActas">
-                ${docsTableHtml(actas, { tipo: 'acta', empty: 'Sin proyecto de acta' })}
+                ${docsTableHtml(actas, { tipo: 'acta', empty: 'Sin acta de recepción' })}
                 ${docsObs.length ? `<hr/><p class="small fw-semibold">Adjuntos de observaciones</p>${docsTableHtml(docsObs, { tipo: 'recepcion' })}` : ''}
               </div>
               <div class="tab-pane fade" id="rbExpHist">
@@ -414,7 +418,7 @@ export async function openExpedienteRecepcionModal(row) {
           </div>
           <div class="modal-footer flex-wrap gap-2">
             ${d.requerimiento_id ? `<button type="button" class="btn btn-outline-primary" id="rbExpTraza">Trazabilidad</button>` : ''}
-            ${actas.some((a) => a._kind === 'acta') ? `<button type="button" class="btn btn-outline-secondary" id="rbExpDescActa">Descargar proyecto</button>` : ''}
+            ${actas.some((a) => a._kind === 'acta') ? `<button type="button" class="btn btn-outline-secondary" id="rbExpDescActa">Descargar acta</button>` : ''}
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
           </div>
         </div>
@@ -434,13 +438,13 @@ export async function openExpedienteRecepcionModal(row) {
   });
   modalEl.querySelector('#rbExpDescActa')?.addEventListener('click', async () => {
     try {
-      const acta = (d.actas || [])[0];
-      if (!acta) throw new Error('No hay proyecto de acta');
+      const acta = seleccionarActaVigente(d.actas || []);
+      if (!acta) throw new Error('No hay acta de recepción');
       const resDoc = await recepcionBienesService.getDocumento(d.id, 'acta', acta.id);
       const doc = resDoc?.data || resDoc;
       if (!doc?.contenido_base64) throw new Error('Acta sin contenido');
       openBase64Document({
-        nombre: doc.nombre || acta.documento_nombre || 'proyecto-acta.pdf',
+        nombre: doc.nombre || acta.documento_nombre || 'acta-recepcion.pdf',
         mime_type: doc.mime_type || 'application/pdf',
         contenido_base64: doc.contenido_base64,
       });
@@ -487,7 +491,7 @@ export async function openHistorialRecepcionModal(row) {
 export async function openDerivarAuModal(row, { onDone } = {}) {
   const res = await recepcionBienesService.getDetalle(row.id);
   const detalle = res?.data || res || row;
-  const acta = (detalle.actas || [])[0];
+  const acta = seleccionarActaVigente(detalle.actas || []);
   const visada = !!(detalle.acta_visada
     || acta?.estado_documental === 'ACTA_RECEPCION_VISADA_ALMACEN'
     || acta?.visado_almacen_at);
@@ -534,10 +538,13 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
 
   let docsPack = [...(paquete.documentos || [])];
   let destinatarios = [];
+  const centroResuelto = !!(detalle.centro || detalle.area_usuaria);
+  // El backend resuelve el área real desde el requerimiento; no se envía área como autorización.
   try {
-    const uRes = await recepcionBienesService.listDestinatariosAu();
+    const uRes = await recepcionBienesService.listDestinatariosAu(row.id, {});
     destinatarios = uRes?.data || uRes || [];
   } catch (_) { /* ok */ }
+  const guardarHabilitado = centroResuelto;
 
   const renderDocsTable = () => {
     const byGrupo = new Map();
@@ -609,13 +616,18 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
                   <option value="RECEPCION_BIENES_AU" selected>Recepción de Bienes – Área Usuaria</option>
                 </select>
               </div>
-              <div class="col-md-4">
+              <div class="col-md-2">
+                <label class="form-label">Centro *</label>
+                <input class="form-control" id="rbAuCentro" value="${esc(detalle.centro || '—')}" readonly
+                  ${centroResuelto ? '' : 'title="Centro no resuelto — debe corregirse antes de derivar"'}>
+              </div>
+              <div class="col-md-2">
                 <label class="form-label">Área / unidad destino</label>
                 <input class="form-control" id="rbAuArea" value="${esc(detalle.area_usuaria || '')}" readonly>
               </div>
               <div class="col-md-8">
                 <label class="form-label">Persona responsable *</label>
-                <select class="form-select" id="rbAuDest">
+                <select class="form-select" id="rbAuDest" ${centroResuelto ? '' : 'disabled'}>
                   <option value="">Seleccione…</option>
                   ${destinatarios.map((u) => `
                     <option value="${esc(u.id)}"
@@ -625,6 +637,7 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
                       ${esc(u.nombre)}${u.cargo ? ` — ${esc(u.cargo)}` : ''}${u.dni ? ` · DNI ${esc(u.dni)}` : ''}
                     </option>`).join('')}
                 </select>
+                ${centroResuelto ? '' : '<div class="form-text text-warning small">Centro no resuelto: no se puede seleccionar responsable ni derivar.</div>'}
               </div>
               <div class="col-md-4">
                 <label class="form-label">Correo / cargo</label>
@@ -663,7 +676,7 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-            <button type="button" class="btn btn-primary" id="rbAuSave">
+            <button type="button" class="btn btn-primary" id="rbAuSave" ${guardarHabilitado ? '' : 'disabled'}>
               <span>Derivar</span>
               <span class="spinner-border spinner-border-sm d-none" id="rbAuSpin"></span>
             </button>
@@ -687,6 +700,7 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
     if (!opt?.value) { meta.textContent = '—'; return; }
     meta.textContent = [opt.dataset.cargo, opt.dataset.correo].filter(Boolean).join(' · ') || '—';
   };
+  modalEl.querySelector('#rbAuSave').disabled = !guardarHabilitado;
 
   modalEl.querySelector('#rbAuExtraFile')?.addEventListener('change', () => {
     const file = modalEl.querySelector('#rbAuExtraFile')?.files?.[0];
@@ -781,6 +795,10 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
     hideErr(modalEl);
     const btn = modalEl.querySelector('#rbAuSave');
     const spin = modalEl.querySelector('#rbAuSpin');
+    if (!guardarHabilitado) {
+      showErr(modalEl, 'No se puede derivar: el centro del expediente no está resuelto');
+      return;
+    }
     try {
       const sel = modalEl.querySelector('#rbAuDest');
       const opt = sel.options[sel.selectedIndex];
@@ -1003,7 +1021,7 @@ export async function openRegistrarActaModal(row, { onDone, actaId = null } = {}
   const actas = (d.actas || []).filter((a) => !a.eliminado_at);
   const actaEdit = actaId ? actas.find((a) => Number(a.id) === Number(actaId)) : null;
 
-  const actaVigente = actaEdit || actas[0] || null;
+  const actaVigente = actaEdit || seleccionarActaVigente(actas) || null;
   const yaGenerada = !!(actaVigente && ['ACTA_RECEPCION_GENERADA', 'ACTA_RECEPCION_EDITADA', 'ACTA_RECEPCION_VISADA_ALMACEN', 'ACTA_RECEPCION_ENVIADA_AU'].includes(actaVigente.estado_documental));
   const yaVisada = !!(actaVigente?.visado_almacen_at || actaVigente?.estado_documental === 'ACTA_RECEPCION_VISADA_ALMACEN');
 

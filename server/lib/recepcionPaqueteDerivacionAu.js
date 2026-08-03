@@ -3,6 +3,7 @@
  * Solo recepción/conformidad — no cotización, requerimiento ni CCP.
  */
 import { query } from '../db.js';
+import { resolveCentroExpediente, assertAccesoRecepcionBienes, esAlcanceGlobal } from './recepcionBienesAlcance.js';
 
 function httpError(message, status = 400, code = null, detail = null) {
   const err = new Error(message);
@@ -103,6 +104,10 @@ async function enrichFromB64(partial, b64) {
  */
 export async function buildPaqueteDocumentalDerivacionAu(expedienteId, opts = {}) {
   const expId = parseInt(expedienteId, 10);
+  if (opts.userCtx && typeof opts.userCtx === 'object' && !esAlcanceGlobal(opts.userCtx)) {
+    const centro = await resolveCentroExpediente(expId);
+    assertAccesoRecepcionBienes(opts.userCtx, centro);
+  }
   const { rows: expRows } = await query(`
     SELECT rbe.*, oc.id AS orden_id, oc.numero_orden
     FROM recepcion_bienes_expedientes rbe
@@ -478,8 +483,12 @@ export async function persistirPaqueteDerivacion(derivacionId, expedienteId, doc
   }
 }
 
-export async function listarPaqueteDerivado(expedienteId) {
+export async function listarPaqueteDerivado(expedienteId, userCtx = null) {
   await ensureDerivacionDocsTable();
+  if (userCtx && typeof userCtx === 'object' && !esAlcanceGlobal(userCtx)) {
+    const centro = await resolveCentroExpediente(expedienteId);
+    assertAccesoRecepcionBienes(userCtx, centro);
+  }
   const { rows: ders } = await query(`
     SELECT id FROM recepcion_bienes_derivaciones
     WHERE expediente_recepcion_id = $1 AND accion = 'DERIVAR_AU'
@@ -497,8 +506,12 @@ export async function listarPaqueteDerivado(expedienteId) {
 /**
  * Adjunto propio de derivación (JSON+base64, arquitectura del proyecto).
  */
-export async function adjuntarAdjuntoDerivacionAu(expedienteId, body = {}, usuario = '') {
+export async function adjuntarAdjuntoDerivacionAu(expedienteId, body = {}, usuario = '', userCtx = null) {
   const expId = parseInt(expedienteId, 10);
+  if (userCtx && typeof userCtx === 'object' && !esAlcanceGlobal(userCtx)) {
+    const centro = await resolveCentroExpediente(expId);
+    assertAccesoRecepcionBienes(userCtx, centro);
+  }
   const { rows: der } = await query(`
     SELECT estado_global FROM recepcion_bienes_expedientes WHERE id = $1
   `, [expId]);
@@ -550,8 +563,12 @@ export async function adjuntarAdjuntoDerivacionAu(expedienteId, body = {}, usuar
   }), raw);
 }
 
-export async function eliminarAdjuntoDerivacionAu(expedienteId, documentoId, body = {}, usuario = '') {
+export async function eliminarAdjuntoDerivacionAu(expedienteId, documentoId, body = {}, usuario = '', userCtx = null) {
   const expId = parseInt(expedienteId, 10);
+  if (userCtx && typeof userCtx === 'object' && !esAlcanceGlobal(userCtx)) {
+    const centro = await resolveCentroExpediente(expId);
+    assertAccesoRecepcionBienes(userCtx, centro);
+  }
   const docId = parseInt(documentoId, 10);
   const { rows: expRows } = await query(`
     SELECT estado_global FROM recepcion_bienes_expedientes WHERE id = $1

@@ -159,6 +159,10 @@ export function renderBadgeEstadoValidacionHtml(exp, escFn = (s) => String(s ?? 
       orden_estado: exp.orden_estado || '',
       enviado_proveedor_at: exp.enviado_proveedor_at || null,
       orden_id: exp.orden_id || null,
+      // RC8.1B — preservar evidencia de recepción de bienes en el seed del resolvedor.
+      recepcion_estado_global: exp.recepcion_estado_global || '',
+      recepcion_estado_interno: exp.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: exp.recepcion_bienes_expediente_id ?? null,
     }, escFn);
   }
   if (exp?.ccp_registrado || exp?.ccp_activo || exp?.validacion_estado === 'CCP_REGISTRADO'
@@ -168,8 +172,20 @@ export function renderBadgeEstadoValidacionHtml(exp, escFn = (s) => String(s ?? 
     || exp?.validacion_estado === 'ENVIADA_OPPM'
     || exp?.orden_estado || exp?.enviado_proveedor_at
     || exp?.estado_bandeja_class === 'ccp-morado'
+    || exp?.recepcion_estado_global
     || esExpedienteDerivadoCcp(exp || {})) {
-    return renderBadgeEstadoVigenteHtml(exp || { estado_cuadro: 'DERIVADO_CCP' }, escFn);
+    return renderBadgeEstadoVigenteHtml({
+      ...exp,
+      estado_cuadro: exp.estado_cuadro || 'DERIVADO_CCP',
+      codigo_ccp: exp.codigo_ccp || '',
+      ccp_activo: !!exp.ccp_activo,
+      orden_estado: exp.orden_estado || '',
+      enviado_proveedor_at: exp.enviado_proveedor_at || null,
+      orden_id: exp.orden_id || null,
+      recepcion_estado_global: exp.recepcion_estado_global || '',
+      recepcion_estado_interno: exp.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: exp.recepcion_bienes_expediente_id ?? null,
+    }, escFn);
   }
   const cls = exp?.estado_bandeja_class || 'warning';
   const label = exp?.estado_bandeja || 'Pendiente de validación';
@@ -266,6 +282,13 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
       recibido_proveedor_at: withOrden.recibido_proveedor_at || seedCot.recibido_proveedor_at || null,
       orden_resuelta: !!(withOrden.orden_resuelta || seedCot.orden_resuelta),
       expediente_derivado_pago: !!(withOrden.expediente_derivado_pago || seedCot.expediente_derivado_pago),
+      // RC8.1B — preservar evidencia de recepción de bienes en la consolidación.
+      recepcion_estado_global: withOrden.recepcion_estado_global
+        || seedCot.recepcion_estado_global || '',
+      recepcion_estado_interno: withOrden.recepcion_estado_interno
+        || seedCot.recepcion_estado_interno || '',
+      recepcion_bienes_expediente_id: withOrden.recepcion_bienes_expediente_id
+        ?? seedCot.recepcion_bienes_expediente_id ?? null,
       estadoVigente: withOrden.estadoVigente || seedCot.estadoVigente || null,
     };
     const est = estadoExpedienteValidacion(g.cotizaciones, meta);
@@ -305,6 +328,10 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
       enviado_proveedor_at: meta.enviado_proveedor_at,
       orden_resuelta: meta.orden_resuelta,
       expediente_derivado_pago: meta.expediente_derivado_pago,
+      // RC8.1B — propagar evidencia de recepción de bienes en la fila consolidada.
+      recepcion_estado_global: meta.recepcion_estado_global,
+      recepcion_estado_interno: meta.recepcion_estado_interno,
+      recepcion_bienes_expediente_id: meta.recepcion_bienes_expediente_id,
       estadoVigente: vigente,
       estado_vigente: vigente.codigo,
       estado_vigente_label: vigente.label,
