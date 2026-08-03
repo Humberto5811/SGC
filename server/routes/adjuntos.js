@@ -1,17 +1,38 @@
 // Rutas para gestionar adjuntos de requerimientos
 import express from 'express';
 import { query } from '../db.js';
-import { assertCanAccessRequirement } from '../lib/userDataScope.js';
+import { assertCanAccessRequirement, canAccessRequirementByContractAssignment } from '../lib/userDataScope.js';
 
 const router = express.Router();
 
+/**
+ * RC8.2E — Guard central de adjuntos con política completa:
+ *   1. Exigir req.user.id (sin fallback a headers).
+ *   2. Verificar asignación contractual (created_by / responsable).
+ *   3. Si no está asignado, verificar alcance organizacional.
+ *   4. Si ninguna autorización aplica → 403.
+ */
 async function guardAdjuntoByReq(req, requerimientoId) {
-  const userId = req.user?.id || req.headers['x-user-id'];
+  // 1. Autenticación estricta: solo req.user.id
+  const userId = req.user?.id;
   if (!userId) {
     const err = new Error('No autenticado');
     err.status = 401;
+    err.code = 'AUTH_REQUIRED';
     throw err;
   }
+
+  // 2. Verificar asignación contractual (created_by / responsable en solicitudes)
+  try {
+    const assignment = await canAccessRequirementByContractAssignment(userId, requerimientoId);
+    if (assignment.ok) {
+      return; // Autorizado por asignación contractual
+    }
+  } catch (_) {
+    // Si falla la consulta de asignación, continuar con alcance organizacional
+  }
+
+  // 3. Verificar alcance organizacional
   await assertCanAccessRequirement(userId, requerimientoId, 'VER');
 }
 
@@ -135,6 +156,29 @@ router.post('/subir/:requerimientoId', async (req, res, next) => {
 router.delete('/:adjuntoId', async (req, res, next) => {
   try {
     const { adjuntoId } = req.params;
+
+    // RC8.2E — Resolver requerimiento_id real desde BD antes de autorizar
+    const adjRow = await query(
+      `SELECT id, requerimiento_id FROM requerimientos_adjuntos WHERE id = $1`,
+      [adjuntoId]
+    );
+    if (!adjRow || adjRow.rowCount === 0) {
+      return res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
+    }
+
+    try {
+      await guardAdjuntoByReq(req, adjRow.rows[0].requerimiento_id);
+    } catch (e) {
+      if (e.status === 403 || e.status === 401) {
+        return res.status(e.status).json({
+          code: e.code || (e.status === 401 ? 'AUTH_REQUIRED' : 'REQUERIMIENTO_FUERA_DE_ALCANCE'),
+          error: e.message,
+          message: e.message,
+        });
+      }
+      throw e;
+    }
+
     const res2 = await query(
       `DELETE FROM requerimientos_adjuntos WHERE id = $1 RETURNING id`,
       [adjuntoId]
