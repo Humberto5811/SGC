@@ -534,10 +534,13 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
 
   let docsPack = [...(paquete.documentos || [])];
   let destinatarios = [];
+  const centroResuelto = !!(detalle.centro || detalle.area_usuaria);
+  // El backend resuelve el área real desde el requerimiento; no se envía área como autorización.
   try {
-    const uRes = await recepcionBienesService.listDestinatariosAu();
+    const uRes = await recepcionBienesService.listDestinatariosAu(row.id, {});
     destinatarios = uRes?.data || uRes || [];
   } catch (_) { /* ok */ }
+  const guardarHabilitado = centroResuelto;
 
   const renderDocsTable = () => {
     const byGrupo = new Map();
@@ -609,13 +612,18 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
                   <option value="RECEPCION_BIENES_AU" selected>Recepción de Bienes – Área Usuaria</option>
                 </select>
               </div>
-              <div class="col-md-4">
+              <div class="col-md-2">
+                <label class="form-label">Centro *</label>
+                <input class="form-control" id="rbAuCentro" value="${esc(detalle.centro || '—')}" readonly
+                  ${centroResuelto ? '' : 'title="Centro no resuelto — debe corregirse antes de derivar"'}>
+              </div>
+              <div class="col-md-2">
                 <label class="form-label">Área / unidad destino</label>
                 <input class="form-control" id="rbAuArea" value="${esc(detalle.area_usuaria || '')}" readonly>
               </div>
               <div class="col-md-8">
                 <label class="form-label">Persona responsable *</label>
-                <select class="form-select" id="rbAuDest">
+                <select class="form-select" id="rbAuDest" ${centroResuelto ? '' : 'disabled'}>
                   <option value="">Seleccione…</option>
                   ${destinatarios.map((u) => `
                     <option value="${esc(u.id)}"
@@ -625,6 +633,7 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
                       ${esc(u.nombre)}${u.cargo ? ` — ${esc(u.cargo)}` : ''}${u.dni ? ` · DNI ${esc(u.dni)}` : ''}
                     </option>`).join('')}
                 </select>
+                ${centroResuelto ? '' : '<div class="form-text text-warning small">Centro no resuelto: no se puede seleccionar responsable ni derivar.</div>'}
               </div>
               <div class="col-md-4">
                 <label class="form-label">Correo / cargo</label>
@@ -663,7 +672,7 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-            <button type="button" class="btn btn-primary" id="rbAuSave">
+            <button type="button" class="btn btn-primary" id="rbAuSave" ${guardarHabilitado ? '' : 'disabled'}>
               <span>Derivar</span>
               <span class="spinner-border spinner-border-sm d-none" id="rbAuSpin"></span>
             </button>
@@ -687,6 +696,7 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
     if (!opt?.value) { meta.textContent = '—'; return; }
     meta.textContent = [opt.dataset.cargo, opt.dataset.correo].filter(Boolean).join(' · ') || '—';
   };
+  modalEl.querySelector('#rbAuSave').disabled = !guardarHabilitado;
 
   modalEl.querySelector('#rbAuExtraFile')?.addEventListener('change', () => {
     const file = modalEl.querySelector('#rbAuExtraFile')?.files?.[0];
@@ -781,6 +791,10 @@ export async function openDerivarAuModal(row, { onDone } = {}) {
     hideErr(modalEl);
     const btn = modalEl.querySelector('#rbAuSave');
     const spin = modalEl.querySelector('#rbAuSpin');
+    if (!guardarHabilitado) {
+      showErr(modalEl, 'No se puede derivar: el centro del expediente no está resuelto');
+      return;
+    }
     try {
       const sel = modalEl.querySelector('#rbAuDest');
       const opt = sel.options[sel.selectedIndex];

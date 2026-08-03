@@ -32,6 +32,7 @@ import {
   eliminarAdjuntoDerivacionAu,
   listarPaqueteDerivado,
 } from '../lib/recepcionPaqueteDerivacionAu.js';
+import { resolveCentroExpediente, assertAccesoRecepcionBienes } from '../lib/recepcionBienesAlcance.js';
 
 const router = Router();
 const ROLES = new Set(['dec', 'admin', 'au', 'almacen', 'cm', 'coordinador', 'analista']);
@@ -43,7 +44,40 @@ function requireRol(req, res, next) {
   req.rbRol = rol;
   req.rbUsuario = req.headers['x-user-name'] || req.user?.nombre || req.user?.username || 'usuario';
   req.rbUserId = req.headers['x-user-id'] || req.user?.id || null;
+  // RB8.1B: userCtx SIEMPRE desde req.user (BD), nunca desde headers x-user-*.
+  const u = req.user && typeof req.user === 'object' ? req.user : null;
+  req.rbUserCtx = u ? {
+    id: u.id != null ? parseInt(u.id, 10) : (req.rbUserId != null ? parseInt(req.rbUserId, 10) : null),
+    rol: u.rol ?? rol,
+    centro: u.centro,
+    codigo_centro_costo: u.codigo_centro_costo,
+    alcance_datos: u.alcance_datos,
+    area_id: u.area_id,
+    permisos: u.permisos,
+  } : null;
   return next();
+}
+
+/** RB8.1B.1 — Guard central por centro para rutas de actas (expediente_id en params). */
+function assertAccesoExpediente(req, res, next) {
+  (async () => {
+    if (!req.rbUserCtx) return next(); // sin sesión válida: el control de auth global responde
+    const centro = await resolveCentroExpediente(req.params.id);
+    assertAccesoRecepcionBienes(req.rbUserCtx, centro);
+    return next();
+  })().catch(next);
+}
+
+/** Mapea errores de alcance RB8.1B a HTTP. */
+function buildErrorMapper() {
+  return (err, req, res, next) => {
+    const code = String(err?.code || '');
+    if (code === 'ACCESO_CENTRO_DENEGADO') return res.status(403).json({ error: err.message || 'Acceso denegado', code });
+    if (code === 'CENTRO_NO_RESUELTO' || code === 'RESPONSABLE_CENTRO_INVALIDO' || code === 'RESPONSABLE_AREA_INVALIDO') {
+      return res.status(422).json({ error: err.message || 'No se pudo validar el centro', code });
+    }
+    return next(err);
+  };
 }
 
 router.use(requireRol);
@@ -54,6 +88,7 @@ router.get('/bandeja', async (req, res, next) => {
       rol: req.rbRol,
       usuario: req.rbUsuario,
       userId: req.rbUserId,
+      userCtx: req.rbUserCtx,
     });
     res.json({ ok: true, data });
   } catch (err) { next(err); }
@@ -76,28 +111,35 @@ router.post('/desde-orden/:ordenId', async (req, res, next) => {
 
 router.get('/destinatarios-au', async (req, res, next) => {
   try {
-    const data = await listDestinatariosAreaUsuaria(req.query.search || '');
+    const expedienteId = req.query.expediente_id || req.query.expedienteId || req.query.id;
+    if (!expedienteId) {
+      return res.status(422).json({ error: 'expediente_id es obligatorio', code: 'EXPEDIENTE_ID_REQUERIDO' });
+    }
+    const data = await listDestinatariosAreaUsuaria(expedienteId, {
+      search: req.query.search || req.query.q || '',
+      userCtx: req.rbUserCtx,
+    });
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
 router.get('/:id', async (req, res, next) => {
   try {
-    const data = await getDetalleRecepcionBienes(req.params.id);
+    const data = await getDetalleRecepcionBienes(req.params.id, req.rbUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
 router.get('/:id/historial', async (req, res, next) => {
   try {
-    const data = await getHistorialRecepcionBienes(req.params.id);
+    const data = await getHistorialRecepcionBienes(req.params.id, req.rbUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
 router.get('/:id/documentos/:tipo/:docId', async (req, res, next) => {
   try {
-    const data = await getDocumentoRecepcionBienes(req.params.id, req.params.tipo, req.params.docId);
+    const data = await getDocumentoRecepcionBienes(req.params.id, req.params.tipo, req.params.docId, req.rbUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
@@ -116,14 +158,14 @@ function sendDocumentoBytes(res, file, disposition) {
 
 router.get('/:id/documentos/:tipo/:docId/preview', async (req, res, next) => {
   try {
-    const file = await getDocumentoRecepcionBienesBytes(req.params.id, req.params.tipo, req.params.docId);
+    const file = await getDocumentoRecepcionBienesBytes(req.params.id, req.params.tipo, req.params.docId, req.rbUserCtx);
     return sendDocumentoBytes(res, file, 'inline');
   } catch (err) { next(err); }
 });
 
 router.get('/:id/documentos/:tipo/:docId/download', async (req, res, next) => {
   try {
-    const file = await getDocumentoRecepcionBienesBytes(req.params.id, req.params.tipo, req.params.docId);
+    const file = await getDocumentoRecepcionBienesBytes(req.params.id, req.params.tipo, req.params.docId, req.rbUserCtx);
     return sendDocumentoBytes(res, file, 'attachment');
   } catch (err) { next(err); }
 });
@@ -135,14 +177,14 @@ router.post('/:id/registrar-recepcion', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/:id/generar-acta', async (req, res, next) => {
+router.post('/:id/generar-acta', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await generarActaRecepcion(req.params.id, req.body || {}, req.rbUsuario, req.rbRol);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
-router.put('/:id/actas/:actaId', async (req, res, next) => {
+router.put('/:id/actas/:actaId', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await editarActaRecepcion(
       req.params.id, req.params.actaId, req.body || {}, req.rbUsuario, req.rbRol,
@@ -151,7 +193,7 @@ router.put('/:id/actas/:actaId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.delete('/:id/actas/:actaId', async (req, res, next) => {
+router.delete('/:id/actas/:actaId', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await eliminarActaRecepcion(
       req.params.id, req.params.actaId, req.body || {}, req.rbUsuario, req.rbRol,
@@ -160,7 +202,7 @@ router.delete('/:id/actas/:actaId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/:id/acta-visada', async (req, res, next) => {
+router.post('/:id/acta-visada', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await adjuntarActaVisadaAlmacen(req.params.id, req.body || {}, req.rbUsuario, req.rbRol);
     res.json({ ok: true, data });
@@ -172,6 +214,7 @@ router.get('/:id/paquete-derivacion-au', async (req, res, next) => {
     const data = await buildPaqueteDocumentalDerivacionAu(req.params.id, {
       acta_id: req.query.acta_id || req.query.actaId,
       recepcion_id: req.query.recepcion_id || req.query.recepcionId,
+      userCtx: req.rbUserCtx,
     });
     res.json(data);
   } catch (err) { next(err); }
@@ -179,14 +222,14 @@ router.get('/:id/paquete-derivacion-au', async (req, res, next) => {
 
 router.get('/:id/paquete-derivado', async (req, res, next) => {
   try {
-    const data = await listarPaqueteDerivado(req.params.id);
+    const data = await listarPaqueteDerivado(req.params.id, req.rbUserCtx);
     res.json(data);
   } catch (err) { next(err); }
 });
 
 router.post('/:id/adjunto-derivacion', async (req, res, next) => {
   try {
-    const data = await adjuntarAdjuntoDerivacionAu(req.params.id, req.body || {}, req.rbUsuario);
+    const data = await adjuntarAdjuntoDerivacionAu(req.params.id, req.body || {}, req.rbUsuario, req.rbUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
@@ -194,13 +237,13 @@ router.post('/:id/adjunto-derivacion', async (req, res, next) => {
 router.delete('/:id/adjunto-derivacion/:documentoId', async (req, res, next) => {
   try {
     const data = await eliminarAdjuntoDerivacionAu(
-      req.params.id, req.params.documentoId, req.body || {}, req.rbUsuario,
+      req.params.id, req.params.documentoId, req.body || {}, req.rbUsuario, req.rbUserCtx,
     );
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
-router.post('/:id/actas/:actaId/visado', async (req, res, next) => {
+router.post('/:id/actas/:actaId/visado', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await adjuntarActaVisadaAlmacen(
       req.params.id,
@@ -212,21 +255,21 @@ router.post('/:id/actas/:actaId/visado', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/:id/actas/:actaId/visado', async (req, res, next) => {
+router.get('/:id/actas/:actaId/visado', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await listarActaVisada(req.params.id, req.params.actaId);
     res.json(data);
   } catch (err) { next(err); }
 });
 
-router.get('/:id/actas/:actaId/visado/:documentoId', async (req, res, next) => {
+router.get('/:id/actas/:actaId/visado/:documentoId', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await obtenerActaVisada(req.params.id, req.params.actaId, req.params.documentoId);
     res.json(data);
   } catch (err) { next(err); }
 });
 
-router.post('/:id/actas/:actaId/visado/:documentoId/reemplazar', async (req, res, next) => {
+router.post('/:id/actas/:actaId/visado/:documentoId/reemplazar', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await reemplazarActaVisada(
       req.params.id, req.params.actaId, req.params.documentoId,
@@ -236,7 +279,7 @@ router.post('/:id/actas/:actaId/visado/:documentoId/reemplazar', async (req, res
   } catch (err) { next(err); }
 });
 
-router.delete('/:id/actas/:actaId/visado/:documentoId', async (req, res, next) => {
+router.delete('/:id/actas/:actaId/visado/:documentoId', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await eliminarActaVisada(
       req.params.id, req.params.actaId, req.params.documentoId,
@@ -248,19 +291,19 @@ router.delete('/:id/actas/:actaId/visado/:documentoId', async (req, res, next) =
 
 router.post('/:id/derivar-area-usuaria', async (req, res, next) => {
   try {
-    const data = await derivarAreaUsuaria(req.params.id, req.body || {}, req.rbUsuario, req.rbRol);
+    const data = await derivarAreaUsuaria(req.params.id, req.body || {}, req.rbUsuario, req.rbRol, req.rbUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
-router.post('/:id/cargar-acta-firmada', async (req, res, next) => {
+router.post('/:id/cargar-acta-firmada', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await cargarActaFirmada(req.params.id, req.body || {}, req.rbUsuario, req.rbRol);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
-router.post('/:id/observar', async (req, res, next) => {
+router.post('/:id/observar', assertAccesoExpediente, async (req, res, next) => {
   try {
     const data = await observarActa(req.params.id, req.body || {}, req.rbUsuario, req.rbRol);
     res.json({ ok: true, data });
@@ -281,5 +324,6 @@ router.post('/:id/derivar-pago', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.use(buildErrorMapper());
 export default router;
 export { asegurarExpedienteRecepcionDesdeOrden };
