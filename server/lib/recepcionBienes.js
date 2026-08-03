@@ -13,6 +13,7 @@ import {
   buildDocsCotizacionAdjudicada,
   dedupeDocumentos,
   toDocumentoContrato,
+  seleccionarActaVigente,
 } from '../../shared/expedienteDocumentos.js';
 import { generateActaRecepcionPdfServer } from './recepcionActaPdfServer.js';
 import { buildActaRecepcionData } from '../../shared/recepcionActaData.js';
@@ -494,7 +495,7 @@ export async function getDetalleRecepcionBienes(id, userCtx = null) {
       FROM recepcion_bienes_actas
       WHERE expediente_recepcion_id = $1
         AND eliminado_at IS NULL
-      ORDER BY id DESC
+      ORDER BY version DESC, generado_at DESC, id DESC
     `, [exp.id]),
     query(`
       SELECT id, tipo, estado_anterior, estado_nuevo, usuario, rol, motivo, created_at, metadata
@@ -698,7 +699,7 @@ export async function getDetalleRecepcionBienes(id, userCtx = null) {
     montoTotal: exp.monto_total,
     montoLiquidarAcumulado: exp.monto_liquidar_acumulado,
   });
-  const actaVigente = (actas.rows || [])[0] || null;
+  const actaVigente = seleccionarActaVigente(actas.rows || []);
   const { listarVisadosDetalle, tieneActaVisadaVigente } = await import('./recepcionActaVisada.js');
   const actasVisadas = await listarVisadosDetalle(exp.id);
   const visadaVigente = await tieneActaVisadaVigente(exp.id, actaVigente?.id || null);

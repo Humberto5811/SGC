@@ -116,6 +116,129 @@ export function dedupeDocumentos(docs = []) {
   return out;
 }
 
+function nombreNormalizado(doc = {}) {
+  return String(doc.nombre || doc.nombre_archivo || doc.nombre_original || '')
+    .toLowerCase()
+    .replace(/\.(pdf|png|jpg|jpeg|docx?)$/i, '')
+    .replace(/[_\-–—\s]+/g, ' ')
+    .trim();
+}
+
+// Clave lógica = tipo + nombre normalizado (SIN origen), de modo que el
+// mismo documento que llega por cotización y por recepción se unifica;
+// documentos distintos con el mismo nombre pero distinto tipo no se mezclan.
+function claveLogicaDoc(doc = {}) {
+  const tipo = String(doc.tipo || doc.tipo_documento || '').toUpperCase();
+  const nombre = nombreNormalizado(doc);
+  return `${tipo}|${nombre}`;
+}
+
+/**
+ * RB8.1C — Selecciona la última versión vigente por documento lógico.
+ *
+ * Clave lógica = tipo|nombre_normalizado (NO solo nombre físico),
+ * para fusionar el mismo documento que aparece como cotización y como
+ * recepción, sin mezclar documentos distintos que coinciden en nombre.
+ *
+ * Prioridad dentro de cada grupo:
+ *   1. vigente === true / activo === true (si el campo existe);
+ *   2. version DESC;
+ *   3. updated_at DESC;
+ *   4. created_at / generado_at DESC;
+ *   5. id DESC / documentoId DESC (solo desempate final).
+ *
+ * @param {Array<object>} documentos
+ * @returns {Array<object>} un documento por grupo lógico (orden original).
+ */
+export function seleccionarUltimaVersionDocumentos(documentos = []) {
+  const grupos = new Map();
+  for (const d of documentos || []) {
+    const clave = claveLogicaDoc(d);
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(d);
+  }
+  const out = [];
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  // Conserva el orden de aparición del primer elemento de cada grupo.
+  const primerIdx = new Map();
+  (documentos || []).forEach((d, idx) => {
+    const clave = claveLogicaDoc(d);
+    if (!primerIdx.has(clave)) primerIdx.set(clave, idx);
+  });
+
+  for (const [clave, items] of grupos.entries()) {
+    const mejor = [...items].sort((a, b) => {
+      const aVig = a.vigente === true || a.activo === true ? 1 : 0;
+      const bVig = b.vigente === true || b.activo === true ? 1 : 0;
+      if (aVig !== bVig) return bVig - aVig;
+      const vDiff = num(b.version) - num(a.version);
+      if (vDiff !== 0) return vDiff;
+      const updDiff = (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0);
+      if (updDiff !== 0) return updDiff;
+      const crtDiff = (Date.parse(b.created_at || b.generado_at) || 0) - (Date.parse(a.created_at || a.generado_at) || 0);
+      if (crtDiff !== 0) return crtDiff;
+      return num(b.id ?? b.documentoId) - num(a.id ?? a.documentoId);
+    })[0];
+    // Evita documentos sin nombre (vacío) si existe alternativa con nombre.
+    if (!nombreNormalizado(mejor) && items.length > 1) {
+      const conNombre = items.filter((x) => nombreNormalizado(x));
+      if (conNombre.length) {
+        out.push([...conNombre].sort((a, b) => num(b.version) - num(a.version))[0]);
+        continue;
+      }
+    }
+    out.push(mejor);
+  }
+  return out.sort((a, b) => {
+    // Reordena según primer índice de aparición de su grupo.
+    const kA = claveLogicaDoc(a);
+    const kB = claveLogicaDoc(b);
+    return (primerIdx.get(kA) ?? 0) - (primerIdx.get(kB) ?? 0);
+  });
+}
+
+/**
+ * RB8.1C — Selecciona la acta vigente de recepción de bienes.
+ *
+ * Criterio:
+ *   1. excluye eliminado_at IS NOT NULL;
+ *   2. vigente === true, si existe;
+ *   3. version DESC;
+ *   4. updated_at DESC;
+ *   5. generado_at / created_at DESC;
+ *   6. id DESC.
+ *
+ * @param {Array<object>} actas
+ * @returns {object|null} acta vigente o null.
+ */
+export function seleccionarActaVigente(actas = []) {
+  const activas = (actas || []).filter((a) => {
+    if (a.eliminado_at) return false;
+    return true;
+  });
+  if (!activas.length) return null;
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const ts = (v) => Date.parse(v) || 0;
+  return [...activas].sort((a, b) => {
+    const aVig = a.vigente === true ? 1 : 0;
+    const bVig = b.vigente === true ? 1 : 0;
+    if (aVig !== bVig) return bVig - aVig;
+    const vDiff = num(b.version) - num(a.version);
+    if (vDiff !== 0) return vDiff;
+    const upd = ts(b.updated_at) - ts(a.updated_at);
+    if (upd !== 0) return upd;
+    const gen = ts(b.generado_at || b.created_at) - ts(a.generado_at || a.created_at);
+    if (gen !== 0) return gen;
+    return num(b.id) - num(a.id);
+  })[0] || null;
+}
+
 /**
  * Extrae documentos de cotización del proveedor adjudicado.
  * Incluye 5-A, 5-B, docs solicitados, requisitos y certificados.
