@@ -439,6 +439,90 @@ export async function assertCanAccessRequirement(userId, requerimientoId, action
 }
 
 /**
+ * RC8.2E — Autorización por asignación contractual en Invitaciones.
+ *
+ * Verifica si un usuario es creador (created_by = username) o responsable
+ * (texto normalizado) de al menos una solicitud de cotización vinculada
+ * al requerimiento. No otorga acceso global; es una vía adicional a la
+ * autorización por alcance organizacional.
+ *
+ * @returns {{ ok: boolean, motivo?: string, solicitud_id?: number, codigo_solicitud?: string }}
+ */
+export async function canAccessRequirementByContractAssignment(userId, requerimientoId) {
+  const uid = parseInt(userId, 10);
+  const rid = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(uid) || !Number.isFinite(rid)) {
+    return { ok: false, motivo: 'Parámetros inválidos' };
+  }
+
+  // Cargar usuario: username + nombre completo normalizado
+  const { rows: uRows } = await query(
+    `SELECT id, username,
+            TRIM(LOWER(COALESCE(apellidos || ' ' || nombres, nombre, ''))) AS nombre_normalizado,
+            TRIM(LOWER(COALESCE(nombre, ''))) AS nombre_solo
+     FROM usuarios WHERE id = $1 AND activo = TRUE`,
+    [uid],
+  );
+  if (!uRows.length) return { ok: false, motivo: 'Usuario no encontrado o inactivo' };
+
+  const user = uRows[0];
+  const username = String(user.username || '').trim().toLowerCase();
+
+  // Buscar solicitudes vinculadas al requerimiento
+  const { rows: scRows } = await query(
+    `SELECT sc.id, sc.codigo,
+            TRIM(LOWER(COALESCE(sc.created_by, ''))) AS created_by_lc,
+            TRIM(LOWER(COALESCE(sc.responsable, ''))) AS responsable_lc
+     FROM solicitud_requerimientos sr
+     JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+     WHERE sr.requerimiento_id = $1`,
+    [rid],
+  );
+
+  for (const sc of scRows) {
+    // Regla A: created_by = username (vínculo fuerte, exacto)
+    if (sc.created_by_lc === username) {
+      return {
+        ok: true,
+        motivo: 'Creador de la solicitud',
+        solicitud_id: sc.id,
+        codigo_solicitud: sc.codigo,
+      };
+    }
+
+    // Regla B: responsable textual normalizado coincide con nombre del usuario
+    if (sc.responsable_lc) {
+      const resp = sc.responsable_lc;
+      const uNorm = user.nombre_normalizado;
+      const uSimple = user.nombre_solo;
+
+      // Coincidencia exacta normalizada (nombre completo)
+      if (uNorm && resp === uNorm) {
+        return {
+          ok: true,
+          motivo: 'Responsable de la solicitud',
+          solicitud_id: sc.id,
+          codigo_solicitud: sc.codigo,
+        };
+      }
+
+      // Coincidencia exacta solo con nombre (ej. "juan ulises")
+      if (uSimple && resp === uSimple) {
+        return {
+          ok: true,
+          motivo: 'Responsable de la solicitud',
+          solicitud_id: sc.id,
+          codigo_solicitud: sc.codigo,
+        };
+      }
+
+    }
+  }
+
+  return { ok: false, motivo: 'Sin asignación contractual activa al requerimiento' };
+}
+
+/**
  * Valida que un área (código/nombre) esté dentro del alcance para crear.
  */
 export async function assertAreaWithinScope(userId, areaRef = {}) {
