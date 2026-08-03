@@ -256,9 +256,16 @@ function mapBandejaRow(row) {
 export async function listarBandejaRecepcionBienes({ rol = 'ALMACEN', usuario = '', userId = null, userCtx = null } = {}) {
   await sincronizarOrdenesElegibles(usuario || 'Sistema');
 
+  // RB8.1D — contexto de usuario obligatorio; nunca se fabrica DEC/ALMACEN.
+  const ctx = (userCtx && typeof userCtx === 'object') ? userCtx : null;
+  if (!ctx) {
+    const err = new Error('Autenticación requerida');
+    err.code = 'AUTH_REQUIRED';
+    err.status = 401;
+    throw err;
+  }
   const actor = resolveRolActor({ rol }, rol);
-  const ctx = (userCtx && typeof userCtx === 'object') ? userCtx : (rol ? { rol, id: userId } : null);
-  const global = ctx ? esAlcanceGlobal(ctx) : false;
+  const global = esAlcanceGlobal(ctx);
   let whereBandeja = 'TRUE';
   const params = [];
 

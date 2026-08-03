@@ -3,6 +3,7 @@
  * Autorización SIEMPRE en backend. Nunca se confía en centro enviado por el cliente.
  */
 import { query } from '../db.js';
+import { isRolTransversalFlujo } from './userDataScope.js';
 
 /** trim + uppercase + colapso de espacios y puntos (C.N.S.P. → CNSP). Devuelve '' si no es válido. */
 export function normalizarCodigoCentro(valor) {
@@ -120,12 +121,18 @@ export async function resolveCentroExpediente(expedienteId, client = null) {
   };
 }
 
-/** Alcance global real: admin, alcance_datos global/institucional o permisos. */
+/**
+ * RB8.1D — Reutiliza la política central de userDataScope.js (sin lista duplicada).
+ * Global si: alcance_datos GLOBAL/INSTITUCIONAL, rol transversal (DEC/CM/Almacén
+ * según política central), admin/administrador, o permisos con alcance global.
+ */
 export function esAlcanceGlobal(user) {
-  const rol = String(user?.rol || '').toLowerCase();
-  if (['admin', 'administrador', 'dec'].includes(rol)) return true;
+  if (!user) return false;
   const alcance = String(user?.alcance_datos || '').toUpperCase();
   if (alcance.includes('GLOBAL') || alcance.includes('INSTITUCIONAL')) return true;
+  if (isRolTransversalFlujo(user)) return true;
+  const rol = String(user?.rol || '').toLowerCase();
+  if (rol === 'admin' || rol === 'administrador') return true;
   const perms = user?.permisos;
   if (perms) {
     const texto = typeof perms === 'string' ? perms : JSON.stringify(perms);
@@ -139,14 +146,15 @@ function centrosDelUsuario(user) {
   return lista.map((c) => normalizarCodigoCentro(c)).filter(Boolean);
 }
 
-/** Acceso por centro: admin/global → OK; restringido → coincidencia; sin centro → false. */
+/** Acceso por centro: admin/global → OK; restringido → coincidencia EXACTA; sin centro → false. */
 export function puedeAccederRecepcionBienes(user, centro) {
   if (!user) return false;
   if (esAlcanceGlobal(user)) return true;
   const target = normalizarCodigoCentro(centro?.centro_codigo);
   const mine = centrosDelUsuario(user);
   if (!target || !mine.length) return false;
-  return mine.some((m) => m === target || m.endsWith(target) || target.endsWith(m));
+  // RB8.1D — comparación EXACTA: no endsWith/startsWith/includes para autorización.
+  return mine.some((m) => m === target);
 }
 
 /** Lanza 403 genérico sin revelar centro ni datos. */
@@ -187,7 +195,8 @@ export async function validarResponsableCentro(responsableId, centro, areaId = n
   }
   const target = normalizarCodigoCentro(centro?.centro_codigo);
   const mine = [u?.centro, u?.codigo_centro_costo].map((c) => normalizarCodigoCentro(c)).filter(Boolean);
-  if (!target || !mine.some((m) => m === target || m.endsWith(target) || target.endsWith(m))) {
+  // RB8.1D — comparación EXACTA: no endsWith/startsWith/includes para autorización.
+  if (!target || !mine.some((m) => m === target)) {
     const err = new Error('El responsable no pertenece al centro del expediente');
     err.code = 'RESPONSABLE_CENTRO_INVALIDO';
     err.status = 422;

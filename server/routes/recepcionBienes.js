@@ -38,30 +38,36 @@ const router = Router();
 const ROLES = new Set(['dec', 'admin', 'au', 'almacen', 'cm', 'coordinador', 'analista']);
 
 function requireRol(req, res, next) {
-  const rol = String(
-    req.headers['x-user-rol'] || req.headers['x-user-role'] || req.user?.rol || req.user?.role || 'dec',
-  ).toLowerCase();
-  req.rbRol = rol;
-  req.rbUsuario = req.headers['x-user-name'] || req.user?.nombre || req.user?.username || 'usuario';
-  req.rbUserId = req.headers['x-user-id'] || req.user?.id || null;
-  // RB8.1B: userCtx SIEMPRE desde req.user (BD), nunca desde headers x-user-*.
+  // RB8.1D — Autorización estricta: SOLO desde req.user (poblado por requireAuth desde BD).
+  // Sin req.user válido la petición responde 401; NUNCA se fabrica un rol DEC/global.
   const u = req.user && typeof req.user === 'object' ? req.user : null;
-  req.rbUserCtx = u ? {
-    id: u.id != null ? parseInt(u.id, 10) : (req.rbUserId != null ? parseInt(req.rbUserId, 10) : null),
-    rol: u.rol ?? rol,
+  if (!u || u.id == null) {
+    return res.status(401).json({ error: 'Autenticación requerida', code: 'AUTH_REQUIRED' });
+  }
+  const rol = String(u.rol ?? u.role ?? '').toLowerCase();
+  // x-user-name solo como dato VISUAL de compatibilidad; nunca autoriza.
+  req.rbRol = rol;
+  req.rbUsuario = req.headers['x-user-name'] || u.nombre || u.username || 'usuario';
+  req.rbUserId = u.id != null ? parseInt(u.id, 10) : null;
+  req.rbUserCtx = {
+    id: req.rbUserId,
+    rol,
     centro: u.centro,
     codigo_centro_costo: u.codigo_centro_costo,
     alcance_datos: u.alcance_datos,
     area_id: u.area_id,
     permisos: u.permisos,
-  } : null;
+  };
   return next();
 }
 
 /** RB8.1B.1 — Guard central por centro para rutas de actas (expediente_id en params). */
 function assertAccesoExpediente(req, res, next) {
   (async () => {
-    if (!req.rbUserCtx) return next(); // sin sesión válida: el control de auth global responde
+    if (!req.rbUserCtx) {
+      // RB8.1D — defensa en profundidad: sin contexto autenticado, 401 (nunca DEC/global).
+      return res.status(401).json({ error: 'Autenticación requerida', code: 'AUTH_REQUIRED' });
+    }
     const centro = await resolveCentroExpediente(req.params.id);
     assertAccesoRecepcionBienes(req.rbUserCtx, centro);
     return next();

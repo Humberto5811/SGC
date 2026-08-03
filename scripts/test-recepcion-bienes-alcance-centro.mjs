@@ -33,7 +33,7 @@ console.log('\n=== RB8.1B — Alcance por centro (cableado Recepción Bienes) ==
 {
   const lib = fs.readFileSync(path.join(root, 'server/lib/recepcionBienes.js'), 'utf8');
   assert.match(lib, /listarBandejaRecepcionBienes\(\{ rol = 'ALMACEN', usuario = '', userId = null, userCtx = null \}/, 'firma bandeja');
-  assert.match(lib, /const global = ctx \? esAlcanceGlobal\(ctx\) : false/, 'detección global');
+  assert.match(lib, /const global = esAlcanceGlobal\(ctx\)/, 'detección global');
   assert.match(lib, /resolverCentroDesdeRequerimiento\(\{\s*cmn: row\.requerimiento_cmn,\s*area: row\.req_area,\s*payload: row\.requerimiento_payload,\s*\}\)/, 'resolución centro en bandeja');
   // Punto 1 — paginación: el LIMIT NO debe aplicarse en SQL antes del filtro por centro.
   assert.match(lib, /const sqlLimit = \(ctx && !global\) \? '' : 'LIMIT 500'/, 'LIMIT omitido en SQL para restringidos');
@@ -316,4 +316,85 @@ console.log('\n=== RB8.1B — Alcance por centro (cableado Recepción Bienes) ==
   }
 }
 
-console.log('\nRB8.1B alcance centro OK (incluye RB8.1B.1 actas por centro; RB8.1C última versión de documentos/actas)\n');
+// I. RB8.1D — Fallback DEC eliminado y autorización estricta por centro
+{
+  const helm = fs.readFileSync(path.join(root, 'server/lib/recepcionBienesAlcance.js'), 'utf8');
+  const rutas = fs.readFileSync(path.join(root, 'server/routes/recepcionBienes.js'), 'utf8');
+  const libBandeja = fs.readFileSync(path.join(root, 'server/lib/recepcionBienes.js'), 'utf8');
+
+  // 1. Sin req.user → 401, cero filas.
+  assert.match(rutas, /!u \|\| u\.id == null/, 'requireRol exige req.user.id');
+  assert.match(rutas, /status\(401\)\.json\(\{ error: 'Autenticación requerida', code: 'AUTH_REQUIRED' \}\)/, '401 AUTH_REQUIRED');
+  ok('I.1. Sin req.user → 401 AUTH_REQUIRED, cero filas');
+
+  // 2. Sin headers y sin req.user nunca se convierte en DEC (ROLES Set sí contiene dec; es válido).
+  assert.doesNotMatch(rutas, /\|\| 'dec'/, 'sin || "dec" en requireRol');
+  assert.doesNotMatch(rutas, /x-user-rol \|\| req\.user/, 'requireRol no fabrica identidad desde headers');
+  ok('I.2. Sin headers y sin req.user nunca se convierte en DEC');
+
+  // 3. Header x-user-rol=dec con req.user CNCC no eleva privilegios.
+  assert.doesNotMatch(rutas, /x-user-rol/, 'requireRol no lee x-user-rol');
+  assert.doesNotMatch(rutas, /x-user-role/, 'requireRol no lee x-user-role');
+  ok('I.3. x-user-rol=dec se ignora; no eleva privilegios');
+
+  // 4. Header x-user-id de otro usuario se ignora.
+  assert.doesNotMatch(rutas, /x-user-id/, 'requireRol no lee x-user-id');
+  ok('I.4. Header x-user-id se ignora; identidad solo desde req.user');
+
+  // 5–7. req.user CNCC → CNSP excluido; CNSP → incluido; admin/global → acceso.
+  {
+    const { puedeAccederRecepcionBienes, esAlcanceGlobal } = await import('../server/lib/recepcionBienesAlcance.js');
+    assert.equal(puedeAccederRecepcionBienes({ centro: 'CNCC' }, { centro_codigo: 'CNSP' }), false, 'CNCC no ve CNSP');
+    assert.equal(puedeAccederRecepcionBienes({ centro: 'CNSP' }, { centro_codigo: 'CNSP' }), true, 'CNSP ve CNSP');
+    assert.equal(puedeAccederRecepcionBienes({ rol: 'admin' }, { centro_codigo: 'CNSP' }), true, 'admin global');
+    assert.equal(esAlcanceGlobal({ rol: 'dec' }), true, 'dec transversal central');
+    ok('I.5–7. CNCC excluido, CNSP incluido, admin/global conserva acceso');
+
+    // 9. Código 0106060101 no coincide por sufijo con 060101 (exacta).
+    assert.equal(puedeAccederRecepcionBienes(
+      { centro: 'CNCC', codigo_centro_costo: '0106060101' },
+      { centro_codigo: '060101' },
+    ), false, 'sufijo rechazado');
+    ok('I.9. Código 0106060101 no coincide por sufijo con 060101');
+  }
+
+  // 8. userCtx null en listarBandeja → AUTH_REQUIRED.
+  assert.match(libBandeja, /if \(!ctx\)/, 'bandeja exige ctx');
+  assert.match(libBandeja, /AUTH_REQUIRED/, 'bandeja lanza AUTH_REQUIRED');
+  assert.doesNotMatch(libBandeja, /userCtx \|\|/, 'no fallback fabrica DEC');
+  ok('I.8. userCtx null en listarBandeja → AUTH_REQUIRED');
+
+  // 10. Responsable con código parcialmente coincidente rechazado (exacta).
+  {
+    const { validarResponsableCentro } = await import('../server/lib/recepcionBienesAlcance.js');
+    const dbParcial = {
+      async query() {
+        return { rows: [{ id: 99, activo: true, centro: 'CNCC', codigo_centro_costo: '0106060101', area_id: null }] };
+      },
+    };
+    await assert.rejects(
+      () => validarResponsableCentro(99, { centro_codigo: '060101' }, null, dbParcial),
+      (e) => e.code === 'RESPONSABLE_CENTRO_INVALIDO' && e.status === 422,
+    );
+    // 11. Coincidencia exacta permitida.
+    const dbExacta = {
+      async query() {
+        return { rows: [{ id: 99, activo: true, centro: 'CNSP', codigo_centro_costo: 'CC-01', area_id: null }] };
+      },
+    };
+    const okResp = await validarResponsableCentro(99, { centro_codigo: 'CNSP' }, null, dbExacta);
+    assert.equal(okResp.id, 99, 'coincidencia exacta permitida');
+    ok('I.10/11. Responsable con código parcial rechazado; coincidencia exacta permitida');
+  }
+
+  // 12. La ruta HTTP real usa requireAuth antes del router.
+  {
+    const indexSrc = fs.readFileSync(path.join(root, 'server/index.js'), 'utf8');
+    const iAuth = indexSrc.indexOf("app.use('/api', requireAuth)");
+    const iRb = indexSrc.indexOf("app.use('/api/recepcion-bienes', recepcionBienesRouter)");
+    assert.ok(iAuth !== -1 && iRb !== -1 && iAuth < iRb, 'requireAuth antes de recepcionBienesRouter');
+    ok('I.12. requireAuth corre antes del router de recepción-bienes');
+  }
+}
+
+console.log('\nRB8.1B alcance centro OK (incluye RB8.1B.1 actas por centro; RB8.1C última versión de documentos/actas; RB8.1D fallback DEC eliminado y autorización estricta)\n');
