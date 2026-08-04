@@ -15,7 +15,11 @@
  *  6. PERSONALIZADO: asignaciones explicitas
  */
 import { query } from '../db.js';
-import { normalizeTextoInstitucional } from '../../shared/cuadroComparativoRol.js';
+import {
+  normalizeTextoInstitucional,
+  isAdminSecurityRole,
+  isTransversalProfile,
+} from '../utils/userRoleCatalog.js';
 
 export const SCOPE_TYPES = Object.freeze({
   INSTITUCIONAL: 'INSTITUCIONAL',
@@ -67,43 +71,15 @@ export async function ensureAlcanceTables() {
 }
 
 function isAdminRol(rol) {
-  const r = normalizeTextoInstitucional(rol);
-  return r === 'admin' || r === 'administrador';
+  // Delegado al catálogo central: isAdminSecurityRole
+  return isAdminSecurityRole({ rol });
 }
 
 /** Roles/cargos transversales: no se restringen por centro en bandejas AU. */
 export function isRolTransversalFlujo(user = {}) {
-  const rol = normalizeTextoInstitucional(user.rol || user.role || '');
-  const cargo = normalizeTextoInstitucional(user.cargo || '');
-
-  if (['dec', 'cm', 'almacen', 'analista', 'ccp'].includes(rol) && rol !== 'au') {
-    // rol sistema dec/cm/almacen suele ser transversal; au nunca
-    if (rol === 'dec' || rol === 'cm' || rol === 'almacen') return true;
-  }
-
-  // Contrataciones
-  if (/coordinador/.test(cargo) && (/\bcm\b/.test(cargo) || /contratos\s*menores/.test(cargo) || /\buit\b/.test(cargo))) {
-    return true;
-  }
-  if (/analista/.test(cargo) && (/compra/.test(cargo) || /contrat/.test(cargo) || /\bccp\b/.test(cargo) || /\bcm\b/.test(cargo))) {
-    return true;
-  }
-  if (/\bdec\b/.test(cargo) || /^jefe\s+dec/.test(cargo) || /especialista\s+dec/.test(cargo)) {
-    return true;
-  }
-  if (/\bccp\b/.test(cargo) || /certificacion\s*de\s*credito/.test(cargo)) {
-    return true;
-  }
-  if (/coordinador/.test(cargo) && /contratacion/.test(cargo)) {
-    return true;
-  }
-
-  // Almacén
-  if (/almacen/.test(cargo) || /almacenero/.test(cargo)) {
-    return true;
-  }
-
-  return false;
+  // Delegado al catálogo central para mantener ÚNICA fuente de verdad.
+  // Mismo comportamiento → mismo set de usuarios afectados.
+  return isTransversalProfile(user);
 }
 
 function isDirectorOCoordinadorCentro(cargo = '') {

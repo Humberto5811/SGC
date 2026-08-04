@@ -7,13 +7,31 @@ import { fmtDateTime, passwordStatusBadge } from '../../utils/authHelpers.js';
 import {
   MODULOS, emptyPermisos, normalizePermisos, permisosFromRol,
 } from '../../utils/permissionsCatalog.js';
+import {
+  resolveFunctionalProfiles,
+  PERFILES_FUNCIONALES_LABELS,
+} from '../../../server/utils/userRoleCatalog.js';
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function fmtRol(rol) {
-  const map = { admin: 'Admin', usuario: 'Usuario', au: 'AU', dec: 'DEC' };
+  const map = { admin: 'Administrador', usuario: 'Usuario', au: 'Área Usuaria', dec: 'DEC' };
   return map[rol] || rol || '—';
+}
+
+function fmtPerfilFuncional(usuario) {
+  if (!usuario) return '—';
+  const perfiles = resolveFunctionalProfiles({
+    id: usuario.id,
+    rol: usuario.rol || 'usuario',
+    cargo: usuario.cargo || '',
+    permisos: usuario.permisos || null,
+    alcance_datos: usuario.alcance_datos || null,
+  });
+  return perfiles
+    .map((p) => PERFILES_FUNCIONALES_LABELS[p] || p)
+    .join(', ') || '—';
 }
 
 function areaCell(text) {
@@ -403,10 +421,16 @@ async function openForm(id) {
             <div class="col-md-3"><label class="form-label">Rol sistema</label>
               <select class="form-select form-select-sm" id="fRol">
                 <option value="usuario" ${u.rol === 'usuario' ? 'selected' : ''}>Usuario</option>
-                <option value="au" ${u.rol === 'au' ? 'selected' : ''}>AU</option>
+                <option value="au" ${u.rol === 'au' ? 'selected' : ''}>Área Usuaria</option>
                 <option value="dec" ${u.rol === 'dec' ? 'selected' : ''}>DEC</option>
-                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Admin</option>
-              </select></div>
+                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Administrador</option>
+              </select>
+              <small class="text-muted d-block mt-1">Rol técnico de compatibilidad. La función operativa se configura mediante perfil, accesos y alcance.</small></div>
+            <div class="col-md-3"><label class="form-label">Perfil funcional</label>
+              <div class="form-control form-control-sm bg-light text-muted" style="cursor:default;" title="Perfil inferido automáticamente según el cargo y permisos del usuario. No editable en esta versión.">
+                <i class="bi bi-person-badge"></i> ${esc(fmtPerfilFuncional(u))}
+              </div>
+              <small class="text-muted d-block mt-1">Perfil inferido automáticamente. No editable en esta versión.</small></div>
             <div class="col-md-3"><label class="form-label">Estado</label>
               <select class="form-select form-select-sm" id="fEstado"><option ${u.activo !== false ? 'selected' : ''}>Activo</option><option ${u.activo === false ? 'selected' : ''}>Inactivo</option></select></div>
             ${!id ? '<div class="col-md-3"><label class="form-label">Contraseña temporal *</label><input type="text" class="form-control form-control-sm" id="fPassword" placeholder="Ej. hnizama" required></div>' : ''}
