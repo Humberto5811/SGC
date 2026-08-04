@@ -837,7 +837,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         <td>${esc(it.codigo_sigamef || '—')}</td><td>${esc(it.descripcion || '—')}</td>
         <td class="text-center">${esc(cant)}</td>
         <td class="small text-nowrap">
-          <button type="button" class="btn btn-sm sc-btn-inst me-1 sc-item-req" data-i="${i}"><i class="bi bi-eye"></i> VER REQUERIMIENTO</button>
+          <button type="button" class="btn btn-sm sc-btn-inst me-1 sc-item-req" data-i="${i}" title="Abre el detalle completo del requerimiento (pedidos, documentos). Requiere asignación."><i class="bi bi-eye"></i> Ver detalle del requerimiento</button>
           <button type="button" class="btn btn-sm sc-btn-inst sc-item-docs" data-i="${i}"><i class="bi bi-folder2-open"></i> DOCUMENTOS</button>
         </td>
       </tr>`;
@@ -1217,7 +1217,7 @@ async function showItemRequerimientoModal(item, opts = {}) {
     // Mostrar error en modal en lugar de "Sin documentos adjuntos"
     const status = reqError?.status || reqError?.statusCode || 0;
     const msg = status === 403
-      ? 'No tiene autorización para consultar este requerimiento.'
+      ? 'No tiene autorización para consultar este requerimiento. Motivos posibles: no es responsable de la solicitud vinculada, el Coordinador CM no le ha asignado este expediente, o el requerimiento pertenece a otro centro de costo. Contacte a su coordinador si requiere acceso.'
       : (reqError?.message || 'No fue posible cargar el requerimiento.');
     const wrap = document.createElement('div');
     wrap.innerHTML = `

@@ -581,6 +581,26 @@ export async function assertCanAccessRequirementForContracting(userId, requerimi
     };
   }
 
-  // 2) Fallback a alcance organizacional existente
+  // 2) Asignación dinámica por expediente (RC8.3D)
+  // Permite que un Coordinador CM asigne explícitamente un expediente a un analista.
+  const { isAssignedExpediente } = await import('./expedienteAsignaciones.js');
+  const assigned = await isAssignedExpediente(userId, 'REQUERIMIENTO', requerimientoId);
+  if (assigned) {
+    return {
+      scopeType: SCOPE_TYPES.TRANSVERSAL_FLUJO,
+      centroIds: [],
+      centroCodigos: [],
+      centroCostoIds: [],
+      centroCostoCodigos: [],
+      areaIds: [],
+      areaNombres: [],
+      isInstitutional: false,
+      skipOrgFilter: true,
+      userId,
+      motivo: 'Asignado al expediente (RC8.3D)',
+    };
+  }
+
+  // 3) Fallback a alcance organizacional existente
   return assertCanAccessRequirement(userId, requerimientoId, action);
 }
