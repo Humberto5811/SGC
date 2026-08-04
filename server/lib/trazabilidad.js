@@ -675,7 +675,26 @@ export async function enrichRequerimientoRowsWithCcp(rows = []) {
   const list = (Array.isArray(rows) ? rows : []).map(enrichRequerimientoRow);
   try {
     const { attachCcpFlagsToRows } = await import('./ccpEstadoFlags.js');
-    return await attachCcpFlagsToRows(list);
+    const withCcp = await attachCcpFlagsToRows(list);
+
+    // RC8.4D — anexar estado_responsable_vigente en batch (sin N+1)
+    try {
+      const { resolveEstadoResponsableBatch } = await import('./resolvedorEstadoResponsable.js');
+      const ids = withCcp.map((r) => parseInt(r?.id, 10)).filter((n) => Number.isFinite(n) && n > 0);
+      if (ids.length) {
+        const resolved = await resolveEstadoResponsableBatch(ids, withCcp);
+        for (const row of withCcp) {
+          const id = parseInt(row?.id, 10);
+          if (Number.isFinite(id) && resolved.has(id)) {
+            row.estado_responsable_vigente = resolved.get(id);
+          } else {
+            row.estado_responsable_vigente = null;
+          }
+        }
+      }
+    } catch (_) { /* resolvedor no disponible — sin anexar */ }
+
+    return withCcp;
   } catch (_) {
     return list;
   }

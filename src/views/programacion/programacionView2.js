@@ -168,7 +168,7 @@ function getPayloadItemTexts(r) {
 }
 
 function getResponsableRolDisplay(r) {
-  const resp = String(r?.responsable_actual || r?.responsableActual || '').trim();
+  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
   if (/program/i.test(resp)) return 'Programación';
   return getRolDisplayFromRow(r);
 }
@@ -217,7 +217,7 @@ function renderProgramacionRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsable_actual || r.responsableActual || '—';
+  const resp = r.responsableActual || r.responsable_actual || '—';
   const rol = getResponsableRolDisplay(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Programación');
   const nombreItem = descripcionesBien || r.denominacion || '—';

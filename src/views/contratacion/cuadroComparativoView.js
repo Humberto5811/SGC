@@ -1,6 +1,6 @@
 // Cuadro Comparativo — bandeja por Solicitud de Cotización (RC8.0 refresh no destructivo)
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { bindBandejaToolbar, closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import { usePagination } from '../../utils/paginacion.js';
@@ -444,6 +444,7 @@ function buildCuadroTheadHtml() {
     <th>Centro</th>
     <th class="text-center">Cantidad</th>
     <th>Estado</th>
+    <th>Responsable actual</th>
     <th class="text-center">Ver</th>
   </tr>`;
 }
@@ -458,6 +459,7 @@ function buildCuadroRowHtml(c) {
       <td class="small">${formatCentroCuadro(c, esc)}</td>
       <td class="text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
       <td>${renderBadgeEstadoCuadroHtml(c, labelEstadoExpedienteUnificado(c) || labelCuadroEstado(c.estado_cuadro || c.estado), esc)}</td>
+      <td class="small">${esc(getResponsableVigenteLabel(c))}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
           data-id="${esc(c.solicitud_id)}" title="Ver expediente">

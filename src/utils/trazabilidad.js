@@ -392,25 +392,81 @@ export function enrichReqRow(r) {
     : null;
   const etapaWorkflow = ubicacion || snapEtapa;
   const snapSub = workflowSnapshot?.subModuloActual || workflowSnapshot?.moduloActual || null;
-  const subModulo = snapSub || r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[etapaWorkflow] || getEstadoActualTexto(etapaWorkflow);
-  const estadoNegocio = String(r?.estado || '').trim() || resolveEstadoNegocioFromRow(r);
-  const estadoActualTexto = subModulo || r.estado_actual_texto || r.estadoActualTexto || getEstadoActualTexto(etapaWorkflow);
+
+  // RC8.4D — contrato estado_responsable_vigente como fuente primaria (backend enriquece en batch)
+  const erv = r.estado_responsable_vigente;
+  const subModulo = erv?.etapaLabel
+    || snapSub
+    || r.sub_modulo_actual
+    || r.subModuloActual
+    || ETAPA_LABELS[etapaWorkflow]
+    || getEstadoActualTexto(etapaWorkflow);
+
+  const estadoNegocio = erv?.estadoLabel
+    || String(r?.estado || '').trim()
+    || resolveEstadoNegocioFromRow(r);
+
+  const estadoActualTexto = erv?.etapaLabel
+    || subModulo
+    || r.estado_actual_texto
+    || r.estadoActualTexto
+    || getEstadoActualTexto(etapaWorkflow);
+
+  // RC8.4D — responsable vigente: PERSONA > UNIDAD > PENDIENTE
+  let responsableActual;
+  if (erv) {
+    if (erv.responsableTipo === 'PERSONA') {
+      responsableActual = erv.responsableNombre || erv.responsableUsername || '—';
+    } else if (erv.responsableTipo === 'UNIDAD') {
+      responsableActual = erv.responsableUnidad || '—';
+    } else if (erv.responsableTipo === 'PENDIENTE') {
+      responsableActual = 'Pendiente de asignación';
+    } else {
+      responsableActual = erv.responsableUnidad || erv.responsableNombre || '—';
+    }
+  } else {
+    // Fallback legacy: nunca usar r.responsable (es centro CNCC)
+    // RC8.4F — priorizar responsableActual ya enriquecido sobre responsable_actual BD
+    responsableActual = r.responsableActual || r.responsable_actual || '—';
+  }
+
   const obsMotor = r.obsMotor || obtenerEstadoObservaciones(r);
   return {
     ...r,
     estado: estadoNegocio,
     monto_total,
     dias_en_estado: dias,
-    estadoActual: etapaWorkflow,
-    estado_actual: etapaWorkflow,
+    estadoActual: erv?.etapaCodigo || etapaWorkflow,
+    estado_actual: erv?.etapaCodigo || etapaWorkflow,
     estadoActualTexto,
     estado_actual_texto: estadoActualTexto,
+    sub_modulo_actual: r.sub_modulo_actual || subModulo || '',
     subModuloActual: subModulo || r.subModuloActual,
-    // No usar r.responsable: en requerimientos esa columna guarda el centro (p.ej. CNCC), no la persona.
-    responsableActual: r.responsable_actual || r.responsableActual || '—',
+    responsableActual,
+    // RC8.4D — exponer contrato completo para consumidores visuales
+    estado_responsable_vigente: erv || null,
     workflowSnapshot,
     obsMotor,
   };
+}
+
+/**
+ * RC8.4F — etiqueta visible de responsable vigente (regla única).
+ * Preferir estado_responsable_vigente; fallback a responsableActual enriquecido.
+ */
+export function getResponsableVigenteLabel(row) {
+  const enriched = enrichReqRow(row || {});
+  return enriched.responsableActual || '—';
+}
+
+/**
+ * RC8.4F — etiqueta de estado de negocio desde contrato (o fallback).
+ */
+export function getEstadoVigenteLabel(row) {
+  const enriched = enrichReqRow(row || {});
+  const erv = enriched.estado_responsable_vigente;
+  if (erv?.estadoLabel) return erv.estadoLabel;
+  return enriched.estado || enriched.estado_actual_texto || enriched.estadoActualTexto || '—';
 }
 
 export function filterRowsClient(rows, filters = {}) {

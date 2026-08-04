@@ -327,8 +327,8 @@ function bandejaSortValue(row, field) {
     case 'denominacion': return getRowDescripcionRaw(row);
     case 'estado': return String(row.estado || row.estado_actual || row.estadoActual || '');
     case 'responsable':
-      // No usar row.responsable: es centro (CNCC), no persona.
-      return String(row.responsable_actual || row.responsableActual || '');
+      // RC8.4F — priorizar responsableActual (contrato) sobre responsable_actual BD
+      return String(row.responsableActual || row.responsable_actual || '');
     case 'dias':
       return Number(row.dias_en_estado ?? calcDiasEnEstado(row.fecha_estado_actual || row.fechaEstadoActual) ?? 0);
     case 'created_at':

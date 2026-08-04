@@ -3,7 +3,7 @@
  * Ruta: dec/ccp · OD35
  */
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
 } from '../../utils/bandejaUi.js';
@@ -141,6 +141,7 @@ function renderRow(row) {
       <td><strong>${esc(row.solicitud_codigo || '—')}</strong></td>
       <td>${esc(centro)}</td>
       <td>${renderEstadoCell(row)}</td>
+      <td class="small">${esc(getResponsableVigenteLabel(row))}</td>
       <td class="small fw-semibold text-break" style="max-width:140px">${ccpTxt}</td>
       ${menu}
     </tr>`;
@@ -154,6 +155,7 @@ const THEAD = `<tr>
   <th>Solicitud de Cotización</th>
   <th>Centro</th>
   <th>Estado</th>
+  <th>Responsable actual</th>
   <th style="min-width:100px">CCP</th>
   <th class="text-center" style="width:70px">Acciones</th>
 </tr>`;

@@ -16,13 +16,13 @@ export function isCoordinadorActos(user) {
 }
 
 export function isExpedientePoolCoordinador(req) {
-  const resp = String(req?.responsable_actual || req?.responsableActual || '');
+  const resp = String(req?.responsableActual || req?.responsable_actual || '');
   return /coordinador.*contratos/i.test(resp) || resp === 'Especialista Contrataciones';
 }
 
 export function isExpedienteAsignadoAMi(req, userName) {
   if (!userName) return false;
-  const resp = String(req?.responsable_actual || req?.responsableActual || '').toLowerCase();
+  const resp = String(req?.responsableActual || req?.responsable_actual || '').toLowerCase();
   const me = String(userName).toLowerCase();
   if (/coordinador.*contratos/i.test(resp)) return false;
   return resp.includes(me) || me.split(' ').filter((p) => p.length > 2).some((p) => resp.includes(p));
@@ -370,7 +370,7 @@ export function actosBandejaStyles() {
 }
 
 function getResponsableRolDisplay(r) {
-  const resp = String(r?.responsable_actual || r?.responsableActual || '').trim();
+  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
   if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
   if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
   return getRolDisplayFromRow(r);
@@ -403,7 +403,7 @@ export function renderActosRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsable_actual || r.responsableActual || '—';
+  const resp = r.responsableActual || r.responsable_actual || '—';
   const rol = getResponsableRolDisplay(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '—';

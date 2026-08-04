@@ -1,6 +1,10 @@
 // Recepción de Cotizaciones — bandeja consolidada por Solicitud (RC8.0 refresh no destructivo)
 import { contratacionesService } from '../../services/contratacionesService.js';
-import { bandejaTableStyles } from '../../utils/trazabilidad.js';
+import {
+  bandejaTableStyles,
+  getResponsableVigenteLabel,
+  getEstadoVigenteLabel,
+} from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { showEnviarValidarModal } from '../../utils/derivarValidacionModal.js';
@@ -290,7 +294,8 @@ async function showCotizacionDetalleModal(cotId) {
               <div class="mt-1">
                 <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(labelEstadoCotizacion(c))}</span>
               </div>
-              ${c.validacion_responsable ? `<div class="text-muted mt-1">Responsable AU: ${esc(c.validacion_responsable)}</div>` : ''}
+              <div class="text-muted mt-1">Estado vigente: ${esc(getEstadoVigenteLabel(c))}</div>
+              <div class="text-muted">Responsable vigente: ${esc(getResponsableVigenteLabel(c))}</div>
             </div>
             <div class="col-md-4">
               <span class="text-muted d-block">Monto total ofertado</span>
@@ -373,13 +378,11 @@ function showExpedienteDetalleModal(expediente) {
               <table class="table table-sm table-hover table-bordered mb-0">
                 <thead class="table-light"><tr>
                   <th>Proveedor</th><th>Monto ofertado</th>
-                  <th>Fecha recepción</th><th>Estado</th><th class="text-center">Acciones</th>
+                  <th>Fecha recepción</th><th>Estado</th><th>Responsable</th><th class="text-center">Acciones</th>
                 </tr></thead>
                 <tbody>
                   ${cots.map((c) => {
                     const estadoLabel = labelEstadoCotizacion(c);
-                    const responsableHint = c.validacion_responsable && /enviada a validar/i.test(estadoLabel)
-                      ? `<div class="small text-muted">${esc(c.validacion_responsable)}</div>` : '';
                     return `
                     <tr>
                       <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
@@ -387,11 +390,12 @@ function showExpedienteDetalleModal(expediente) {
                       <td class="small">${esc(fmtFecha(c))}</td>
                       <td>
                         <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(estadoLabel)}</span>
-                        ${responsableHint}
+                        <div class="small text-muted">${esc(getEstadoVigenteLabel(c))}</div>
                       </td>
+                      <td class="small">${esc(getResponsableVigenteLabel(c))}</td>
                       <td class="text-center">${renderAccionCotizacion(c)}</td>
                     </tr>`;
-                  }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin cotizaciones</td></tr>'}
+                  }).join('') || '<tr><td colspan="6" class="text-muted text-center">Sin cotizaciones</td></tr>'}
                 </tbody>
               </table>
             </div>
@@ -445,6 +449,7 @@ const RECEPCION_THEAD = `<tr>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
   <th>Estado</th>
+  <th>Responsable actual</th>
   <th class="text-center">Ver</th>
 </tr>`;
 
@@ -461,7 +466,9 @@ function buildRecepcionRowHtml(exp) {
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
         ${renderBadgeEstadoRecepcionHtml(exp, esc)}
+        <div class="small text-muted">${esc(getEstadoVigenteLabel(exp))}</div>
       </td>
+      <td class="small">${esc(getResponsableVigenteLabel(exp))}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary rc-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">

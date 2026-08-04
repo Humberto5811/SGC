@@ -32,6 +32,7 @@ import {
   assertAccesoRecepcionBienes,
   validarResponsableCentro,
 } from './recepcionBienesAlcance.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 function httpError(message, status = 400, code = null) {
   const err = new Error(message);
@@ -411,10 +412,17 @@ export async function listarBandejaRecepcionBienes({ rol = 'ALMACEN', usuario = 
       }
       if (puedeAccederRecepcionBienes(ctx, centro)) filtradas.push(row);
     }
-    return filtradas.slice(0, 500).map(mapBandejaRow);
+    return enrichBandejaRecepcionRows(filtradas.slice(0, 500).map(mapBandejaRow));
   }
 
-  return rows.map(mapBandejaRow);
+  return enrichBandejaRecepcionRows(rows.map(mapBandejaRow));
+}
+
+/** RC8.4F — anexar estado_responsable_vigente en batch (sin N+1). */
+async function enrichBandejaRecepcionRows(mapped) {
+  const list = Array.isArray(mapped) ? mapped : [];
+  await enrichEstadoResponsableForBandeja(list, 'requerimiento_id');
+  return list;
 }
 
 async function getExpedienteOrThrow(id) {
@@ -443,6 +451,9 @@ async function getExpedienteOrThrow(id) {
   if (!rows.length) throw httpError('Expediente de recepción no encontrado', 404);
   const row = rows[0];
   row.lugar_entrega = row.orden_lugar_entrega || null;
+  // RC8.4F — enriquecer detalle con contrato vigente (batch de 1)
+  await enrichEstadoResponsableForBandeja([row], 'requerimiento_id');
+
   return row;
 }
 

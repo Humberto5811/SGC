@@ -5,6 +5,7 @@ import { query } from '../db.js';
 import { resolveValidationCentro } from '../../shared/validacionCentro.js';
 import { buildCcpEstadoResponse } from './ccpEstadoFlags.js';
 import { resolveEstadoActualExpediente, badgeVisualEstadoVigente } from '../../shared/estadoExpedienteVigente.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 export const ESTADOS_CCP_BANDEJA = Object.freeze({
   PENDIENTE_CONSOLIDACION: 'PENDIENTE_CONSOLIDACION',
@@ -329,6 +330,9 @@ export async function listarBandejaCcp() {
       recepcion_bienes_expediente_id: ev.recepcion_bienes_expediente_id ?? null,
     });
   }
+  // RC8.4E — anexar estado_responsable_vigente en batch
+  await enrichEstadoResponsableForBandeja(out, 'requerimiento_id');
+
   return out;
 }
 

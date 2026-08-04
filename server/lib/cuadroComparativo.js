@@ -48,6 +48,7 @@ import {
   metaVersionDesdeRow,
 } from './cuadroComparativoVersionado.js';
 import { emitirObservacion } from './observacionesWorkflow.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 import {
   resolveEstadoExpedienteVigente,
   getLabelEstado,
@@ -597,7 +598,7 @@ export async function listarCuadroComparativoExpedientes() {
     ccpBySid = await loadCcpFlagsBySolicitudIds(ids);
   } catch (_) { /* noop */ }
 
-  return elegibles.map((r) => {
+  const result = elegibles.map((r) => {
     const reqs = reqMap.get(r.solicitud_id) || [];
     const persisted = estadoMap.get(r.solicitud_id);
     const ccpFlags = ccpBySid.get(Number(r.solicitud_id)) || {};
@@ -748,6 +749,11 @@ export async function listarCuadroComparativoExpedientes() {
       ].filter(Boolean).join(' ').toLowerCase(),
     };
   });
+
+  // RC8.4E — anexar estado_responsable_vigente en batch
+  await enrichEstadoResponsableForBandeja(result, 'requerimiento_id');
+
+  return result;
 }
 
 /**

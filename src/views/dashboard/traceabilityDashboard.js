@@ -1,5 +1,5 @@
 // Estructura preparatoria para panel de control de trazabilidad (dashboard futuro)
-import { computeTraceSummary } from '../../utils/trazabilidad.js';
+import { computeTraceSummary, getResponsableVigenteLabel, getEstadoVigenteLabel } from '../../utils/trazabilidad.js';
 
 /** Indicadores planificados para el dashboard SGC. */
 export const TRACEABILITY_DASHBOARD_WIDGETS = [
@@ -15,9 +15,9 @@ export function buildDashboardSnapshot(rows = []) {
   const byEstado = {};
   const byResponsable = {};
   rows.forEach((r) => {
-    const est = r.estadoActualTexto || r.estado_actual_texto || r.estado || '—';
+    const est = getEstadoVigenteLabel(r);
     byEstado[est] = (byEstado[est] || 0) + 1;
-    const resp = r.responsable_actual || r.responsableActual || '—';
+    const resp = getResponsableVigenteLabel(r);
     byResponsable[resp] = (byResponsable[resp] || 0) + 1;
   });
   return {

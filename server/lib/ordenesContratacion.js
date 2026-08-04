@@ -12,6 +12,7 @@ import {
   normalizeEstadoOrden,
 } from '../../shared/estadoExpedienteVigente.js';
 import { calcularFechaMaxima, calcularFechaMaximaEntrega, normalizeTipoDias, toIsoDateString, addOneDay } from './diasPlazo.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 export const REGLAS_INICIO_PLAZO = Object.freeze({
   INICIO_PLAZO_FECHA_ORDEN: 'INICIO_PLAZO_FECHA_ORDEN',
@@ -832,6 +833,9 @@ export async function listarBandejaOrdenes() {
         || (list.map((e) => e.fecha_maxima).filter(Boolean).map((d) => String(d).slice(0, 10)).sort().pop() || null);
     }
   }
+
+  // RC8.4E — anexar estado_responsable_vigente en batch
+  await enrichEstadoResponsableForBandeja(out, 'requerimiento_id');
 
   return out;
 }
