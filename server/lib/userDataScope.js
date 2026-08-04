@@ -15,7 +15,11 @@
  *  6. PERSONALIZADO: asignaciones explicitas
  */
 import { query } from '../db.js';
-import { normalizeTextoInstitucional } from '../../shared/cuadroComparativoRol.js';
+import {
+  normalizeTextoInstitucional,
+  isAdminSecurityRole,
+  isTransversalProfile,
+} from '../utils/userRoleCatalog.js';
 
 export const SCOPE_TYPES = Object.freeze({
   INSTITUCIONAL: 'INSTITUCIONAL',
@@ -67,43 +71,15 @@ export async function ensureAlcanceTables() {
 }
 
 function isAdminRol(rol) {
-  const r = normalizeTextoInstitucional(rol);
-  return r === 'admin' || r === 'administrador';
+  // Delegado al catálogo central: isAdminSecurityRole
+  return isAdminSecurityRole({ rol });
 }
 
 /** Roles/cargos transversales: no se restringen por centro en bandejas AU. */
 export function isRolTransversalFlujo(user = {}) {
-  const rol = normalizeTextoInstitucional(user.rol || user.role || '');
-  const cargo = normalizeTextoInstitucional(user.cargo || '');
-
-  if (['dec', 'cm', 'almacen', 'analista', 'ccp'].includes(rol) && rol !== 'au') {
-    // rol sistema dec/cm/almacen suele ser transversal; au nunca
-    if (rol === 'dec' || rol === 'cm' || rol === 'almacen') return true;
-  }
-
-  // Contrataciones
-  if (/coordinador/.test(cargo) && (/\bcm\b/.test(cargo) || /contratos\s*menores/.test(cargo) || /\buit\b/.test(cargo))) {
-    return true;
-  }
-  if (/analista/.test(cargo) && (/compra/.test(cargo) || /contrat/.test(cargo) || /\bccp\b/.test(cargo) || /\bcm\b/.test(cargo))) {
-    return true;
-  }
-  if (/\bdec\b/.test(cargo) || /^jefe\s+dec/.test(cargo) || /especialista\s+dec/.test(cargo)) {
-    return true;
-  }
-  if (/\bccp\b/.test(cargo) || /certificacion\s*de\s*credito/.test(cargo)) {
-    return true;
-  }
-  if (/coordinador/.test(cargo) && /contratacion/.test(cargo)) {
-    return true;
-  }
-
-  // Almacén
-  if (/almacen/.test(cargo) || /almacenero/.test(cargo)) {
-    return true;
-  }
-
-  return false;
+  // Delegado al catálogo central para mantener ÚNICA fuente de verdad.
+  // Mismo comportamiento → mismo set de usuarios afectados.
+  return isTransversalProfile(user);
 }
 
 function isDirectorOCoordinadorCentro(cargo = '') {
@@ -567,3 +543,64 @@ export async function assertAreaWithinScope(userId, areaRef = {}) {
 }
 
 export { httpError as scopeHttpError };
+
+/**
+ * RC8.2H — Guard central para autorizar acceso a requerimiento en contexto
+ * de Contrataciones (Invitaciones, Solicitudes de Cotización).
+ *
+ * Orden obligatorio:
+ *   1) Asignación contractual real (created_by exacto / responsable exacto normalizado)
+ *   2) Alcance organizacional existente (centro / CC)
+ *   3) Denegar 403
+ *
+ * Solo usa req.user.id. No confía en x-user-id ni x-user-rol.
+ *
+ * @param {number} userId - req.user.id
+ * @param {number} requerimientoId
+ * @param {string} [action='VER']
+ * @returns {Promise<object>} scope si autorizado; lanza error 403 si no.
+ */
+export async function assertCanAccessRequirementForContracting(userId, requerimientoId, action = 'VER') {
+  // 1) Asignación contractual real (RC8.2E)
+  const contract = await canAccessRequirementByContractAssignment(userId, requerimientoId);
+  if (contract.ok) {
+    // Autorizado por asignación contractual. Devolver scope TRANSVERSAL_FLUJO
+    // para que no se filtre por centro.
+    return {
+      scopeType: SCOPE_TYPES.TRANSVERSAL_FLUJO,
+      centroIds: [],
+      centroCodigos: [],
+      centroCostoIds: [],
+      centroCostoCodigos: [],
+      areaIds: [],
+      areaNombres: [],
+      isInstitutional: false,
+      skipOrgFilter: true,
+      userId,
+      motivo: contract.motivo,
+    };
+  }
+
+  // 2) Asignación dinámica por expediente (RC8.3D)
+  // Permite que un Coordinador CM asigne explícitamente un expediente a un analista.
+  const { isAssignedExpediente } = await import('./expedienteAsignaciones.js');
+  const assigned = await isAssignedExpediente(userId, 'REQUERIMIENTO', requerimientoId);
+  if (assigned) {
+    return {
+      scopeType: SCOPE_TYPES.TRANSVERSAL_FLUJO,
+      centroIds: [],
+      centroCodigos: [],
+      centroCostoIds: [],
+      centroCostoCodigos: [],
+      areaIds: [],
+      areaNombres: [],
+      isInstitutional: false,
+      skipOrgFilter: true,
+      userId,
+      motivo: 'Asignado al expediente (RC8.3D)',
+    };
+  }
+
+  // 3) Fallback a alcance organizacional existente
+  return assertCanAccessRequirement(userId, requerimientoId, action);
+}

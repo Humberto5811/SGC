@@ -1,4 +1,5 @@
 // Catálogo de permisos — servidor (espejo de src/utils/permissionsCatalog.js)
+import { isAdminSecurityRole, normalizeSecurityRole } from '../utils/userRoleCatalog.js';
 
 export const ACTIVIDADES = ['VER', 'CREAR', 'EDITAR', 'ELIMINAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'RECHAZAR', 'EXPORTAR', 'FIRMAR', 'DESCARGAR'];
 
@@ -100,7 +101,7 @@ export function getActividadesForSubmodulo(permisos, subId) {
 /** RC119 — permisos efectivos unificados (espejo cliente). */
 export function resolveUserPermissions(user) {
   if (!user) return emptyPermisos();
-  if (user.rol === 'admin') {
+  if (isAdminSecurityRole(user)) {
     return normalizePermisos(user.permisos, 'admin', { explicit: user.permisos != null });
   }
   if (user.permisos != null && typeof user.permisos === 'object') {
@@ -128,15 +129,16 @@ export function allPermisos() {
 }
 
 export function permisosFromRol(rol) {
-  if (rol === 'admin') return allPermisos();
+  const normalized = normalizeSecurityRole(rol);
+  if (normalized === 'admin') return allPermisos();
   const p = emptyPermisos();
-  if (rol === 'au') {
+  if (normalized === 'au') {
     p.modulos = ['REQUERIMIENTOS', 'EJECUCION'];
     p.submodulos = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO', 'RECEPCION_BIENES'];
     p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR', 'DESCARGAR'];
     p.actividadesPorSubmodulo = {};
     p.submodulos.forEach((sid) => { p.actividadesPorSubmodulo[sid] = [...p.actividades]; });
-  } else if (rol === 'dec') {
+  } else if (normalized === 'dec') {
     p.modulos = ['CONTRATACIONES', 'EJECUCION'];
     p.submodulos = MODULOS.filter((m) => p.modulos.includes(m.id)).flatMap((m) => m.submodulos.map((s) => s.id));
     p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR', 'DESCARGAR'];

@@ -837,7 +837,7 @@ export async function showSolicitudCotizacionModal(requerimientoIds, rows = [], 
         <td>${esc(it.codigo_sigamef || '—')}</td><td>${esc(it.descripcion || '—')}</td>
         <td class="text-center">${esc(cant)}</td>
         <td class="small text-nowrap">
-          <button type="button" class="btn btn-sm sc-btn-inst me-1 sc-item-req" data-i="${i}"><i class="bi bi-eye"></i> VER REQUERIMIENTO</button>
+          <button type="button" class="btn btn-sm sc-btn-inst me-1 sc-item-req" data-i="${i}" title="Abre el detalle completo del requerimiento (pedidos, documentos). Requiere asignación."><i class="bi bi-eye"></i> Ver detalle del requerimiento</button>
           <button type="button" class="btn btn-sm sc-btn-inst sc-item-docs" data-i="${i}"><i class="bi bi-folder2-open"></i> DOCUMENTOS</button>
         </td>
       </tr>`;
@@ -1199,11 +1199,44 @@ async function showItemRequerimientoModal(item, opts = {}) {
   if (!item?.requerimiento_id) return;
   let req = null;
   let adjuntos = [];
+  let reqError = null;
   try {
     req = await requerimientosService.getById(item.requerimiento_id);
-    const adjResp = await adjuntosService.getAdjuntos(item.requerimiento_id);
-    adjuntos = adjResp?.adjuntos || adjResp?.data || [];
-  } catch (_) {}
+  } catch (err) {
+    reqError = err;
+  }
+  if (!reqError) {
+    try {
+      const adjResp = await adjuntosService.getAdjuntos(item.requerimiento_id);
+      adjuntos = adjResp?.adjuntos || adjResp?.data || [];
+    } catch (_) {
+      // Adjuntos fallback: mostrar tabla vacía sin bloquear el modal
+    }
+  }
+  if (reqError) {
+    // Mostrar error en modal en lugar de "Sin documentos adjuntos"
+    const status = reqError?.status || reqError?.statusCode || 0;
+    const msg = status === 403
+      ? 'No tiene autorización para consultar este requerimiento. Motivos posibles: no es responsable de la solicitud vinculada, el Coordinador CM no le ha asignado este expediente, o el requerimiento pertenece a otro centro de costo. Contacte a su coordinador si requiere acceso.'
+      : (reqError?.message || 'No fue posible cargar el requerimiento.');
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="modal fade" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header prov-draggable-header"><h5 class="modal-title">Requerimiento ${esc(item.requerimiento_codigo || item.requerimiento_id)}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <div class="alert alert-${status === 403 ? 'warning' : 'danger'} mb-0">${esc(msg)}</div>
+        </div>
+      </div></div></div>`;
+    document.body.appendChild(wrap);
+    const mEl = wrap.firstElementChild;
+    makeModalDraggable(mEl);
+    const m = window.bootstrap.Modal.getOrCreateInstance(mEl);
+    mEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+    m.show();
+    return;
+  }
+
   const tipoContratacion = opts.tipo || mapTipoFromRow(req || item);
   const payload = (() => { try { return JSON.parse(req?.payload || '{}'); } catch (_) { return {}; } })();
   const items = payload.items || payload.servicioItems || payload.locadorItems || [];
