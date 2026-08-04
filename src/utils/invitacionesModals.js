@@ -1199,11 +1199,44 @@ async function showItemRequerimientoModal(item, opts = {}) {
   if (!item?.requerimiento_id) return;
   let req = null;
   let adjuntos = [];
+  let reqError = null;
   try {
     req = await requerimientosService.getById(item.requerimiento_id);
-    const adjResp = await adjuntosService.getAdjuntos(item.requerimiento_id);
-    adjuntos = adjResp?.adjuntos || adjResp?.data || [];
-  } catch (_) {}
+  } catch (err) {
+    reqError = err;
+  }
+  if (!reqError) {
+    try {
+      const adjResp = await adjuntosService.getAdjuntos(item.requerimiento_id);
+      adjuntos = adjResp?.adjuntos || adjResp?.data || [];
+    } catch (_) {
+      // Adjuntos fallback: mostrar tabla vacía sin bloquear el modal
+    }
+  }
+  if (reqError) {
+    // Mostrar error en modal en lugar de "Sin documentos adjuntos"
+    const status = reqError?.status || reqError?.statusCode || 0;
+    const msg = status === 403
+      ? 'No tiene autorización para consultar este requerimiento.'
+      : (reqError?.message || 'No fue posible cargar el requerimiento.');
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="modal fade" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header prov-draggable-header"><h5 class="modal-title">Requerimiento ${esc(item.requerimiento_codigo || item.requerimiento_id)}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <div class="alert alert-${status === 403 ? 'warning' : 'danger'} mb-0">${esc(msg)}</div>
+        </div>
+      </div></div></div>`;
+    document.body.appendChild(wrap);
+    const mEl = wrap.firstElementChild;
+    makeModalDraggable(mEl);
+    const m = window.bootstrap.Modal.getOrCreateInstance(mEl);
+    mEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+    m.show();
+    return;
+  }
+
   const tipoContratacion = opts.tipo || mapTipoFromRow(req || item);
   const payload = (() => { try { return JSON.parse(req?.payload || '{}'); } catch (_) { return {}; } })();
   const items = payload.items || payload.servicioItems || payload.locadorItems || [];

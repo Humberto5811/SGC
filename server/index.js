@@ -396,9 +396,22 @@ app.use('/api/requerimientos', crudRouter({
     });
   },
   authorizeRow: async (req, row) => {
-    const { assertCanAccessRequirement } = await import('./lib/userDataScope.js');
-    const userId = req.user?.id || req.headers['x-user-id'];
-    await assertCanAccessRequirement(userId, row.id, String(req.method || 'GET'));
+    const { assertCanAccessRequirementForContracting } = await import('./lib/userDataScope.js');
+    const userId = req.user?.id;
+    if (!userId) {
+      const err = new Error('No autenticado');
+      err.status = 401;
+      err.code = 'AUTH_REQUIRED';
+      throw err;
+    }
+    // GET (lectura/detalle) usa guard contractual + alcance organizacional.
+    // POST/PUT/DELETE mantienen assertCanAccessRequirement estricto.
+    if (req.method === 'GET') {
+      await assertCanAccessRequirementForContracting(userId, row.id, 'VER');
+    } else {
+      const { assertCanAccessRequirement } = await import('./lib/userDataScope.js');
+      await assertCanAccessRequirement(userId, row.id, String(req.method));
+    }
   },
   afterCreate: async (row, body, req) => {
     const { resolveUsuarioCreadorRequerimiento } = await import('./lib/usuarioDisplay.js');
