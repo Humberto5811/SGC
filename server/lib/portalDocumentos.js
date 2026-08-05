@@ -40,6 +40,28 @@ function parseJson(val, fallback = []) {
   try { return JSON.parse(val || 'null') ?? fallback; } catch (_) { return fallback; }
 }
 
+/**
+ * Resuelve la UM contra el requerimiento vigente.
+ * En SC históricas de servicios, detalle_items puede conservar "UND"; el
+ * requerimiento es la fuente de verdad y debe prevalecer para portal/PDF.
+ */
+export function resolveUnidadMedidaItem(it, reqRow, tipoSol) {
+  const payload = parseJson(reqRow?.payload, {});
+  const tipo = String(reqRow?.tipo || tipoSol || '').toLowerCase();
+  const rawItems = /servicio/.test(tipo) ? (payload.servicioItems || [])
+    : /locad|locaci/.test(tipo) ? (payload.locadorItems || [])
+      : (payload.items || []);
+  const src = Array.isArray(rawItems) ? rawItems[it?.item_index ?? 0] : null;
+  const fromReq = String(src?.unidad_medida || src?.um || '').trim();
+  if (fromReq) return fromReq;
+  const direct = String(it?.unidad_medida || it?.um || '').trim();
+  if (direct && !(/servicio|locad|locaci/.test(tipo) && /^(?:UND|UNIDAD)\.?$/i.test(direct))) {
+    return direct;
+  }
+  if (/servicio|locad|locaci/.test(tipo)) return 'SERVICIO';
+  return 'UND';
+}
+
 export async function assertAccesoSolicitud(proveedorId, solicitudId) {
   const { rows } = await query(`
     SELECT
@@ -295,7 +317,15 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
   const reqIds = reqRows.map((r) => r.id);
   const adjuntosMap = await loadAdjuntosPorRequerimiento(reqIds);
   const documentos = buildDocumentosConvocatoria(acceso, reqIds, adjuntosMap);
-  const detalle_items = enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById);
+  const detalle_items = enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById)
+    .map((it) => ({
+      ...it,
+      unidad_medida: resolveUnidadMedidaItem(
+        it,
+        reqById.get(it.requerimiento_id) || {},
+        acceso.tipo,
+      ),
+    }));
 
   return {
     solicitud: {
@@ -351,10 +381,11 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
 
   const itemsConDocs = items.map((it, idx) => {
     const meta = reqMetaById[it.requerimiento_id] || {};
+    const reqRow = reqById.get(it.requerimiento_id) || {};
     return {
       ...it,
       item_key: `${it.requerimiento_id}-${it.item_index ?? idx}`,
-      unidad_medida: it.unidad_medida || it.um || 'UND',
+      unidad_medida: resolveUnidadMedidaItem(it, reqRow, tipoSol),
       documentos_tecnicos: buildDocumentosPorItem(it, adjuntosMap),
       entregables_source: meta.entregables_source || extractEntregablesSource({}, tipoSol),
     };

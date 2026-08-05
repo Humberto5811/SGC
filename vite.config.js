@@ -8,7 +8,7 @@ export default defineConfig({
     proxy: {
       // Redirige las llamadas /api al backend Express
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://217.216.54.68',
         changeOrigin: true,
         secure: false
       }

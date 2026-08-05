@@ -731,6 +731,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       id: r.id,
       solicitud_id: r.solicitud_id,
       proveedor_id: r.proveedor_id,
+      requerimiento_id: r.requerimiento_id,
       estado: r.estado,
       validacion_estado: valEst,
       solicitud_estado: r.solicitud_estado || '',

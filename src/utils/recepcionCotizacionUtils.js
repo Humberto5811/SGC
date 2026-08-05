@@ -205,6 +205,9 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
       recepcion_estado_global: meta.recepcion_estado_global,
       recepcion_estado_interno: meta.recepcion_estado_interno,
       recepcion_bienes_expediente_id: meta.recepcion_bienes_expediente_id,
+      estado_responsable_vigente: withOrden.estado_responsable_vigente
+        || seedCot.estado_responsable_vigente
+        || null,
       fecha_ultima_presentacion: fechaUltima,
     };
   }).sort((a, b) => fechaSortKey(b.fecha_ultima_presentacion) - fechaSortKey(a.fecha_ultima_presentacion));

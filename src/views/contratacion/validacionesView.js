@@ -6,6 +6,7 @@ import {
   renderFilterBarHtml,
   bandejaTableStyles,
   getResponsableVigenteLabel,
+  estadoActualBadge,
 } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { bindBandejaToolbar, closeBandejaActionMenus } from '../../utils/bandejaUi.js';
@@ -19,7 +20,6 @@ import {
   consolidarExpedientesValidacion,
   formatRequerimientosValidacion,
   formatCentrosValidacion,
-  renderBadgeEstadoValidacionHtml,
 } from '../../utils/validacionesUtils.js';
 import {
   createViewLifecycle,
@@ -91,6 +91,7 @@ function openValidarExpediente(expediente) {
 
 function buildValidacionRowHtml(exp) {
   const n = Number(exp.cantidad_cotizaciones) || (exp.cotizaciones || []).length || 0;
+  const puedeValidar = (exp.cotizaciones || []).some((c) => c.puede_validar);
   return `
     <tr data-row-id="${esc(exp.solicitud_id)}">
       <td>
@@ -101,13 +102,14 @@ function buildValidacionRowHtml(exp) {
       <td class="small">${formatCentrosValidacion(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        ${renderBadgeEstadoValidacionHtml(exp, esc)}
+        ${estadoActualBadge(exp)}
       </td>
       <td class="small">${esc(getResponsableVigenteLabel(exp))}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary val-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">
-          <i class="bi bi-eye"></i> Ver
+          <i class="bi ${puedeValidar ? 'bi-shield-check' : 'bi-eye'}"></i>
+          ${puedeValidar ? 'Revisar y validar' : 'Ver seguimiento'}
         </button>
       </td>
     </tr>`;

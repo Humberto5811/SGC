@@ -124,7 +124,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
       contratacionesService.getValidacionSubmodulos(),
     ]);
     const preview = prevResp.data;
-    submodulos = subResp.data || [];
+    submodulos = (subResp.data || []).filter((s) => s.code === 'VALIDACIONES');
     body.innerHTML = `
       <div class="alert alert-info small py-2">
         <i class="bi bi-info-circle"></i> ${esc(preview.nota || 'La propuesta económica no se envía al área usuaria.')}
@@ -141,8 +141,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
         <div class="col-md-6">
           <label class="form-label fw-semibold">Área usuaria / Submódulo destino</label>
           <select class="form-select form-select-sm" id="${id}_sub">
-            <option value="">Seleccione…</option>
-            ${submodulos.map((s) => `<option value="${esc(s.code)}">${esc(s.label)}</option>`).join('')}
+            ${submodulos.map((s) => `<option value="${esc(s.code)}" selected>${esc(s.label)}</option>`).join('')}
           </select>
         </div>
         <div class="col-md-6">
@@ -180,6 +179,15 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
             `<option value="${u.id}">${esc(u.nombre)}${u.cargo ? ` — ${esc(u.cargo)}` : ''}</option>`).join('')
           : '<option value="">Sin usuarios con permiso en este submódulo</option>';
         selResp.disabled = !usuarios.length;
+        const sugerido = preview.responsable_sugerido;
+        const defaultUser = sugerido && usuarios.find((u) => (
+          String(u.id) === String(sugerido.id)
+          || (sugerido.username && String(u.username || '').toLowerCase() === String(sugerido.username).toLowerCase())
+        ));
+        if (defaultUser) {
+          selResp.value = String(defaultUser.id);
+          btnEnviar.disabled = false;
+        }
       } catch (err) {
         errBox.textContent = err.message;
         errBox.classList.remove('d-none');
@@ -187,6 +195,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
     };
 
     selResp.onchange = () => { btnEnviar.disabled = !selResp.value; };
+    if (selSub.value) await selSub.onchange();
 
     btnEnviar.onclick = async () => {
       const sub = submodulos.find((s) => s.code === selSub.value);
