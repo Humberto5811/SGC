@@ -622,6 +622,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       cot.fecha_presentacion, cot.requerimiento_id,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      sc.tipo AS solicitud_tipo, sc.tipo,
       sc.estado AS solicitud_estado,
       (
         SELECT r.estado_actual
@@ -734,6 +735,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       estado: r.estado,
       validacion_estado: valEst,
       solicitud_estado: r.solicitud_estado || '',
+      solicitud_tipo: r.solicitud_tipo || r.tipo || '',
+      tipo: r.solicitud_tipo || r.tipo || '',
       estado_cuadro: r.estado_cuadro || '',
       derivado_ccp: derivadoCcp,
       validacion_responsable: r.validacion_responsable || '',

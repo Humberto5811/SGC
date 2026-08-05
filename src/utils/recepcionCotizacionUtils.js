@@ -11,17 +11,60 @@ import {
   badgeClassRecepcion,
   fechaPrincipalCotizacion,
 } from './estadoRecepcionCotizaciones.js';
+import {
+  resolveDestinoDesdeRecepcionCotizaciones,
+  DESTINOS_RECEPCION,
+  labelAccionDerivacionRecepcion,
+} from '../../shared/workflow/destinoRecepcion.js';
 
 export {
   buildEstadoRecepcionContract,
   resolveEstadoRecepcion,
   resolveEstadoCotizacion,
   fechaPrincipalCotizacion,
+  resolveDestinoDesdeRecepcionCotizaciones,
+  DESTINOS_RECEPCION,
+  labelAccionDerivacionRecepcion,
 };
 
+/** Tipo del expediente (solicitud o requerimiento). */
+export function tipoExpedienteRecepcion(row = {}) {
+  return row.tipo || row.solicitud_tipo || row.tipo_contratacion || '';
+}
+
+export function destinoRecepcionDeFila(row = {}) {
+  return resolveDestinoDesdeRecepcionCotizaciones(tipoExpedienteRecepcion(row));
+}
+
+function yaDerivadoDesdeRecepcion(c) {
+  if (c?.derivado_ccp || c?.ccp_activo || c?.ccp_registrado) return true;
+  const sol = String(c?.solicitud_estado || '').toUpperCase();
+  if (sol === 'EN_CCP') return true;
+  const etapa = String(c?.estado_actual || c?.estadoActual || '').toUpperCase();
+  if (etapa === 'CCP' || etapa === 'VALIDACION_USUARIO' || etapa === 'CUADRO_COMPARATIVO') return true;
+  const v = String(c?.validacion_estado || '').toUpperCase();
+  if (['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO'].includes(v)) return true;
+  if (c?.validacion_informe?.derivacion_ccp) return true;
+  return false;
+}
+
 export function puedeEnviarValidarRecepcion(c) {
+  if (destinoRecepcionDeFila(c) !== DESTINOS_RECEPCION.VALIDACIONES) return false;
   const v = String(c?.validacion_estado || '').toUpperCase();
   return c?.estado === 'COTIZACION_PRESENTADA' && (!v || v === 'PENDIENTE');
+}
+
+export function puedeDerivarACcpRecepcion(c) {
+  if (destinoRecepcionDeFila(c) !== DESTINOS_RECEPCION.CCP) return false;
+  if (c?.estado !== 'COTIZACION_PRESENTADA') return false;
+  if (yaDerivadoDesdeRecepcion(c)) return false;
+  return true;
+}
+
+export function puedeDevolverValidacionRecepcion(c) {
+  if (destinoRecepcionDeFila(c) === DESTINOS_RECEPCION.CCP) return false;
+  const v = String(c?.validacion_estado || '').toUpperCase();
+  return c?.estado === 'COTIZACION_PRESENTADA' && ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
 }
 
 export function formatRequerimientosBandeja(c, esc) {
@@ -128,6 +171,8 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
         solicitud_codigo: c.solicitud_codigo,
         denominacion: c.denominacion || '',
         objeto: c.objeto || '',
+        tipo: c.tipo || c.solicitud_tipo || '',
+        solicitud_tipo: c.solicitud_tipo || c.tipo || '',
         requerimientos_texto: c.requerimientos_texto || c.requerimientos_codigos || '',
         requerimientos_codigos: c.requerimientos_codigos || c.requerimientos_texto || '',
         centros_texto: c.centros_texto || c.centro || '',

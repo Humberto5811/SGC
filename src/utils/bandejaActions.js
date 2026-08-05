@@ -11,6 +11,11 @@ import {
   estaEnEvaluacionAccionable,
   estaAprobadoEnEvaluacion,
 } from './estadoAccionesExpediente.js';
+import {
+  puedeEnviarValidarRecepcion,
+  puedeDerivarACcpRecepcion,
+  puedeDevolverValidacionRecepcion,
+} from './recepcionCotizacionUtils.js';
 
 const MODULO_EVAL = 'Evaluación de Requerimiento';
 
@@ -269,13 +274,11 @@ export function recepcionCotizacionesMenuItems(c) {
   const items = [
     { act: 'verPropuesta', label: 'Ver propuesta', icon: 'bi-eye' },
   ];
-  const v = String(c?.validacion_estado || '').toUpperCase();
-  const presentada = c?.estado === 'COTIZACION_PRESENTADA';
-  const puedeEnviar = presentada && (!v || v === 'PENDIENTE');
-  const puedeDevolver = presentada && (v === 'OBSERVADO' || v === 'NO_APTO' || v === 'APTO');
-  if (puedeEnviar) {
-    items.push({ act: 'enviarValidar', label: 'Enviar a validar', icon: 'bi-send' });
-  } else if (puedeDevolver) {
+  if (puedeDerivarACcpRecepcion(c)) {
+    items.push({ act: 'derivarCcp', label: 'Derivar a CCP', icon: 'bi-send' });
+  } else if (puedeEnviarValidarRecepcion(c)) {
+    items.push({ act: 'enviarValidar', label: 'Derivar a Validaciones', icon: 'bi-send' });
+  } else if (puedeDevolverValidacionRecepcion(c)) {
     items.push({
       act: 'enviarValidar',
       label: 'Devolver a Validación AU',
@@ -334,6 +337,7 @@ export function ccpMenuItems(row = {}, opts = {}) {
     );
   }
   items.push({ act: 'ver', label: 'Ver', icon: 'bi-eye' });
+  // Locación (origen RECEPCION_COTIZACION_LOCACION): sin acciones de Cuadro Comparativo.
   if (row.consolidacion_id) {
     items.push({ act: 'descargarWord', label: 'Descargar Word', icon: 'bi-file-earmark-word' });
   }

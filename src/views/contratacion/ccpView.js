@@ -122,13 +122,18 @@ function renderRow(row) {
   const checked = selectedIds.has(rid) ? 'checked' : '';
   const centro = row.centro || '—';
   const ccpTxt = row.codigo_ccp ? esc(row.codigo_ccp) : '<span class="text-muted">Pendiente</span>';
+  const esLocacion = row.origen_ccp === 'RECEPCION_COTIZACION_LOCACION';
+  const tipoTxt = esLocacion
+    ? 'Locación'
+    : (row.tipo_label || row.tipo || '—');
+  const origenTxt = esLocacion ? 'Recepción de Cotización' : (row.origen_ccp_label || 'Cuadro Comparativo');
   const menu = renderActionMenuCell(
     rid,
     ccpMenuItems(row, { canManage: canManageCcp() }),
     '',
   );
   return `
-    <tr data-rid="${rid}">
+    <tr data-rid="${rid}" data-origen-ccp="${esc(row.origen_ccp || '')}">
       <td class="text-center">
         <input type="checkbox" class="form-check-input ccp-row-sel" data-rid="${rid}"
           ${canSel ? '' : 'disabled'} ${checked}
@@ -137,6 +142,12 @@ function renderRow(row) {
       <td>
         <strong>${esc(row.requerimiento_codigo)}</strong>
         <div class="small text-muted text-truncate" style="max-width:220px" title="${esc(row.denominacion || '')}">${esc(row.denominacion || '')}</div>
+        <div class="small mt-1">
+          <span class="badge bg-light text-dark border">${esc(tipoTxt)}</span>
+          <span class="text-muted">· ${esc(origenTxt)}</span>
+          ${esLocacion ? '<span class="text-muted">· Cuadro: No aplica</span>' : ''}
+        </div>
+        ${row.proveedor_nombre ? `<div class="small text-muted mt-1">${esc(row.proveedor_nombre)}${row.monto_adjudicado != null ? ` · ${fmtMonto(row.monto_adjudicado, row.moneda)}` : ''}</div>` : ''}
       </td>
       <td><strong>${esc(row.solicitud_codigo || '—')}</strong></td>
       <td>${esc(centro)}</td>
@@ -489,8 +500,13 @@ async function openDetalleReqModal(requerimientoId) {
     document.getElementById(`${id}_body`).innerHTML = `
       <div class="mb-3 small">
         <strong>${esc(d.requerimiento_codigo)}</strong> · SC ${esc(d.solicitud_codigo || '—')}
+        · Tipo: <strong>${esc(d.origen_ccp === 'RECEPCION_COTIZACION_LOCACION' ? 'Locación' : (d.tipo || '—'))}</strong>
+        · Origen: <strong>${esc(d.origen_ccp_label || (d.origen_ccp === 'RECEPCION_COTIZACION_LOCACION' ? 'Recepción de Cotización' : 'Cuadro Comparativo'))}</strong>
+        · Cuadro: <strong>${d.cuadro_id == null ? 'No aplica' : esc(String(d.cuadro_id))}</strong>
         · CCP: <strong>${esc(d.codigo_ccp || 'Pendiente')}</strong>
-        · Adjudicado: <strong>${fmtMonto(d.monto_adjudicado, d.moneda)}</strong>
+        · ${d.origen_ccp === 'RECEPCION_COTIZACION_LOCACION' ? 'Propuesta' : 'Adjudicado'}:
+          <strong>${fmtMonto(d.monto_adjudicado, d.moneda)}</strong>
+        ${d.proveedor_nombre ? ` · Proveedor: <strong>${esc(d.proveedor_nombre)}</strong>` : ''}
       </div>
       ${renderFilasTable(d.filas, d.moneda)}`;
   } catch (err) {
