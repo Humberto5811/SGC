@@ -5,7 +5,7 @@ import {
   IMPORTANTE_ANEXO11, CONFIRMACION_ANEXO11, GLOSA_LOCADORES_FORMA_PAGO,
   DECLARO_CONOCER_ANEXO11, GLOSA_PENALIDAD_ANEXO11, FORMULA_PENALIDAD_ANEXO11,
   FORMULA_F_ANEXO11, CIERRE_PENALIDAD_ANEXO11, NOTA_COTIZACION_ANEXO11,
-  cantidadPorTipo,
+  cantidadPorTipo, unidadMedidaCotizacion, unidadMedidaAnexo11,
 } from './proveedorCotizacionConfig.js';
 import { sumPrecioEntregables } from './entregablesCotizacion.js';
 import { TZ_LIMA } from './dateTimeLima.js';
@@ -52,16 +52,46 @@ export function buildAnexo11EntregablesRows(entregables = [], servicioDesc = '')
   )) : [];
   return list.map((e, idx) => {
     const precio = Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) || 0;
-    const desc = String(e.nombre || e.descripcion || (idx === 0 ? servicioDesc : '') || '').trim();
+    const entregable = String(e.nombre || e.descripcion || `ENTREGABLE ${idx + 1}`).trim();
     return {
       nro: e.numero ?? e.nro ?? idx + 1,
-      descripcion: desc,
+      descripcion_servicio: String(servicioDesc || '').trim(),
+      entregable,
+      descripcion: entregable,
       plazo: String(e.plazo_texto || e.plazo || '').trim(),
-      um: e.um || e.unidad_medida || 'Servicio',
+      um: unidadMedidaAnexo11(e.um || e.unidad_medida || 'SERVICIO', 'Locadores'),
       precio,
       total: precio,
     };
   });
+}
+
+/**
+ * Cuerpo autoTable institucional Anexo 11 (6 columnas + rowspan en N° y Descripción).
+ */
+export function buildAnexo11AutoTableBody(rows = [], servicioDesc = '') {
+  const list = Array.isArray(rows) ? rows : [];
+  const desc = String(servicioDesc || list[0]?.descripcion_servicio || '').trim();
+  return list.map((e, idx) => {
+    const precio = Number(e.precio ?? e.total ?? 0) || 0;
+    return [
+      idx === 0 ? String(e.nro ?? 1) : '',
+      idx === 0 ? desc : '',
+      String(e.entregable || e.descripcion || `ENTREGABLE ${idx + 1}`),
+      e.um || 'Servicio',
+      money(precio),
+      money(precio),
+    ];
+  });
+}
+
+export function applyAnexo11RowSpans(data, rowCount) {
+  if (!data || data.section !== 'body' || rowCount < 1) return;
+  const { column, row } = data;
+  if (row.index === 0 && (column.index === 0 || column.index === 1)) {
+    data.cell.rowSpan = rowCount;
+    data.cell.styles.valign = 'middle';
+  }
 }
 
 function appendWrappedText(doc, text, x, y, maxWidth, lineHeight = 11) {
@@ -308,7 +338,7 @@ export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, lo
     it.requerimiento_codigo || '',
     String(it.descripcion || ''),
     String(cantidadPorTipo(locador ? 'Locadores' : 'Servicios', it.cantidad)),
-    it.unidad_medida || 'servicio',
+    unidadMedidaCotizacion(it, locador ? 'Locadores' : 'Servicios'),
   ]);
 
   doc.autoTable({
@@ -389,7 +419,7 @@ export function downloadAnexo06B({ solicitud, items, precios, proveedor, datos }
       it.requerimiento_codigo || '',
       String(it.descripcion || ''),
       String(cantidadPorTipo('Servicios', it.cantidad)),
-      it.unidad_medida || 'servicio',
+      unidadMedidaCotizacion(it, 'Servicios'),
       money(p.unitario),
       money(p.total),
     ];
@@ -459,32 +489,43 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
     || [];
   const rows = buildAnexo11EntregablesRows(rawEnts, servicio);
   const total = sumPrecioEntregables(rows);
-  const body = rows.map((e) => [
-    String(e.nro),
-    e.descripcion,
-    e.um,
-    money(e.precio),
-  ]);
+  const body = buildAnexo11AutoTableBody(rows, servicio);
 
   doc.autoTable({
     startY: y,
     head: [[
-      'N°', 'Entregable / Descripción', 'Unidad de medida',
-      'Precio S/\n(Inc. IGV)',
+      'N°',
+      'Descripción del Servicio',
+      'N° de entregables',
+      'Unidad de medida',
+      'Precio Unitario por cada entregable S/\n(Inc. IGV)',
+      'Precio Total S/\n(Inc. IGV)',
     ]],
-    body: body.length ? body : [['—', 'Sin entregables programados', '—', '0.00']],
-    styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak', valign: 'top' },
+    body: body.length ? body : [['—', servicio || '—', 'Sin entregables programados', 'Servicio', '0.00', '0.00']],
+    styles: { fontSize: 7, cellPadding: 3, overflow: 'linebreak', valign: 'top' },
     columnStyles: {
-      1: { cellWidth: 260 },
+      0: { cellWidth: 28, halign: 'center' },
+      1: { cellWidth: 140 },
+      2: { cellWidth: 100 },
+      3: { cellWidth: 55, halign: 'center' },
+      4: { cellWidth: 70, halign: 'right' },
+      5: { cellWidth: 60, halign: 'right' },
     },
-    headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
+    headStyles: {
+      fillColor: [220, 220, 220],
+      textColor: [0, 0, 0],
+      fontStyle: 'bold',
+      halign: 'center',
+      valign: 'middle',
+    },
+    didParseCell: (data) => applyAnexo11RowSpans(data, body.length),
     margin: { left: MARGIN, right: MARGIN },
   });
 
   y = doc.lastAutoTable.finalY + 10;
   doc.setFontSize(9);
   doc.setFont(undefined, 'bold');
-  doc.text(`Precio total de la propuesta: S/ ${money(total)}`, MARGIN, y);
+  doc.text(`Precio Total S/ (Incluido IGV): ${money(total)}`, MARGIN, y);
   doc.setFont(undefined, 'normal');
   y += 16;
 
@@ -507,7 +548,7 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
   const plazos = extra?.plazos_entregables || [];
   if (rows.length) {
     rows.forEach((e, i) => {
-      const label = e.descripcion || `Entregable ${e.nro}`;
+      const label = e.entregable || e.descripcion || `Entregable ${e.nro}`;
       const val = plazos[i] || e.plazo || '…. días calendario contados a partir del día de notificada la o.s.';
       y = ensureSpace(doc, y, 28);
       y = appendWrappedText(doc, `-${label}: ${val}`, MARGIN + 8, y, CONTENT_W - 8, 11) + 2;

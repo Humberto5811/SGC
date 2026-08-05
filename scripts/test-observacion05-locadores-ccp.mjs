@@ -24,7 +24,7 @@ const read = (rel) => readFileSync(join(root, rel), 'utf8');
 // 1-2. Bien / Servicio → Validaciones
 assert.equal(resolveDestinoDesdeRecepcionCotizaciones('BIEN'), DESTINOS_RECEPCION.VALIDACIONES);
 assert.equal(resolveDestinoDesdeRecepcionCotizaciones('SERVICIO'), DESTINOS_RECEPCION.VALIDACIONES);
-assert.equal(labelAccionDerivacionRecepcion('bienes'), 'Derivar a Validaciones');
+assert.equal(labelAccionDerivacionRecepcion('bienes'), 'Enviar a Validaciones');
 
 // 3. Locación → CCP
 assert.equal(resolveDestinoDesdeRecepcionCotizaciones('locadores'), DESTINOS_RECEPCION.CCP);
@@ -98,7 +98,8 @@ assert.ok(!menuCcpLoc.some((i) => /cuadro/i.test(i.label)));
 // 17-18. PDF / Anexo 11 / SERVICIO
 const pdfSrc = read('src/utils/proveedorPdfCotizacion.js');
 assert.match(pdfSrc, /buildAnexo11EntregablesRows/);
-assert.match(pdfSrc, /um: e\.um \|\| e\.unidad_medida \|\| 'Servicio'/);
+assert.match(pdfSrc, /unidadMedidaAnexo11/);
+assert.match(pdfSrc, /e\.um \|\| e\.unidad_medida \|\| 'SERVICIO'/);
 
 const portalRoute = read('server/routes/portal.js');
 assert.match(portalRoute, /derivar-ccp/);

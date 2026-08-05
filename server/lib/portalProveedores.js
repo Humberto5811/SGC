@@ -619,7 +619,12 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
   }
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado,
-      cot.fecha_presentacion, cot.requerimiento_id,
+      cot.fecha_presentacion,
+      COALESCE(
+        cot.requerimiento_id,
+        (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr
+         WHERE sr.solicitud_id = cot.solicitud_id ORDER BY sr.id LIMIT 1)
+      ) AS requerimiento_id,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.tipo AS solicitud_tipo, sc.tipo,
@@ -732,6 +737,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       id: r.id,
       solicitud_id: r.solicitud_id,
       proveedor_id: r.proveedor_id,
+      requerimiento_id: r.requerimiento_id || null,
       estado: r.estado,
       validacion_estado: valEst,
       solicitud_estado: r.solicitud_estado || '',

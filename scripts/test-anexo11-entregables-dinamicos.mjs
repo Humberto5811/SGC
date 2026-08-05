@@ -38,7 +38,7 @@ assert.ok(!stepsSrc.includes('MAX_ENTREGABLES_LOCADOR'), 'Steps no usa MAX_ENTRE
 assert.ok(!pdfSrc.includes('PLAZOS_ENTREGABLES_LABELS'), 'PDF no fija 6 plazos');
 assert.match(pdfSrc, /buildAnexo11EntregablesRows/);
 assert.match(pdfSrc, /formatFechaCartaLima/);
-assert.match(pdfSrc, /Precio total de la propuesta/);
+assert.match(pdfSrc, /Precio Total S\/ \(Incluido IGV\)|Precio total de la propuesta/);
 assert.match(stepsSrc, /renderStep1Entregables/);
 assert.match(viewSrc, /entregables_cotizados/);
 assert.match(viewSrc, /downloadAnexo11/);
@@ -60,6 +60,7 @@ const rows = buildAnexo11EntregablesRows(priced, 'Servicio REQ-00002');
 assert.equal(rows.length, 2);
 assert.equal(sumPrecioEntregables(rows), 6000);
 assert.match(rows[0].descripcion, /Primer/);
+assert.match(String(rows[0].entregable || rows[0].descripcion), /Primer/);
 assert.match(String(rows[0].plazo || prog[0].plazo_texto), /30/);
 ok('REQ-00002: exactamente 2 filas y total 6000');
 

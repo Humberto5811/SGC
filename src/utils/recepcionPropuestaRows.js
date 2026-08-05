@@ -52,7 +52,7 @@ export function normalizeFilasPropuesta(cot) {
       requerimiento_codigo: readText(det, 'requerimiento_codigo', 'codigo_requerimiento', 'codigo', 'req') || '—',
       descripcion: readText(det, 'descripcion', 'denominacion', 'objeto') || '—',
       cantidad: cantidadPorTipo(tipo, det.cantidad),
-      unidad_medida: readText(det, 'unidad_medida', 'um') || (tipo === 'Bienes' ? 'UND' : 'servicio'),
+            unidad_medida: readText(det, 'unidad_medida', 'um') || (tipo === 'Bienes' ? 'UND' : 'SERVICIO'),
       marca: '', modelo: '', pais: '', garantia: '', plazo_entrega: '',
     }));
   }
@@ -69,7 +69,7 @@ export function normalizeFilasPropuesta(cot) {
         || readText(prop, 'descripcion', 'denominacion') || '—',
       cantidad: tipo === 'Bienes' ? (cantRaw ?? det.cantidad ?? '—') : cantidadPorTipo(tipo, cantRaw ?? det.cantidad),
       unidad_medida: readText(det, 'unidad_medida', 'um') || readText(prop, 'unidad_medida', 'um')
-        || (tipo === 'Bienes' ? 'UND' : 'servicio'),
+        || (tipo === 'Bienes' ? 'UND' : 'SERVICIO'),
       marca: readText(prop, 'marca'),
       modelo: readText(prop, 'modelo'),
       pais: readText(prop, 'pais'),
