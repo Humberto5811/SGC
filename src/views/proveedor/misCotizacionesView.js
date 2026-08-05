@@ -16,7 +16,7 @@ import {
   triggerFileInput, money as moneyPdf,
 } from '../../utils/proveedorPdfCotizacion.js';
 import {
-  getCotizacionConfig, normalizeTipoCotizacion,
+  getCotizacionConfig, normalizeTipoCotizacion, unidadMedidaCotizacion, unidadMedidaAnexo11,
 } from '../../utils/proveedorCotizacionConfig.js';
 import { renderStep1ByTipo, initEntregablesEco, resolveEntregablesFromWorkspace } from '../../utils/proveedorCotizacionSteps.js';
 import { sumPrecioEntregables } from '../../utils/entregablesCotizacion.js';
@@ -463,18 +463,21 @@ function recalcPrecios() {
       if (!formState.entregablesEco[it.item_key]) formState.entregablesEco[it.item_key] = [];
       if (!formState.entregablesEco[it.item_key][enidx]) {
         formState.entregablesEco[it.item_key][enidx] = {
-          nro: enidx + 1, numero: enidx + 1, um: 'Servicio',
+          nro: enidx + 1, numero: enidx + 1, um: unidadMedidaAnexo11({}, tipo),
         };
       }
       const prev = formState.entregablesEco[it.item_key][enidx];
       formState.entregablesEco[it.item_key][enidx] = {
         ...prev,
+        um: prev.um || unidadMedidaAnexo11(prev, tipo),
         precio: unit,
         precio_unitario: unit,
         total,
       };
       const totalEl = tr.querySelector('.prov-e-total');
       if (totalEl) totalEl.value = formatPriceDisplay(total);
+      const totalCell = tr.querySelector('.prov-e-total-cell');
+      if (totalCell) totalCell.textContent = formatPriceDisplay(total);
     });
   } else {
     workspace.items.forEach((it, idx) => {
@@ -761,7 +764,7 @@ function buildPayload() {
         requerimiento_codigo: it.requerimiento_codigo,
         descripcion: it.descripcion,
         cantidad: it.cantidad ?? 1,
-        unidad_medida: it.unidad_medida || 'UND',
+        unidad_medida: unidadMedidaCotizacion(it, tipo),
       })),
     };
 
@@ -784,7 +787,8 @@ function buildPayload() {
       descripcion: e.descripcion || '',
       plazo_texto: (formState.extra.plazos_entregables || [])[i] || e.plazo_texto || '',
       cantidad: e.cantidad ?? 1,
-      unidad_medida: e.unidad_medida || e.um || 'Servicio',
+      unidad_medida: unidadMedidaAnexo11(e, tipo),
+      um: unidadMedidaAnexo11(e, tipo),
       precio: Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) || 0,
     }));
     propuestaEconomica = {

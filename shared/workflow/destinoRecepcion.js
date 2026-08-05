@@ -25,8 +25,8 @@ export function resolveDestinoDesdeRecepcionCotizaciones(tipoExpediente) {
 /** Etiqueta de acción en menú Acciones de Recepción. */
 export function labelAccionDerivacionRecepcion(tipoExpediente) {
   const dest = resolveDestinoDesdeRecepcionCotizaciones(tipoExpediente);
-  if (dest === DESTINOS_RECEPCION.CCP) return 'Derivar a CCP';
-  if (dest === DESTINOS_RECEPCION.VALIDACIONES) return 'Derivar a Validaciones';
+  if (dest === DESTINOS_RECEPCION.CCP) return 'Enviar a CCP';
+  if (dest === DESTINOS_RECEPCION.VALIDACIONES) return 'Enviar a Validaciones';
   return '';
 }
 

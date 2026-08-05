@@ -87,8 +87,8 @@ function bindDocButtons(container) {
  * @param {{ title?: string, submitLabel?: string, onSuccess?: () => void }} opts
  */
 export async function showEnviarValidarModal(cotId, opts = {}) {
-  const title = opts.title || 'Enviar a validar';
-  const submitLabel = opts.submitLabel || 'Enviar a validar';
+  const title = opts.title || 'Enviar a Validaciones';
+  const submitLabel = opts.submitLabel || 'Enviar a Validaciones';
   const id = `envVal_${Date.now()}`;
   const wrap = document.createElement('div');
   wrap.innerHTML = `
@@ -124,7 +124,11 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
       contratacionesService.getValidacionSubmodulos(),
     ]);
     const preview = prevResp.data;
-    submodulos = subResp.data || [];
+    // Obs 05_02 — desde Recepción solo destino Validaciones (no Registro/Evaluación).
+    submodulos = (subResp.data || []).filter((s) => String(s.code || '').toUpperCase() === 'VALIDACIONES');
+    if (!submodulos.length) {
+      submodulos = [{ code: 'VALIDACIONES', label: 'Validaciones' }];
+    }
     body.innerHTML = `
       <div class="alert alert-info small py-2">
         <i class="bi bi-info-circle"></i> ${esc(preview.nota || 'La propuesta económica no se envía al área usuaria.')}
@@ -141,14 +145,13 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
         <div class="col-md-6">
           <label class="form-label fw-semibold">Área usuaria / Submódulo destino</label>
           <select class="form-select form-select-sm" id="${id}_sub">
-            <option value="">Seleccione…</option>
-            ${submodulos.map((s) => `<option value="${esc(s.code)}">${esc(s.label)}</option>`).join('')}
+            ${submodulos.map((s) => `<option value="${esc(s.code)}" selected>${esc(s.label)}</option>`).join('')}
           </select>
         </div>
         <div class="col-md-6">
           <label class="form-label fw-semibold">Responsable de validación</label>
           <select class="form-select form-select-sm" id="${id}_resp" disabled>
-            <option value="">Seleccione área usuaria primero…</option>
+            <option value="">Cargando…</option>
           </select>
         </div>
         <div class="col-12">
@@ -164,7 +167,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
     const selResp = document.getElementById(`${id}_resp`);
     const errBox = document.getElementById(`${id}_err`);
 
-    selSub.onchange = async () => {
+    async function loadUsuariosSubmodulo() {
       selResp.innerHTML = '<option value="">Cargando…</option>';
       selResp.disabled = true;
       btnEnviar.disabled = true;
@@ -184,7 +187,10 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
         errBox.textContent = err.message;
         errBox.classList.remove('d-none');
       }
-    };
+    }
+
+    selSub.onchange = () => { loadUsuariosSubmodulo(); };
+    await loadUsuariosSubmodulo();
 
     selResp.onchange = () => { btnEnviar.disabled = !selResp.value; };
 

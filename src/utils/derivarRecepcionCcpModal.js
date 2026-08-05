@@ -19,7 +19,7 @@ export async function showDerivarRecepcionCcpModal(cotId, opts = {}) {
       <div class="modal-dialog">
         <div class="modal-content">
           <div class="modal-header bg-light">
-            <h5 class="modal-title"><i class="bi bi-send"></i> Derivar a CCP</h5>
+            <h5 class="modal-title"><i class="bi bi-send"></i> Enviar a CCP</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
           </div>
           <div class="modal-body" id="${id}_body">
@@ -27,7 +27,7 @@ export async function showDerivarRecepcionCcpModal(cotId, opts = {}) {
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-            <button type="button" class="btn btn-success" id="${id}_ok" disabled>Confirmar derivación</button>
+            <button type="button" class="btn btn-success" id="${id}_ok" disabled>Confirmar envío a CCP</button>
           </div>
         </div>
       </div>

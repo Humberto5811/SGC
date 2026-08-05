@@ -275,10 +275,38 @@ export function recepcionCotizacionesMenuItems(c) {
     { act: 'verPropuesta', label: 'Ver propuesta', icon: 'bi-eye' },
   ];
   if (puedeDerivarACcpRecepcion(c)) {
-    items.push({ act: 'derivarCcp', label: 'Derivar a CCP', icon: 'bi-send' });
+    items.push({ act: 'derivarCcp', label: 'Enviar a CCP', icon: 'bi-send' });
   } else if (puedeEnviarValidarRecepcion(c)) {
-    items.push({ act: 'enviarValidar', label: 'Derivar a Validaciones', icon: 'bi-send' });
+    items.push({ act: 'enviarValidar', label: 'Enviar a Validaciones', icon: 'bi-send' });
   } else if (puedeDevolverValidacionRecepcion(c)) {
+    items.push({
+      act: 'enviarValidar',
+      label: 'Devolver a Validación AU',
+      icon: 'bi-arrow-counterclockwise',
+    });
+  }
+  return items;
+}
+
+/**
+ * Menú Acciones de la bandeja consolidada por Solicitud (Obs 05_02).
+ * Destino según tipo: Bienes/Servicios → Validaciones; Locación → CCP.
+ */
+export function recepcionExpedienteMenuItems(exp = {}) {
+  const tipo = exp.tipo || exp.solicitud_tipo || '';
+  const cots = (exp.cotizaciones || []).map((c) => ({
+    ...c,
+    tipo: c.tipo || c.solicitud_tipo || tipo,
+    solicitud_tipo: c.solicitud_tipo || c.tipo || tipo,
+  }));
+  const items = [
+    { act: 'ver', label: 'Ver cotizaciones', icon: 'bi-eye' },
+  ];
+  if (cots.some((c) => puedeDerivarACcpRecepcion(c))) {
+    items.push({ act: 'enviarCcp', label: 'Enviar a CCP', icon: 'bi-send' });
+  } else if (cots.some((c) => puedeEnviarValidarRecepcion(c))) {
+    items.push({ act: 'enviarValidar', label: 'Enviar a Validaciones', icon: 'bi-send' });
+  } else if (cots.some((c) => puedeDevolverValidacionRecepcion(c))) {
     items.push({
       act: 'enviarValidar',
       label: 'Devolver a Validación AU',

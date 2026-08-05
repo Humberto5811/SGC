@@ -173,6 +173,7 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
         objeto: c.objeto || '',
         tipo: c.tipo || c.solicitud_tipo || '',
         solicitud_tipo: c.solicitud_tipo || c.tipo || '',
+        requerimiento_id: c.requerimiento_id || null,
         requerimientos_texto: c.requerimientos_texto || c.requerimientos_codigos || '',
         requerimientos_codigos: c.requerimientos_codigos || c.requerimientos_texto || '',
         centros_texto: c.centros_texto || c.centro || '',
@@ -181,6 +182,14 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
     }
     const g = map.get(key);
     g.cotizaciones.push(c);
+    if (!g.requerimiento_id && c.requerimiento_id) g.requerimiento_id = c.requerimiento_id;
+    if (!g.tipo && (c.tipo || c.solicitud_tipo)) {
+      g.tipo = c.tipo || c.solicitud_tipo;
+      g.solicitud_tipo = g.tipo;
+    }
+    if (!g.estado_responsable_vigente && c.estado_responsable_vigente) {
+      g.estado_responsable_vigente = c.estado_responsable_vigente;
+    }
     if (!g.centros_texto && (c.centros_texto || c.centro)) {
       g.centros_texto = c.centros_texto || c.centro || '';
     }
@@ -237,6 +246,13 @@ export function consolidarExpedientesRecepcion(cotizaciones = []) {
       solicitud_estado: meta.solicitud_estado,
       estado_cuadro: meta.estado_cuadro,
       cantidad_cotizaciones: g.cotizaciones.length,
+      requerimiento_id: g.requerimiento_id || seedCot.requerimiento_id || null,
+      estado_responsable_vigente: g.estado_responsable_vigente
+        || withOrden.estado_responsable_vigente
+        || seedCot.estado_responsable_vigente
+        || null,
+      estado_actual: meta.estado_actual,
+      sub_modulo_actual: meta.sub_modulo_actual,
       ...contract,
       estado_recepcion: contract.estado_recepcion_label,
       badge_estado: contract.badge_estado,

@@ -46,6 +46,37 @@ export function cantidadPorTipo(tipo, cantidad) {
   return cantidad ?? 1;
 }
 
+/**
+ * Unidad de medida para cotización portal/PDF.
+ * Bienes: respeta el valor o UND.
+ * Servicios/Locadores: prioriza el del requerimiento; UND/UNIDAD históricas → SERVICIO.
+ */
+export function unidadMedidaCotizacion(itemOrUm = {}, tipo = '') {
+  const t = normalizeTipoCotizacion(
+    tipo
+    || itemOrUm?.tipo
+    || itemOrUm?.tipo_contratacion
+    || itemOrUm?.solicitud_tipo
+    || '',
+  );
+  const raw = typeof itemOrUm === 'string'
+    ? itemOrUm
+    : String(itemOrUm?.unidad_medida || itemOrUm?.um || '').trim();
+  if (t === 'Bienes') return raw || 'UND';
+  const up = raw.toUpperCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  if (!raw || up === 'UND' || up === 'UNIDAD' || up === 'UNID' || up === 'U') return 'SERVICIO';
+  if (up === 'SERVICIO' || up === 'SERVICIOS') return 'SERVICIO';
+  return raw;
+}
+
+/** Etiqueta institucional Anexo 11 (Title Case). */
+export function unidadMedidaAnexo11(itemOrUm = {}, tipo = 'Locadores') {
+  const u = unidadMedidaCotizacion(itemOrUm, tipo);
+  if (String(u).toUpperCase() === 'SERVICIO') return 'Servicio';
+  return u;
+}
+
+
 /** Textos oficiales — ANEXO Nº 06-A / 06-B (modelo Word INS). */
 export const TEXTO_CONFIRMACION_TR_06A =
   'Asimismo, confirmamos haber leído los términos de referencia del presente requerimiento y que nuestra propuesta técnica cumple con todos los aspectos descritos en el requerimiento remitido.';

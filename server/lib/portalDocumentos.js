@@ -7,6 +7,22 @@ import {
 } from './cronogramaDatetime.js';
 import { enrichDetalleItemsCentro, resolveCentroDisplay } from './centroDisplay.js';
 
+/**
+ * UM para ítems del workspace portal.
+ * Servicios/Locadores: UND históricas → SERVICIO; prioriza valor del requerimiento.
+ */
+export function resolveUnidadMedidaItem(item = {}, tipoSolicitud = '') {
+  const tipoRaw = item.tipo || item.tipo_requerimiento || tipoSolicitud || '';
+  const t = String(tipoRaw).toLowerCase();
+  const isServicio = /servicio|locad|locaci/.test(t);
+  const raw = String(item.unidad_medida || item.um || '').trim();
+  if (!isServicio) return raw || 'UND';
+  const up = raw.toUpperCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  if (!raw || up === 'UND' || up === 'UNIDAD' || up === 'UNID' || up === 'U') return 'SERVICIO';
+  if (up === 'SERVICIO' || up === 'SERVICIOS') return 'SERVICIO';
+  return raw;
+}
+
 function extractEntregablesSource(payload, tipo) {
   let p = payload;
   if (typeof p === 'string') {
@@ -351,10 +367,13 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
 
   const itemsConDocs = items.map((it, idx) => {
     const meta = reqMetaById[it.requerimiento_id] || {};
+    const tipoItem = meta.tipo || tipoSol;
+    const um = resolveUnidadMedidaItem({ ...it, tipo: tipoItem }, tipoSol);
     return {
       ...it,
       item_key: `${it.requerimiento_id}-${it.item_index ?? idx}`,
-      unidad_medida: it.unidad_medida || it.um || 'UND',
+      unidad_medida: um,
+      um,
       documentos_tecnicos: buildDocumentosPorItem(it, adjuntosMap),
       entregables_source: meta.entregables_source || extractEntregablesSource({}, tipoSol),
     };

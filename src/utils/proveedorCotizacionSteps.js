@@ -6,6 +6,7 @@ import {
   FORMULA_F_ANEXO11, CIERRE_PENALIDAD_ANEXO11, DECLARO_CONOCER_ANEXO11, IMPORTANTE_ANEXO11,
   CONFIRMACION_ANEXO11, NOTA_COTIZACION_ANEXO11,
   cantidadPorTipo, normalizeTipoCotizacion,
+  unidadMedidaCotizacion, unidadMedidaAnexo11,
 } from './proveedorCotizacionConfig.js';
 import { TEXTO_AUTORIZACION_CORREO, TEXTO_LEY_27444 } from './proveedorPdfCotizacion.js';
 import {
@@ -161,7 +162,7 @@ export function renderStep1Bienes(ctx) {
               <td>${esc(it.codigo_sigamef || '—')}</td>
               <td>${esc(it.descripcion || '—')}</td>
               <td class="text-center">${esc(it.cantidad ?? 1)}</td>
-              <td class="text-center">${esc(it.unidad_medida || 'UND')}</td>
+              <td class="text-center">${esc(unidadMedidaCotizacion(it, 'Bienes'))}</td>
               ${renderDocsColumn(it, sid)}
               <td><input class="form-control form-control-sm prov-f-presentacion" value="${esc(f.presentacion)}"${ro}></td>
               <td><input class="form-control form-control-sm prov-f-cant" type="number" min="0" value="${esc(f.cantidad_ofertada)}"${ro}></td>
@@ -230,7 +231,7 @@ export function renderStep1Bienes(ctx) {
               <td class="text-center">${e.numero}</td>
               <td style="white-space:normal;word-break:break-word;">${esc(e.nombre || e.descripcion || '—')}</td>
               <td class="text-center">${esc(e.cantidad ?? '—')}</td>
-              <td class="text-center">${esc(e.unidad_medida || 'UND')}</td>
+              <td class="text-center">${esc(e.unidad_medida || unidadMedidaCotizacion(e, tipo === 'Bienes' ? 'Bienes' : 'Servicios'))}</td>
               <td style="white-space:normal;word-break:break-word;">${esc(e.plazo_texto || e.descripcion || '—')}</td>
             </tr>`).join('')}
         </tbody>
@@ -262,16 +263,18 @@ export function renderStep1Entregables(ctx, { locador = false } = {}) {
   const ents = entsRaw.length ? entsRaw : mergeEntregablesConPrecios(programados, []);
   const total = sumPrecioEntregables(ents);
 
+  const servicioDesc = it0.descripcion || sol.denominacion || sol.objeto || '';
   const ecoRows = ents.map((e, eidx) => `
       <tr data-eidx="0" data-enidx="${eidx}">
-        <td class="text-center">${e.numero ?? eidx + 1}</td>
-        <td class="small" style="white-space:normal;word-break:break-word;">${esc(e.nombre || e.descripcion || (eidx === 0 ? (it0.descripcion || '') : ''))}</td>
-        <td class="small">${esc(e.plazo_texto || '—')}</td>
-        <td class="text-center">${esc(e.um || e.unidad_medida || 'Servicio')}</td>
+        ${eidx === 0 ? `<td class="text-center align-middle" rowspan="${Math.max(ents.length, 1)}">${e.numero ?? 1}</td>
+        <td class="small align-middle" rowspan="${Math.max(ents.length, 1)}" style="white-space:normal;word-break:break-word;">${esc(servicioDesc)}</td>` : ''}
+        <td class="small" style="white-space:normal;word-break:break-word;">${esc(e.nombre || e.descripcion || `ENTREGABLE ${eidx + 1}`)}</td>
+        <td class="text-center">${esc(unidadMedidaAnexo11(e.um || e.unidad_medida || it0, tipo))}</td>
         <td><input class="form-control form-control-sm prov-e-unit text-end" type="text" inputmode="decimal"
           value="${esc(formatPriceDisplay(e.precio_unitario ?? e.precio ?? e.total ?? 0))}"${ro}></td>
+        <td class="text-end small fw-semibold prov-e-total-cell">${esc(formatPriceDisplay(e.precio_unitario ?? e.precio ?? e.total ?? 0))}</td>
       </tr>`).join('')
-    || '<tr><td colspan="5" class="text-muted small text-center">Sin entregables programados en el TDR.</td></tr>';
+    || `<tr><td colspan="6" class="text-muted small text-center">Sin entregables programados en el TDR.</td></tr>`;
 
   const plazosHtml = ents.map((e, i) => `
     <div class="col-md-12"><label class="form-label mb-0">${esc(e.nombre || ('Entregable ' + (i + 1)))}</label>
@@ -296,7 +299,7 @@ export function renderStep1Entregables(ctx, { locador = false } = {}) {
               <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
               <td style="white-space:normal;word-break:break-word;">${esc(it.descripcion || '—')}</td>
               <td class="text-center">${esc(cantidadPorTipo(tipo, it.cantidad))}</td>
-              <td class="text-center">${esc(it.unidad_medida || 'servicio')}</td>
+              <td class="text-center">${esc(unidadMedidaCotizacion(it, tipo))}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -315,16 +318,20 @@ export function renderStep1Entregables(ctx, { locador = false } = {}) {
     <p class="small text-muted mb-2">SERVICIO: <strong>${esc(it0.descripcion || sol.denominacion || sol.objeto || '')}</strong></p>
     <div class="table-responsive mb-2">
       <table class="table table-bordered table-sm prov-cot-table mb-0">
-        <thead class="table-light text-center">
+        <thead class="table-light text-center align-middle">
           <tr>
-            <th>N°</th><th>Entregable</th><th>Plazo</th><th>U.M.</th>
-            <th>Precio S/. (Inc. IGV)</th>
+            <th>N°</th>
+            <th>Descripción del Servicio</th>
+            <th>N° de entregables</th>
+            <th>Unidad de medida</th>
+            <th>Precio Unitario por cada entregable S/<br>(Inc. IGV)</th>
+            <th>Precio Total S/<br>(Inc. IGV)</th>
           </tr>
         </thead>
         <tbody>${ecoRows}</tbody>
       </table>
     </div>
-    <div class="fw-semibold mb-2">Precio total de la propuesta: S/ <span id="provCotMontoTotal">${money(total)}</span></div>
+    <div class="fw-semibold mb-2">Precio Total S/ (Incluido IGV): <span id="provCotMontoTotal">${money(total)}</span></div>
     <div class="p-2 bg-light border rounded small text-muted mb-2" style="user-select:none;">${esc(IMPORTANTE_ANEXO11)}</div>
     <div class="p-2 bg-light border rounded small text-muted mb-2" style="user-select:none;">${esc(CONFIRMACION_ANEXO11)}</div>
     <h6 class="small fw-semibold mt-2">Plazo para la presentación del producto</h6>
@@ -381,7 +388,7 @@ export function initEntregablesEco(items, prevEco = {}, tipo, workspace = null) 
     if (Array.isArray(savedList) && savedList.length) {
       map[it.item_key] = savedList.map((e, i) => ({
         nro: e.nro ?? e.numero ?? i + 1,
-        um: e.um || e.unidad_medida || (it.unidad_medida || 'UND'),
+        um: unidadMedidaAnexo11(e.um || e.unidad_medida || it, tipo),
         precio_unitario: e.precio_unitario ?? e.precio ?? 0,
         total: e.total ?? e.precio ?? e.precio_unitario ?? 0,
       }));
@@ -389,7 +396,7 @@ export function initEntregablesEco(items, prevEco = {}, tipo, workspace = null) 
     }
     map[it.item_key] = [{
       nro: 1,
-      um: it.unidad_medida || 'servicio',
+      um: unidadMedidaAnexo11(it, tipo),
       precio_unitario: 0,
       total: 0,
     }];

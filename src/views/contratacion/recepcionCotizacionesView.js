@@ -4,6 +4,7 @@ import {
   bandejaTableStyles,
   getResponsableVigenteLabel,
   getEstadoVigenteLabel,
+  estadoActualBadge,
 } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
@@ -25,7 +26,12 @@ import {
   fechaPrincipalCotizacion,
 } from '../../utils/recepcionCotizacionUtils.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
-import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
+import {
+  closeBandejaActionMenus,
+  renderActionMenuCell,
+  bindActionMenus,
+} from '../../utils/bandejaUi.js';
+import { recepcionExpedienteMenuItems } from '../../utils/bandejaActions.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -343,11 +349,11 @@ function renderAccionCotizacion(c) {
   ];
   if (puedeDerivarACcpRecepcion(c)) {
     buttons.push(`<button type="button" class="btn btn-sm btn-success rc-cot-ccp" data-id="${c.id}">
-      <i class="bi bi-send"></i> Derivar a CCP
+      <i class="bi bi-send"></i> Enviar a CCP
     </button>`);
   } else if (puedeEnviarValidarRecepcion(c)) {
     buttons.push(`<button type="button" class="btn btn-sm btn-primary rc-cot-enviar" data-id="${c.id}">
-      <i class="bi bi-send"></i> Derivar a Validaciones
+      <i class="bi bi-send"></i> Enviar a Validaciones
     </button>`);
   } else if (puedeDevolverValidacionRecepcion(c)) {
     buttons.push(`<button type="button" class="btn btn-sm btn-warning rc-cot-enviar" data-id="${c.id}">
@@ -444,8 +450,8 @@ function showExpedienteDetalleModal(expediente) {
       const v = String(row?.validacion_estado || '').toUpperCase();
       const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
       showEnviarValidarModal(btn.dataset.id, {
-        title: esDevolucion ? 'Devolver a Validación AU' : 'Derivar a Validaciones',
-        submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Derivar a Validaciones',
+        title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a Validaciones',
+        submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a Validaciones',
         requireObservacion: esDevolucion,
         onSuccess: () => {
           modal.hide();
@@ -453,6 +459,53 @@ function showExpedienteDetalleModal(expediente) {
         },
       });
     };
+  });
+}
+
+/** Cotización accionable del expediente (con tipo heredado de la SC). */
+function cotizacionesConTipo(exp) {
+  const tipo = exp?.tipo || exp?.solicitud_tipo || '';
+  return (exp?.cotizaciones || []).map((c) => ({
+    ...c,
+    tipo: c.tipo || c.solicitud_tipo || tipo,
+    solicitud_tipo: c.solicitud_tipo || c.tipo || tipo,
+  }));
+}
+
+function pickCotizacionEnviarValidaciones(exp) {
+  return cotizacionesConTipo(exp).find((c) => puedeEnviarValidarRecepcion(c)
+    || puedeDevolverValidacionRecepcion(c)) || null;
+}
+
+function pickCotizacionEnviarCcp(exp) {
+  return cotizacionesConTipo(exp).find((c) => puedeDerivarACcpRecepcion(c)) || null;
+}
+
+function openEnviarValidacionesDesdeExpediente(exp) {
+  const row = pickCotizacionEnviarValidaciones(exp);
+  if (!row) {
+    alert('No hay cotizaciones pendientes de enviar a Validaciones en este expediente.');
+    return;
+  }
+  const v = String(row.validacion_estado || '').toUpperCase();
+  const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
+  showEnviarValidarModal(row.id, {
+    title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a Validaciones',
+    submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a Validaciones',
+    requireObservacion: esDevolucion,
+    onSuccess: () => loadCotizaciones(true),
+  });
+}
+
+function openEnviarCcpDesdeExpediente(exp) {
+  const row = pickCotizacionEnviarCcp(exp);
+  if (!row) {
+    alert('No hay cotizaciones de locación pendientes de enviar a CCP en este expediente.');
+    return;
+  }
+  showDerivarRecepcionCcpModal(row.id, {
+    row,
+    onSuccess: () => loadCotizaciones(true),
   });
 }
 
@@ -468,14 +521,21 @@ const RECEPCION_THEAD = `<tr>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
   <th>Estado</th>
-  <th>Responsable actual</th>
-  <th class="text-center">Ver</th>
+  <th>Responsable</th>
+  <th class="text-center">Acciones</th>
 </tr>`;
+
+function badgeEstadoBandejaRecepcion(exp) {
+  // Estándar RC8.4 — badge de contrato estado/responsable cuando hay enrichment.
+  if (exp?.estado_responsable_vigente) return estadoActualBadge(exp);
+  return renderBadgeEstadoRecepcionHtml(exp, esc);
+}
 
 function buildRecepcionRowHtml(exp) {
   const n = Number(exp.cantidad_cotizaciones) || (exp.cotizaciones || []).length || 0;
+  const sid = exp.solicitud_id;
   return `
-    <tr data-row-id="${esc(exp.solicitud_id)}">
+    <tr data-row-id="${esc(sid)}">
       <td>
         <strong>${esc(exp.solicitud_codigo)}</strong>
         <div class="small text-muted">${esc((exp.denominacion || exp.objeto || '').slice(0, 80))}</div>
@@ -483,17 +543,9 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatRequerimientosBandeja(exp, esc)}</td>
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
-      <td>
-        ${renderBadgeEstadoRecepcionHtml(exp, esc)}
-        <div class="small text-muted">${esc(getEstadoVigenteLabel(exp))}</div>
-      </td>
+      <td>${badgeEstadoBandejaRecepcion(exp)}</td>
       <td class="small">${esc(getResponsableVigenteLabel(exp))}</td>
-      <td class="text-center">
-        <button type="button" class="btn btn-sm btn-outline-primary rc-exp-ver"
-          data-solicitud-id="${esc(exp.solicitud_id)}">
-          <i class="bi bi-eye"></i> Ver
-        </button>
-      </td>
+      ${renderActionMenuCell(sid, recepcionExpedienteMenuItems(exp), '')}
     </tr>`;
 }
 
@@ -557,12 +609,19 @@ async function loadCotizaciones(resetPage = false) {
     shell.thead.innerHTML = RECEPCION_THEAD;
     shell.tbody.innerHTML = pageExpedientes.map(buildRecepcionRowHtml).join('');
 
-    cont.querySelectorAll('.rc-exp-ver').forEach((btn) => {
-      btn.onclick = () => {
-        const sid = btn.dataset.solicitudId;
+    bindActionMenus(shell.tbody, {
+      ver: (sid) => {
         const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
         if (exp) showExpedienteDetalleModal(exp);
-      };
+      },
+      enviarValidar: (sid) => {
+        const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
+        if (exp) openEnviarValidacionesDesdeExpediente(exp);
+      },
+      enviarCcp: (sid) => {
+        const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
+        if (exp) openEnviarCcpDesdeExpediente(exp);
+      },
     });
     recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));
     restoreScroll(VIEW_ID, SCROLL_SEL);

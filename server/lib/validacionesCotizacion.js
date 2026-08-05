@@ -24,8 +24,6 @@ import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js'
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'VALIDACIONES', label: 'Validaciones' },
-  { code: 'REGISTRO_REQUERIMIENTO', label: 'Registro de Requerimiento' },
-  { code: 'EVALUACION_REQUERIMIENTO', label: 'Evaluación de Requerimiento' },
 ]);
 
 function parseJson(val, fallback = {}) {
@@ -1347,7 +1345,12 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     throw new Error('La cotización ya fue derivada o validada');
   }
   const documentos = buildManifiestoCotizacionTecnica(cot);
-  const sub = SUBMODULOS_VALIDACION.find((s) => s.code === submodulo) || { code: submodulo, label: submodulo_label || submodulo };
+  const subCode = String(submodulo || '').toUpperCase();
+  if (subCode && subCode !== 'VALIDACIONES') {
+    throw new Error('Desde Recepción solo se puede derivar al submódulo Validaciones');
+  }
+  const sub = SUBMODULOS_VALIDACION.find((s) => s.code === (subCode || 'VALIDACIONES'))
+    || { code: 'VALIDACIONES', label: submodulo_label || 'Validaciones' };
   const prevInf = parseInforme(cot);
   const obsTexto = obsTextoPre;
   const informe = {

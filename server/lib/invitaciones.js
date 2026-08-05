@@ -219,6 +219,12 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
           codigo_sigamef: it.item_bien || it.codigo || '',
           descripcion: it.nombre_item || it.descripcion || r.denominacion || '',
           cantidad: it.cantidad || it.cant || 1,
+          unidad_medida: it.unidad_medida || it.um || (
+            r.tipo === 'servicios' || r.tipo === 'locacion' ? 'SERVICIO' : 'UND'
+          ),
+          um: it.unidad_medida || it.um || (
+            r.tipo === 'servicios' || r.tipo === 'locacion' ? 'SERVICIO' : 'UND'
+          ),
           item_index: idx,
           documentos: Object.entries(it.documentos_anexos || {}).map(([tipo, d]) => ({
             documento: tipo,
@@ -240,6 +246,8 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
         codigo_sigamef: '',
         descripcion: r.denominacion || '',
         cantidad: 1,
+        unidad_medida: r.tipo === 'servicios' || r.tipo === 'locacion' ? 'SERVICIO' : 'UND',
+        um: r.tipo === 'servicios' || r.tipo === 'locacion' ? 'SERVICIO' : 'UND',
         item_index: 0,
         documentos: [],
       });
