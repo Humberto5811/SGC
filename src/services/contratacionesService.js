@@ -157,6 +157,9 @@ export const contratacionesService = {
   async derivarValidacion(id, body) {
     return api.post(`/contrataciones/portal-analista/validaciones/${id}/derivar`, body);
   },
+  async derivarRecepcionACcp(id, body) {
+    return api.post(`/contrataciones/portal-analista/cotizaciones/${id}/derivar-ccp`, body);
+  },
   async devolverValidacion(id, body) {
     return api.post(`/contrataciones/portal-analista/validaciones/${id}/devolver`, body);
   },

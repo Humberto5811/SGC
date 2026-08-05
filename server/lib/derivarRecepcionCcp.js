@@ -1,0 +1,182 @@
+/**
+ * Derivación Recepción de Cotizaciones → CCP (solo LOCACIÓN).
+ * No crea filas en cuadros_comparativos.
+ */
+import { query } from '../db.js';
+import { registrarTrazaPortal } from './invitaciones.js';
+import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
+import { normalizarTipo, TIPOS_CONTRATACION } from '../../shared/workflow/tiposContratacion.js';
+import {
+  resolveDestinoDesdeRecepcionCotizaciones,
+  DESTINOS_RECEPCION,
+} from '../../shared/workflow/destinoRecepcion.js';
+
+function parseJson(val, fallback = {}) {
+  if (val && typeof val === 'object') return val;
+  try { return JSON.parse(val || 'null') ?? fallback; } catch (_) { return fallback; }
+}
+
+async function loadCotizacionConTipo(cotizacionId) {
+  const { rows } = await query(`
+    SELECT cot.*, p.ruc, p.razon_social,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      sc.tipo AS solicitud_tipo, sc.estado AS solicitud_estado,
+      (
+        SELECT r.tipo FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = cot.solicitud_id
+        ORDER BY r.id LIMIT 1
+      ) AS requerimiento_tipo,
+      (
+        SELECT r.estado_actual FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = cot.solicitud_id
+        ORDER BY r.id LIMIT 1
+      ) AS req_estado_actual
+    FROM cotizaciones_proveedor cot
+    JOIN proveedores p ON p.id = cot.proveedor_id
+    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    WHERE cot.id = $1
+  `, [cotizacionId]);
+  if (!rows.length) throw new Error('Cotización no encontrada');
+  return rows[0];
+}
+
+function resolveTipoExpediente(cot) {
+  return normalizarTipo(cot.solicitud_tipo || cot.requerimiento_tipo || '');
+}
+
+function yaDerivadoACcp(cot) {
+  const solEst = String(cot.solicitud_estado || '').toUpperCase();
+  const etapa = String(cot.req_estado_actual || '').toUpperCase();
+  return solEst === 'EN_CCP' || etapa === 'CCP';
+}
+
+/**
+ * Deriva expediente de locación desde Recepción a CCP.
+ * Idempotente si ya está en CCP. No crea cuadro comparativo.
+ */
+export async function derivarRecepcionACcp(cotizacionId, body = {}, usuarioOperador = '') {
+  const cot = await loadCotizacionConTipo(cotizacionId);
+  if (String(cot.estado) !== 'COTIZACION_PRESENTADA') {
+    throw new Error('La cotización no está presentada');
+  }
+
+  const tipo = resolveTipoExpediente(cot);
+  const destino = resolveDestinoDesdeRecepcionCotizaciones(tipo);
+  if (destino !== DESTINOS_RECEPCION.CCP || tipo !== TIPOS_CONTRATACION.LOCACION) {
+    throw new Error(
+      'Solo expedientes de Locadores pueden derivarse a CCP desde Recepción. '
+      + 'Bienes y Servicios deben ir a Validaciones.',
+    );
+  }
+
+  const respId = parseInt(body.responsable_id || body.responsable_destino_id || body.responsable_ccp_id, 10);
+  const respNombre = String(
+    body.responsable_nombre || body.responsable_destino_nombre || body.responsable_ccp_nombre || '',
+  ).trim();
+  const observacion = String(body.observacion || body.observacion_derivacion || '').trim();
+
+  if (yaDerivadoACcp(cot)) {
+    return {
+      ok: true,
+      idempotente: true,
+      ya_en_ccp: true,
+      destino: DESTINOS_RECEPCION.CCP,
+      origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
+      solicitud_id: cot.solicitud_id,
+      cotizacion_id: cot.id,
+      cuadro_id: null,
+      responsable_id: respId || null,
+      responsable_nombre: respNombre || cot.validacion_responsable || '',
+    };
+  }
+
+  if (!Number.isFinite(respId) || respId <= 0) {
+    throw new Error('Seleccione el usuario responsable de CCP');
+  }
+  if (!respNombre) {
+    throw new Error('Nombre del responsable CCP es obligatorio');
+  }
+  if (!observacion || observacion.length < 3) {
+    throw new Error('La observación es obligatoria para derivar a CCP');
+  }
+
+  const user = String(usuarioOperador || '').slice(0, 150);
+  const fecha = new Date().toISOString();
+
+  await query(`
+    UPDATE solicitudes_cotizacion SET estado = 'EN_CCP', updated_at = NOW()
+    WHERE id = $1 AND estado NOT IN ('CERRADA')
+  `, [cot.solicitud_id]);
+
+  const histEntry = {
+    tipo: 'derivacion_ccp_desde_recepcion',
+    destino: 'CCP',
+    origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
+    responsable: respNombre,
+    responsable_id: respId,
+    usuario: user,
+    observacion,
+    fecha,
+  };
+
+  // Marca cotizaciones presentadas (historial propio, no cuadros_comparativos).
+  await query(`
+    UPDATE cotizaciones_proveedor SET
+      validacion_responsable = $2,
+      validacion_informe = COALESCE(validacion_informe, '{}'::jsonb) || $3::jsonb,
+      historial = COALESCE(historial, '[]'::jsonb) || $4::jsonb,
+      updated_at = NOW()
+    WHERE solicitud_id = $1
+      AND estado = 'COTIZACION_PRESENTADA'
+  `, [
+    cot.solicitud_id,
+    respNombre.slice(0, 200),
+    JSON.stringify({
+      derivacion_ccp: {
+        responsable_id: respId,
+        responsable_nombre: respNombre,
+        derivado_por: user,
+        derivado_at: fecha,
+        observacion,
+        origen: 'RECEPCION_COTIZACION_LOCACION',
+      },
+    }),
+    JSON.stringify([histEntry]),
+  ]);
+
+  await registrarTrazaPortal({
+    solicitud_id: cot.solicitud_id,
+    proveedor_id: cot.proveedor_id,
+    requerimiento_id: cot.requerimiento_id,
+    evento: 'LOCACION_APROBADA_RECEPCION',
+    detalle: `Locación derivada a CCP desde Recepción → ${respNombre}${observacion ? `: ${observacion.slice(0, 160)}` : ''}`,
+    usuario: user,
+  });
+
+  await syncRequerimientosSolicitudWorkflow(cot.solicitud_id, {
+    etapaDestino: 'CCP',
+    usuario: user,
+    observacion: observacion || `Locación derivada a CCP — ${respNombre}`,
+    etapaEjecutor: 'RECEPCION_COTIZACIONES',
+    responsable: respNombre,
+  });
+
+  return {
+    ok: true,
+    idempotente: false,
+    destino: DESTINOS_RECEPCION.CCP,
+    origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
+    solicitud_id: cot.solicitud_id,
+    cotizacion_id: cot.id,
+    cuadro_id: null,
+    responsable_id: respId,
+    responsable_nombre: respNombre,
+  };
+}
+
+export async function resolveTipoExpedienteCotizacion(cotizacionId) {
+  const cot = await loadCotizacionConTipo(cotizacionId);
+  return resolveTipoExpediente(cot);
+}

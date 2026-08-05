@@ -6,6 +6,12 @@ import { resolveValidationCentro } from '../../shared/validacionCentro.js';
 import { buildCcpEstadoResponse } from './ccpEstadoFlags.js';
 import { resolveEstadoActualExpediente, badgeVisualEstadoVigente } from '../../shared/estadoExpedienteVigente.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
+import { normalizarTipo, TIPOS_CONTRATACION } from '../../shared/workflow/tiposContratacion.js';
+
+export const ORIGEN_CCP = Object.freeze({
+  CUADRO_COMPARATIVO: 'CUADRO_COMPARATIVO',
+  RECEPCION_COTIZACION_LOCACION: 'RECEPCION_COTIZACION_LOCACION',
+});
 
 export const ESTADOS_CCP_BANDEJA = Object.freeze({
   PENDIENTE_CONSOLIDACION: 'PENDIENTE_CONSOLIDACION',
@@ -121,6 +127,139 @@ function montoAdjudicadoDeCuadro(cuadroRow) {
   return Number(sum.toFixed(2));
 }
 
+function montoDesdePropuestaEconomica(propuestaEconomica) {
+  const eco = parseJson(propuestaEconomica, {});
+  const n = Number(eco?.monto ?? eco?.total ?? eco?.precio_total ?? 0);
+  return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
+}
+
+/**
+ * Fuente única de datos CCP (Bien/Servicio vía cuadro; Locación vía recepción).
+ * @returns {Promise<object>}
+ */
+export async function resolveFuenteDatosCcp(requerimientoId) {
+  const id = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
+
+  const { rows: cuadroRows } = await query(`
+    SELECT r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion, r.tipo,
+      r.estado_actual, r.area, r.payload,
+      sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
+      sc.area_usuaria, sc.objeto,
+      cc.id AS cuadro_id, cc.valor_adjudicado, cc.datos_json, cc.proveedor_ganador_id,
+      p.razon_social AS proveedor_nombre, p.ruc AS proveedor_ruc
+    FROM requerimientos r
+    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
+    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+    JOIN cuadros_comparativos cc ON cc.solicitud_id = sc.id
+      AND UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
+      AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
+    LEFT JOIN proveedores p ON p.id = cc.proveedor_ganador_id
+    WHERE r.id = $1
+    ORDER BY cc.version DESC NULLS LAST, cc.id DESC
+    LIMIT 1
+  `, [id]);
+
+  if (cuadroRows[0]) {
+    const row = cuadroRows[0];
+    return {
+      origenCcp: ORIGEN_CCP.CUADRO_COMPARATIVO,
+      requerimientoId: row.requerimiento_id,
+      requerimientoCodigo: row.requerimiento_codigo,
+      denominacion: row.denominacion || row.objeto || '',
+      tipo: row.tipo || '',
+      estadoActual: row.estado_actual || '',
+      cuadroId: row.cuadro_id,
+      solicitudId: row.solicitud_id,
+      solicitudCodigo: row.solicitud_codigo,
+      solicitudEstado: row.solicitud_estado || '',
+      cotizacionId: null,
+      proveedorId: row.proveedor_ganador_id || null,
+      proveedorNombre: row.proveedor_nombre || '',
+      proveedorRuc: row.proveedor_ruc || '',
+      monto: montoAdjudicadoDeCuadro(row),
+      moneda: 'PEN',
+      areaUsuaria: row.area_usuaria || row.area || '',
+      payload: row.payload,
+      // compat assertReqEnCcp / consolidación
+      id: row.requerimiento_id,
+      solicitud_id: row.solicitud_id,
+      cuadro_id: row.cuadro_id,
+      valor_adjudicado: row.valor_adjudicado,
+      datos_json: row.datos_json,
+    };
+  }
+
+  const { rows: locRows } = await query(`
+    SELECT r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion, r.tipo,
+      r.estado_actual, r.area, r.payload,
+      sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
+      sc.area_usuaria, sc.objeto, sc.tipo AS solicitud_tipo,
+      cot.id AS cotizacion_id, cot.propuesta_economica, cot.proveedor_id,
+      p.razon_social AS proveedor_nombre, p.ruc AS proveedor_ruc
+    FROM requerimientos r
+    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
+    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+    LEFT JOIN LATERAL (
+      SELECT c.* FROM cotizaciones_proveedor c
+      WHERE c.solicitud_id = sc.id AND c.estado = 'COTIZACION_PRESENTADA'
+      ORDER BY
+        CASE WHEN COALESCE(c.validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
+        c.fecha_presentacion DESC NULLS LAST,
+        c.id DESC
+      LIMIT 1
+    ) cot ON TRUE
+    LEFT JOIN proveedores p ON p.id = cot.proveedor_id
+    WHERE r.id = $1
+      AND UPPER(COALESCE(r.estado_actual, '')) = 'CCP'
+      AND UPPER(COALESCE(sc.estado, '')) = 'EN_CCP'
+    LIMIT 1
+  `, [id]);
+
+  if (!locRows[0]) {
+    throw httpError('El requerimiento no está derivado a CCP', 409, 'CCP_NO_DERIVADO');
+  }
+
+  const row = locRows[0];
+  const tipoCanon = normalizarTipo(row.tipo || row.solicitud_tipo || '');
+  if (tipoCanon !== TIPOS_CONTRATACION.LOCACION) {
+    throw httpError('El requerimiento no está derivado a CCP', 409, 'CCP_NO_DERIVADO');
+  }
+  if (!row.cotizacion_id) {
+    throw httpError('Locación en CCP sin cotización presentada válida', 409, 'CCP_SIN_COTIZACION');
+  }
+
+  const eco = parseJson(row.propuesta_economica, {});
+  const moneda = String(eco?.moneda || 'PEN').toUpperCase() || 'PEN';
+
+  return {
+    origenCcp: ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION,
+    requerimientoId: row.requerimiento_id,
+    requerimientoCodigo: row.requerimiento_codigo,
+    denominacion: row.denominacion || row.objeto || '',
+    tipo: row.tipo || row.solicitud_tipo || 'LOCACION',
+    estadoActual: row.estado_actual || 'CCP',
+    cuadroId: null,
+    solicitudId: row.solicitud_id,
+    solicitudCodigo: row.solicitud_codigo,
+    solicitudEstado: row.solicitud_estado || '',
+    cotizacionId: row.cotizacion_id,
+    proveedorId: row.proveedor_id || null,
+    proveedorNombre: row.proveedor_nombre || '',
+    proveedorRuc: row.proveedor_ruc || '',
+    monto: montoDesdePropuestaEconomica(row.propuesta_economica),
+    moneda,
+    areaUsuaria: row.area_usuaria || row.area || '',
+    payload: row.payload,
+    id: row.requerimiento_id,
+    solicitud_id: row.solicitud_id,
+    cuadro_id: null,
+    valor_adjudicado: montoDesdePropuestaEconomica(row.propuesta_economica),
+    datos_json: null,
+  };
+}
+
+
 /**
  * Filas presupuestales: Requerimiento + Centro + Meta + Fuente + Específica.
  * Distribuye el monto adjudicado proporcionalmente a total_item de pedidos (o partes iguales).
@@ -170,7 +309,8 @@ export function buildFilasPresupuestales({
 }
 
 export async function listarBandejaCcp() {
-  const { rows } = await query(`
+  // Fuente A — Bienes/Servicios vía Cuadro Comparativo (DERIVADO_CCP).
+  const { rows: rowsCuadro } = await query(`
     SELECT
       r.id AS requerimiento_id,
       r.codigo AS requerimiento_codigo,
@@ -182,10 +322,16 @@ export async function listarBandejaCcp() {
       sc.codigo AS solicitud_codigo,
       sc.estado AS solicitud_estado,
       sc.objeto,
+      sc.area_usuaria,
       cc.id AS cuadro_id,
       cc.estado AS cuadro_estado,
       cc.valor_adjudicado,
       cc.datos_json,
+      cc.proveedor_ganador_id,
+      p.razon_social AS proveedor_nombre,
+      p.ruc AS proveedor_ruc,
+      NULL::int AS cotizacion_id,
+      'CUADRO_COMPARATIVO'::text AS origen_ccp,
       cod.id AS codigo_id,
       cod.codigo_ccp,
       cod.estado AS codigo_estado,
@@ -200,6 +346,7 @@ export async function listarBandejaCcp() {
     JOIN solicitudes_cotizacion sc ON sc.id = cc.solicitud_id
     JOIN solicitud_requerimientos sr ON sr.solicitud_id = sc.id
     JOIN requerimientos r ON r.id = sr.requerimiento_id
+    LEFT JOIN proveedores p ON p.id = cc.proveedor_ganador_id
     LEFT JOIN LATERAL (
       SELECT c.* FROM ccp_codigos c
       WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
@@ -213,9 +360,84 @@ export async function listarBandejaCcp() {
     ) link ON TRUE
     LEFT JOIN ccp_solicitudes sol ON sol.id = link.solicitud_id AND sol.estado <> 'ANULADA'
     WHERE UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
+      AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
       AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_CUADRO_COMPARATIVO')
     ORDER BY sc.codigo DESC, r.codigo ASC
   `);
+
+  // Fuente B — Locación directa desde Recepción (sin cuadro).
+  const { rows: rowsLocacion } = await query(`
+    SELECT
+      r.id AS requerimiento_id,
+      r.codigo AS requerimiento_codigo,
+      r.denominacion,
+      r.tipo,
+      r.estado_actual,
+      r.payload,
+      sc.id AS solicitud_id,
+      sc.codigo AS solicitud_codigo,
+      sc.estado AS solicitud_estado,
+      sc.objeto,
+      sc.area_usuaria,
+      NULL::int AS cuadro_id,
+      NULL::text AS cuadro_estado,
+      cot.propuesta_economica,
+      cot.proveedor_id AS proveedor_ganador_id,
+      p.razon_social AS proveedor_nombre,
+      p.ruc AS proveedor_ruc,
+      cot.id AS cotizacion_id,
+      'RECEPCION_COTIZACION_LOCACION'::text AS origen_ccp,
+      cod.id AS codigo_id,
+      cod.codigo_ccp,
+      cod.estado AS codigo_estado,
+      cod.registrado_por,
+      cod.registrado_at,
+      cod.modificado_por,
+      cod.modificado_at,
+      sol.id AS consolidacion_id,
+      sol.codigo_interno AS consolidacion_codigo,
+      sol.estado AS consolidacion_estado
+    FROM requerimientos r
+    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
+    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+    LEFT JOIN LATERAL (
+      SELECT c.* FROM cotizaciones_proveedor c
+      WHERE c.solicitud_id = sc.id AND c.estado = 'COTIZACION_PRESENTADA'
+      ORDER BY
+        CASE WHEN COALESCE(c.validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
+        c.fecha_presentacion DESC NULLS LAST,
+        c.id DESC
+      LIMIT 1
+    ) cot ON TRUE
+    LEFT JOIN proveedores p ON p.id = cot.proveedor_id
+    LEFT JOIN LATERAL (
+      SELECT c.* FROM ccp_codigos c
+      WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
+      ORDER BY c.id DESC LIMIT 1
+    ) cod ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT csr.solicitud_id
+      FROM ccp_solicitud_requerimientos csr
+      WHERE csr.requerimiento_id = r.id AND csr.activo = TRUE
+      ORDER BY csr.id DESC LIMIT 1
+    ) link ON TRUE
+    LEFT JOIN ccp_solicitudes sol ON sol.id = link.solicitud_id AND sol.estado <> 'ANULADA'
+    WHERE UPPER(COALESCE(r.estado_actual, '')) = 'CCP'
+      AND UPPER(COALESCE(sc.estado, '')) = 'EN_CCP'
+      AND cot.id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM cuadros_comparativos cc
+        WHERE cc.solicitud_id = sc.id
+          AND UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
+          AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
+      )
+    ORDER BY sc.codigo DESC, r.codigo ASC
+  `);
+
+  const rows = [
+    ...rowsCuadro,
+    ...rowsLocacion.filter((r) => normalizarTipo(r.tipo || '') === TIPOS_CONTRATACION.LOCACION),
+  ];
 
   const out = [];
   const seen = new Set();
@@ -231,6 +453,10 @@ export async function listarBandejaCcp() {
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const origenCcp = row.origen_ccp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+      ? ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+      : ORIGEN_CCP.CUADRO_COMPARATIVO;
+
     const pedidos = await loadPedidosRequerimiento(row.requerimiento_id);
     const centroRes = resolveValidationCentro({
       pedidoCentro: pedidos[0]?.centro || '',
@@ -240,7 +466,12 @@ export async function listarBandejaCcp() {
       })(),
       centroCosto: pedidos[0]?.centro_costo || '',
     });
-    const monto = montoAdjudicadoDeCuadro(row);
+    const monto = origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+      ? montoDesdePropuestaEconomica(row.propuesta_economica)
+      : montoAdjudicadoDeCuadro(row);
+    const moneda = origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+      ? (String(parseJson(row.propuesta_economica, {})?.moneda || 'PEN').toUpperCase() || 'PEN')
+      : 'PEN';
     const estadoCode = labelEstadoBandeja({
       codigoActivo: !!row.codigo_ccp,
       consolidacionEstado: row.consolidacion_estado,
@@ -251,7 +482,7 @@ export async function listarBandejaCcp() {
 
     const seed = {
       solicitud_estado: row.solicitud_estado,
-      estado_cuadro: row.cuadro_estado,
+      estado_cuadro: row.cuadro_estado || (origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION ? '' : ''),
       codigo_ccp: row.codigo_ccp || ev.codigo_ccp || '',
       ccp_activo: !!(row.codigo_ccp || ev.ccp_activo),
       consolidacion_estado: row.consolidacion_estado,
@@ -262,7 +493,6 @@ export async function listarBandejaCcp() {
       derivado_ejecucion_at: ev.derivado_ejecucion_at || null,
       orden_resuelta: !!ev.orden_resuelta,
       expediente_derivado_pago: !!ev.expediente_derivado_pago,
-      // RC8.1B — evidencia de recepción de bienes (el cargador central ya la trae).
       recepcion_estado_global: ev.recepcion_estado_global || '',
       recepcion_estado_interno: ev.recepcion_estado_interno || '',
       recepcion_bienes_expediente_id: ev.recepcion_bienes_expediente_id ?? null,
@@ -278,9 +508,15 @@ export async function listarBandejaCcp() {
       requerimiento_codigo: row.requerimiento_codigo,
       denominacion: row.denominacion || row.objeto || '',
       tipo: row.tipo || '',
+      tipo_label: origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION ? 'Locación' : (row.tipo || ''),
+      origen_ccp: origenCcp,
+      origen_ccp_label: origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+        ? 'Recepción de Cotización'
+        : 'Cuadro Comparativo',
       solicitud_id: row.solicitud_id,
       solicitud_codigo: row.solicitud_codigo,
       centro: centroRes.centro || '',
+      area_usuaria: row.area_usuaria || '',
       estado_ccp: isCcpReg ? ESTADOS_CCP_BANDEJA.CCP_REGISTRADA : estadoCode,
       estado_ccp_label: vigente.label || ESTADOS_CCP_LABEL[estadoCode] || estadoCode,
       estado_actual: vigente.code,
@@ -309,9 +545,13 @@ export async function listarBandejaCcp() {
       tiene_codigo: !!row.codigo_ccp,
       ccp_activo: !!row.codigo_ccp,
       ccp_registrado: isCcpReg || !!vigente.ccpRegistrado,
-      cuadro_id: row.cuadro_id,
+      cuadro_id: origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION ? null : row.cuadro_id,
+      cotizacion_id: row.cotizacion_id || null,
+      proveedor_id: row.proveedor_ganador_id || null,
+      proveedor_nombre: row.proveedor_nombre || '',
+      proveedor_ruc: row.proveedor_ruc || '',
       monto_adjudicado: monto,
-      moneda: 'PEN',
+      moneda,
       consolidacion_id: row.consolidacion_id || null,
       consolidacion_codigo: row.consolidacion_codigo || '',
       consolidacion_estado: row.consolidacion_estado || '',
@@ -324,13 +564,11 @@ export async function listarBandejaCcp() {
       enviado_proveedor_at: ev.enviado_proveedor_at || null,
       orden_resuelta: !!ev.orden_resuelta,
       expediente_derivado_pago: !!ev.expediente_derivado_pago,
-      // RC8.1B — propagar recepción de bienes en el JSON final.
       recepcion_estado_global: ev.recepcion_estado_global || '',
       recepcion_estado_interno: ev.recepcion_estado_interno || '',
       recepcion_bienes_expediente_id: ev.recepcion_bienes_expediente_id ?? null,
     });
   }
-  // RC8.4E — anexar estado_responsable_vigente en batch
   await enrichEstadoResponsableForBandeja(out, 'requerimiento_id');
 
   return out;
@@ -340,65 +578,65 @@ export async function getDetalleCcpRequerimiento(requerimientoId) {
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
 
-  const { rows } = await query(`
-    SELECT r.id, r.codigo, r.denominacion, r.tipo, r.payload,
-      sc.id AS solicitud_id, sc.codigo AS solicitud_codigo,
-      cc.id AS cuadro_id, cc.valor_adjudicado, cc.datos_json, cc.estado AS cuadro_estado,
-      cod.id AS codigo_id, cod.codigo_ccp, cod.estado AS codigo_estado,
-      cod.registrado_por, cod.registrado_at, cod.modificado_por, cod.modificado_at
-    FROM requerimientos r
-    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
-    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
-    JOIN cuadros_comparativos cc ON cc.solicitud_id = sc.id AND UPPER(cc.estado) = 'DERIVADO_CCP'
-    LEFT JOIN LATERAL (
-      SELECT c.* FROM ccp_codigos c
-      WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
-      ORDER BY c.id DESC LIMIT 1
-    ) cod ON TRUE
-    WHERE r.id = $1
-    ORDER BY cc.version DESC NULLS LAST, cc.id DESC
-    LIMIT 1
-  `, [id]);
-  if (!rows.length) throw httpError('Requerimiento no encontrado en bandeja CCP', 404);
+  let fuente;
+  try {
+    fuente = await resolveFuenteDatosCcp(id);
+  } catch (err) {
+    if (err?.code === 'CCP_NO_DERIVADO' || err?.status === 409) {
+      throw httpError('Requerimiento no encontrado en bandeja CCP', 404);
+    }
+    throw err;
+  }
 
-  const row = rows[0];
+  const { rows: codRows } = await query(`
+    SELECT id, codigo_ccp, estado, registrado_por, registrado_at, modificado_por, modificado_at
+    FROM ccp_codigos
+    WHERE requerimiento_id = $1 AND estado = 'ACTIVO'
+    ORDER BY id DESC LIMIT 1
+  `, [id]);
+  const cod = codRows[0] || {};
+
   const pedidos = await loadPedidosRequerimiento(id);
-  const monto = montoAdjudicadoDeCuadro(row);
+  const monto = fuente.monto;
   const filas = buildFilasPresupuestales({
-    requerimiento: { id: row.id, codigo: row.codigo, denominacion: row.denominacion },
+    requerimiento: {
+      id: fuente.requerimientoId,
+      codigo: fuente.requerimientoCodigo,
+      denominacion: fuente.denominacion,
+    },
     pedidos,
     montoTotal: monto,
-    codigoCcp: row.codigo_ccp || '',
+    codigoCcp: cod.codigo_ccp || '',
   });
 
   return {
-    requerimiento_id: row.id,
-    requerimiento_codigo: row.codigo,
-    denominacion: row.denominacion,
-    solicitud_id: row.solicitud_id,
-    solicitud_codigo: row.solicitud_codigo,
-    cuadro_id: row.cuadro_id,
-    codigo_ccp: row.codigo_ccp || '',
-    codigo_id: row.codigo_id,
+    requerimiento_id: fuente.requerimientoId,
+    requerimiento_codigo: fuente.requerimientoCodigo,
+    denominacion: fuente.denominacion,
+    tipo: fuente.tipo,
+    origen_ccp: fuente.origenCcp,
+    origen_ccp_label: fuente.origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+      ? 'Recepción de Cotización'
+      : 'Cuadro Comparativo',
+    solicitud_id: fuente.solicitudId,
+    solicitud_codigo: fuente.solicitudCodigo,
+    cuadro_id: fuente.cuadroId,
+    cotizacion_id: fuente.cotizacionId,
+    proveedor_id: fuente.proveedorId,
+    proveedor_nombre: fuente.proveedorNombre,
+    proveedor_ruc: fuente.proveedorRuc,
+    codigo_ccp: cod.codigo_ccp || '',
+    codigo_id: cod.id || null,
     monto_adjudicado: monto,
     filas,
     total: monto,
-    moneda: 'PEN',
+    moneda: fuente.moneda || 'PEN',
+    area_usuaria: fuente.areaUsuaria || '',
   };
 }
 
 async function assertReqEnCcp(requerimientoId) {
-  const { rows } = await query(`
-    SELECT r.id, sc.id AS solicitud_id, cc.id AS cuadro_id, cc.valor_adjudicado, cc.datos_json
-    FROM requerimientos r
-    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
-    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
-    JOIN cuadros_comparativos cc ON cc.solicitud_id = sc.id AND UPPER(cc.estado) = 'DERIVADO_CCP'
-    WHERE r.id = $1
-    LIMIT 1
-  `, [requerimientoId]);
-  if (!rows.length) throw httpError('El requerimiento no está derivado a CCP', 409, 'CCP_NO_DERIVADO');
-  return rows[0];
+  return resolveFuenteDatosCcp(requerimientoId);
 }
 
 export async function registrarCodigoCcp(requerimientoId, body = {}, usuario = '', rol = '') {
@@ -447,8 +685,12 @@ export async function registrarCodigoCcp(requerimientoId, body = {}, usuario = '
     ...buildCcpEstadoResponse({
       codigo_ccp: codigo,
       solicitud_estado: 'EN_CCP',
-      estado_cuadro: 'DERIVADO_CCP',
+      estado_cuadro: reqRow.origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+        ? ''
+        : 'DERIVADO_CCP',
     }),
+    origen_ccp: reqRow.origenCcp,
+    cuadro_id: reqRow.cuadroId ?? null,
   };
 }
 
@@ -572,8 +814,15 @@ export async function crearConsolidacionCcp(body = {}, usuario = '', rol = '') {
   const items = [];
   for (const rid of ids) {
     const row = await assertReqEnCcp(rid);
-    const monto = montoAdjudicadoDeCuadro(row);
-    if (!(monto > 0)) throw httpError(`El requerimiento ${rid} no tiene valor adjudicado`, 409);
+    const monto = Number(row.monto ?? row.valor_adjudicado ?? 0) || 0;
+    if (!(monto > 0)) {
+      throw httpError(
+        row.origenCcp === ORIGEN_CCP.RECEPCION_COTIZACION_LOCACION
+          ? `El requerimiento ${rid} no tiene monto en la propuesta económica`
+          : `El requerimiento ${rid} no tiene valor adjudicado`,
+        409,
+      );
+    }
 
     const { rows: link } = await query(`
       SELECT csr.id, sol.codigo_interno
@@ -589,7 +838,7 @@ export async function crearConsolidacionCcp(body = {}, usuario = '', rol = '') {
         'CCP_YA_CONSOLIDADO',
       );
     }
-    items.push({ rid, solicitudId: row.solicitud_id, monto });
+    items.push({ rid, solicitudId: row.solicitud_id || row.solicitudId, monto });
   }
 
   const total = Number(items.reduce((a, it) => a + it.monto, 0).toFixed(2));
@@ -665,7 +914,15 @@ export async function getConsolidacionCcp(solicitudId) {
   const requerimientos = [];
   for (const link of links) {
     const pedidos = await loadPedidosRequerimiento(link.requerimiento_id);
-    const monto = Number(link.monto) || montoAdjudicadoDeCuadro(link);
+    let monto = Number(link.monto) || 0;
+    if (!(monto > 0)) {
+      try {
+        const fuente = await resolveFuenteDatosCcp(link.requerimiento_id);
+        monto = Number(fuente.monto) || 0;
+      } catch (_) {
+        monto = montoAdjudicadoDeCuadro(link);
+      }
+    }
     const reqFilas = buildFilasPresupuestales({
       requerimiento: {
         id: link.requerimiento_id,

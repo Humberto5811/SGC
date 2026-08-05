@@ -8,8 +8,13 @@ import {
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { showEnviarValidarModal } from '../../utils/derivarValidacionModal.js';
+import { showDerivarRecepcionCcpModal } from '../../utils/derivarRecepcionCcpModal.js';
 import { renderPropuestaTecnicaRecepcion, renderPropuestaEconomicaRecepcion } from '../../utils/recepcionPropuestaRows.js';
-import { puedeEnviarValidarRecepcion } from '../../utils/recepcionCotizacionUtils.js';
+import {
+  puedeEnviarValidarRecepcion,
+  puedeDerivarACcpRecepcion,
+  puedeDevolverValidacionRecepcion,
+} from '../../utils/recepcionCotizacionUtils.js';
 import {
   formatRequerimientosBandeja,
   formatCentrosBandeja,
@@ -331,18 +336,20 @@ async function showCotizacionDetalleModal(cotId) {
 }
 
 function renderAccionCotizacion(c) {
-  const v = String(c.validacion_estado || '').toUpperCase();
-  const puedeDevolver = c.estado === 'COTIZACION_PRESENTADA' && ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
   const buttons = [
     `<button type="button" class="btn btn-sm btn-outline-secondary rc-cot-ver" data-id="${c.id}">
       <i class="bi bi-eye"></i> Ver propuesta
     </button>`,
   ];
-  if (puedeEnviarValidarRecepcion(c)) {
-    buttons.push(`<button type="button" class="btn btn-sm btn-primary rc-cot-enviar" data-id="${c.id}">
-      <i class="bi bi-send"></i> Enviar a validar
+  if (puedeDerivarACcpRecepcion(c)) {
+    buttons.push(`<button type="button" class="btn btn-sm btn-success rc-cot-ccp" data-id="${c.id}">
+      <i class="bi bi-send"></i> Derivar a CCP
     </button>`);
-  } else if (puedeDevolver) {
+  } else if (puedeEnviarValidarRecepcion(c)) {
+    buttons.push(`<button type="button" class="btn btn-sm btn-primary rc-cot-enviar" data-id="${c.id}">
+      <i class="bi bi-send"></i> Derivar a Validaciones
+    </button>`);
+  } else if (puedeDevolverValidacionRecepcion(c)) {
     buttons.push(`<button type="button" class="btn btn-sm btn-warning rc-cot-enviar" data-id="${c.id}">
       <i class="bi bi-arrow-counterclockwise"></i> Devolver a Validación AU
     </button>`);
@@ -419,14 +426,26 @@ function showExpedienteDetalleModal(expediente) {
   body?.querySelectorAll('.rc-cot-ver').forEach((btn) => {
     btn.onclick = () => showCotizacionDetalleModal(btn.dataset.id);
   });
+  body?.querySelectorAll('.rc-cot-ccp').forEach((btn) => {
+    btn.onclick = () => {
+      const row = (cotizacionesCache || []).find((r) => String(r.id) === String(btn.dataset.id));
+      showDerivarRecepcionCcpModal(btn.dataset.id, {
+        row: row || {},
+        onSuccess: () => {
+          modal.hide();
+          loadCotizaciones(true);
+        },
+      });
+    };
+  });
   body?.querySelectorAll('.rc-cot-enviar').forEach((btn) => {
     btn.onclick = () => {
       const row = (cotizacionesCache || []).find((r) => String(r.id) === String(btn.dataset.id));
       const v = String(row?.validacion_estado || '').toUpperCase();
       const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
       showEnviarValidarModal(btn.dataset.id, {
-        title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
-        submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
+        title: esDevolucion ? 'Devolver a Validación AU' : 'Derivar a Validaciones',
+        submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Derivar a Validaciones',
         requireObservacion: esDevolucion,
         onSuccess: () => {
           modal.hide();

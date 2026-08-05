@@ -371,6 +371,23 @@ portalAnalistaRouter.get('/cotizaciones/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/** Locadores: Recepción → CCP (sin Validaciones ni Cuadro Comparativo). */
+portalAnalistaRouter.post('/cotizaciones/:id/derivar-ccp', async (req, res, next) => {
+  try {
+    const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
+    if (!usuario) return res.status(401).json({ error: 'No autenticado' });
+    const { derivarRecepcionACcp } = await import('../lib/derivarRecepcionCcp.js');
+    const data = await derivarRecepcionACcp(req.params.id, req.body || {}, usuario);
+    res.json({ success: true, ok: true, ...data });
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (/Solo expedientes|obligatoria|obligatorio|Seleccione|no está presentada|Locadores no/i.test(msg)) {
+      return res.status(409).json({ error: msg });
+    }
+    next(err);
+  }
+});
+
 portalAnalistaRouter.get('/cotizaciones/:id/documento/:ref/ver', async (req, res, next) => {
   try {
     const adj = await resolverDocumentoCotizacionAnalista(req.params.id, req.params.ref);

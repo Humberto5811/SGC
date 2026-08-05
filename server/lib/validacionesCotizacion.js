@@ -1295,6 +1295,30 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
   }
   const cot = await loadCotizacionFull(cotizacionId);
   if (String(cot.estado) !== 'COTIZACION_PRESENTADA') throw new Error('La cotización no está presentada');
+
+  // Locadores no pasan por Validaciones (Recepción → CCP).
+  const { normalizarTipo, TIPOS_CONTRATACION } = await import('../../shared/workflow/tiposContratacion.js');
+  const { resolveDestinoDesdeRecepcionCotizaciones, DESTINOS_RECEPCION } = await import('../../shared/workflow/destinoRecepcion.js');
+  let tipoReq = '';
+  try {
+    const { rows: tr } = await query(`
+      SELECT r.tipo FROM solicitud_requerimientos sr
+      JOIN requerimientos r ON r.id = sr.requerimiento_id
+      WHERE sr.solicitud_id = $1
+      ORDER BY r.id LIMIT 1
+    `, [cot.solicitud_id]);
+    tipoReq = tr[0]?.tipo || '';
+  } catch (_) { /* ok */ }
+  const tipoCanon = normalizarTipo(cot.solicitud_tipo || tipoReq || '');
+  if (
+    tipoCanon === TIPOS_CONTRATACION.LOCACION
+    || resolveDestinoDesdeRecepcionCotizaciones(tipoCanon) === DESTINOS_RECEPCION.CCP
+  ) {
+    throw new Error(
+      'Los expedientes de Locadores no se derivan a Validaciones. Use Derivar a CCP desde Recepción.',
+    );
+  }
+
   const estadoActual = String(cot.validacion_estado || '').toUpperCase();
   const esReapertura = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(estadoActual);
   const obsTextoPre = String(observacion || body?.observacion_retorno || '').trim();
