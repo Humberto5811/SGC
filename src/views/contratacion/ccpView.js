@@ -155,7 +155,7 @@ const THEAD = `<tr>
   <th>Solicitud de Cotización</th>
   <th>Centro</th>
   <th>Estado</th>
-  <th>Responsable</th>
+  <th>Responsable actual</th>
   <th style="min-width:100px">CCP</th>
   <th class="text-center" style="width:70px">Acciones</th>
 </tr>`;

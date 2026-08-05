@@ -4,7 +4,6 @@ import {
   bandejaTableStyles,
   getResponsableVigenteLabel,
   getEstadoVigenteLabel,
-  estadoActualBadge,
 } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
@@ -15,13 +14,13 @@ import {
   formatRequerimientosBandeja,
   formatCentrosBandeja,
   consolidarExpedientesRecepcion,
+  renderBadgeEstadoRecepcionHtml,
   labelEstadoCotizacion,
   badgeEstadoCotizacion,
   fechaPrincipalCotizacion,
 } from '../../utils/recepcionCotizacionUtils.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
-import { closeBandejaActionMenus, renderActionMenuCell, bindActionMenus } from '../../utils/bandejaUi.js';
-import { recepcionExpedienteMenuItems } from '../../utils/bandejaActions.js';
+import { closeBandejaActionMenus } from '../../utils/bandejaUi.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -255,7 +254,7 @@ async function showCotizacionDetalleModal(cotId) {
           <div class="modal-body" id="${id}_body">
             <div class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm"></span> Cargando…</div>
           </div>
-          <div class="modal-footer" id="${id}_footer">
+          <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
           </div>
         </div>
@@ -326,30 +325,6 @@ async function showCotizacionDetalleModal(cotId) {
         </div>
       </div>`;
     bindDocumentoButtons(body);
-
-    const footer = document.getElementById(`${id}_footer`);
-    const v = String(c.validacion_estado || '').toUpperCase();
-    const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
-    if (footer && (puedeEnviarValidarRecepcion(c) || esDevolucion)) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = esDevolucion ? 'btn btn-warning' : 'btn btn-primary';
-      btn.innerHTML = esDevolucion
-        ? '<i class="bi bi-arrow-counterclockwise"></i> Devolver a Validación AU'
-        : '<i class="bi bi-send"></i> Enviar a validar';
-      btn.onclick = () => {
-        showEnviarValidarModal(c.id || cotId, {
-          title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
-          submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
-          requireObservacion: esDevolucion,
-          onSuccess: () => {
-            modal.hide();
-            loadCotizaciones(true);
-          },
-        });
-      };
-      footer.insertBefore(btn, footer.firstChild);
-    }
   } catch (err) {
     document.getElementById(`${id}_body`).innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -446,9 +421,17 @@ function showExpedienteDetalleModal(expediente) {
   });
   body?.querySelectorAll('.rc-cot-enviar').forEach((btn) => {
     btn.onclick = () => {
-      openEnviarValidarFromRecepcion(btn.dataset.id, () => {
-        modal.hide();
-        loadCotizaciones(true);
+      const row = (cotizacionesCache || []).find((r) => String(r.id) === String(btn.dataset.id));
+      const v = String(row?.validacion_estado || '').toUpperCase();
+      const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
+      showEnviarValidarModal(btn.dataset.id, {
+        title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
+        submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
+        requireObservacion: esDevolucion,
+        onSuccess: () => {
+          modal.hide();
+          loadCotizaciones(true);
+        },
       });
     };
   });
@@ -460,26 +443,14 @@ function buildLoadParams() {
   return params;
 }
 
-function openEnviarValidarFromRecepcion(cotId, onSuccess) {
-  const row = (cotizacionesCache || []).find((r) => String(r.id) === String(cotId));
-  const v = String(row?.validacion_estado || '').toUpperCase();
-  const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
-  showEnviarValidarModal(cotId, {
-    title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a validar',
-    submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a validar',
-    requireObservacion: esDevolucion,
-    onSuccess: onSuccess || (() => loadCotizaciones(true)),
-  });
-}
-
 const RECEPCION_THEAD = `<tr>
   <th>Solicitud de cotización</th>
   <th>Requerimiento</th>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
   <th>Estado</th>
-  <th>Responsable</th>
-  <th class="text-center">Acciones</th>
+  <th>Responsable actual</th>
+  <th class="text-center">Ver</th>
 </tr>`;
 
 function buildRecepcionRowHtml(exp) {
@@ -494,23 +465,17 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>
-        ${estadoActualBadge(exp)}
+        ${renderBadgeEstadoRecepcionHtml(exp, esc)}
+        <div class="small text-muted">${esc(getEstadoVigenteLabel(exp))}</div>
       </td>
       <td class="small">${esc(getResponsableVigenteLabel(exp))}</td>
-      ${renderActionMenuCell(exp.solicitud_id, recepcionExpedienteMenuItems(exp))}
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-primary rc-exp-ver"
+          data-solicitud-id="${esc(exp.solicitud_id)}">
+          <i class="bi bi-eye"></i> Ver
+        </button>
+      </td>
     </tr>`;
-}
-
-function bindRecepcionBandejaActions(cont) {
-  if (!cont) return;
-  bindActionMenus(cont, {
-    verExpediente: (sid) => {
-      const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
-      if (exp) showExpedienteDetalleModal(exp);
-    },
-    verPropuesta: (cotId) => showCotizacionDetalleModal(cotId),
-    enviarValidar: (cotId) => openEnviarValidarFromRecepcion(cotId),
-  });
 }
 
 async function loadCotizaciones(resetPage = false) {
@@ -573,7 +538,13 @@ async function loadCotizaciones(resetPage = false) {
     shell.thead.innerHTML = RECEPCION_THEAD;
     shell.tbody.innerHTML = pageExpedientes.map(buildRecepcionRowHtml).join('');
 
-    bindRecepcionBandejaActions(cont);
+    cont.querySelectorAll('.rc-exp-ver').forEach((btn) => {
+      btn.onclick = () => {
+        const sid = btn.dataset.solicitudId;
+        const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
+        if (exp) showExpedienteDetalleModal(exp);
+      };
+    });
     recepcionPagination.renderControls('recepCotOuter', () => loadCotizaciones(false));
     restoreScroll(VIEW_ID, SCROLL_SEL);
     refreshIndicator?.hide();

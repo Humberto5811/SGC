@@ -57,11 +57,10 @@ export function evalMenuItems(r) {
     || requiereBadgeModulo(r, MODULO_EVAL)
     || enEvaluacion
     || aprobado;
-  const bloqueadoPorEtapa = !enEvaluacion;
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
-    { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado || bloqueadoPorEtapa },
-    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado || bloqueadoPorEtapa },
+    { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: aprobado },
+    { act: 'delete', label: 'Eliminar', icon: 'bi-trash', disabled: aprobado },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: aprobado || !enEvaluacion },
     { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots', disabled: !motorObs },
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
@@ -76,7 +75,7 @@ export function evalHiddenActions(r, esc) {
   const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Evaluación de Requerimiento');
   const obsEnabled = enEvaluacion || aprobado || pendienteSubsanar || requiereBadgeModulo(r, MODULO_EVAL);
   return `
-    <button type="button" class="eval-edit" data-act-trigger="edit" data-id="${r.id}" ${aprobado || !enEvaluacion ? 'disabled' : ''}></button>
+    <button type="button" class="eval-edit" data-act-trigger="edit" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>
     <button type="button" class="eval-print" data-act-trigger="download" data-id="${r.id}"></button>
     <button type="button" class="eval-attach" data-act-trigger="attach" data-id="${r.id}" data-estado="${esc(r.estado || '')}"></button>
     <button type="button" class="eval-obs-menu" data-act-trigger="obs" data-id="${r.id}"></button>
@@ -84,7 +83,7 @@ export function evalHiddenActions(r, esc) {
     <button type="button" class="eval-observar" data-act-trigger="obs" data-id="${r.id}" ${obsEnabled ? '' : 'disabled'}></button>
     <button type="button" class="eval-approve" data-act-trigger="approve" data-id="${r.id}" ${aprobado || !enEvaluacion ? 'disabled' : ''}></button>
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>
-    <button type="button" class="eval-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado || !enEvaluacion ? 'disabled' : ''}></button>`;
+    <button type="button" class="eval-del" data-act-trigger="delete" data-id="${r.id}" ${aprobado ? 'disabled' : ''}></button>`;
 }
 
 /**
@@ -283,44 +282,6 @@ export function recepcionCotizacionesMenuItems(c) {
       icon: 'bi-arrow-counterclockwise',
     });
   }
-  return items;
-}
-
-/** Menú Acciones de bandeja consolidada por solicitud (RC observación 05). */
-export function recepcionExpedienteMenuItems(exp) {
-  const cots = exp?.cotizaciones || [];
-  const items = [
-    { act: 'verExpediente', label: 'Ver cotizaciones', icon: 'bi-eye', id: exp?.solicitud_id },
-  ];
-  const multi = cots.length > 1;
-  cots.forEach((c) => {
-    const v = String(c?.validacion_estado || '').toUpperCase();
-    const presentada = c?.estado === 'COTIZACION_PRESENTADA';
-    const proveedor = String(c?.razon_social || c?.ruc || '').trim();
-    const suffix = multi && proveedor ? ` — ${proveedor.slice(0, 36)}` : '';
-    if (presentada && (!v || v === 'PENDIENTE')) {
-      items.push({
-        act: 'enviarValidar',
-        label: `Enviar a validar${suffix}`,
-        icon: 'bi-send',
-        id: c.id,
-      });
-    } else if (presentada && (v === 'OBSERVADO' || v === 'NO_APTO' || v === 'APTO')) {
-      items.push({
-        act: 'enviarValidar',
-        label: `Devolver a Validación AU${suffix}`,
-        icon: 'bi-arrow-counterclockwise',
-        id: c.id,
-      });
-    } else if (c?.id) {
-      items.push({
-        act: 'verPropuesta',
-        label: multi ? `Ver propuesta${suffix}` : 'Ver propuesta',
-        icon: 'bi-file-earmark-text',
-        id: c.id,
-      });
-    }
-  });
   return items;
 }
 

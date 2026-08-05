@@ -16,7 +16,7 @@ import {
   triggerFileInput, money as moneyPdf,
 } from '../../utils/proveedorPdfCotizacion.js';
 import {
-  getCotizacionConfig, normalizeTipoCotizacion, unidadMedidaCotizacion,
+  getCotizacionConfig, normalizeTipoCotizacion,
 } from '../../utils/proveedorCotizacionConfig.js';
 import { renderStep1ByTipo, initEntregablesEco, resolveEntregablesFromWorkspace } from '../../utils/proveedorCotizacionSteps.js';
 import { sumPrecioEntregables } from '../../utils/entregablesCotizacion.js';
@@ -474,10 +474,7 @@ function recalcPrecios() {
         total,
       };
       const totalEl = tr.querySelector('.prov-e-total');
-      if (totalEl) {
-        if (totalEl.tagName === 'INPUT') totalEl.value = formatPriceDisplay(total);
-        else totalEl.textContent = money(total);
-      }
+      if (totalEl) totalEl.value = formatPriceDisplay(total);
     });
   } else {
     workspace.items.forEach((it, idx) => {
@@ -764,7 +761,7 @@ function buildPayload() {
         requerimiento_codigo: it.requerimiento_codigo,
         descripcion: it.descripcion,
         cantidad: it.cantidad ?? 1,
-        unidad_medida: unidadMedidaCotizacion(tipo, it.unidad_medida),
+        unidad_medida: it.unidad_medida || 'UND',
       })),
     };
 

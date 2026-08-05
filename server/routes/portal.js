@@ -479,7 +479,7 @@ portalAnalistaRouter.post('/validaciones/:id/derivar', async (req, res, next) =>
     });
   } catch (err) {
     const msg = String(err?.message || '');
-    if (/obligatoria|obligatorios|no está presentada|ya fue|ya está|permitido|submódulo/i.test(msg)) {
+    if (/obligatoria|obligatorios|no está presentada|ya fue|ya está|no permitido/i.test(msg)) {
       return res.status(409).json({ error: msg });
     }
     next(err);

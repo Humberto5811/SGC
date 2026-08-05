@@ -1,9 +1,7 @@
 /**
  * Normalización y render de propuestas recibidas — Recepción de Cotizaciones (RC7.6.3).
  */
-import {
-  normalizeTipoCotizacion, cantidadPorTipo, unidadMedidaCotizacion,
-} from './proveedorCotizacionConfig.js';
+import { normalizeTipoCotizacion, cantidadPorTipo } from './proveedorCotizacionConfig.js';
 
 export function normalizeTipoRecepcion(tipo) {
   const t = String(tipo || '').trim();
@@ -54,7 +52,7 @@ export function normalizeFilasPropuesta(cot) {
       requerimiento_codigo: readText(det, 'requerimiento_codigo', 'codigo_requerimiento', 'codigo', 'req') || '—',
       descripcion: readText(det, 'descripcion', 'denominacion', 'objeto') || '—',
       cantidad: cantidadPorTipo(tipo, det.cantidad),
-      unidad_medida: unidadMedidaCotizacion(tipo, readText(det, 'unidad_medida', 'um')),
+      unidad_medida: readText(det, 'unidad_medida', 'um') || (tipo === 'Bienes' ? 'UND' : 'servicio'),
       marca: '', modelo: '', pais: '', garantia: '', plazo_entrega: '',
     }));
   }
@@ -70,10 +68,8 @@ export function normalizeFilasPropuesta(cot) {
       descripcion: readText(det, 'descripcion', 'denominacion', 'objeto')
         || readText(prop, 'descripcion', 'denominacion') || '—',
       cantidad: tipo === 'Bienes' ? (cantRaw ?? det.cantidad ?? '—') : cantidadPorTipo(tipo, cantRaw ?? det.cantidad),
-      unidad_medida: unidadMedidaCotizacion(
-        tipo,
-        readText(det, 'unidad_medida', 'um') || readText(prop, 'unidad_medida', 'um'),
-      ),
+      unidad_medida: readText(det, 'unidad_medida', 'um') || readText(prop, 'unidad_medida', 'um')
+        || (tipo === 'Bienes' ? 'UND' : 'servicio'),
       marca: readText(prop, 'marca'),
       modelo: readText(prop, 'modelo'),
       pais: readText(prop, 'pais'),
@@ -100,10 +96,7 @@ export function buildFilasEconomicas(cot) {
             requerimiento_codigo: f.requerimiento_codigo,
             descripcion: f.descripcion,
             nro_entregable: `Entregable ${e.nro ?? i + 1}`,
-            unidad_medida: unidadMedidaCotizacion(
-              tipo,
-              readText(e, 'um', 'unidad_medida'),
-            ),
+            unidad_medida: readText(e, 'um', 'unidad_medida') || 'Servicio',
             precio_unitario: e.precio_unitario ?? e.unitario,
             precio_total: e.total,
           });
@@ -123,10 +116,7 @@ export function buildFilasEconomicas(cot) {
             requerimiento_codigo: f.requerimiento_codigo,
             descripcion: f.descripcion,
             nro_entregable: `Entregable ${e.nro ?? e.numero_entregable ?? i + 1}`,
-            unidad_medida: unidadMedidaCotizacion(
-              tipo,
-              readText(e, 'um', 'unidad_medida') || f.unidad_medida,
-            ),
+            unidad_medida: readText(e, 'um', 'unidad_medida') || f.unidad_medida,
             precio_unitario: e.precio_unitario ?? e.unitario,
             precio_total: e.total ?? e.precio_total,
           });

@@ -46,19 +46,6 @@ export function cantidadPorTipo(tipo, cantidad) {
   return cantidad ?? 1;
 }
 
-/**
- * Compatibilidad con SC/cotizaciones históricas que guardaron "UND" para
- * servicios. No altera unidades válidas de bienes ni otras UM explícitas.
- */
-export function unidadMedidaCotizacion(tipo, unidad) {
-  const t = normalizeTipoCotizacion(tipo);
-  const value = String(unidad || '').trim();
-  if (t === 'Servicios' || t === 'Locadores') {
-    return !value || /^(?:UND|UNIDAD)\.?$/i.test(value) ? 'SERVICIO' : value;
-  }
-  return value || 'UND';
-}
-
 /** Textos oficiales — ANEXO Nº 06-A / 06-B (modelo Word INS). */
 export const TEXTO_CONFIRMACION_TR_06A =
   'Asimismo, confirmamos haber leído los términos de referencia del presente requerimiento y que nuestra propuesta técnica cumple con todos los aspectos descritos en el requerimiento remitido.';
