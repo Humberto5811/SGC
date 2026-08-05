@@ -145,7 +145,7 @@ function invitacionesBandejaHeaders(sortState = null) {
 }
 
 function getResponsableRolDisplayInv(r) {
-  const resp = String(r?.responsable_actual || r?.responsableActual || '').trim();
+  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
   if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
   if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
   return getRolDisplayFromRow(r);
@@ -178,7 +178,7 @@ function renderInvBandejaRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsable_actual || r.responsableActual || '—';
+  const resp = r.responsableActual || r.responsable_actual || '—';
   const rol = getResponsableRolDisplayInv(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = resolvePedidoSigamef(r);

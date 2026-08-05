@@ -56,7 +56,7 @@ function actosSortBandejaHeaders(sortState = null) {
 }
 
 function getResponsableRolDisplayCm(r) {
-  const resp = String(r?.responsable_actual || r?.responsableActual || '').trim();
+  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
   if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
   if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
   return getRolDisplayFromRow(r);
@@ -89,7 +89,7 @@ function renderCmBandejaRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsable_actual || r.responsableActual || '—';
+  const resp = r.responsableActual || r.responsable_actual || '—';
   const rol = getResponsableRolDisplayCm(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = resolvePedidoSigamef(r);
@@ -133,7 +133,7 @@ function filterRowsForProfile(rows, filters = {}) {
     const vista = String(filters.vista || '').toLowerCase();
     if (vista === 'mi_equipo') {
       return rows.filter((r) => {
-        const resp = String(r.responsable_actual || r.responsableActual || '');
+        const resp = String(r.responsableActual || r.responsable_actual || '');
         return resp && !/coordinador.*contratos/i.test(resp);
       });
     }

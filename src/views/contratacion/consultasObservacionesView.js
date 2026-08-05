@@ -2,7 +2,7 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
-import { bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { openAdjuntosSolicitudModal } from '../../utils/adjuntosModal.js';
@@ -343,6 +343,7 @@ const CONSULTAS_THEAD = `<tr>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
   <th>Estado</th>
+  <th>Responsable actual</th>
   <th class="text-center">Ver</th>
 </tr>`;
 
@@ -351,6 +352,7 @@ function buildConsultaRowHtml(exp) {
   const tienePendiente = (exp.consultas || []).some((c) => String(c.estado || '').toUpperCase() === 'PENDIENTE');
   const estadoLabel = tienePendiente ? 'Consultas' : 'Consultas';
   const estadoBadge = tienePendiente ? 'warning text-dark' : 'success';
+  const responsable = getResponsableVigenteLabel(exp);
   return `
     <tr data-row-id="${esc(exp.solicitud_id)}">
       <td>
@@ -362,6 +364,7 @@ function buildConsultaRowHtml(exp) {
       <td>
         <span class="badge bg-${estadoBadge}">${esc(estadoLabel)}</span>
       </td>
+      <td class="small">${esc(responsable)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary co-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">

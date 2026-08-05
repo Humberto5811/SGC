@@ -20,6 +20,7 @@ import {
   consolidateCentros,
 } from '../../shared/validacionCentro.js';
 import { resolveEstadoExpedienteVigente } from '../../shared/estadoExpedienteVigente.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'VALIDACIONES', label: 'Validaciones' },
@@ -775,7 +776,12 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
       sin_asignacion: perm.sinAsignacion,
     };
   });
-  return enrichCentrosBandejaValidacion(mapped);
+  const enriched = await enrichCentrosBandejaValidacion(mapped);
+
+  // RC8.4E — anexar estado_responsable_vigente en batch
+  await enrichEstadoResponsableForBandeja(enriched);
+
+  return enriched;
 }
 
 async function loadCotizacionFull(cotizacionId) {

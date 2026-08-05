@@ -297,7 +297,7 @@ export async function fetchBandejaActosPreparatorios(filters = {}, options = {})
   if (options.soloMios && options.usuarioNombre) {
     const me = String(options.usuarioNombre).toLowerCase();
     list = list.filter((r) => {
-      const respName = String(r.responsable_actual || r.responsableActual || '').toLowerCase();
+      const respName = String(r.responsableActual || r.responsable_actual || '').toLowerCase();
       if (/coordinador.*contratos/i.test(respName)) return false;
       return respName.includes(me) || me.split(' ').some((p) => p.length > 2 && respName.includes(p));
     });

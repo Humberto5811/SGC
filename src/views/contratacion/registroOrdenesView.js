@@ -3,7 +3,7 @@
  * Ruta: dec/registro-ordenes · permiso REGISTRO_ORDENES_CONTRATACION
  */
 import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
-import { bandejaTableStyles } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles, getResponsableVigenteLabel, getEstadoVigenteLabel } from '../../utils/trazabilidad.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
 } from '../../utils/bandejaUi.js';
@@ -44,7 +44,7 @@ const VIEW_ID = 'registro-ordenes';
 const SCROLL_SEL = '#roScrollWrap';
 const PREFIX = 'ro';
 const LIST_ID = 'roList';
-const COLS = 21;
+const COLS = 22;
 const loadGuard = createRequestSequenceGuard();
 
 let lifecycle = null;
@@ -76,7 +76,7 @@ const RO_BANDEJA_CSS = `
   font-size: 10px;
   table-layout: fixed;
   width: 100%;
-  min-width: 1480px;
+  min-width: 1580px;
   border-collapse: collapse;
 }
 #${VIEW_ID} table.ro-bandeja thead th {
@@ -183,7 +183,8 @@ export function renderRegistroOrdenesView() {
                 <col style="width:70px">
                 <col style="width:70px">
                 <col style="width:80px">
-                <col style="width:120px">
+                <col style="width:100px">
+                <col style="width:100px">
                 <col style="width:60px">
               </colgroup>
               <thead class="table-light sticky-top">
@@ -207,7 +208,8 @@ export function renderRegistroOrdenesView() {
                   <th>Recepción</th>
                   <th>Plazo de<br>entrega</th>
                   <th>Fecha máxima<br>de entrega</th>
-                  <th>Estado</th>
+                  <th>Estado vigente</th>
+                  <th>Responsable actual</th>
                   <th>Acciones</th>
                 </tr>
               </thead>
@@ -279,6 +281,8 @@ function renderRow(row) {
   const tipCod = esc(row.codigo_sigamef_tooltip || row.codigo_sigamef || '');
   const tipDesc = esc(row.item_descripcion_tooltip || row.item_descripcion || '');
   const tipEnt = esc(row.entrega_tooltip || '');
+  const estadoVigente = getEstadoVigenteLabel(row);
+  const responsableVigente = getResponsableVigenteLabel(row);
   const checklistHtml = shouldShowChecklistBadge(row)
     ? ` ${renderChecklistBadge(row.checklist || row)}`
     : '';
@@ -302,7 +306,8 @@ function renderRow(row) {
     <td>${fmtFecha(row.fecha_recepcion_confirmada)}</td>
     <td title="${esc(row.condicion_inicio_label || '')}">${esc(row.plazo_entrega_label || (row.plazo_entrega ? `${row.plazo_entrega} días` : '—'))}</td>
     <td>${fmtFecha(row.fecha_maxima_entrega)}</td>
-    <td class="ro-wrap">${renderEstado(row)}${checklistHtml}</td>
+    <td class="ro-wrap" title="${esc(estadoVigente)}">${renderEstado(row)}${checklistHtml}</td>
+    <td class="ro-wrap" title="${esc(responsableVigente)}">${esc(responsableVigente)}</td>
     ${menu}
   </tr>`;
 }

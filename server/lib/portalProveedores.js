@@ -10,6 +10,7 @@ import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
 import { prepareCotizacionPortalBody } from './portalCotizacionAdjuntos.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 function clientIp(req) {
   return String(req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '').split(',')[0].trim();
@@ -548,12 +549,34 @@ export async function listarConsultasBandeja(queryParams = {}) {
     ORDER BY c.created_at DESC
     LIMIT 500
   `, params);
-  return rows.map((r) => ({
+
+  const mapped = rows.map((r) => ({
     ...r,
     requerimientos_texto: r.requerimientos_texto || r.requerimiento_codigo || '',
     centros_texto: r.centros_texto || '',
     centro: r.centros_texto || '',
   }));
+
+  // RC8.4E — anexar estado_responsable_vigente en batch
+  try {
+    const { resolveEstadoResponsableBatch } = await import('./resolvedorEstadoResponsable.js');
+    const reqIds = [...new Set(
+      rows.map((r) => parseInt(r.requerimiento_id, 10)).filter((n) => Number.isFinite(n) && n > 0),
+    )];
+    if (reqIds.length) {
+      const resolved = await resolveEstadoResponsableBatch(reqIds);
+      for (const row of mapped) {
+        const rid = parseInt(row.requerimiento_id, 10);
+        if (Number.isFinite(rid) && resolved.has(rid)) {
+          row.estado_responsable_vigente = resolved.get(rid);
+        } else {
+          row.estado_responsable_vigente = null;
+        }
+      }
+    }
+  } catch (_) { /* resolvedor no disponible */ }
+
+  return mapped;
 }
 
 export async function responderConsultaAnalista(consultaId, body, usuario) {
@@ -596,7 +619,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
   }
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado,
-      cot.fecha_presentacion,
+      cot.fecha_presentacion, cot.requerimiento_id,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.estado AS solicitud_estado,
@@ -692,7 +715,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
   }));
   const ccpBySid = await loadCcpFlagsBySolicitudIds(sids);
 
-  return rows.map((r) => {
+  const enriched = rows.map((r) => {
     const eco = typeof r.propuesta_economica === 'object'
       ? r.propuesta_economica
       : (() => { try { return JSON.parse(r.propuesta_economica || '{}'); } catch (_) { return {}; } })();
@@ -772,6 +795,11 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       },
     };
   });
+
+  // RC8.4E — anexar estado_responsable_vigente en batch
+  await enrichEstadoResponsableForBandeja(enriched);
+
+  return enriched;
 }
 
 function AVANZADO_RECEPCION(codigo) {
