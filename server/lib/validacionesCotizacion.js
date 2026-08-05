@@ -21,11 +21,10 @@ import {
 } from '../../shared/validacionCentro.js';
 import { resolveEstadoExpedienteVigente } from '../../shared/estadoExpedienteVigente.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
+import { resolveResponsablePersonaDisplay } from './usuarioDisplay.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'VALIDACIONES', label: 'Validaciones' },
-  { code: 'REGISTRO_REQUERIMIENTO', label: 'Registro de Requerimiento' },
-  { code: 'EVALUACION_REQUERIMIENTO', label: 'Evaluación de Requerimiento' },
 ]);
 
 function parseJson(val, fallback = {}) {
@@ -112,14 +111,18 @@ export function canUserValidateExpediente(cot, usuario, userId, opts = {}) {
   ].filter(Boolean);
 
   const matchNombre = candidatos.some((c) => nameTokensMatch(c, respNombre));
+  const derivadoPor = String(inf.derivacion?.derivado_por || '').trim();
+  const matchDerivador = candidatos.some((c) => nameTokensMatch(c, derivadoPor));
   const v = String(cot.validacion_estado || '').toUpperCase();
   const editable = matchNombre && ['DERIVADA', 'EN_PROCESO'].includes(v);
 
   return {
-    puedeVer: matchNombre,
+    puedeVer: matchNombre || matchDerivador,
     puedeValidar: editable,
     sinAsignacion: false,
-    motivo: matchNombre ? (editable ? 'Responsable asignado' : 'Solo lectura') : 'No asignado',
+    motivo: matchNombre
+      ? (editable ? 'Responsable asignado' : 'Solo lectura')
+      : (matchDerivador ? 'Derivado por el usuario — seguimiento' : 'No asignado'),
   };
 }
 
@@ -175,6 +178,7 @@ function mapCotizacionRow(r, ccpFlags = null) {
     id: r.id,
     solicitud_id: r.solicitud_id,
     proveedor_id: r.proveedor_id,
+    requerimiento_id: r.requerimiento_id,
     estado: r.estado,
     validacion_estado: valEst,
     solicitud_estado: r.solicitud_estado || '',
@@ -804,12 +808,58 @@ async function loadCotizacionFull(cotizacionId) {
   return rows[0];
 }
 
+async function resolveCreadorRequerimientoSolicitud(solicitudId, requerimientoId = null) {
+  const { rows: reqRows } = await query(`
+    SELECT r.id, r.usuario_modificacion, r.responsable, r.area,
+      r.historial_movimientos, r.historial_estados
+    FROM solicitud_requerimientos sr
+    JOIN requerimientos r ON r.id = sr.requerimiento_id
+    WHERE sr.solicitud_id = $1
+    ORDER BY
+      CASE WHEN r.id = $2 THEN 0 ELSE 1 END,
+      r.id ASC
+  `, [solicitudId, requerimientoId]);
+  if (!reqRows.length) return null;
+
+  const creadorRef = resolveResponsablePersonaDisplay(reqRows[0]);
+  if (!creadorRef || creadorRef === 'Usuario AU') return null;
+
+  const { rows: usuarios } = await query(`
+    SELECT id, dni, username, apellidos, nombres, nombre, cargo
+    FROM usuarios
+    WHERE activo = TRUE
+      AND (
+        LOWER(TRIM(COALESCE(username, ''))) = LOWER(TRIM($1))
+        OR TRIM(COALESCE(dni, '')) = TRIM($1)
+        OR LOWER(TRIM(COALESCE(nombre, ''))) = LOWER(TRIM($1))
+        OR LOWER(TRIM(CONCAT(COALESCE(apellidos, ''), ' ', COALESCE(nombres, ''))))
+          = LOWER(TRIM($1))
+      )
+    ORDER BY id ASC
+    LIMIT 1
+  `, [creadorRef]);
+  if (!usuarios.length) return null;
+  const u = usuarios[0];
+  return {
+    id: u.id,
+    username: u.username || u.dni || '',
+    nombre: nombreUsuario(u),
+    cargo: u.cargo || '',
+  };
+}
+
 export async function getPreviewDerivacionValidacion(cotizacionId) {
   const cot = await loadCotizacionFull(cotizacionId);
   const documentos = buildManifiestoCotizacionTecnica(cot);
+  const responsableSugerido = await resolveCreadorRequerimientoSolicitud(
+    cot.solicitud_id,
+    cot.requerimiento_id,
+  );
   return {
     ...mapCotizacionRow(cot),
     documentos_tecnicos: documentos,
+    submodulo_sugerido: 'VALIDACIONES',
+    responsable_sugerido: responsableSugerido,
     excluye_economica: true,
     nota: 'La propuesta económica (Anexo 05-B y montos) no se envía al área usuaria.',
   };
@@ -1293,6 +1343,9 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
   if (!submodulo || !responsable_id || !responsable_nombre) {
     throw new Error('Submódulo y responsable son obligatorios');
   }
+  if (String(submodulo).toUpperCase() !== 'VALIDACIONES') {
+    throw new Error('El único submódulo permitido para esta derivación es Validaciones');
+  }
   const cot = await loadCotizacionFull(cotizacionId);
   if (String(cot.estado) !== 'COTIZACION_PRESENTADA') throw new Error('La cotización no está presentada');
   const estadoActual = String(cot.validacion_estado || '').toUpperCase();
@@ -1460,8 +1513,6 @@ export async function devolverValidacionAAreaUsuaria(cotizacionId, body, usuario
     observacion,
     responsable_id,
     responsable_nombre,
-    submodulo,
-    submodulo_label,
   } = body || {};
   const obs = String(observacion || '').trim();
   if (!obs) throw new Error('La observación es obligatoria para devolver la validación');
@@ -1480,8 +1531,8 @@ export async function devolverValidacionAAreaUsuaria(cotizacionId, body, usuario
   }
 
   return derivarValidacionCotizacion(cotizacionId, {
-    submodulo: submodulo || prevInf.derivacion?.submodulo || 'REGISTRO_REQUERIMIENTO',
-    submodulo_label: submodulo_label || prevInf.derivacion?.submodulo_label,
+    submodulo: 'VALIDACIONES',
+    submodulo_label: 'Validaciones',
     responsable_id: respId,
     responsable_nombre: respNombre,
     observacion: obs,

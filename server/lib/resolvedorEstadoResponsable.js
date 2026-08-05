@@ -14,7 +14,9 @@ import {
   loadEstadoExpedienteEvidenceByIds,
   applyEstadoEvidenceToRow,
 } from './estadoExpedienteEvidence.js';
-import { getUsuarioMap, resolveUsuarioNombreSync } from './usuarioDisplay.js';
+import {
+  getUsuarioMap, resolveUsuarioNombreSync, resolveResponsablePersonaDisplay,
+} from './usuarioDisplay.js';
 import { isRolGenerico } from '../../shared/identificadoresUsuarios.js';
 
 // ==========================================================================
@@ -24,6 +26,60 @@ import { isRolGenerico } from '../../shared/identificadoresUsuarios.js';
 async function loadAsignacionesBatch(ids, rows, estados) {
   const map = new Map();
   ids.forEach((id) => map.set(id, null));
+
+  // ── Validación del Área Usuaria ──
+  // Durante esta etapa manda la asignación de la cotización. Si aún no existe,
+  // el creador real del requerimiento es el responsable inicial.
+  try {
+    const idsValidacion = ids.filter((id) => estados.get(id)?.etapaCodigo === 'VALIDACIONES');
+    if (idsValidacion.length) {
+      const { rows: valRows } = await query(
+        `SELECT sr.requerimiento_id,
+          cot.validacion_responsable,
+          cot.validacion_informe->'derivacion'->>'responsable_nombre' AS responsable_nombre,
+          cot.validacion_informe->'derivacion'->>'responsable_id' AS responsable_id
+         FROM solicitud_requerimientos sr
+         JOIN cotizaciones_proveedor cot ON cot.solicitud_id = sr.solicitud_id
+         WHERE sr.requerimiento_id = ANY($1::int[])
+           AND cot.estado = 'COTIZACION_PRESENTADA'
+           AND UPPER(COALESCE(cot.validacion_estado, '')) IN
+             ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
+         ORDER BY cot.updated_at DESC, cot.id DESC`,
+        [idsValidacion],
+      );
+      const byReq = new Map();
+      valRows.forEach((r) => {
+        const rid = Number(r.requerimiento_id);
+        if (!byReq.has(rid)) byReq.set(rid, r);
+      });
+      for (const rid of idsValidacion) {
+        const r = byReq.get(rid);
+        const nombreAsignado = String(
+          r?.validacion_responsable || r?.responsable_nombre || '',
+        ).trim();
+        if (nombreAsignado && !isRolGenerico(nombreAsignado)) {
+          map.set(rid, {
+            usuarioId: parseInt(r?.responsable_id, 10) || null,
+            username: nombreAsignado,
+            nombre: (await resolveNombre(nombreAsignado)) || nombreAsignado,
+            unidad: 'Área Usuaria',
+          });
+          continue;
+        }
+
+        const req = rows.get(rid);
+        const creador = req ? resolveResponsablePersonaDisplay(req) : '';
+        if (creador && creador !== 'Usuario AU' && !isRolGenerico(creador)) {
+          map.set(rid, {
+            usuarioId: null,
+            username: creador,
+            nombre: (await resolveNombre(creador)) || creador,
+            unidad: 'Área Usuaria',
+          });
+        }
+      }
+    }
+  } catch (_) { /* ok */ }
 
   // ── Invitaciones / Recepción Cotizaciones (solicitudes_cotizacion) ──
   try {
@@ -42,6 +98,7 @@ async function loadAsignacionesBatch(ids, rows, estados) {
       if (!byReq.has(rid)) byReq.set(rid, r);
     });
     for (const [rid, r] of byReq) {
+      if (map.get(rid) !== null) continue;
       const u = String(r.created_by || '').trim();
       if (u && !isRolGenerico(u)) {
         const nombre = await resolveNombre(u);

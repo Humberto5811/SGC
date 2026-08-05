@@ -209,7 +209,7 @@ export function renderRegistroOrdenesView() {
                   <th>Plazo de<br>entrega</th>
                   <th>Fecha máxima<br>de entrega</th>
                   <th>Estado vigente</th>
-                  <th>Responsable actual</th>
+                  <th>Responsable</th>
                   <th>Acciones</th>
                 </tr>
               </thead>

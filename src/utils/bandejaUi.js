@@ -488,12 +488,12 @@ export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '')
           data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false" title="Acciones">⋮</button>
         <ul class="dropdown-menu dropdown-menu-end shadow-sm">
           ${items.map((m) => `
-            <li><button type="button" class="dropdown-item bandeja-menu-act py-1" data-act="${esc(m.act)}" data-id="${id}" ${m.disabled ? 'disabled' : ''}>
+            <li><button type="button" class="dropdown-item bandeja-menu-act py-1" data-act="${esc(m.act)}" data-id="${esc(m.id != null ? m.id : id)}" ${m.disabled ? 'disabled' : ''}>
               <i class="bi ${m.icon || 'bi-dot'} me-2"></i>${esc(m.label)}
             </button></li>`).join('')}
         </ul>
       </div>
-      <div class="visually-hidden bandeja-hidden-actions" data-req-id="${id}">${hiddenActionsHtml}</div>
+      <div class="visually-hidden bandeja-hidden-actions" data-req-id="${esc(id)}">${hiddenActionsHtml}</div>
     </td>`;
 }
 

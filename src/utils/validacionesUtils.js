@@ -336,6 +336,9 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
       estado_vigente: vigente.codigo,
       estado_vigente_label: vigente.label,
       estadoInterno: withOrden.estadoInterno || estadoInternoVal,
+      estado_responsable_vigente: withOrden.estado_responsable_vigente
+        || seedCot.estado_responsable_vigente
+        || null,
       validacion_estado: est.validacion_estado,
       validacion_responsable: responsables.length === 1
         ? responsables[0]
