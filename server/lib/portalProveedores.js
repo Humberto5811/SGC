@@ -623,7 +623,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       COALESCE(
         cot.requerimiento_id,
         (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr
-         WHERE sr.solicitud_id = cot.solicitud_id ORDER BY sr.id LIMIT 1)
+         WHERE sr.solicitud_id = cot.solicitud_id ORDER BY sr.requerimiento_id LIMIT 1)
       ) AS requerimiento_id,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
