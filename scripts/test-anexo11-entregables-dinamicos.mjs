@@ -14,10 +14,8 @@ import {
 } from '../src/utils/entregablesCotizacion.js';
 import {
   buildAnexo11EntregablesRows,
-  buildAnexo11AutoTableBody,
   formatFechaCartaLima,
 } from '../src/utils/proveedorPdfCotizacion.js';
-import { unidadMedidaCotizacion } from '../src/utils/proveedorCotizacionConfig.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -39,15 +37,12 @@ assert.ok(!pdfSrc.includes('MAX_ENTREGABLES_LOCADOR'), 'PDF no usa MAX_ENTREGABL
 assert.ok(!stepsSrc.includes('MAX_ENTREGABLES_LOCADOR'), 'Steps no usa MAX_ENTREGABLES_LOCADOR');
 assert.ok(!pdfSrc.includes('PLAZOS_ENTREGABLES_LABELS'), 'PDF no fija 6 plazos');
 assert.match(pdfSrc, /buildAnexo11EntregablesRows/);
-assert.match(pdfSrc, /buildAnexo11AutoTableBody/);
 assert.match(pdfSrc, /formatFechaCartaLima/);
-assert.match(pdfSrc, /Precio Total S\/ \(Incluido IGV\)/);
-assert.match(pdfSrc, /Descripción del Servicio/);
-assert.match(pdfSrc, /N° de entregables/);
+assert.match(pdfSrc, /Precio total de la propuesta/);
 assert.match(stepsSrc, /renderStep1Entregables/);
 assert.match(viewSrc, /entregables_cotizados/);
 assert.match(viewSrc, /downloadAnexo11/);
-ok('Sin pads de 6 filas; helpers dinámicos y formato institucional presentes');
+ok('Sin pads de 6 filas; helpers dinámicos presentes');
 
 const tdr = {
   locadorInformacion: [
@@ -64,22 +59,9 @@ const priced = mergeEntregablesConPrecios(prog, [
 const rows = buildAnexo11EntregablesRows(priced, 'Servicio REQ-00002');
 assert.equal(rows.length, 2);
 assert.equal(sumPrecioEntregables(rows), 6000);
-assert.match(rows[0].entregable || rows[0].descripcion, /Primer/);
+assert.match(rows[0].descripcion, /Primer/);
 assert.match(String(rows[0].plazo || prog[0].plazo_texto), /30/);
 ok('REQ-00002: exactamente 2 filas y total 6000');
-
-const body = buildAnexo11AutoTableBody(rows, 'Servicio REQ-00002');
-assert.equal(body.length, 2);
-assert.equal(body[0][0].rowSpan, 2);
-assert.match(String(body[0][1].content), /Servicio REQ-00002/);
-assert.match(String(body[0][2]), /Primer/);
-ok('Cuerpo Anexo 11 con rowspan institucional');
-
-assert.equal(unidadMedidaCotizacion('Servicios', 'UND'), 'SERVICIO');
-assert.equal(unidadMedidaCotizacion('Locadores', 'UNIDAD'), 'SERVICIO');
-assert.equal(unidadMedidaCotizacion('Bienes', 'UND'), 'UND');
-assert.equal(unidadMedidaCotizacion('Bienes', 'KG'), 'KG');
-ok('UM histórica UND se corrige sólo para servicios/locadores');
 
 const emptyish = buildAnexo11EntregablesRows([
   { numero: 1, nombre: '', descripcion: '', plazo_texto: '', precio: 0 },

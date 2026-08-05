@@ -5,7 +5,7 @@ import {
   IMPORTANTE_ANEXO11, CONFIRMACION_ANEXO11, GLOSA_LOCADORES_FORMA_PAGO,
   DECLARO_CONOCER_ANEXO11, GLOSA_PENALIDAD_ANEXO11, FORMULA_PENALIDAD_ANEXO11,
   FORMULA_F_ANEXO11, CIERRE_PENALIDAD_ANEXO11, NOTA_COTIZACION_ANEXO11,
-  cantidadPorTipo, unidadMedidaCotizacion,
+  cantidadPorTipo,
 } from './proveedorCotizacionConfig.js';
 import { sumPrecioEntregables } from './entregablesCotizacion.js';
 import { TZ_LIMA } from './dateTimeLima.js';
@@ -52,51 +52,15 @@ export function buildAnexo11EntregablesRows(entregables = [], servicioDesc = '')
   )) : [];
   return list.map((e, idx) => {
     const precio = Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) || 0;
-    const nombreEnt = String(e.nombre || e.descripcion || `Entregable ${idx + 1}`).trim();
+    const desc = String(e.nombre || e.descripcion || (idx === 0 ? servicioDesc : '') || '').trim();
     return {
       nro: e.numero ?? e.nro ?? idx + 1,
-      servicio: String(servicioDesc || '').trim(),
-      entregable: nombreEnt,
-      descripcion: nombreEnt,
+      descripcion: desc,
       plazo: String(e.plazo_texto || e.plazo || '').trim(),
       um: e.um || e.unidad_medida || 'Servicio',
       precio,
       total: precio,
     };
-  });
-}
-
-/** Cuerpo autoTable Anexo 11 — formato institucional (6 columnas, rowspan servicio). */
-export function buildAnexo11AutoTableBody(rows = [], servicioDesc = '') {
-  const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) {
-    return [[
-      '—',
-      String(servicioDesc || 'Sin servicio').trim() || '—',
-      'Sin entregables programados',
-      '—',
-      '0.00',
-      '0.00',
-    ]];
-  }
-  const n = list.length;
-  const descServicio = String(servicioDesc || list[0]?.servicio || '').trim();
-  return list.map((e, idx) => {
-    const um = e.um || e.unidad_medida || 'Servicio';
-    const precio = money(e.precio);
-    const total = money(e.total ?? e.precio);
-    const entregable = e.entregable || e.descripcion || `Entregable ${e.nro ?? idx + 1}`;
-    if (idx === 0) {
-      return [
-        { content: String(e.nro ?? 1), rowSpan: n, styles: { valign: 'middle', halign: 'center' } },
-        { content: descServicio, rowSpan: n, styles: { valign: 'middle' } },
-        entregable,
-        um,
-        precio,
-        total,
-      ];
-    }
-    return [entregable, um, precio, total];
   });
 }
 
@@ -344,7 +308,7 @@ export function downloadAnexo06A({ solicitud, items, extra, proveedor, datos, lo
     it.requerimiento_codigo || '',
     String(it.descripcion || ''),
     String(cantidadPorTipo(locador ? 'Locadores' : 'Servicios', it.cantidad)),
-    unidadMedidaCotizacion(locador ? 'Locadores' : 'Servicios', it.unidad_medida),
+    it.unidad_medida || 'servicio',
   ]);
 
   doc.autoTable({
@@ -425,7 +389,7 @@ export function downloadAnexo06B({ solicitud, items, precios, proveedor, datos }
       it.requerimiento_codigo || '',
       String(it.descripcion || ''),
       String(cantidadPorTipo('Servicios', it.cantidad)),
-      unidadMedidaCotizacion('Servicios', it.unidad_medida),
+      it.unidad_medida || 'servicio',
       money(p.unitario),
       money(p.total),
     ];
@@ -495,37 +459,32 @@ export function downloadAnexo11({ solicitud, items, entregablesEco, extra, prove
     || [];
   const rows = buildAnexo11EntregablesRows(rawEnts, servicio);
   const total = sumPrecioEntregables(rows);
-  const body = buildAnexo11AutoTableBody(rows, servicio);
+  const body = rows.map((e) => [
+    String(e.nro),
+    e.descripcion,
+    e.um,
+    money(e.precio),
+  ]);
 
   doc.autoTable({
     startY: y,
     head: [[
-      'N°',
-      'Descripción del Servicio',
-      'N° de entregables',
-      'Unidad de medida',
-      'Precio Unitario por cada entregable S/\n(Inc. IGV)',
-      'Precio Total S/\n(Inc. IGV)',
+      'N°', 'Entregable / Descripción', 'Unidad de medida',
+      'Precio S/\n(Inc. IGV)',
     ]],
-    body,
-    styles: { fontSize: 7, cellPadding: 3, overflow: 'linebreak', valign: 'top', halign: 'center' },
+    body: body.length ? body : [['—', 'Sin entregables programados', '—', '0.00']],
+    styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak', valign: 'top' },
     columnStyles: {
-      1: { cellWidth: 140, halign: 'left' },
-      2: { cellWidth: 95, halign: 'left' },
-      4: { halign: 'right' },
-      5: { halign: 'right' },
+      1: { cellWidth: 260 },
     },
-    headStyles: {
-      fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold',
-      halign: 'center', valign: 'middle',
-    },
+    headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0], fontStyle: 'bold' },
     margin: { left: MARGIN, right: MARGIN },
   });
 
   y = doc.lastAutoTable.finalY + 10;
   doc.setFontSize(9);
   doc.setFont(undefined, 'bold');
-  doc.text(`Precio Total S/ (Incluido IGV): ${money(total)}`, MARGIN, y);
+  doc.text(`Precio total de la propuesta: S/ ${money(total)}`, MARGIN, y);
   doc.setFont(undefined, 'normal');
   y += 16;
 

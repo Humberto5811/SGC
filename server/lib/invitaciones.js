@@ -204,14 +204,10 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
   for (const r of rows) {
     const payload = parsePayload(r);
     const centro = resolveCentroDisplay(r);
-    const tipoReq = String(r.tipo || '').toLowerCase();
-    const esServicio = /servicio/.test(tipoReq);
-    const esLocacion = /locad|locaci/.test(tipoReq);
-    const rawItems = esServicio ? (payload.servicioItems || [])
-      : esLocacion ? (payload.locadorItems || [])
+    const rawItems = r.tipo === 'servicios' ? (payload.servicioItems || [])
+      : r.tipo === 'locacion' ? (payload.locadorItems || [])
         : (payload.items || []);
     if (Array.isArray(rawItems) && rawItems.length) {
-      const umDefault = (esServicio || esLocacion) ? 'SERVICIO' : 'UND';
       rawItems.forEach((it, idx) => {
         items.push({
           requerimiento_id: r.id,
@@ -223,7 +219,6 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
           codigo_sigamef: it.item_bien || it.codigo || '',
           descripcion: it.nombre_item || it.descripcion || r.denominacion || '',
           cantidad: it.cantidad || it.cant || 1,
-          unidad_medida: it.unidad_medida || it.um || umDefault,
           item_index: idx,
           documentos: Object.entries(it.documentos_anexos || {}).map(([tipo, d]) => ({
             documento: tipo,
@@ -235,7 +230,6 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
         });
       });
     } else {
-      const umDefault = (esServicio || esLocacion) ? 'SERVICIO' : 'UND';
       items.push({
         requerimiento_id: r.id,
         requerimiento_codigo: r.codigo,
@@ -246,7 +240,6 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
         codigo_sigamef: '',
         descripcion: r.denominacion || '',
         cantidad: 1,
-        unidad_medida: umDefault,
         item_index: 0,
         documentos: [],
       });

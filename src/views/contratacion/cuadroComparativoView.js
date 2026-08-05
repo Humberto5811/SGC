@@ -444,7 +444,7 @@ function buildCuadroTheadHtml() {
     <th>Centro</th>
     <th class="text-center">Cantidad</th>
     <th>Estado</th>
-    <th>Responsable</th>
+    <th>Responsable actual</th>
     <th class="text-center">Ver</th>
   </tr>`;
 }
