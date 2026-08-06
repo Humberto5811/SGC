@@ -2,9 +2,9 @@
 import {
   resolveEstadoExpedienteVigente,
   BADGE_COLOR_CCP,
-  renderBadgeEstadoVigenteHtml,
   esExpedienteDerivadoCcp,
 } from '../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../ui/workflow/index.js';
 
 const ESTADOS_VALIDADO = new Set(['APTO']);
 const ESTADOS_OBSERVADO = new Set(['NO_APTO', 'OBSERVADO']);
@@ -187,12 +187,14 @@ export function renderBadgeEstadoValidacionHtml(exp, escFn = (s) => String(s ?? 
       recepcion_bienes_expediente_id: exp.recepcion_bienes_expediente_id ?? null,
     }, escFn);
   }
-  const cls = exp?.estado_bandeja_class || 'warning';
   const label = exp?.estado_bandeja || 'Pendiente de validación';
-  if (exp?.badgeStyle) {
-    return `<span class="badge badge-estado-mod" style="${escFn(exp.badgeStyle)}">${escFn(label)}</span>`;
-  }
-  return `<span class="badge bg-${escFn(cls)}">${escFn(label)}</span>`;
+  return renderBadgeEstadoVigenteHtml({
+    ...exp,
+    estado_responsable_vigente: exp.estado_responsable_vigente || {
+      estadoCodigo: exp.estado_vigente || exp.validacion_estado || '',
+      estadoLabel: label,
+    },
+  }, escFn);
 }
 
 export function formatRequerimientosValidacion(c, esc) {

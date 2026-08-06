@@ -9,7 +9,7 @@ import {
 } from '../../utils/bandejaUi.js';
 import { ccpMenuItems } from '../../utils/bandejaActions.js';
 import { openCcpCodigoModal } from '../../utils/ccpCodigoModal.js';
-import { renderBadgeEstadoVigenteHtml } from '../../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -113,7 +113,13 @@ function renderEstadoCell(row) {
     return renderBadgeEstadoVigenteHtml(seed, esc);
   }
   const label = row.etiqueta_estado || row.estado_ccp_label || row.estado_ccp || '—';
-  return `<span class="badge bg-secondary">${esc(label)}</span>`;
+  return renderBadgeEstadoVigenteHtml({
+    ...row,
+    estado_responsable_vigente: row.estado_responsable_vigente || {
+      estadoCodigo: row.estado_codigo || row.estado_ccp || '',
+      estadoLabel: label,
+    },
+  }, esc);
 }
 
 function renderRow(row) {

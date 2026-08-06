@@ -14,7 +14,7 @@ import {
 } from '../../utils/trazabilidad.js';
 import { renderEstadoVisualHtml, buildPresenterRow } from '../../utils/estadoVisualPresenter.js';
 import { renderEstadoExpedienteHtml } from '../../utils/estadoExpedientePresenter.js';
-import { renderBadgeEstadoVigenteHtml } from '../../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import { SUBMODULOS_DESTINO, getPersonasForSubmodulo, getSubmoduloByLabel, getObservacionOrigenLabel, getSubmoduloDisplayLabel, getObservacionPendiente, observacionPendienteParaSubmodulo } from '../../utils/observacionDestino.js';
 import { getListaObservaciones, obtenerEstadoObservaciones, migrateObservacion, buildArbolObservaciones, formatEtiquetaJerarquica, getObservacionPadreId, calcularRondaRaiz } from '../../../shared/observacionesMotor.js';
 import { renderAdjuntosPanel } from '../../utils/adjuntosModal.js';

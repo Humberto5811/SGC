@@ -52,7 +52,7 @@ export const MENU_STRUCTURE = [
       { path: 'ejecucion/recepcion-bienes', label: 'Recepción de Bienes', icon: 'bi-box-seam', submoduloId: 'RECEPCION_BIENES' },
       { path: 'ejecucion/presentacion', label: 'Presentación Entregable', icon: 'bi-file-check', submoduloId: 'ALMACEN' },
       { path: 'ejecucion/ampliacion', label: 'Ampliación Resolución', icon: 'bi-calendar-plus', submoduloId: 'AMPLIACION' },
-      { path: 'ejecucion/pago', label: 'Derivación de Pago', icon: 'bi-credit-card', submoduloId: 'TESORERIA' },
+      { path: 'ejecucion/pago', label: 'Pagos', icon: 'bi-credit-card', submoduloId: 'TESORERIA' },
     ],
   },
   {

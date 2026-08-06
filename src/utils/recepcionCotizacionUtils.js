@@ -1,9 +1,8 @@
 /** Utilidades compartidas — bandeja Recepción de Cotizaciones. */
 import {
-  BADGE_COLOR_CCP,
-  renderBadgeEstadoVigenteHtml,
   esExpedienteDerivadoCcp,
 } from '../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../ui/workflow/index.js';
 import {
   buildEstadoRecepcionContract,
   resolveEstadoRecepcion,
@@ -142,12 +141,13 @@ export function renderBadgeEstadoRecepcionHtml(exp, escFn = (s) => String(s ?? '
   }
 
   const label = labelEstadoRecepcionAgregado(exp);
-  const cls = exp?.badge_estado || badgeClassRecepcion(codigo, '') || 'primary';
-  if (cls === 'ccp-morado' || exp?.badgeStyle) {
-    const style = exp?.badgeStyle || `background:${BADGE_COLOR_CCP};color:#fff`;
-    return `<span class="badge badge-estado-mod" style="${escFn(style)}">${escFn(label)}</span>`;
-  }
-  return `<span class="badge bg-${escFn(cls)}">${escFn(label)}</span>`;
+  return renderBadgeEstadoVigenteHtml({
+    ...exp,
+    estado_responsable_vigente: exp.estado_responsable_vigente || {
+      estadoCodigo: codigo || exp.estado_vigente || '',
+      estadoLabel: label,
+    },
+  }, escFn);
 }
 
 function fechaSortKey(iso) {

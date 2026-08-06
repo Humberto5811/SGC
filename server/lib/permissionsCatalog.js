@@ -34,7 +34,7 @@ export const MODULOS = [
     submodulos: [
       { id: 'RECEPCION_BIENES', label: 'Recepción de Bienes', route: 'ejecucion/recepcion-bienes' },
       { id: 'ALMACEN', label: 'Almacén / Presentación Entregable', route: 'ejecucion/presentacion' },
-      { id: 'TESORERIA', label: 'Tesorería', route: 'ejecucion/pago' },
+      { id: 'TESORERIA', label: 'Pagos', route: 'ejecucion/pago' },
       { id: 'AMPLIACION', label: 'Ampliación Resolución', route: 'ejecucion/ampliacion' },
     ],
   },

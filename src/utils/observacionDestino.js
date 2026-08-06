@@ -69,8 +69,67 @@ export function normalizeLegacyActosLabel(text) {
     .replace(/\bEn Actos Prep\.?\b/gi, 'En Coordinación CM');
 }
 
+/** Código interno estable (permisos / rutas / workflow). */
+export const SUBMODULO_CODE_TESORERIA = 'TESORERIA';
+/** Etiqueta visible institucional. */
+export const SUBMODULO_LABEL_PAGOS = 'Pagos';
+
+/**
+ * Alias históricos de Tesorería / Pagos (fuente única).
+ * Comparación vía foldLabel (sin acentos, minúsculas, espacios colapsados).
+ */
+const TESORERIA_LABEL_ALIASES = Object.freeze([
+  'tesoreria',
+  'en tesoreria',
+  'derivacion de pago',
+  'pago',
+  'pagos',
+  'en pagos',
+]);
+
+function foldSubmoduloLabel(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/** True si el valor es código o etiqueta legacy/actual de TESORERIA/Pagos. */
+export function isTesoreriaAlias(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (raw.toUpperCase() === SUBMODULO_CODE_TESORERIA) return true;
+  return TESORERIA_LABEL_ALIASES.includes(foldSubmoduloLabel(raw));
+}
+
+/**
+ * Resuelve alias / código a TESORERIA, o null si no aplica.
+ * @param {unknown} value
+ * @returns {'TESORERIA'|null}
+ */
+export function resolveTesoreriaCode(value) {
+  return isTesoreriaAlias(value) ? SUBMODULO_CODE_TESORERIA : null;
+}
+
+/**
+ * Normaliza etiqueta de submódulo para UI.
+ * Alias Tesorería / Derivación de Pago / Pago / Pagos / TESORERIA → "Pagos".
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export function normalizeSubmoduloLabel(value) {
+  if (value == null || value === '') return value;
+  if (isTesoreriaAlias(value)) return SUBMODULO_LABEL_PAGOS;
+  return String(value);
+}
+
 export function getSubmoduloDisplayLabel(label) {
   const s = String(label || '').trim();
+  if (!s) return '—';
+  const pagos = normalizeSubmoduloLabel(s);
+  if (isTesoreriaAlias(s)) return pagos;
   return normalizeLegacyActosLabel(SUBMODULO_DISPLAY_LABELS[s] || s || '—');
 }
 
@@ -106,6 +165,7 @@ export function getRolDisplayFromRow(row) {
     ORDEN: 'Registro de Órdenes',
     EJECUCION: 'Ejecución',
     RECEPCION_BIENES: 'Almacén',
+    TESORERIA: SUBMODULO_LABEL_PAGOS,
   };
   return byEtapa[etapa] || sub || '—';
 }
@@ -123,12 +183,15 @@ export const SUBMODULOS_DESTINO = [
   { code: 'CCP', label: 'CCP', personas: ['Comité de Compras Públicas'] },
   { code: 'EJECUCION', label: 'Ejecución Contractual', personas: ['Ejecutor Contractual'] },
   { code: 'ALMACEN', label: 'Almacén', personas: ['Almacén'] },
-  { code: 'TESORERIA', label: 'Tesorería', personas: ['Tesorería'] },
+  { code: 'TESORERIA', label: 'Pagos', personas: ['Pagos'] },
 ];
 
 export function getSubmoduloByLabel(label) {
   const s = String(label || '').trim();
   if (!s) return null;
+  if (isTesoreriaAlias(s)) {
+    return SUBMODULOS_DESTINO.find((item) => item.code === SUBMODULO_CODE_TESORERIA) || null;
+  }
   if (/actos prep/i.test(s) || /coordinaci[oó]n cm/i.test(s)) {
     return SUBMODULOS_DESTINO.find((item) => item.code === 'ACTOS_PREPARATORIOS') || null;
   }
@@ -154,7 +217,7 @@ export function resolveEstadoFromDestino(destinoSubmodulo, destinoEtapa) {
     case 'CCP': return 'En CCP';
     case 'EJECUCION': return 'En Ejecución';
     case 'ALMACEN': return 'En Almacén';
-    case 'TESORERIA': return 'En Tesorería';
+    case 'TESORERIA': return 'En Pagos';
     case 'EVALUACION':
     default: return 'En tramite de aprobación';
   }

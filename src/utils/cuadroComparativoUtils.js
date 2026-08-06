@@ -6,9 +6,9 @@ import {
   labelEstadoCuadroVigente,
   BADGE_COLOR_CCP,
   badgeVisualEstadoVigente,
-  renderBadgeEstadoVigenteHtml,
   esExpedienteDerivadoCcp,
 } from '../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../ui/workflow/index.js';
 
 export { BADGE_COLOR_CCP, badgeVisualEstadoVigente, renderBadgeEstadoVigenteHtml, esExpedienteDerivadoCcp };
 
@@ -254,7 +254,13 @@ export function renderBadgeEstadoCuadroHtml(rowOrCode, label, escFn = (s) => Str
   const text = label != null
     ? label
     : (labelEstadoExpedienteUnificado(row) || labelCuadroEstado(code));
-  return `<span class="badge ${badgeHtmlClassCuadro(code)}">${escFn(text)}</span>`;
+  return renderBadgeEstadoVigenteHtml({
+    ...row,
+    estado_responsable_vigente: row.estado_responsable_vigente || {
+      estadoCodigo: n || code || '',
+      estadoLabel: text,
+    },
+  }, escFn);
 }
 
 /** Actualiza un nodo badge existente (modales). */

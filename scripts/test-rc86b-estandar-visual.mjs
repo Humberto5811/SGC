@@ -19,6 +19,15 @@ import { adaptEstadoResponsable, TIPO_RESPONSABLE_UI } from '../src/ui/workflow/
 import { renderEstadoBadgeHtml } from '../src/ui/workflow/EstadoBadge.js';
 import { renderResponsableBadgeHtml } from '../src/ui/workflow/ResponsableBadge.js';
 import { renderEstadoResponsableCellHtml } from '../src/ui/workflow/EstadoResponsableCell.js';
+import {
+  normalizeSubmoduloLabel,
+  resolveTesoreriaCode,
+  isTesoreriaAlias,
+  getSubmoduloByLabel,
+  SUBMODULO_CODE_TESORERIA,
+  SUBMODULO_LABEL_PAGOS,
+} from '../src/utils/observacionDestino.js';
+import { filterRowsClient } from '../src/utils/trazabilidad.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
@@ -351,6 +360,80 @@ test('30. git diff --check limpio (si hay cambios)', () => {
 test('Pagos stub documentado', () => {
   ok(/NO IMPLEMENTADO/i.test(read('src/views/ejecucion/derivacionPagoView.js')));
   ok(/Pagos/.test(read('src/views/ejecucion/derivacionPagoView.js')));
+});
+
+// ── RC8.6B.1 — compatibilidad etiquetas Tesorería / Pagos ──
+console.log('\n🔬 RC8.6B.1 — Compatibilidad Tesorería / Pagos\n');
+
+const TESORERIA_ALIASES_CASES = [
+  'Tesorería',
+  'TESORERIA',
+  'Derivación de Pago',
+  'Pago',
+  'Pagos',
+];
+
+test('B1. Alias legacy resuelven a código TESORERIA', () => {
+  for (const alias of TESORERIA_ALIASES_CASES) {
+    eq(resolveTesoreriaCode(alias), 'TESORERIA', `resolveTesoreriaCode(${alias})`);
+    eq(getSubmoduloByLabel(alias)?.code, 'TESORERIA', `getSubmoduloByLabel(${alias})`);
+    ok(isTesoreriaAlias(alias), `isTesoreriaAlias(${alias})`);
+  }
+});
+
+test('B2. Etiqueta visible final siempre es Pagos', () => {
+  for (const alias of TESORERIA_ALIASES_CASES) {
+    eq(normalizeSubmoduloLabel(alias), 'Pagos', `normalizeSubmoduloLabel(${alias})`);
+  }
+  eq(SUBMODULO_LABEL_PAGOS, 'Pagos');
+  eq(SUBMODULO_CODE_TESORERIA, 'TESORERIA');
+});
+
+test('B3. Permisos TESORERIA permanecen intactos', () => {
+  const p = read('src/utils/permissionsCatalog.js');
+  ok(p.includes("id: 'TESORERIA'"));
+  ok(p.includes("label: 'Pagos'"));
+  ok(p.includes("route: 'ejecucion/pago'"));
+  const sp = read('server/lib/permissionsCatalog.js');
+  ok(sp.includes("id: 'TESORERIA'"));
+  ok(sp.includes("label: 'Pagos'"));
+  ok(sp.includes("route: 'ejecucion/pago'"));
+});
+
+test('B4. Ruta ejecucion/pago permanece intacta', () => {
+  ok(read('src/services/menuService.js').includes("path: 'ejecucion/pago'"));
+  ok(read('src/utils/permissionsCatalog.js').includes("route: 'ejecucion/pago'"));
+  ok(read('server/lib/permissionsCatalog.js').includes("route: 'ejecucion/pago'"));
+});
+
+test('B5. Menú muestra únicamente Pagos (no Tesorería como label)', () => {
+  const menu = read('src/services/menuService.js');
+  ok(menu.includes("label: 'Pagos'"));
+  ok(menu.includes("submoduloId: 'TESORERIA'"));
+  ok(!/label:\s*'Tesorería'/.test(menu));
+  ok(!/label:\s*'Derivación de Pago'/.test(menu));
+});
+
+test('B6. Alias centralizados (sin arrays duplicados en vistas)', () => {
+  const od = read('src/utils/observacionDestino.js');
+  ok(od.includes('TESORERIA_LABEL_ALIASES'));
+  ok(od.includes('normalizeSubmoduloLabel'));
+  ok(od.includes('isTesoreriaAlias'));
+  const tr = read('src/utils/trazabilidad.js');
+  ok(tr.includes('isTesoreriaAlias'));
+  ok(tr.includes('normalizeSubmoduloLabel'));
+  ok(!tr.includes('TESORERIA_LABEL_ALIASES'), 'trazabilidad no debe duplicar el array de alias');
+});
+
+test('B7. Filtro Pagos reconoce filas legacy Tesorería', () => {
+  const rows = [
+    { id: 1, sub_modulo_actual: 'Tesorería' },
+    { id: 2, sub_modulo_actual: 'Almacén' },
+    { id: 3, sub_modulo_actual: 'Pagos' },
+  ];
+  const filtered = filterRowsClient(rows, { sub_modulo_actual: 'Pagos' });
+  eq(filtered.length, 2);
+  ok(filtered.every((r) => r.id === 1 || r.id === 3));
 });
 
 console.log(`\nResultado: ${passed} OK, ${failed} FAIL\n`);

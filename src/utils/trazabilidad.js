@@ -1,6 +1,8 @@
 // Utilidades UI de trazabilidad de expedientes (frontend)
 import { computeMotorSnapshot, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
 import { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow } from './estadoVisualPresenter.js';
+import { adaptEstadoResponsable } from '../ui/workflow/adaptEstadoResponsable.js';
+import { isTesoreriaAlias, normalizeSubmoduloLabel } from './observacionDestino.js';
 
 export const ETAPA_BADGES = {
   REGISTRADO: 'secondary',
@@ -35,7 +37,7 @@ export const ETAPA_LABELS = {
   EJECUCION: 'Ejecución Contractual',
   REGISTRO_ORDEN: 'Registro de Orden',
   ALMACEN: 'Almacén',
-  TESORERIA: 'Tesorería',
+  TESORERIA: 'Pagos',
   FINALIZADO: 'Finalizado',
   OBSERVADO: 'Observado',
 };
@@ -55,7 +57,7 @@ export const ESTADO_ACTUAL_TEXTO = {
   EJECUCION: 'En Ejecución',
   REGISTRO_ORDEN: 'En Reg. Orden',
   ALMACEN: 'En Almacén',
-  TESORERIA: 'En Tesorería',
+  TESORERIA: 'En Pagos',
   FINALIZADO: 'Finalizado',
   OBSERVADO: 'Observado',
 };
@@ -75,7 +77,7 @@ export const ETAPA_TIMELINE_LABELS = {
   EJECUCION: 'Ejecución Contractual',
   REGISTRO_ORDEN: 'Registro de Orden',
   ALMACEN: 'Almacén',
-  TESORERIA: 'Tesorería',
+  TESORERIA: 'Pagos',
   FINALIZADO: 'Finalizado',
   OBSERVADO: 'Observado',
 };
@@ -238,7 +240,7 @@ export const SUBMODULOS_FILTRO = [
   'CCP',
   'Registro de Orden',
   'Almacén',
-  'Tesorería',
+  'Pagos',
   'Finalizado',
 ];
 
@@ -395,22 +397,28 @@ export function enrichReqRow(r) {
 
   // RC8.4D — contrato estado_responsable_vigente como fuente primaria (backend enriquece en batch)
   const erv = r.estado_responsable_vigente;
-  const subModulo = erv?.etapaLabel
+  const subRaw = erv?.etapaLabel
     || snapSub
     || r.sub_modulo_actual
     || r.subModuloActual
     || ETAPA_LABELS[etapaWorkflow]
     || getEstadoActualTexto(etapaWorkflow);
+  const subModulo = normalizeSubmoduloLabel(subRaw) || '';
 
   const estadoNegocio = erv?.estadoLabel
     || String(r?.estado || '').trim()
     || resolveEstadoNegocioFromRow(r);
 
-  const estadoActualTexto = erv?.etapaLabel
+  const estadoActualTextoRaw = erv?.etapaLabel
     || subModulo
     || r.estado_actual_texto
     || r.estadoActualTexto
     || getEstadoActualTexto(etapaWorkflow);
+  const estadoActualTexto = isTesoreriaAlias(estadoActualTextoRaw)
+    ? (String(estadoActualTextoRaw).trim().toLowerCase().startsWith('en ')
+      ? 'En Pagos'
+      : normalizeSubmoduloLabel(estadoActualTextoRaw))
+    : estadoActualTextoRaw;
 
   // RC8.4D — responsable vigente: PERSONA > UNIDAD > PENDIENTE
   let responsableActual;
@@ -451,22 +459,17 @@ export function enrichReqRow(r) {
 }
 
 /**
- * RC8.4F — etiqueta visible de responsable vigente (regla única).
- * Preferir estado_responsable_vigente; fallback a responsableActual enriquecido.
+ * RC8.4F / RC8.6B — etiqueta visible de responsable vigente (adapter único).
  */
 export function getResponsableVigenteLabel(row) {
-  const enriched = enrichReqRow(row || {});
-  return enriched.responsableActual || '—';
+  return adaptEstadoResponsable(row || {}).responsableDisplay || 'Pendiente de asignación';
 }
 
 /**
- * RC8.4F — etiqueta de estado de negocio desde contrato (o fallback).
+ * RC8.4F / RC8.6B — etiqueta de estado de negocio desde catálogo/adapter.
  */
 export function getEstadoVigenteLabel(row) {
-  const enriched = enrichReqRow(row || {});
-  const erv = enriched.estado_responsable_vigente;
-  if (erv?.estadoLabel) return erv.estadoLabel;
-  return enriched.estado || enriched.estado_actual_texto || enriched.estadoActualTexto || '—';
+  return adaptEstadoResponsable(row || {}).estadoLabel || '—';
 }
 
 export function filterRowsClient(rows, filters = {}) {
@@ -474,7 +477,7 @@ export function filterRowsClient(rows, filters = {}) {
   const codigo = String(f.codigo || '').toLowerCase();
   const sigamef = String(f.codigo_sigamef || '').toLowerCase();
   const estado = String(f.estado_actual || '').toUpperCase();
-  const subMod = String(f.sub_modulo_actual || '').toLowerCase();
+  const subModFilter = String(f.sub_modulo_actual || '').trim();
   const resp = String(f.responsable_actual || '').toLowerCase();
   const area = String(f.area || '').toLowerCase();
   return (rows || []).filter((r) => {
@@ -485,7 +488,14 @@ export function filterRowsClient(rows, filters = {}) {
       if (!String(codigosSigamef || '').toLowerCase().includes(sigamef)) return false;
     }
     if (estado && String(row.estadoActual || row.estado_actual || '').toUpperCase() !== estado) return false;
-    if (subMod && !String(row.subModuloActual || row.sub_modulo_actual || '').toLowerCase().includes(subMod)) return false;
+    if (subModFilter) {
+      const rowSub = String(row.subModuloActual || row.sub_modulo_actual || '').trim();
+      if (isTesoreriaAlias(subModFilter) || isTesoreriaAlias(rowSub)) {
+        if (!(isTesoreriaAlias(subModFilter) && isTesoreriaAlias(rowSub))) return false;
+      } else if (!rowSub.toLowerCase().includes(subModFilter.toLowerCase())) {
+        return false;
+      }
+    }
     if (resp && !String(row.responsableActual || '').toLowerCase().includes(resp)) return false;
     if (area && !String(row.area || '').toLowerCase().includes(area)) return false;
     return true;

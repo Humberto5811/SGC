@@ -19,6 +19,8 @@ import {
   getSubmoduloByLabel,
   SUBMODULOS_DESTINO,
 } from './observacionDestino.js';
+import { adaptEstadoResponsable } from '../ui/workflow/adaptEstadoResponsable.js';
+import { renderEstadoBadgeHtml } from '../ui/workflow/EstadoBadge.js';
 
 const ESTADO_COLORES = Object.freeze({
   REGISTRADO: { bg: '#0d6efd', fg: '#fff' },
@@ -222,13 +224,13 @@ export function buildEstadoVisual(row, opts = {}) {
 }
 
 export function renderEstadoVisualHtml(row, opts = {}, escFn = (s) => String(s ?? '')) {
+  // RC8.6B — presentación institucional vía componentes centrales (sin colores inline)
   const v = buildEstadoVisual(row, opts);
-  const fg = v.color.fg || '#fff';
-  const workflowBadge = `<span class="badge badge-estado-mod" style="background:${v.color.bg};color:${fg};">${escFn(v.textoPrincipal)}</span>`;
-  if (v.badgeObservado) {
-    return `${workflowBadge}<span class="badge bg-danger ms-1" title="Observación pendiente — acción requerida en ${escFn(v.textoPrincipal)}">Observado</span>`;
-  }
-  return workflowBadge;
+  const adapted = adaptEstadoResponsable(row);
+  if (v.textoPrincipal) adapted.estadoLabel = v.textoPrincipal;
+  const code = v.estadoVigente?.codigo || v.estadoVigente?.estadoVigente?.codigo;
+  if (code) adapted.estadoCodigo = code;
+  return renderEstadoBadgeHtml(adapted, { observed: !!v.badgeObservado });
 }
 
 export default { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow };

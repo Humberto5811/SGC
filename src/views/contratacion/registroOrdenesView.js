@@ -7,7 +7,7 @@ import { bandejaTableStyles, getResponsableVigenteLabel, getEstadoVigenteLabel }
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
-import { renderBadgeEstadoVigenteHtml } from '../../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import {
   registroOrdenesMenuItems, fmtMonto, fmtFecha, fmtFechaHora,
   downloadPdfBase64,

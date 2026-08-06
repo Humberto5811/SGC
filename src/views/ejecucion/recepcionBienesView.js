@@ -4,11 +4,11 @@
  * UI operativa sin alert()/prompt() — patrón Validaciones / Registro de Órdenes.
  */
 import { recepcionBienesService } from '../../services/recepcionBienesService.js';
-import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import {
-  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
+  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
-import { renderBadgeEstadoVigenteHtml } from '../../../shared/estadoExpedienteVigente.js';
+import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import { resolveAccionesRecepcionBienes } from '../../../shared/recepcionSaldo.js';
 import {
   createViewLifecycle,
@@ -148,7 +148,7 @@ function renderRow(row) {
       <td>${esc(fmtFecha(row.fecha_envio_au))}</td>
       <td title="${esc(row.entrega_tooltip || '')}">${esc(row.entrega_label || row.numero_entrega || '—')}</td>
       <td>${esc(fmtFecha(row.fecha_entrega_almacen))}</td>
-      <td class="small">${esc(getResponsableVigenteLabel(row))}</td>
+      <td class="small">${renderResponsableCellHtml(row, esc)}</td>
       ${renderActionMenuCell(id, menuItems(row))}
     </tr>`;
 }

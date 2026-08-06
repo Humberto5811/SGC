@@ -6,6 +6,9 @@ import {
 } from './trazabilidad.js';
 import { getRolDisplayFromRow, countPendientesModulo } from './observacionDestino.js';
 import { renderEstadoVisualHtml } from './estadoVisualPresenter.js';
+import { renderResponsableBadgeFromRow } from '../ui/workflow/ResponsableBadge.js';
+import { renderEstadoResponsableCellHtml } from '../ui/workflow/EstadoResponsableCell.js';
+import { adaptEstadoResponsable } from '../ui/workflow/adaptEstadoResponsable.js';
 import { resolveModuloFromPrefix } from './observacionesUi.js';
 
 const MODULO_BANDEJA_POR_PREFIX = Object.freeze({
@@ -36,7 +39,7 @@ export const ESTADO_BADGE_STYLES = {
   EJECUCION: { bg: '#495057', label: 'En Ejecución' },
   REGISTRO_ORDEN: { bg: '#0d6efd', label: 'En Reg. Orden' },
   ALMACEN: { bg: '#495057', label: 'En Almacén' },
-  TESORERIA: { bg: '#495057', label: 'En Tesorería' },
+  TESORERIA: { bg: '#495057', label: 'En Pagos' },
   FINALIZADO: { bg: '#198754', label: 'Finalizado' },
   OBSERVADO: { bg: '#dc3545', label: 'Observado' },
 };
@@ -152,24 +155,21 @@ export function getResponsableRol(row) {
 }
 
 /**
- * Celda Responsable estándar (nombre + submódulo debajo) — todas las bandejas.
+ * Celda Responsable estándar — RC8.6B componentes centrales.
  * @param {object} row
  * @param {(s: string) => string} [escFn]
- * @param {{ submodulo?: string }} [opts]
+ * @param {{ submodulo?: string, variant?: string }} [opts]
  */
 export function renderResponsableCellHtml(row, escFn = esc, opts = {}) {
-  const enriched = enrichReqRow(row || {});
-  const nombre = enriched.responsableActual || '—';
-  const erv = enriched.estado_responsable_vigente;
-  const sub = String(
-    opts.submodulo
-    || erv?.etapaLabel
-    || enriched.subModuloActual
-    || enriched.sub_modulo_actual
-    || getRolDisplayFromRow(enriched)
-    || '—',
-  ).trim() || '—';
-  return `<div class="req-resp-name">${escFn(nombre)}</div><div class="req-resp-role">${escFn(sub)}</div>`;
+  if (opts.variant === 'cell' || opts.withEstado) {
+    return renderEstadoResponsableCellHtml(row, opts.variant === 'detailed' ? 'detailed' : 'standard');
+  }
+  const adapted = adaptEstadoResponsable(row);
+  // Mantener layout nombre + rol (etapa) sin presentar submódulo como persona
+  const etapa = String(opts.submodulo || adapted.etapaLabel || '').trim();
+  const badge = renderResponsableBadgeFromRow(row);
+  if (!etapa) return badge;
+  return `<div class="sgc-estado-responsable-cell"><div class="sgc-estado-responsable-cell__row">${badge}</div><div class="sgc-estado-responsable-cell__etapa">${escFn(etapa)}</div></div>`;
 }
 
 export function buildRowTooltip(row) {
