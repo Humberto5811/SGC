@@ -33,6 +33,8 @@ let rowsCache = [];
 let selectedIds = new Set();
 let filtroEstado = '';
 let filtroQ = '';
+/** @type {{ modo?: string, acceso_por_asignacion?: boolean, puede_consolidar?: boolean }} */
+let bandejaMeta = { modo: 'GLOBAL', acceso_por_asignacion: false, puede_consolidar: true };
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -45,11 +47,21 @@ function fmtMonto(n, moneda = 'PEN') {
 }
 
 function canManageCcp() {
+  // RC8.6E — GLOBAL puede gestionar; ASIGNACION puede registrar/editar código en lo propio
+  if (bandejaMeta.modo === 'ASIGNACION') return true;
+  if (bandejaMeta.modo === 'GLOBAL') return true;
   try {
     const u = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    if (u.acceso_ccp_por_asignacion || u.acceso_ccp) return true;
     const rol = String(u.rol || u.role || '').toLowerCase();
     return rol === 'dec' || rol === 'admin';
   } catch (_) { return false; }
+}
+
+function canConsolidarCcp() {
+  if (bandejaMeta.puede_consolidar === false) return false;
+  if (bandejaMeta.modo === 'ASIGNACION' || bandejaMeta.acceso_por_asignacion) return false;
+  return true;
 }
 
 function currentUserLabel() {
@@ -64,12 +76,21 @@ function updateSelectionUi() {
   const btn = document.getElementById(`${PREFIX}ConsolidarBtn`);
   const n = selectedIds.size;
   if (countEl) countEl.textContent = String(n);
-  if (btn) btn.disabled = n < 1;
+  if (btn) {
+    const allowConsol = canConsolidarCcp();
+    btn.classList.toggle('d-none', !allowConsol);
+    btn.disabled = !allowConsol || n < 1;
+  }
   const master = document.getElementById(`${PREFIX}SelectAll`);
   if (master) {
     const visibles = rowsCache.filter((r) => r.puede_seleccionar);
     master.checked = visibles.length > 0 && visibles.every((r) => selectedIds.has(r.requerimiento_id));
     master.indeterminate = selectedIds.size > 0 && !master.checked;
+  }
+  const modoEl = document.getElementById(`${PREFIX}ModoAsignacion`);
+  if (modoEl) {
+    const show = !!bandejaMeta.acceso_por_asignacion || bandejaMeta.modo === 'ASIGNACION';
+    modoEl.classList.toggle('d-none', !show);
   }
 }
 
@@ -191,6 +212,10 @@ function renderCcpView() {
         <div>
           <h2 class="mb-1"><i class="bi bi-journal-check"></i> Certificado de Crédito Presupuestal -CCP</h2>
           <p class="text-muted mb-0 small">Bandeja de requerimientos derivados a CCP. Registre el código, consolide y genere la solicitud Word.</p>
+          <div id="${PREFIX}ModoAsignacion" class="d-none mt-2">
+            <span class="badge bg-info text-dark border">Expedientes asignados</span>
+            <span class="text-muted small ms-1">Solo ve y tramita los expedientes CCP asignados a usted.</span>
+          </div>
         </div>
         <div class="d-flex ccp-toolbar align-items-center">
           <span class="badge bg-light text-dark border">Seleccionados: <span id="${PREFIX}SelCount">0</span></span>
@@ -416,6 +441,12 @@ async function loadBandeja(silent = false) {
     if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
 
     rowsCache = Array.isArray(resp?.data) ? resp.data : [];
+    bandejaMeta = {
+      modo: resp?.meta?.modo || 'GLOBAL',
+      acceso_por_asignacion: !!resp?.meta?.acceso_por_asignacion,
+      puede_consolidar: resp?.meta?.puede_consolidar !== false
+        && resp?.meta?.modo !== 'ASIGNACION',
+    };
     selectedIds = new Set([...selectedIds].filter((id) => {
       const r = rowsCache.find((x) => x.requerimiento_id === id);
       return r && r.puede_seleccionar;
@@ -423,16 +454,21 @@ async function loadBandeja(silent = false) {
 
     const shell = getCcpShell();
     paintTable(shell);
+    updateSelectionUi();
     restoreScroll(VIEW_ID, SCROLL_SEL);
     refreshIndicator?.hide();
+    showAlert('', '');
   } catch (err) {
     if (isAbortError(err) || !request.isCurrent()) return;
     if (lifecycle && !lifecycle.isActive()) return;
-    showAlert('danger', err.message || 'Error al cargar bandeja CCP');
+    // Un solo mensaje: alert local O vacío en tabla — no ambos
+    const msg = err.message || 'Error al cargar bandeja CCP';
     if (hadShell && rowsCache.length) {
+      showAlert('danger', msg);
       refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
     } else {
-      cont.innerHTML = `<div class="alert alert-danger">${esc(err.message || 'Error al cargar bandeja CCP')}</div>`;
+      showAlert('', '');
+      cont.innerHTML = `<div class="alert alert-danger">${esc(msg)}</div>`;
       refreshIndicator?.hide();
     }
   }
@@ -678,6 +714,10 @@ async function openConsolidacionModal(solicitudId, { editable = true } = {}) {
 }
 
 async function consolidarSeleccion() {
+  if (!canConsolidarCcp()) {
+    showAlert('warning', 'Consolidar requiere acceso global CCP');
+    return;
+  }
   const ids = [...selectedIds];
   if (!ids.length) return;
   if (!window.confirm(`¿Consolidar ${ids.length} requerimiento(s) en una solicitud CCP?`)) return;
@@ -703,7 +743,9 @@ function initCcpView() {
   filtroEstado = '';
   filtroQ = '';
   rowsCache = [];
+  bandejaMeta = { modo: 'GLOBAL', acceso_por_asignacion: false, puede_consolidar: true };
   closeBandejaActionMenus();
+  showAlert('', '');
 
   document.getElementById(`${PREFIX}RefreshBtn`)?.addEventListener('click', () => loadBandeja(true));
   document.getElementById(`${PREFIX}ConsolidarBtn`)?.addEventListener('click', consolidarSeleccion);

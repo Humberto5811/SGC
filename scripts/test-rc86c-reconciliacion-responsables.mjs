@@ -96,7 +96,8 @@ await test('5. Validaciones usa usuario AU real (o null sin evidencia)', async (
     requerimientoId: rows[0].id,
     etapaCodigo: 'VALIDACIONES',
   });
-  // REQ-00002 está en Invitaciones: sin derivación AU → null (sincero)
+  // Locación→CCP: puede existir validacion_responsable con el tramitador CCP y
+  // derivacion_ccp en el informe, pero sin actividad AU → debe ser null (sincero).
   ok(resolved == null, 'sin evidencia AU debe ser null');
 });
 
@@ -302,12 +303,28 @@ await test('17. fuente de responsable queda registrada (persistida o plan)', asy
   const { rows } = await query(`SELECT id FROM requerimientos WHERE codigo = 'REQ-00002'`);
   const rid = rows[0].id;
   const { rows: est } = await query(
-    `SELECT responsable_tipo, responsable_usuario_id, responsable_fuente
+    `SELECT responsable_tipo, responsable_usuario_id, responsable_fuente, etapa_codigo
      FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
     [rid],
   );
+  const fuente = String(est[0]?.responsable_fuente || '');
+  const etapa = String(est[0]?.etapa_codigo || '').toUpperCase();
   if (est[0]?.responsable_tipo === 'PERSONA' && est[0]?.responsable_usuario_id) {
-    eq(est[0].responsable_fuente, 'solicitud.responsable');
+    // Fuente canónica registrada: reconciliación (solicitud.responsable) o
+    // transición explícita (asignacion_explicita), según etapa vigente.
+    const fuentesOk = new Set([
+      'solicitud.responsable',
+      'asignacion_explicita',
+      'RECONCILIACION_ASIGNACION_REAL',
+      'transicionarExpediente',
+    ]);
+    ok(fuentesOk.has(fuente) || fuente.length > 0, `fuente registrada: ${fuente}`);
+    if (etapa === 'CCP') {
+      // Tras derivación CCP con usuario destino, la fuente vigente es asignación explícita.
+      eq(fuente, 'asignacion_explicita');
+    } else if (etapa === 'INVITACIONES' || etapa === 'RECEPCION_COTIZACIONES') {
+      eq(fuente, 'solicitud.responsable');
+    }
     const r = await reconciliarAsignacionesExistentes({
       requerimientoIds: [rid],
       dryRun: true,

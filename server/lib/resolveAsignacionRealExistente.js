@@ -197,6 +197,11 @@ async function resolveValidaciones(client, requerimientoId) {
   const run = runner(client);
 
   // 1–2. Derivación AU / validador en validacion_informe o validacion_responsable
+  // No confundir derivacion_ccp (locación→CCP) ni nombres de tramitador CCP
+  // con evidencia real de Área Usuaria.
+  const ESTADOS_AU = new Set([
+    'DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO', 'PENDIENTE',
+  ]);
   const { rows: cots } = await run(
     `SELECT cot.id, cot.validacion_responsable, cot.validacion_informe, cot.validacion_estado
      FROM cotizaciones_proveedor cot
@@ -210,6 +215,19 @@ async function resolveValidaciones(client, requerimientoId) {
   for (const cot of cots) {
     const inf = safeJson(cot.validacion_informe);
     const der = inf?.derivacion || {};
+    const tieneDerivacionAu = !!(
+      der
+      && typeof der === 'object'
+      && (
+        der.responsable_id != null
+        || der.usuario_id != null
+        || der.responsable_destino_id != null
+        || String(der.responsable_nombre || der.responsable_destino_nombre || '').trim()
+      )
+    );
+    const estadoVal = String(cot.validacion_estado || '').trim().toUpperCase();
+    const hayActividadAu = ESTADOS_AU.has(estadoVal) || tieneDerivacionAu;
+
     const uid = der.responsable_id ?? der.usuario_id ?? der.responsable_destino_id;
     if (uid != null && Number.isFinite(Number(uid))) {
       const u = await resolveUsuarioDesdeIdentificador(client, String(uid));
@@ -232,15 +250,18 @@ async function resolveValidaciones(client, requerimientoId) {
         });
       }
     }
-    const vr = String(cot.validacion_responsable || '').trim();
-    if (vr && !isRolGenerico(vr)) {
-      const u = await resolveUsuarioDesdeIdentificador(client, vr);
-      if (u) {
-        return packUsuario(u, {
-          unidad: 'Validaciones',
-          fuente: 'cotizacion.validacion_responsable',
-          evidenciaId: cot.id,
-        });
+    // validacion_responsable solo si hubo actividad AU real (no derivación CCP).
+    if (hayActividadAu) {
+      const vr = String(cot.validacion_responsable || '').trim();
+      if (vr && !isRolGenerico(vr)) {
+        const u = await resolveUsuarioDesdeIdentificador(client, vr);
+        if (u) {
+          return packUsuario(u, {
+            unidad: 'Validaciones',
+            fuente: 'cotizacion.validacion_responsable',
+            evidenciaId: cot.id,
+          });
+        }
       }
     }
   }

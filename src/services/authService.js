@@ -49,6 +49,27 @@ export const authService = {
     window.location.hash = '#/login';
   },
 
+  /**
+   * RC8.6E — refresca flags de sesión (p.ej. acceso_ccp_por_asignacion).
+   * No altera permisos JSON locales salvo que el servidor los devuelva.
+   */
+  refreshSession: async () => {
+    const current = authService.getCurrentUser();
+    if (!current?.id) return { success: false };
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { 'x-user-id': String(current.id) },
+      });
+      if (!res.ok) return { success: false };
+      const data = await res.json();
+      if (data?.success && data.user) {
+        authService.setCurrentUser({ ...current, ...data.user });
+        return { success: true, user: data.user };
+      }
+    } catch (_) { /* ignore */ }
+    return { success: false };
+  },
+
   isAuthenticated: () => authService.getCurrentUser() !== null,
 
   restoreSession: () => {

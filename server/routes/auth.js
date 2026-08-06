@@ -18,7 +18,7 @@ export function getEstadoPassword(row) {
   return 'Cambio pendiente';
 }
 
-export function buildSafeUser(row) {
+export function buildSafeUser(row, accesoCcpFlags = null) {
   const raw = row.permisos;
   const hasStoredObject = raw != null && typeof raw === 'object';
   const hasExplicitGrants = hasStoredObject && (
@@ -28,6 +28,7 @@ export function buildSafeUser(row) {
   // Con grants guardados: respetar JSON. Sin grants: plantilla por rol (compat au/dec).
   const permisos = normalizePermisos(raw, row.rol, { explicit: hasExplicitGrants });
   const centro = row.centro || row.area_responsable || row.centro_codigo || '';
+  const flags = accesoCcpFlags && typeof accesoCcpFlags === 'object' ? accesoCcpFlags : {};
   return {
     id: row.id,
     dni: row.dni,
@@ -45,6 +46,10 @@ export function buildSafeUser(row) {
     centro,
     alcance_datos: row.alcance_datos || null,
     permisos,
+    // RC8.6E — menú/ruta CCP por asignación (no solo localStorage de permisos)
+    acceso_ccp: flags.acceso_ccp === true,
+    acceso_ccp_modo: flags.acceso_ccp_modo || null,
+    acceso_ccp_por_asignacion: flags.acceso_ccp_por_asignacion === true,
     debeCambiarPassword: row.debe_cambiar_password !== false,
     estado_password: getEstadoPassword(row),
     ultimo_acceso: row.ultimo_acceso || null,
@@ -53,12 +58,34 @@ export function buildSafeUser(row) {
   };
 }
 
+async function enrichSafeUser(row) {
+  let flags = {
+    acceso_ccp: false,
+    acceso_ccp_modo: null,
+    acceso_ccp_por_asignacion: false,
+  };
+  try {
+    const { resolveFlagAccesoCcpMenu } = await import('../lib/accesoCcp.js');
+    flags = await resolveFlagAccesoCcpMenu(row.id, row);
+  } catch (_) { /* tablas CCP/asignación aún no listas */ }
+  return buildSafeUser(row, flags);
+}
+
 const USER_LOOKUP = `
   SELECT u.*, a.responsable AS area_responsable, c.codigo AS centro_codigo
   FROM usuarios u
   LEFT JOIN areas a ON u.area_id = a.id
   LEFT JOIN centros c ON a.centro_id = c.id
   WHERE (LOWER(u.username) = LOWER($1) OR u.dni = $1) AND u.activo = TRUE
+  LIMIT 1
+`;
+
+const USER_LOOKUP_BY_ID = `
+  SELECT u.*, a.responsable AS area_responsable, c.codigo AS centro_codigo
+  FROM usuarios u
+  LEFT JOIN areas a ON u.area_id = a.id
+  LEFT JOIN centros c ON a.centro_id = c.id
+  WHERE u.id = $1 AND u.activo = TRUE
   LIMIT 1
 `;
 
@@ -91,7 +118,18 @@ router.post('/login', async (req, res, next) => {
     `, [user.id, now, JSON.stringify(auditoria)]);
 
     user.ultimo_acceso = now;
-    res.json({ success: true, user: buildSafeUser(user) });
+    res.json({ success: true, user: await enrichSafeUser(user) });
+  } catch (err) { next(err); }
+});
+
+/** RC8.6E — refresca sesión (permisos + flag acceso CCP por asignación). */
+router.get('/me', async (req, res, next) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) return res.status(401).json({ success: false, error: 'No autenticado' });
+    const { rows } = await query(USER_LOOKUP_BY_ID, [userId]);
+    if (!rows.length) return res.status(401).json({ success: false, error: 'Sesión inválida' });
+    res.json({ success: true, user: await enrichSafeUser(rows[0]) });
   } catch (err) { next(err); }
 });
 
@@ -148,7 +186,7 @@ router.post('/cambio-password', async (req, res, next) => {
       LEFT JOIN centros c ON a.centro_id = c.id
       WHERE u.id = $1
     `, [u.id]);
-    res.json({ success: true, user: buildSafeUser({ ...u, ...extra[0] }) });
+    res.json({ success: true, user: await enrichSafeUser({ ...u, ...extra[0] }) });
   } catch (err) { next(err); }
 });
 

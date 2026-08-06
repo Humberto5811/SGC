@@ -61,13 +61,28 @@ export const permissionsService = {
     const OPEN_ROUTES = new Set(['login', 'dashboard', 'cambio-password', 'portal-proveedores']);
     if (OPEN_ROUTES.has(route)) return true;
     if (u.rol === 'admin') return true;
+    const canonical = resolveCanonicalRoute(route);
+    const routeKey = canonical || route;
+    // RC8.6E — CCP por asignación activa (flag de sesión, no solo permisos JSON)
+    if ((routeKey === 'dec/ccp' || route === 'dec/ccp')
+      && (u.acceso_ccp_por_asignacion === true || u.acceso_ccp === true)) {
+      if (String(actividad).toUpperCase() === 'VER') return true;
+    }
     const subId = resolveRouteSubmodulo(route);
     // Sin mapeo a submódulo: no abrir por defecto (evita fugas de menú Mantenimiento)
     if (!subId) return false;
     const p = getPermisos(u);
-    const canonical = resolveSubmoduloId(subId);
-    if (!(p.submodulos || []).includes(canonical)) return false;
-    return getActividadesForSubmodulo(p, canonical).includes(String(actividad).toUpperCase());
+    const can = resolveSubmoduloId(subId);
+    if (!(p.submodulos || []).includes(can)) {
+      // Asignación CCP: permitir VER aunque no tenga submódulo CCP en JSON
+      if ((can === 'CCP' || subId === 'CCP')
+        && u.acceso_ccp_por_asignacion === true
+        && String(actividad).toUpperCase() === 'VER') {
+        return true;
+      }
+      return false;
+    }
+    return getActividadesForSubmodulo(p, can).includes(String(actividad).toUpperCase());
   },
 
   /** Actividades configurables para Consultas, Recepción de Cotizaciones y Validaciones. */

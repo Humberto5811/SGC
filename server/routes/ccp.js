@@ -1,6 +1,6 @@
 /**
  * Certificación Presupuestal (CCP) — API.
- * Roles operativos: dec / admin (alineado a ROUTE_ROLES 'dec/ccp').
+ * RC8.6E: acceso GLOBAL (permiso/DEC/admin) o ASIGNACION (expediente_asignaciones activa).
  */
 import express from 'express';
 import {
@@ -17,10 +17,12 @@ import {
 } from '../lib/ccpCertificacion.js';
 import { generarWordSolicitudCcp } from '../lib/ccpWord.js';
 import { query } from '../db.js';
+import {
+  assertAccesoCcp,
+  MODO_ACCESO_CCP,
+} from '../lib/accesoCcp.js';
 
 const router = express.Router();
-
-const ROLES_CCP = new Set(['dec', 'admin']);
 
 function actorFromReq(req) {
   const usuario = req.user?.nombre
@@ -28,15 +30,20 @@ function actorFromReq(req) {
     || req.body?.usuario
     || '';
   const rol = String(req.user?.rol || req.headers['x-user-rol'] || '').toLowerCase();
-  return { usuario: String(usuario).slice(0, 150), rol };
+  return { usuario: String(usuario).slice(0, 150), rol, userId: req.user?.id || null };
 }
 
-function assertRolCcp(req) {
-  const rol = String(req.user?.rol || req.headers['x-user-rol'] || '').toLowerCase();
-  if (!ROLES_CCP.has(rol)) {
-    throw httpError('No autorizado para Certificación Presupuestal (CCP)', 403, 'CCP_FORBIDDEN');
+async function requireCcp(req, actividad = 'VER', requerimientoId = null) {
+  const userId = req.user?.id;
+  if (!userId) {
+    throw httpError('No autenticado', 401, 'NO_AUTH');
   }
-  return rol;
+  return assertAccesoCcp({
+    usuarioId: userId,
+    actividad,
+    requerimientoId,
+    userRow: req.user,
+  });
 }
 
 function sendLibError(res, err, next) {
@@ -50,14 +57,20 @@ function sendLibError(res, err, next) {
   return next(err);
 }
 
+function filterByAlcance(data, acceso) {
+  if (acceso.modo !== MODO_ACCESO_CCP.ASIGNACION) return data;
+  const allow = new Set((acceso.alcanceRequerimientoIds || []).map(Number));
+  return (data || []).filter((r) => allow.has(Number(r.requerimiento_id)));
+}
+
 // GET /api/ccp/bandeja
 router.get('/bandeja', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    const acceso = await requireCcp(req, 'VER');
     const data = await listarBandejaCcp();
+    let filtered = filterByAlcance(data, acceso);
     const q = String(req.query.q || req.query.search || '').trim().toLowerCase();
     const estado = String(req.query.estado || '').trim().toUpperCase();
-    let filtered = data;
     if (estado) filtered = filtered.filter((r) => r.estado_ccp === estado);
     if (q) {
       filtered = filtered.filter((r) => {
@@ -68,14 +81,26 @@ router.get('/bandeja', async (req, res, next) => {
         return hay.includes(q);
       });
     }
-    res.json({ data: filtered, meta: { total: filtered.length } });
+    res.json({
+      data: filtered,
+      meta: {
+        total: filtered.length,
+        modo: acceso.modo,
+        acceso_por_asignacion: acceso.modo === MODO_ACCESO_CCP.ASIGNACION,
+        puede_consolidar: acceso.modo === MODO_ACCESO_CCP.GLOBAL,
+        actividades: acceso.actividadesPermitidas,
+      },
+    });
   } catch (err) { sendLibError(res, err, next); }
 });
 
 // POST /api/ccp/consolidaciones
 router.post('/consolidaciones', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    const acceso = await requireCcp(req, 'CONSOLIDAR');
+    if (acceso.modo !== MODO_ACCESO_CCP.GLOBAL) {
+      throw httpError('Consolidar CCP requiere acceso global', 403, 'CCP_CONSOLIDAR_FORBIDDEN');
+    }
     const { usuario, rol } = actorFromReq(req);
     const data = await crearConsolidacionCcp(req.body || {}, usuario, rol);
     res.status(201).json({ ok: true, data });
@@ -85,8 +110,17 @@ router.post('/consolidaciones', async (req, res, next) => {
 // GET /api/ccp/consolidaciones/:id
 router.get('/consolidaciones/:id', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    const acceso = await requireCcp(req, 'VER');
     const data = await getConsolidacionCcp(req.params.id);
+    if (acceso.modo === MODO_ACCESO_CCP.ASIGNACION) {
+      const allow = new Set((acceso.alcanceRequerimientoIds || []).map(Number));
+      const reqs = (data?.requerimientos || data?.filas || [])
+        .map((r) => Number(r.requerimiento_id || r.id))
+        .filter(Boolean);
+      if (reqs.length && !reqs.every((id) => allow.has(id))) {
+        throw httpError('Consolidación fuera de su asignación CCP', 403, 'CCP_FORBIDDEN');
+      }
+    }
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
 });
@@ -94,7 +128,10 @@ router.get('/consolidaciones/:id', async (req, res, next) => {
 // PUT /api/ccp/consolidaciones/:id — actualizar observación / enviar OPPM
 router.put('/consolidaciones/:id', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    const acceso = await requireCcp(req, 'CONSOLIDAR');
+    if (acceso.modo !== MODO_ACCESO_CCP.GLOBAL) {
+      throw httpError('Operación de consolidación requiere acceso global CCP', 403, 'CCP_FORBIDDEN');
+    }
     const { usuario, rol } = actorFromReq(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) throw httpError('Consolidación inválida');
@@ -134,7 +171,10 @@ router.put('/consolidaciones/:id', async (req, res, next) => {
 // POST /api/ccp/consolidaciones/:id/retirar
 router.post('/consolidaciones/:id/retirar', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    const acceso = await requireCcp(req, 'CONSOLIDAR');
+    if (acceso.modo !== MODO_ACCESO_CCP.GLOBAL) {
+      throw httpError('Retirar de consolidación requiere acceso global CCP', 403, 'CCP_FORBIDDEN');
+    }
     const { usuario, rol } = actorFromReq(req);
     const rid = req.body?.requerimiento_id;
     const data = await retirarRequerimientoConsolidacion(req.params.id, rid, usuario, rol);
@@ -145,9 +185,19 @@ router.post('/consolidaciones/:id/retirar', async (req, res, next) => {
 // POST /api/ccp/consolidaciones/:id/generar-word
 router.post('/consolidaciones/:id/generar-word', async (req, res, next) => {
   try {
-    assertRolCcp(req);
-    const { usuario, rol } = actorFromReq(req);
+    const acceso = await requireCcp(req, 'DESCARGAR');
+    // Word de consolidación: GLOBAL, o ASIGNACION solo si todos los reqs son suyos
     const consolidacion = await getConsolidacionCcp(req.params.id);
+    if (acceso.modo === MODO_ACCESO_CCP.ASIGNACION) {
+      const allow = new Set((acceso.alcanceRequerimientoIds || []).map(Number));
+      const reqs = (consolidacion?.requerimientos || consolidacion?.filas || [])
+        .map((r) => Number(r.requerimiento_id || r.id))
+        .filter(Boolean);
+      if (!reqs.length || !reqs.every((id) => allow.has(id))) {
+        throw httpError('Documento fuera de su asignación CCP', 403, 'CCP_FORBIDDEN');
+      }
+    }
+    const { usuario, rol } = actorFromReq(req);
     if (!consolidacion.filas?.length) {
       throw httpError('La consolidación no tiene filas presupuestales', 409);
     }
@@ -170,7 +220,7 @@ router.post('/consolidaciones/:id/generar-word', async (req, res, next) => {
 // GET /api/ccp/:id — detalle requerimiento
 router.get('/:id', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    await requireCcp(req, 'VER', req.params.id);
     const data = await getDetalleCcpRequerimiento(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -179,7 +229,7 @@ router.get('/:id', async (req, res, next) => {
 // POST /api/ccp/:id/codigo
 router.post('/:id/codigo', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    await requireCcp(req, 'CREAR', req.params.id);
     const { usuario, rol } = actorFromReq(req);
     const result = await registrarCodigoCcp(req.params.id, req.body || {}, usuario, rol);
     res.status(201).json(result);
@@ -189,7 +239,7 @@ router.post('/:id/codigo', async (req, res, next) => {
 // PUT /api/ccp/:id/codigo
 router.put('/:id/codigo', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    await requireCcp(req, 'EDITAR', req.params.id);
     const { usuario, rol } = actorFromReq(req);
     const result = await editarCodigoCcp(req.params.id, req.body || {}, usuario, rol);
     res.json(result);
@@ -199,7 +249,7 @@ router.put('/:id/codigo', async (req, res, next) => {
 // DELETE /api/ccp/:id/codigo
 router.delete('/:id/codigo', async (req, res, next) => {
   try {
-    assertRolCcp(req);
+    await requireCcp(req, 'ELIMINAR', req.params.id);
     const { usuario, rol } = actorFromReq(req);
     const result = await anularCodigoCcp(req.params.id, req.body || {}, usuario, rol);
     res.json(result);

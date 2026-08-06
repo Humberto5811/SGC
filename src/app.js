@@ -374,6 +374,16 @@ function bootstrap() {
   authService.restoreSession();
   // RC8.0 — una sola invocación inicial vía initRouter (evita doble renderApp).
   initRouter(() => renderApp());
+  // RC8.6E — refrescar flags de asignación CCP; re-render solo si cambió el acceso menú
+  const before = authService.getCurrentUser();
+  authService.refreshSession().then((r) => {
+    if (!r?.success) return;
+    const after = r.user;
+    const changed = (!!before?.acceso_ccp_por_asignacion) !== (!!after?.acceso_ccp_por_asignacion)
+      || (!!before?.acceso_ccp) !== (!!after?.acceso_ccp)
+      || before?.acceso_ccp_modo !== after?.acceso_ccp_modo;
+    if (changed) renderApp();
+  }).catch(() => {});
   // Drag & drop global: arrastre de modales Bootstrap desde el header
   import('./utils/modalDraggable.js').then((m) => m.initSgcModalDragging()).catch(() => {});
 }

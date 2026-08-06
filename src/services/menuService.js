@@ -117,7 +117,10 @@ export const MENU_STRUCTURE = [
 
 function canShowRoute(path, user) {
   if (!path) return true;
-  return permissionsService.canAccessRoute(path, 'VER', user);
+  if (permissionsService.canAccessRoute(path, 'VER', user)) return true;
+  // RC8.6E — CCP visible con asignación activa aunque el JSON de permisos no liste CCP
+  if (path === 'dec/ccp' && (user?.acceso_ccp_por_asignacion || user?.acceso_ccp)) return true;
+  return false;
 }
 
 export function filterMenuItems(items, user) {
