@@ -117,10 +117,11 @@ export function resolveResponsablePersonaDisplay(row, roleLabels = []) {
 
 async function buildUsuarioMap() {
   const { rows } = await query(`
-    SELECT dni, username,
+    SELECT id, dni, username,
       COALESCE(
         NULLIF(TRIM(CONCAT(COALESCE(apellidos, ''), ' ', COALESCE(nombres, ''))), ''),
         NULLIF(TRIM(nombre), ''),
+        NULLIF(TRIM(username), ''),
         dni
       ) AS display
     FROM usuarios
@@ -130,6 +131,7 @@ async function buildUsuarioMap() {
   rows.forEach((r) => {
     const display = String(r.display || r.dni || '').trim();
     if (!display) return;
+    if (r.id != null) map.set(String(r.id), display);
     if (r.dni) map.set(String(r.dni).trim(), display);
     if (r.username) map.set(String(r.username).trim().toLowerCase(), display);
     map.set(display, display);

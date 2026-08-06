@@ -24,7 +24,22 @@ export function renderResponsableBadgeHtml(data = {}) {
   const tipo = data.responsableTipo || TIPO_RESPONSABLE_UI.PENDIENTE;
   let text = 'Pendiente de asignación';
   if (tipo === TIPO_RESPONSABLE_UI.PERSONA) {
-    text = data.responsableNombre || data.responsableUsername || data.responsableDisplay || text;
+    const nombre = String(data.responsableNombre || '').trim();
+    const username = String(data.responsableUsername || '').trim();
+    const uid = data.responsableUsuarioId;
+    const nombreOk = nombre && !/^\d+$/.test(nombre);
+    const usernameOk = username && !/^\d+$/.test(username);
+    text = nombreOk
+      ? nombre
+      : (usernameOk
+        ? username
+        : (uid != null && Number.isFinite(Number(uid))
+          ? `Usuario #${Number(uid)}`
+          : (data.responsableDisplay || text)));
+    // Nunca mostrar solo el número crudo
+    if (/^\d+$/.test(String(text).trim())) {
+      text = uid != null ? `Usuario #${Number(uid)}` : 'Pendiente de asignación';
+    }
   } else if (tipo === TIPO_RESPONSABLE_UI.UNIDAD) {
     text = data.responsableUnidad || data.responsableDisplay || text;
   } else {

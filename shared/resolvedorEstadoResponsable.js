@@ -211,12 +211,18 @@ export function resolveEstadoResponsableVigente(evidencia = {}, opts = {}) {
       });
     }
     if (uid || (uname && !isUsuarioInvalido(uname, evidencia))) {
+      const unameOk = uname && !/^\d+$/.test(String(uname).trim());
+      const nombreOk = nombre && !/^\d+$/.test(String(nombre).trim());
+      const usernameFinal = unameOk ? String(uname).trim() : '';
+      const nombreFinal = nombreOk
+        ? String(nombre).trim()
+        : (usernameFinal || (uid != null ? `Usuario #${Number(uid)}` : ''));
       return build({
         estadoCodigo, estadoLabel, etapaCodigo, etapaLabel,
         responsableTipo: TIPO_RESPONSABLE.PERSONA,
         responsableUsuarioId: uid,
-        responsableUsername: uname,
-        responsableNombre: nombre,
+        responsableUsername: usernameFinal,
+        responsableNombre: nombreFinal,
         responsableUnidad: a.unidad || a.responsableUnidad || unidadDefault,
         responsableFuente: a.fuente || 'asignacion_explicita_db',
         actualizadoAt,

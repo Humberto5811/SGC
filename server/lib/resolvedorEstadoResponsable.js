@@ -33,11 +33,24 @@ function unidadPorEtapa(estadoVigente) {
   return 'Invitaciones';
 }
 
+function displayFromUserFields({ usuarioId, username, nombre }) {
+  const uid = usuarioId != null && Number.isFinite(Number(usuarioId)) ? Number(usuarioId) : null;
+  const uname = String(username || '').trim();
+  const nom = String(nombre || '').trim();
+  const unameOk = uname && !/^\d+$/.test(uname);
+  const nomOk = nom && !/^\d+$/.test(nom);
+  return {
+    usuarioId: uid,
+    username: unameOk ? uname : '',
+    nombre: nomOk ? nom : (unameOk ? uname : (uid ? `Usuario #${uid}` : '')),
+  };
+}
+
 async function loadAsignacionesBatch(ids, rows, estados) {
   const map = new Map();
   ids.forEach((id) => map.set(id, null));
 
-  // ── RC8.6A — fuente única persistida (prioridad absoluta) ──
+  // ── RC8.6A / RC8.6C.1 — fuente única persistida + JOIN usuarios (sin N+1) ──
   try {
     const { loadEstadoAsignacionPersistidaBatch } = await import('./expedienteEstadoPersistido.js');
     const persistidos = await loadEstadoAsignacionPersistidaBatch(ids);
@@ -45,24 +58,31 @@ async function loadAsignacionesBatch(ids, rows, estados) {
       const a = pack?.asignacion;
       const e = pack?.estado;
       if (a && a.tipo_responsable === 'PERSONA' && a.usuario_id) {
-        const nombre = await resolveNombre(String(a.usuario_id)) || String(a.usuario_id);
+        const disp = displayFromUserFields({
+          usuarioId: a.usuario_id,
+          username: a.usuario_username,
+          nombre: a.usuario_nombre,
+        });
         map.set(rid, {
-          usuarioId: Number(a.usuario_id),
-          username: String(a.usuario_id),
-          nombre,
+          usuarioId: disp.usuarioId,
+          username: disp.username,
+          nombre: disp.nombre,
           unidad: a.unidad_codigo || e?.responsable_unidad || unidadPorEtapa(estados.get(rid)),
-          fuente: 'asignacion_explicita_db',
+          fuente: e?.responsable_fuente || a.origen_asignacion || 'asignacion_explicita_db',
           tipoResponsable: 'PERSONA',
         });
         continue;
       }
       if (e?.responsable_tipo === 'PERSONA' && e.responsable_usuario_id) {
-        const nombre = await resolveNombre(String(e.responsable_usuario_id))
-          || String(e.responsable_usuario_id);
+        const disp = displayFromUserFields({
+          usuarioId: e.responsable_usuario_id,
+          username: e.responsable_username,
+          nombre: e.responsable_nombre,
+        });
         map.set(rid, {
-          usuarioId: Number(e.responsable_usuario_id),
-          username: String(e.responsable_usuario_id),
-          nombre,
+          usuarioId: disp.usuarioId,
+          username: disp.username,
+          nombre: disp.nombre,
           unidad: e.responsable_unidad || unidadPorEtapa(estados.get(rid)),
           fuente: e.responsable_fuente || 'asignacion_explicita_db',
           tipoResponsable: 'PERSONA',

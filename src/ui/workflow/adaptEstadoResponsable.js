@@ -19,6 +19,54 @@ function escStr(v) {
   return s;
 }
 
+function isBareNumericId(s) {
+  return /^\d+$/.test(escStr(s));
+}
+
+/**
+ * Prioridad display PERSONA:
+ * 1. responsableNombre (no numérico puro)
+ * 2. responsableUsername (no numérico puro)
+ * 3. Usuario #ID
+ * 4. Pendiente de asignación
+ */
+function resolvePersonaDisplay({ responsableNombre, responsableUsername, responsableUsuarioId }) {
+  const nombre = escStr(responsableNombre);
+  const username = escStr(responsableUsername);
+  const uid = responsableUsuarioId != null && Number.isFinite(Number(responsableUsuarioId))
+    ? Number(responsableUsuarioId)
+    : null;
+  const nombreOk = nombre && !isBareNumericId(nombre);
+  const usernameOk = username && !isBareNumericId(username);
+  if (nombreOk) {
+    return {
+      responsableNombre: nombre,
+      responsableUsername: usernameOk ? username : '',
+      responsableDisplay: nombre,
+    };
+  }
+  if (usernameOk) {
+    return {
+      responsableNombre: '',
+      responsableUsername: username,
+      responsableDisplay: username,
+    };
+  }
+  if (uid) {
+    const tech = `Usuario #${uid}`;
+    return {
+      responsableNombre: tech,
+      responsableUsername: '',
+      responsableDisplay: tech,
+    };
+  }
+  return {
+    responsableNombre: '',
+    responsableUsername: '',
+    responsableDisplay: PENDIENTE_LABEL,
+  };
+}
+
 function looksLikeCentro(s) {
   const t = escStr(s).toLowerCase();
   if (!t) return false;
@@ -74,13 +122,17 @@ function fallbackLegacy(row) {
   let responsableNombre = '';
   let responsableUnidad = '';
   let responsableUsername = '';
+  let responsableUsuarioId = null;
 
   if (!rawResp || rawResp === '—' || /pendiente de asignaci/i.test(rawResp)) {
     responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
   } else if (/^\d+$/.test(rawResp)) {
+    // ID numérico legacy en responsable_actual — no presentar como nombre
     responsableTipo = TIPO_RESPONSABLE_UI.PERSONA;
-    responsableUsername = rawResp;
-    responsableNombre = rawResp;
+    responsableUsuarioId = Number(rawResp);
+    const disp = resolvePersonaDisplay({ responsableUsuarioId });
+    responsableNombre = disp.responsableNombre;
+    responsableUsername = disp.responsableUsername;
   } else if (/coordinador|programador|especialista|director|gerente|dec\b|analista|almac[eé]n|usuario au|área usuaria|area usuaria/i.test(rawResp)
     || /coordinaci[oó]n cm|programaci[oó]n|invitaciones|cuadro|validaci|recepci[oó]n|tesorer|pagos/i.test(rawResp)) {
     responsableTipo = TIPO_RESPONSABLE_UI.UNIDAD;
@@ -96,7 +148,7 @@ function fallbackLegacy(row) {
     etapaCodigo,
     etapaLabel,
     responsableTipo,
-    responsableUsuarioId: null,
+    responsableUsuarioId,
     responsableUsername,
     responsableNombre,
     responsableUnidad,
@@ -121,21 +173,32 @@ export function adaptEstadoResponsable(row = {}) {
   let { responsableTipo, responsableNombre, responsableUsername, responsableUnidad } = base;
 
   if (responsableTipo === TIPO_RESPONSABLE_UI.PERSONA) {
+    const disp = resolvePersonaDisplay({
+      responsableNombre,
+      responsableUsername,
+      responsableUsuarioId: base.responsableUsuarioId,
+    });
+    responsableNombre = disp.responsableNombre;
+    responsableUsername = disp.responsableUsername;
     // Defensa: nunca presentar centro/submódulo como persona
-    if (!responsableNombre && !responsableUsername) {
+    if (!disp.responsableDisplay || disp.responsableDisplay === PENDIENTE_LABEL) {
       responsableTipo = responsableUnidad ? TIPO_RESPONSABLE_UI.UNIDAD : TIPO_RESPONSABLE_UI.PENDIENTE;
     } else if (looksLikeCentro(responsableNombre)) {
       responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
       responsableNombre = '';
+      responsableUsername = '';
     }
   }
 
   let responsableDisplay = PENDIENTE_LABEL;
   if (responsableTipo === TIPO_RESPONSABLE_UI.PERSONA) {
-    responsableDisplay = responsableNombre || responsableUsername || PENDIENTE_LABEL;
-    if (!responsableNombre && !responsableUsername) {
+    responsableDisplay = resolvePersonaDisplay({
+      responsableNombre,
+      responsableUsername,
+      responsableUsuarioId: base.responsableUsuarioId,
+    }).responsableDisplay;
+    if (responsableDisplay === PENDIENTE_LABEL) {
       responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
-      responsableDisplay = PENDIENTE_LABEL;
     }
   } else if (responsableTipo === TIPO_RESPONSABLE_UI.UNIDAD) {
     responsableDisplay = responsableUnidad || PENDIENTE_LABEL;

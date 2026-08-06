@@ -173,6 +173,46 @@ export async function upsertEstadoVigente(client, {
 }
 
 /**
+ * RC8.6C — actualiza solo responsable vigente; no toca estado_codigo ni etapa_codigo.
+ */
+export async function actualizarResponsableVigente(client, {
+  requerimientoId,
+  responsableTipo,
+  responsableUsuarioId = null,
+  responsableUnidad = null,
+  responsableFuente,
+  actualizadoPor = null,
+  metadataPatch = null,
+}) {
+  const { rows } = await client.query(
+    `UPDATE expediente_estado_vigente SET
+       responsable_tipo = $2,
+       responsable_usuario_id = $3,
+       responsable_unidad = $4,
+       responsable_fuente = $5,
+       actualizado_at = NOW(),
+       actualizado_por = $6,
+       version = version + 1,
+       metadata_json = CASE
+         WHEN $7::jsonb IS NULL THEN metadata_json
+         ELSE COALESCE(metadata_json, '{}'::jsonb) || $7::jsonb
+       END
+     WHERE requerimiento_id = $1
+     RETURNING *`,
+    [
+      requerimientoId,
+      responsableTipo,
+      responsableUsuarioId,
+      responsableUnidad,
+      responsableFuente,
+      actualizadoPor,
+      metadataPatch ? JSON.stringify(metadataPatch) : null,
+    ],
+  );
+  return rows[0] || null;
+}
+
+/**
  * Sincroniza columnas legacy de requerimientos (secundarias).
  * responsable_actual: solo persona (id/username) o unidad/Pendiente — nunca created_by.
  */
@@ -216,7 +256,7 @@ export async function syncLegacyRequerimiento(client, {
   await client.query(sql, params);
 }
 
-/** Batch: asignaciones activas + estado vigente (para bandejas / resolvedor). */
+/** Batch: asignaciones activas + estado vigente enriquecido con usuarios (sin N+1). */
 export async function loadEstadoAsignacionPersistidaBatch(requerimientoIds = [], client = null) {
   const ids = [...new Set(
     (requerimientoIds || []).map((x) => parseInt(x, 10)).filter((n) => Number.isFinite(n) && n > 0),
@@ -228,15 +268,31 @@ export async function loadEstadoAsignacionPersistidaBatch(requerimientoIds = [],
     ? client.query(text, params)
     : (await import('../db.js')).query(text, params));
 
+  const nombreSql = `COALESCE(
+    NULLIF(TRIM(u.nombre), ''),
+    NULLIF(TRIM(CONCAT(COALESCE(u.apellidos, ''), ' ', COALESCE(u.nombres, ''))), ''),
+    NULLIF(TRIM(u.username), ''),
+    CASE WHEN u.id IS NOT NULL THEN 'Usuario #' || u.id::text ELSE NULL END
+  )`;
+
   try {
     const [{ rows: estados }, { rows: asignaciones }] = await Promise.all([
       run(
-        `SELECT * FROM expediente_estado_vigente WHERE requerimiento_id = ANY($1::int[])`,
+        `SELECT e.*,
+                u.username AS responsable_username,
+                ${nombreSql} AS responsable_nombre
+         FROM expediente_estado_vigente e
+         LEFT JOIN usuarios u ON u.id = e.responsable_usuario_id
+         WHERE e.requerimiento_id = ANY($1::int[])`,
         [ids],
       ),
       run(
-        `SELECT * FROM expediente_asignaciones
-         WHERE requerimiento_id = ANY($1::int[]) AND activo = TRUE`,
+        `SELECT a.*,
+                u.username AS usuario_username,
+                ${nombreSql} AS usuario_nombre
+         FROM expediente_asignaciones a
+         LEFT JOIN usuarios u ON u.id = a.usuario_id
+         WHERE a.requerimiento_id = ANY($1::int[]) AND a.activo = TRUE`,
         [ids],
       ),
     ]);
@@ -265,6 +321,7 @@ export default {
   cerrarAsignacionActiva,
   crearAsignacion,
   upsertEstadoVigente,
+  actualizarResponsableVigente,
   syncLegacyRequerimiento,
   loadEstadoAsignacionPersistidaBatch,
 };
