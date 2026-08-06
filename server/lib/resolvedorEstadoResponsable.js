@@ -21,51 +21,73 @@ import { isRolGenerico } from '../../shared/identificadoresUsuarios.js';
 // ASIGNACIÓN EXPLÍCITA — true batch (una query por dominio, no por ID)
 // ==========================================================================
 
+/** Unidad/submódulo según etapa vigente del expediente. */
+function unidadPorEtapa(estadoVigente) {
+  const etapa = String(estadoVigente?.etapaCodigo || '').toUpperCase();
+  if (etapa === 'RECEPCION_COTIZACIONES') return 'Recepción de Cotizaciones';
+  if (etapa === 'VALIDACIONES' || etapa === 'VALIDACION_USUARIO') return 'Validaciones';
+  if (etapa === 'CUADRO_COMPARATIVO') return 'Cuadro Comparativo';
+  if (etapa === 'CCP') return 'CCP';
+  if (etapa === 'REGISTRO_ORDEN' || etapa === 'ORDEN') return 'Registro de Órdenes';
+  if (etapa === 'COORDINACION_CM' || etapa === 'ACTOS_PREPARATORIOS') return 'Coordinación CM';
+  return 'Invitaciones';
+}
+
 async function loadAsignacionesBatch(ids, rows, estados) {
   const map = new Map();
   ids.forEach((id) => map.set(id, null));
 
-  // ── Invitaciones / Recepción Cotizaciones (solicitudes_cotizacion) ──
+  // ── RC8.6A — fuente única persistida (prioridad absoluta) ──
   try {
-    const { rows: inv } = await query(
-      `SELECT sr.requerimiento_id, sc.created_by, sc.responsable
-       FROM solicitud_requerimientos sr
-       JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
-       WHERE sr.requerimiento_id = ANY($1::int[])
-         AND sc.estado <> 'ANULADA'
-       ORDER BY sc.id DESC`,
-      [ids],
-    );
-    const byReq = new Map();
-    inv.forEach((r) => {
-      const rid = Number(r.requerimiento_id);
-      if (!byReq.has(rid)) byReq.set(rid, r);
-    });
-    for (const [rid, r] of byReq) {
-      const u = String(r.created_by || '').trim();
-      if (u && !isRolGenerico(u)) {
-        const nombre = await resolveNombre(u);
+    const { loadEstadoAsignacionPersistidaBatch } = await import('./expedienteEstadoPersistido.js');
+    const persistidos = await loadEstadoAsignacionPersistidaBatch(ids);
+    for (const [rid, pack] of persistidos) {
+      const a = pack?.asignacion;
+      const e = pack?.estado;
+      if (a && a.tipo_responsable === 'PERSONA' && a.usuario_id) {
+        const nombre = await resolveNombre(String(a.usuario_id)) || String(a.usuario_id);
+        map.set(rid, {
+          usuarioId: Number(a.usuario_id),
+          username: String(a.usuario_id),
+          nombre,
+          unidad: a.unidad_codigo || e?.responsable_unidad || unidadPorEtapa(estados.get(rid)),
+          fuente: 'asignacion_explicita_db',
+          tipoResponsable: 'PERSONA',
+        });
+        continue;
+      }
+      if (e?.responsable_tipo === 'PERSONA' && e.responsable_usuario_id) {
+        const nombre = await resolveNombre(String(e.responsable_usuario_id))
+          || String(e.responsable_usuario_id);
+        map.set(rid, {
+          usuarioId: Number(e.responsable_usuario_id),
+          username: String(e.responsable_usuario_id),
+          nombre,
+          unidad: e.responsable_unidad || unidadPorEtapa(estados.get(rid)),
+          fuente: e.responsable_fuente || 'asignacion_explicita_db',
+          tipoResponsable: 'PERSONA',
+        });
+        continue;
+      }
+      if (a || e) {
         map.set(rid, {
           usuarioId: null,
-          username: u,
-          nombre: nombre || u,
-          unidad: 'Invitaciones',
+          username: '',
+          nombre: '',
+          unidad: a?.unidad_codigo || e?.responsable_unidad || unidadPorEtapa(estados.get(rid)),
+          fuente: e?.responsable_fuente || a?.origen_asignacion || 'unidad_destino_etapa',
+          tipoResponsable: a?.tipo_responsable || e?.responsable_tipo || 'UNIDAD',
         });
-      } else {
-        const resp = String(r.responsable || '').trim();
-        if (resp && !isRolGenerico(resp)) {
-          map.set(rid, {
-            usuarioId: null,
-            username: resp,
-            nombre: resp,
-            unidad: 'Invitaciones',
-          });
-        }
       }
     }
-  } catch (_) { /* ok */ }
+  } catch (_) { /* migración pendiente */ }
 
-  // ── Cuadro Comparativo ──
+  // ── Legacy heurísticas (created_by / sc.responsable) DESHABILITADAS en RC8.6A.
+  // Solo cuenta asignación persistida. created_by queda en auditoría, no como vigente.
+  // Si el expediente ya tiene fila en expediente_estado_vigente / asignación activa,
+  // no se completa con fuentes legacy (cuadro.creado_por, etc.).
+
+  // ── Cuadro Comparativo (solo si aún no hay fuente persistida) ──
   try {
     const { rows: cc } = await query(
       `SELECT sr.requerimiento_id, cc.creado_por, cc.actualizado_por
@@ -82,17 +104,9 @@ async function loadAsignacionesBatch(ids, rows, estados) {
       if (!byReq.has(rid)) byReq.set(rid, r);
     });
     for (const [rid, r] of byReq) {
-      if (map.has(rid) && map.get(rid) !== null) continue;
-      const u = String(r.actualizado_por || r.creado_por || '').trim();
-      if (u && !isRolGenerico(u)) {
-        const nombre = await resolveNombre(u);
-        map.set(rid, {
-          usuarioId: null,
-          username: u,
-          nombre: nombre || u,
-          unidad: 'Cuadro Comparativo',
-        });
-      }
+      if (map.get(rid) != null) continue;
+      // RC8.6A: no inferir persona desde creado_por/actualizado_por.
+      void r;
     }
   } catch (_) { /* ok */ }
 
@@ -112,10 +126,17 @@ async function loadAsignacionesBatch(ids, rows, estados) {
     });
     for (const [rid, r] of byReq) {
       if (map.has(rid) && map.get(rid) !== null) continue;
+      // usuario_asignado de recepción bienes SÍ es asignación de dominio (explícita).
       const u = String(r.usuario_asignado || '').trim();
       if (u && !isRolGenerico(u)) {
         const nombre = await resolveNombre(u);
-        map.set(rid, { usuarioId: null, username: u, nombre: nombre || u, unidad: 'Almacén' });
+        map.set(rid, {
+          usuarioId: null,
+          username: u,
+          nombre: nombre || u,
+          unidad: 'Almacén',
+          fuente: 'asignacion_explicita_db',
+        });
       }
     }
   } catch (_) { /* ok */ }
@@ -136,18 +157,9 @@ async function loadAsignacionesBatch(ids, rows, estados) {
       const rid = Number(r.requerimiento_id);
       if (!byReq.has(rid)) byReq.set(rid, r);
     });
-    for (const [rid, r] of byReq) {
+    for (const [rid] of byReq) {
       if (map.has(rid) && map.get(rid) !== null) continue;
-      const u = String(r.actualizado_por || r.creado_por || '').trim();
-      if (u && !isRolGenerico(u)) {
-        const nombre = await resolveNombre(u);
-        map.set(rid, {
-          usuarioId: null,
-          username: u,
-          nombre: nombre || u,
-          unidad: 'Registro de Órdenes',
-        });
-      }
+      // RC8.6A: no inferir desde creado_por/actualizado_por de órdenes.
     }
   } catch (_) { /* ok */ }
 
@@ -164,6 +176,7 @@ async function loadAsignacionesBatch(ids, rows, estados) {
       const hist = Array.isArray(p.historial_actos) ? p.historial_actos : [];
       for (let i = hist.length - 1; i >= 0; i--) {
         const h = hist[i];
+        // Solo asignaciones explícitas tipadas (no "último editor").
         if (h.tipo === 'asignacion' && h.analista && !isRolGenerico(h.analista)) {
           const nombre = await resolveNombre(h.analista);
           map.set(rid, {
@@ -171,6 +184,7 @@ async function loadAsignacionesBatch(ids, rows, estados) {
             username: h.analista,
             nombre: nombre || h.analista,
             unidad: 'Coordinación CM',
+            fuente: 'asignacion_explicita_db',
           });
           break;
         }

@@ -4,10 +4,12 @@
  * Etapa Workflow permanece CUADRO_COMPARATIVO hasta la salida a CCP.
  */
 import { query } from '../db.js';
-import { registrarMovimiento, ETAPAS as ETAPAS_TRAZA } from './trazabilidad.js';
+import { ETAPAS as ETAPAS_TRAZA } from './trazabilidad.js';
 import { getSubModuloMeta } from './movimientos.js';
 import { ETAPAS } from '../../core/workflowEngine/WorkflowState.js';
 import { TRANSICIONES_POR_ACCION } from '../../core/workflowEngine/WorkflowTransitions.js';
+import { transicionarExpediente } from './expedienteTransicion.js';
+import { withTransaction } from './workflow/workflowTransaction.js';
 import {
   ROLES_REVISION,
   BANDEJA_ESTADOS_POR_ROL,
@@ -293,8 +295,7 @@ async function requerimientoIdsDeSolicitud(solicitudId) {
 }
 
 /**
- * Actualiza responsable/submódulo/snapshot vía Workflow oficial
- * sin salir de la etapa CUADRO_COMPARATIVO.
+ * RC8.6A.1 — sync revisión cuadro vía transicionarExpediente (misma tx, sin doble UPDATE).
  */
 export async function syncRevisionCuadroWorkflow(solicitudId, {
   revisionEstado,
@@ -302,62 +303,85 @@ export async function syncRevisionCuadroWorkflow(solicitudId, {
   usuario = 'Sistema',
   observacion = '',
   accion = 'derivado',
+  evento = null,
 } = {}) {
   if (!solicitudId || !revisionEstado) return { actualizados: 0 };
   const etapa = ETAPAS.CUADRO_COMPARATIVO;
-  const estadoNegocio = 'En Cuadro Comparativo';
   const resp = responsable || RESPONSABLES_REVISION.ANALISTA;
   const meta = getSubModuloMeta(etapa);
-  const ids = await requerimientoIdsDeSolicitud(solicitudId);
-  let actualizados = 0;
-
-  for (const requerimientoId of ids) {
-    await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo: estadoNegocio,
-      usuario,
-      accion,
-      observacion: observacion || `Revisión cuadro: ${revisionEstado}`,
-      responsable: resp,
-      etapaEjecutor: etapa,
-      etapaDestino: etapa,
-    });
-
-    const { rows } = await query('SELECT payload, estado_actual, sub_modulo_actual, responsable_actual FROM requerimientos WHERE id = $1', [requerimientoId]);
-    if (!rows.length) continue;
-    const payload = parsePayload(rows[0].payload);
-    payload.workflowSnapshot = {
-      ...(payload.workflowSnapshot || {}),
-      etapaActual: etapa,
-      subModuloActual: meta.subModulo || 'Cuadro Comparativo',
-      moduloActual: meta.modulo || 'Contrataciones',
-      responsableActual: resp,
-      revisionEstado,
-      fechaEstadoActual: new Date().toISOString(),
-    };
-    await query(`
-      UPDATE requerimientos
-      SET responsable_actual = $2,
-          sub_modulo_actual = $3,
-          estado_actual = $4,
-          payload = $5::jsonb
-      WHERE id = $1
-    `, [
-      requerimientoId,
-      resp,
-      meta.subModulo || 'Cuadro Comparativo',
-      etapa,
-      JSON.stringify(payload),
-    ]);
-    actualizados += 1;
+  const a = String(accion || '').toUpperCase();
+  const r = String(revisionEstado || '').toUpperCase();
+  let eventoCodigo = evento;
+  if (!eventoCodigo) {
+    if (a.includes('OBSERV') || r.includes('OBSERV')) {
+      eventoCodigo = (r.includes('DEC') || a.includes('DEC'))
+        ? 'CUADRO_OBSERVADO_DEC'
+        : 'CUADRO_OBSERVADO_COORDINACION';
+    } else if (a.includes('APROBAR') && (a.includes('COORD') || r.includes('COORD'))) {
+      eventoCodigo = 'CUADRO_APROBADO_COORDINACION';
+    } else if (a.includes('DERIV') && a.includes('DEC')) {
+      eventoCodigo = 'CUADRO_DERIVADO_DEC';
+    } else if (a.includes('GENER')) {
+      eventoCodigo = 'CUADRO_GENERADO';
+    } else {
+      eventoCodigo = 'CUADRO_DERIVADO_COORDINACION';
+    }
   }
+  const uid = /^\d+$/.test(String(resp).trim()) ? Number(resp) : null;
 
-  return { actualizados, etapa, revisionEstado, responsable: resp };
+  return withTransaction(async (tx) => {
+    const ids = await requerimientoIdsDeSolicitud(solicitudId);
+    let actualizados = 0;
+    for (const requerimientoId of ids) {
+      try {
+        await transicionarExpediente({
+          requerimientoId,
+          evento: eventoCodigo,
+          usuarioDestinoId: uid,
+          unidadDestino: uid ? null : String(resp),
+          motivo: observacion || `Revisión cuadro: ${revisionEstado}`,
+          metadata: {
+            client_request_id: `cuadro-rev:${solicitudId}:${requerimientoId}:${eventoCodigo}:${revisionEstado}`,
+            revisionEstado,
+            via: 'syncRevisionCuadroWorkflow',
+          },
+          actorRol: usuario,
+          domainMutator: async (client) => {
+            const { rows } = await client.query(
+              'SELECT payload FROM requerimientos WHERE id = $1',
+              [requerimientoId],
+            );
+            if (!rows.length) return null;
+            const payload = parsePayload(rows[0].payload);
+            payload.workflowSnapshot = {
+              ...(payload.workflowSnapshot || {}),
+              etapaActual: etapa,
+              subModuloActual: meta.subModulo || 'Cuadro Comparativo',
+              moduloActual: meta.modulo || 'Contrataciones',
+              responsableActual: resp,
+              revisionEstado,
+              fechaEstadoActual: new Date().toISOString(),
+            };
+            await client.query(
+              'UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1',
+              [requerimientoId, JSON.stringify(payload)],
+            );
+            return { revisionEstado };
+          },
+          client: tx,
+        });
+        actualizados += 1;
+      } catch (err) {
+        if (err?.code === 'TRANSITION_NOT_FOUND' || err?.code === '42P01') continue;
+        throw err;
+      }
+    }
+    return { actualizados, etapa, revisionEstado, responsable: resp };
+  });
 }
 
 /**
- * RC8.8 — Registra evento nombrado en historial_movimientos vía registrarMovimiento.
- * No altera el catálogo Workflow (etapa permanece salvo etapaDestino explícito).
+ * RC8.6A.1 — evento cuadro/CCP vía transicionarExpediente (CUADRO_APROBADO_DEC si dest=CCP).
  */
 export async function registrarEventoCuadroCcp(solicitudId, {
   evento,
@@ -371,54 +395,65 @@ export async function registrarEventoCuadroCcp(solicitudId, {
   if (!solicitudId || !evento) return { actualizados: 0 };
   const etapa = ETAPAS.CUADRO_COMPARATIVO;
   const dest = etapaDestino ? String(etapaDestino).toUpperCase() : etapa;
-  const estado = estadoNegocio
-    || (dest === ETAPAS.CCP ? 'En CCP' : 'En Cuadro Comparativo');
-  // OD32 — al derivar a CCP el snapshot debe reflejar DERIVADO_CCP (no obs. histórica)
   const revEstado = revisionEstado
     || (dest === ETAPAS.CCP ? ESTADOS_REVISION_CUADRO.DERIVADO_CCP : null);
-  const ids = await requerimientoIdsDeSolicitud(solicitudId);
-  let actualizados = 0;
-  for (const requerimientoId of ids) {
-    await registrarMovimiento({
-      requerimientoId,
-      estadoNuevo: estado,
-      usuario,
-      accion: evento,
-      observacion: observacion || evento,
-      responsable: responsable || RESPONSABLES_REVISION.ANALISTA,
-      etapaEjecutor: etapa,
-      etapaDestino: dest,
-    });
-    const { rows } = await query(
-      'SELECT payload FROM requerimientos WHERE id = $1',
-      [requerimientoId],
-    );
-    if (rows.length) {
-      const payload = parsePayload(rows[0].payload);
-      const meta = getSubModuloMeta(dest);
-      payload.workflowSnapshot = {
-        ...(payload.workflowSnapshot || {}),
-        etapaActual: dest,
-        subModuloActual: meta.subModulo || (dest === ETAPAS.CCP ? 'CCP' : 'Cuadro Comparativo'),
-        moduloActual: meta.modulo || 'Contrataciones',
-        responsableActual: responsable || RESPONSABLES_REVISION.ANALISTA,
-        fechaEstadoActual: new Date().toISOString(),
-        ...(revEstado ? { revisionEstado: revEstado } : {}),
-      };
-      await query(
-        'UPDATE requerimientos SET payload = $2::jsonb, estado_actual = $3, sub_modulo_actual = $4, responsable_actual = $5 WHERE id = $1',
-        [
+  const uid = /^\d+$/.test(String(responsable || '').trim()) ? Number(responsable) : null;
+  const eventoCodigo = dest === ETAPAS.CCP
+    ? 'CUADRO_APROBADO_DEC'
+    : String(evento).toUpperCase().replace(/^CCP_DERIVADO$/, 'CUADRO_APROBADO_DEC');
+
+  return withTransaction(async (tx) => {
+    const ids = await requerimientoIdsDeSolicitud(solicitudId);
+    let actualizados = 0;
+    for (const requerimientoId of ids) {
+      try {
+        await transicionarExpediente({
           requerimientoId,
-          JSON.stringify(payload),
-          dest,
-          meta.subModulo || (dest === ETAPAS.CCP ? 'CCP' : 'Cuadro Comparativo'),
-          responsable || RESPONSABLES_REVISION.ANALISTA,
-        ],
-      );
+          evento: eventoCodigo === 'CCP_DERIVADO' ? 'CUADRO_APROBADO_DEC' : eventoCodigo,
+          usuarioDestinoId: uid,
+          unidadDestino: uid ? null : String(responsable || ''),
+          motivo: observacion || evento,
+          metadata: {
+            client_request_id: `cuadro-ccp:${solicitudId}:${requerimientoId}:${eventoCodigo}`,
+            evento_traza: evento,
+            revisionEstado: revEstado,
+            via: 'registrarEventoCuadroCcp',
+            estadoNegocio,
+          },
+          actorRol: usuario,
+          domainMutator: async (client) => {
+            const { rows } = await client.query(
+              'SELECT payload FROM requerimientos WHERE id = $1',
+              [requerimientoId],
+            );
+            if (!rows.length) return null;
+            const payload = parsePayload(rows[0].payload);
+            const meta = getSubModuloMeta(dest);
+            payload.workflowSnapshot = {
+              ...(payload.workflowSnapshot || {}),
+              etapaActual: dest,
+              subModuloActual: meta.subModulo || (dest === ETAPAS.CCP ? 'CCP' : 'Cuadro Comparativo'),
+              moduloActual: meta.modulo || 'Contrataciones',
+              responsableActual: responsable || RESPONSABLES_REVISION.ANALISTA,
+              fechaEstadoActual: new Date().toISOString(),
+              ...(revEstado ? { revisionEstado: revEstado } : {}),
+            };
+            await client.query(
+              'UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1',
+              [requerimientoId, JSON.stringify(payload)],
+            );
+            return { revisionEstado: revEstado };
+          },
+          client: tx,
+        });
+        actualizados += 1;
+      } catch (err) {
+        if (err?.code === 'TRANSITION_NOT_FOUND' || err?.code === '42P01') continue;
+        throw err;
+      }
     }
-    actualizados += 1;
-  }
-  return { actualizados, evento, etapaDestino: dest, revisionEstado: revEstado };
+    return { actualizados, evento: eventoCodigo, etapaDestino: dest, revisionEstado: revEstado };
+  });
 }
 
 /** Verifica que la salida Workflow oficial CUADRO → CCP siga vigente. */

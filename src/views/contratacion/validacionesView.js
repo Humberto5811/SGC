@@ -8,7 +8,7 @@ import {
   getResponsableVigenteLabel,
 } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { bindBandejaToolbar, closeBandejaActionMenus } from '../../utils/bandejaUi.js';
+import { bindBandejaToolbar, closeBandejaActionMenus, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { showValidarModal } from '../../utils/validacionesModal.js';
 import {
@@ -103,7 +103,7 @@ function buildValidacionRowHtml(exp) {
       <td>
         ${renderBadgeEstadoValidacionHtml(exp, esc)}
       </td>
-      <td class="small">${esc(getResponsableVigenteLabel(exp))}</td>
+      <td class="small">${renderResponsableCellHtml(exp, esc)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary val-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">

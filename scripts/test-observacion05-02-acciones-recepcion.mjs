@@ -80,15 +80,24 @@ assert.match(viewSrc, /renderActionMenuCell/);
 assert.match(viewSrc, /bindActionMenus/);
 assert.match(viewSrc, />Responsable</);
 assert.doesNotMatch(viewSrc, /Responsable actual/);
-assert.match(viewSrc, /estadoActualBadge|badgeEstadoBandejaRecepcion/);
-assert.match(viewSrc, /getResponsableVigenteLabel/);
-assert.match(viewSrc, /enviarCcp/);
+assert.match(viewSrc, /renderResponsableCellHtml/);
 assert.match(viewSrc, /Enviar a CCP/);
+assert.match(viewSrc, /enviarCcp/);
+assert.match(viewSrc, /renderBadgeEstadoRecepcionHtml/);
 
-// 5. BE propaga requerimiento_id para enrichment responsable
+// 5. BE propaga requerimiento_id / tipo del requerimiento para enrichment y destino
 const portalSrc = read('server/lib/portalProveedores.js');
 assert.match(portalSrc, /requerimiento_id: r\.requerimiento_id/);
 assert.match(portalSrc, /COALESCE\(\s*cot\.requerimiento_id/);
+assert.match(portalSrc, /AS req_tipo/);
+assert.match(portalSrc, /tipoResuelto|req_tipo \|\| r\.solicitud_tipo/);
+assert.match(portalSrc, /Recepción de Cotizaciones/);
+
+const detSrc = read('server/lib/portalDocumentos.js');
+assert.match(detSrc, /tipo_resuelto/);
+
+const bandejaUi = read('src/utils/bandejaUi.js');
+assert.match(bandejaUi, /export function renderResponsableCellHtml/);
 
 // 6. Consolidación preserva requerimiento_id / estado_responsable_vigente
 const flat = consolidarExpedientesRecepcion([{

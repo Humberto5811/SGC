@@ -787,8 +787,10 @@ export async function listarSolicitudesPorRequerimiento(requerimientoId) {
   return rows;
 }
 
-export async function registrarTrazaPortal(entry) {
-  await query(`
+export async function registrarTrazaPortal(entry, opts = {}) {
+  const client = opts.client || null;
+  const run = (text, params) => (client ? client.query(text, params) : query(text, params));
+  await run(`
     INSERT INTO trazabilidad_portal (solicitud_id, proveedor_id, requerimiento_id, evento, detalle, usuario, ip)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
   `, [

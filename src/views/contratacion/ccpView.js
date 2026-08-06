@@ -5,7 +5,7 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
 import {
-  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
+  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
 import { ccpMenuItems } from '../../utils/bandejaActions.js';
 import { openCcpCodigoModal } from '../../utils/ccpCodigoModal.js';
@@ -152,7 +152,7 @@ function renderRow(row) {
       <td><strong>${esc(row.solicitud_codigo || '—')}</strong></td>
       <td>${esc(centro)}</td>
       <td>${renderEstadoCell(row)}</td>
-      <td class="small">${esc(getResponsableVigenteLabel(row))}</td>
+      <td class="small">${renderResponsableCellHtml(row, esc)}</td>
       <td class="small fw-semibold text-break" style="max-width:140px">${ccpTxt}</td>
       ${menu}
     </tr>`;

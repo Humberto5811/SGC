@@ -1460,12 +1460,14 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
 
   await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
     etapaDestino: 'VALIDACION_USUARIO',
+    evento: esReapertura ? 'VALIDACION_DEVUELTA' : 'COTIZACIONES_DERIVADAS_VALIDACION',
     usuario: usuarioOperador,
     observacion: esReapertura
       ? (obsTexto || `Validación devuelta a Área Usuaria — ${responsable_nombre}`)
       : `Cotización enviada a validación AU — ${responsable_nombre}`,
     etapaEjecutor: 'RECEPCION_COTIZACIONES',
     responsable: responsable_nombre,
+    usuarioDestinoId: Number.isFinite(parseInt(responsable_id, 10)) ? parseInt(responsable_id, 10) : null,
   });
 
   return mapCotizacionRow({
@@ -2116,10 +2118,12 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     `, [updated.solicitud_id]);
     await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
       etapaDestino: destOficial.code,
+      evento: 'VALIDACION_COMPLETADA',
       usuario,
       observacion: observacion_derivacion || 'Validación técnica: existe al menos una cotización válida',
       etapaEjecutor: 'VALIDACION_USUARIO',
       responsable: respDestNombre,
+      usuarioDestinoId: Number.isFinite(parseInt(respDestId, 10)) ? parseInt(respDestId, 10) : null,
     });
   } else {
     // Todas inválidas → retorno a Invitaciones (conserva historial / permite nueva ronda)
@@ -2134,11 +2138,13 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     );
     await syncRequerimientosSolicitudWorkflow(updated.solicitud_id, {
       etapaDestino: destOficial.code,
+      evento: 'COTIZACIONES_INVALIDAS_DEVUELTAS',
       usuario,
       observacion: observacion_derivacion
         || 'Validación: todas las cotizaciones no válidas — retorno a Invitaciones',
       etapaEjecutor: 'VALIDACION_USUARIO',
       responsable: respDestNombre,
+      usuarioDestinoId: Number.isFinite(parseInt(respDestId, 10)) ? parseInt(respDestId, 10) : null,
       forzar: true,
     });
   }

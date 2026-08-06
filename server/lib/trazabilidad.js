@@ -710,8 +710,12 @@ export async function registrarMovimiento({
   etapaEjecutor = null,
   etapaDestino = null,
   etapaDestinoEvento = null,
-}) {
-  const { rows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+}, opts = {}) {
+  const client = opts.client || null;
+  const soloHistorial = opts.soloHistorial === true;
+  const run = (text, params) => (client ? client.query(text, params) : query(text, params));
+
+  const { rows } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) throw new Error('Requerimiento no encontrado');
   const row = rows[0];
   const now = new Date().toISOString();
@@ -772,8 +776,9 @@ export async function registrarMovimiento({
     });
   }
 
-  if (esEventoObservacion) {
-    await query(`
+  // RC8.6A.1 — modo historial: no toca estado/responsable vigente.
+  if (soloHistorial || esEventoObservacion) {
+    await run(`
       UPDATE requerimientos SET
         historial_estados = $2::jsonb,
         historial_movimientos = $3::jsonb,
@@ -781,10 +786,14 @@ export async function registrarMovimiento({
       WHERE id = $1
     `, [requerimientoId, JSON.stringify(historial), JSON.stringify(movimientos)]);
 
-    return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
+    const { rows: out } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+    return enrichRequerimientoRow(out[0]);
   }
 
-  await query(`
+  // Escritura legacy de estado: solo cuando NO forma parte de transicionarExpediente.
+  // Las rutas críticas deben usar transicionarExpediente(); este camino queda para
+  // compatibilidad residual (inventario clase A pendiente fuera del alcance crítico).
+  await run(`
     UPDATE requerimientos SET
       estado = $2,
       estado_actual = $3,
@@ -800,12 +809,12 @@ export async function registrarMovimiento({
     responsableActual, now, JSON.stringify(historial), JSON.stringify(movimientos),
   ]);
 
-  const { rows: freshRows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+  const { rows: freshRows } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
   const fresh = freshRows[0];
   const historialCompleto = reconstruirHistorialCompleto(fresh);
   const ultimoEvt = historialCompleto[historialCompleto.length - 1];
   const fechaEstado = ultimoEvt?.fechaIngreso || now;
-  await query(
+  await run(
     `UPDATE requerimientos SET historial_estados = $2::jsonb, fecha_estado_actual = $3, sub_modulo_actual = $4 WHERE id = $1`,
     [
       requerimientoId,
@@ -815,10 +824,11 @@ export async function registrarMovimiento({
     ],
   );
 
-  return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
+  // RC8.6A.1 — sin sync best-effort a fuente única (evita 2ª tx silenciosa).
+  const { rows: finalRows } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+  return enrichRequerimientoRow(finalRows[0]);
 }
 
-/** Registra subsanación en origen y derivación al submódulo destino seleccionado. */
 export async function registrarSubsanacionDerivacion({
   requerimientoId,
   usuario = 'Sistema',

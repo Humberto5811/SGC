@@ -178,12 +178,38 @@ export function resolveEstadoResponsableVigente(evidencia = {}, opts = {}) {
 
   // ================================================================
   // NIVEL 1: Asignación explícita DB (provista por wrapper server-side)
+  // RC8.6A — también acepta UNIDAD / PENDIENTE persistidos (sin inventar persona).
   // ================================================================
   if (opts.asignaciones?._result) {
     const a = opts.asignaciones._result;
+    const tipoAsig = String(a.tipoResponsable || a.tipo_responsable || '').toUpperCase();
     const uid = a.usuarioId ?? a.responsableUsuarioId ?? null;
     const uname = a.username || a.responsableUsername || '';
     const nombre = a.nombre || a.responsableNombre || uname || '';
+    if (tipoAsig === 'PENDIENTE' || a.pendiente === true) {
+      return build({
+        estadoCodigo, estadoLabel, etapaCodigo, etapaLabel,
+        responsableTipo: TIPO_RESPONSABLE.PENDIENTE,
+        responsableUsuarioId: null,
+        responsableUsername: '',
+        responsableNombre: '',
+        responsableUnidad: a.unidad || a.responsableUnidad || 'Pendiente de asignación',
+        responsableFuente: a.fuente || 'pendiente_asignacion',
+        actualizadoAt,
+      });
+    }
+    if (tipoAsig === 'UNIDAD' || (a.unidad && !uid && !uname)) {
+      return build({
+        estadoCodigo, estadoLabel, etapaCodigo, etapaLabel,
+        responsableTipo: TIPO_RESPONSABLE.UNIDAD,
+        responsableUsuarioId: null,
+        responsableUsername: '',
+        responsableNombre: '',
+        responsableUnidad: a.unidad || a.responsableUnidad || unidadDefault || '—',
+        responsableFuente: a.fuente || 'unidad_destino_etapa',
+        actualizadoAt,
+      });
+    }
     if (uid || (uname && !isUsuarioInvalido(uname, evidencia))) {
       return build({
         estadoCodigo, estadoLabel, etapaCodigo, etapaLabel,
@@ -192,7 +218,7 @@ export function resolveEstadoResponsableVigente(evidencia = {}, opts = {}) {
         responsableUsername: uname,
         responsableNombre: nombre,
         responsableUnidad: a.unidad || a.responsableUnidad || unidadDefault,
-        responsableFuente: 'asignacion_explicita_db',
+        responsableFuente: a.fuente || 'asignacion_explicita_db',
         actualizadoAt,
       });
     }

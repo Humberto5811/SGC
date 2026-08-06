@@ -5,7 +5,7 @@
 import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
 import { bandejaTableStyles, getResponsableVigenteLabel, getEstadoVigenteLabel } from '../../utils/trazabilidad.js';
 import {
-  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
+  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
 import { renderBadgeEstadoVigenteHtml } from '../../../shared/estadoExpedienteVigente.js';
 import {
@@ -282,7 +282,6 @@ function renderRow(row) {
   const tipDesc = esc(row.item_descripcion_tooltip || row.item_descripcion || '');
   const tipEnt = esc(row.entrega_tooltip || '');
   const estadoVigente = getEstadoVigenteLabel(row);
-  const responsableVigente = getResponsableVigenteLabel(row);
   const checklistHtml = shouldShowChecklistBadge(row)
     ? ` ${renderChecklistBadge(row.checklist || row)}`
     : '';
@@ -307,7 +306,7 @@ function renderRow(row) {
     <td title="${esc(row.condicion_inicio_label || '')}">${esc(row.plazo_entrega_label || (row.plazo_entrega ? `${row.plazo_entrega} días` : '—'))}</td>
     <td>${fmtFecha(row.fecha_maxima_entrega)}</td>
     <td class="ro-wrap" title="${esc(estadoVigente)}">${renderEstado(row)}${checklistHtml}</td>
-    <td class="ro-wrap" title="${esc(responsableVigente)}">${esc(responsableVigente)}</td>
+    <td class="ro-wrap">${renderResponsableCellHtml(row, esc)}</td>
     ${menu}
   </tr>`;
 }

@@ -2049,32 +2049,50 @@ export async function derivarAEjecucion(ordenId, usuario, rol) {
     recibido_proveedor_at: orden.recibido_proveedor_at,
   };
 
-  const { rows } = await query(`
-    INSERT INTO orden_ejecucion_derivaciones (orden_id, requerimiento_id, payload_json, derivado_por)
-    VALUES ($1,$2,$3::jsonb,$4)
-    ON CONFLICT (orden_id) DO UPDATE SET
-      payload_json = EXCLUDED.payload_json,
-      derivado_por = EXCLUDED.derivado_por,
-      derivado_at = NOW()
-    RETURNING *
-  `, [orden.id, orden.requerimiento_id, JSON.stringify(payload), String(usuario || '').slice(0, 150)]);
+  const { withTransaction } = await import('./workflow/workflowTransaction.js');
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
 
-  await query(`
-    UPDATE ordenes_contratacion SET
-      estado = $2,
-      derivado_ejecucion_por = $3,
-      derivado_ejecucion_at = NOW(),
-      actualizado_por = $3,
-      actualizado_at = NOW()
-    WHERE id = $1
-  `, [orden.id, ESTADOS_ORDEN.EN_EJECUCION, String(usuario || '').slice(0, 150)]);
+  const { rows } = await withTransaction(async (tx) => {
+    const ins = await tx.query(`
+      INSERT INTO orden_ejecucion_derivaciones (orden_id, requerimiento_id, payload_json, derivado_por)
+      VALUES ($1,$2,$3::jsonb,$4)
+      ON CONFLICT (orden_id) DO UPDATE SET
+        payload_json = EXCLUDED.payload_json,
+        derivado_por = EXCLUDED.derivado_por,
+        derivado_at = NOW()
+      RETURNING *
+    `, [orden.id, orden.requerimiento_id, JSON.stringify(payload), String(usuario || '').slice(0, 150)]);
 
-  await query(`
-    UPDATE requerimientos SET
-      estado_actual = 'EN_EJECUCION',
-      updated_at = NOW()
-    WHERE id = $1
-  `, [orden.requerimiento_id]).catch(() => {});
+    await tx.query(`
+      UPDATE ordenes_contratacion SET
+        estado = $2,
+        derivado_ejecucion_por = $3,
+        derivado_ejecucion_at = NOW(),
+        actualizado_por = $3,
+        actualizado_at = NOW()
+      WHERE id = $1
+    `, [orden.id, ESTADOS_ORDEN.EN_EJECUCION, String(usuario || '').slice(0, 150)]);
+
+    if (orden.requerimiento_id) {
+      await transicionarExpediente({
+        requerimientoId: orden.requerimiento_id,
+        evento: 'ORDEN_DERIVADA_EJECUCION',
+        usuarioOrigenId: null,
+        unidadDestino: orden.tipo_orden === 'BIEN' || String(orden.tipo_orden || '').toUpperCase() === 'BIEN'
+          ? 'Almacén'
+          : 'Área Usuaria',
+        motivo: `Orden ${orden.numero_orden || orden.id} derivada a ejecución`,
+        metadata: {
+          client_request_id: `orden-ejecucion:${orden.id}`,
+          orden_id: orden.id,
+          via: 'derivarAEjecucion',
+        },
+        actorRol: String(usuario || rol || 'SISTEMA'),
+        client: tx,
+      });
+    }
+    return ins;
+  });
 
   await registrarEventoOrden({
     ordenId: orden.id,

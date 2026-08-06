@@ -1,23 +1,26 @@
 /**
  * Derivación Recepción de Cotizaciones → CCP (solo LOCACIÓN).
- * No crea filas en cuadros_comparativos.
+ * RC8.6A.1 — todo en una sola transacción vía transicionarExpediente + domainMutator.
+ * No crea filas en cuadros_comparativos (cuadro_id = null).
  */
 import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
-import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
 import { normalizarTipo, TIPOS_CONTRATACION } from '../../shared/workflow/tiposContratacion.js';
 import {
   resolveDestinoDesdeRecepcionCotizaciones,
   DESTINOS_RECEPCION,
 } from '../../shared/workflow/destinoRecepcion.js';
+import { transicionarExpediente } from './expedienteTransicion.js';
+import { withTransaction } from './workflow/workflowTransaction.js';
 
 function parseJson(val, fallback = {}) {
   if (val && typeof val === 'object') return val;
   try { return JSON.parse(val || 'null') ?? fallback; } catch (_) { return fallback; }
 }
 
-async function loadCotizacionConTipo(cotizacionId) {
-  const { rows } = await query(`
+async function loadCotizacionConTipo(cotizacionId, client = null) {
+  const run = (text, params) => (client ? client.query(text, params) : query(text, params));
+  const { rows } = await run(`
     SELECT cot.*, p.ruc, p.razon_social,
       sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.tipo AS solicitud_tipo, sc.estado AS solicitud_estado,
@@ -55,6 +58,7 @@ function yaDerivadoACcp(cot) {
 /**
  * Deriva expediente de locación desde Recepción a CCP.
  * Idempotente si ya está en CCP. No crea cuadro comparativo.
+ * Atomicidad: dominio + estado vigente + asignación + legacy + traza en UNA tx.
  */
 export async function derivarRecepcionACcp(cotizacionId, body = {}, usuarioOperador = '') {
   const cot = await loadCotizacionConTipo(cotizacionId);
@@ -105,75 +109,121 @@ export async function derivarRecepcionACcp(cotizacionId, body = {}, usuarioOpera
   const user = String(usuarioOperador || '').slice(0, 150);
   const fecha = new Date().toISOString();
 
-  await query(`
-    UPDATE solicitudes_cotizacion SET estado = 'EN_CCP', updated_at = NOW()
-    WHERE id = $1 AND estado NOT IN ('CERRADA')
-  `, [cot.solicitud_id]);
+  return withTransaction(async (tx) => {
+    const { rows: reqRows } = await tx.query(
+      `SELECT requerimiento_id FROM solicitud_requerimientos WHERE solicitud_id = $1`,
+      [cot.solicitud_id],
+    );
+    const reqIds = [...new Set(
+      reqRows.map((r) => parseInt(r.requerimiento_id, 10)).filter((n) => Number.isFinite(n) && n > 0),
+    )];
+    if (cot.requerimiento_id) {
+      const rid = parseInt(cot.requerimiento_id, 10);
+      if (Number.isFinite(rid) && !reqIds.includes(rid)) reqIds.push(rid);
+    }
+    if (!reqIds.length) {
+      throw new Error('Solicitud sin requerimientos vinculados');
+    }
 
-  const histEntry = {
-    tipo: 'derivacion_ccp_desde_recepcion',
-    destino: 'CCP',
-    origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
-    responsable: respNombre,
-    responsable_id: respId,
-    usuario: user,
-    observacion,
-    fecha,
-  };
+    let dominioAplicado = false;
+    const aplicarDominio = async (client) => {
+      if (dominioAplicado) return { skipped: true };
+      dominioAplicado = true;
 
-  // Marca cotizaciones presentadas (historial propio, no cuadros_comparativos).
-  await query(`
-    UPDATE cotizaciones_proveedor SET
-      validacion_responsable = $2,
-      validacion_informe = COALESCE(validacion_informe, '{}'::jsonb) || $3::jsonb,
-      historial = COALESCE(historial, '[]'::jsonb) || $4::jsonb,
-      updated_at = NOW()
-    WHERE solicitud_id = $1
-      AND estado = 'COTIZACION_PRESENTADA'
-  `, [
-    cot.solicitud_id,
-    respNombre.slice(0, 200),
-    JSON.stringify({
-      derivacion_ccp: {
+      await client.query(`
+        UPDATE solicitudes_cotizacion SET estado = 'EN_CCP', updated_at = NOW()
+        WHERE id = $1 AND estado NOT IN ('CERRADA')
+      `, [cot.solicitud_id]);
+
+      const histEntry = {
+        tipo: 'derivacion_ccp_desde_recepcion',
+        destino: 'CCP',
+        origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
+        responsable: respNombre,
         responsable_id: respId,
-        responsable_nombre: respNombre,
-        derivado_por: user,
-        derivado_at: fecha,
+        usuario: user,
         observacion,
-        origen: 'RECEPCION_COTIZACION_LOCACION',
-      },
-    }),
-    JSON.stringify([histEntry]),
-  ]);
+        fecha,
+      };
 
-  await registrarTrazaPortal({
-    solicitud_id: cot.solicitud_id,
-    proveedor_id: cot.proveedor_id,
-    requerimiento_id: cot.requerimiento_id,
-    evento: 'LOCACION_APROBADA_RECEPCION',
-    detalle: `Locación derivada a CCP desde Recepción → ${respNombre}${observacion ? `: ${observacion.slice(0, 160)}` : ''}`,
-    usuario: user,
+      await client.query(`
+        UPDATE cotizaciones_proveedor SET
+          validacion_responsable = $2,
+          validacion_informe = COALESCE(validacion_informe, '{}'::jsonb) || $3::jsonb,
+          historial = COALESCE(historial, '[]'::jsonb) || $4::jsonb,
+          updated_at = NOW()
+        WHERE solicitud_id = $1
+          AND estado = 'COTIZACION_PRESENTADA'
+      `, [
+        cot.solicitud_id,
+        respNombre.slice(0, 200),
+        JSON.stringify({
+          derivacion_ccp: {
+            responsable_id: respId,
+            responsable_nombre: respNombre,
+            derivado_por: user,
+            derivado_at: fecha,
+            observacion,
+            origen: 'RECEPCION_COTIZACION_LOCACION',
+          },
+        }),
+        JSON.stringify([histEntry]),
+      ]);
+
+      await registrarTrazaPortal({
+        solicitud_id: cot.solicitud_id,
+        proveedor_id: cot.proveedor_id,
+        requerimiento_id: cot.requerimiento_id,
+        evento: 'LOCACION_APROBADA_RECEPCION',
+        detalle: `Locación derivada a CCP desde Recepción → ${respNombre}${observacion ? `: ${observacion.slice(0, 160)}` : ''}`,
+        usuario: user,
+      }, { client });
+
+      return {
+        solicitud_id: cot.solicitud_id,
+        cotizacion_id: cot.id,
+        cuadro_id: null,
+        estado_solicitud: 'EN_CCP',
+      };
+    };
+
+    const resultados = [];
+    for (let i = 0; i < reqIds.length; i += 1) {
+      const rid = reqIds[i];
+      const r = await transicionarExpediente({
+        requerimientoId: rid,
+        evento: 'LOCACION_APROBADA_RECEPCION',
+        usuarioOrigenId: null,
+        usuarioDestinoId: respId,
+        unidadDestino: null,
+        motivo: observacion || `Locación derivada a CCP — ${respNombre}`,
+        metadata: {
+          client_request_id: `recepcion-ccp:${cot.solicitud_id}:${rid}:${cot.id}`,
+          cotizacion_id: cot.id,
+          solicitud_id: cot.solicitud_id,
+          tipo_contratacion: 'LOCACION',
+        },
+        actorRol: user || 'SISTEMA',
+        domainMutator: i === 0 ? aplicarDominio : null,
+        client: tx,
+      });
+      resultados.push(r);
+    }
+
+    return {
+      ok: true,
+      idempotente: resultados.every((r) => r.idempotente),
+      destino: DESTINOS_RECEPCION.CCP,
+      origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
+      solicitud_id: cot.solicitud_id,
+      cotizacion_id: cot.id,
+      cuadro_id: null,
+      responsable_id: respId,
+      responsable_nombre: respNombre,
+      requerimientos: reqIds,
+      domain_results: resultados[0]?.domain_results || null,
+    };
   });
-
-  await syncRequerimientosSolicitudWorkflow(cot.solicitud_id, {
-    etapaDestino: 'CCP',
-    usuario: user,
-    observacion: observacion || `Locación derivada a CCP — ${respNombre}`,
-    etapaEjecutor: 'RECEPCION_COTIZACIONES',
-    responsable: respNombre,
-  });
-
-  return {
-    ok: true,
-    idempotente: false,
-    destino: DESTINOS_RECEPCION.CCP,
-    origen_ccp: 'RECEPCION_COTIZACION_LOCACION',
-    solicitud_id: cot.solicitud_id,
-    cotizacion_id: cot.id,
-    cuadro_id: null,
-    responsable_id: respId,
-    responsable_nombre: respNombre,
-  };
 }
 
 export async function resolveTipoExpedienteCotizacion(cotizacionId) {

@@ -151,6 +151,27 @@ export function getResponsableRol(row) {
   return getRolDisplayFromRow(row);
 }
 
+/**
+ * Celda Responsable estándar (nombre + submódulo debajo) — todas las bandejas.
+ * @param {object} row
+ * @param {(s: string) => string} [escFn]
+ * @param {{ submodulo?: string }} [opts]
+ */
+export function renderResponsableCellHtml(row, escFn = esc, opts = {}) {
+  const enriched = enrichReqRow(row || {});
+  const nombre = enriched.responsableActual || '—';
+  const erv = enriched.estado_responsable_vigente;
+  const sub = String(
+    opts.submodulo
+    || erv?.etapaLabel
+    || enriched.subModuloActual
+    || enriched.sub_modulo_actual
+    || getRolDisplayFromRow(enriched)
+    || '—',
+  ).trim() || '—';
+  return `<div class="req-resp-name">${escFn(nombre)}</div><div class="req-resp-role">${escFn(sub)}</div>`;
+}
+
 export function buildRowTooltip(row) {
   const enriched = enrichReqRow(row);
   const sigamef = getSigamefRaw(enriched);

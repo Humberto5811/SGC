@@ -35,7 +35,6 @@ import {
   tipoDeRequerimiento,
   etapaDeRequerimiento,
 } from './workflowRepository.js';
-import { insertWorkflowEvento, appendMovimiento, buildMovimientoEntry } from './workflowHistory.js';
 import { validarPermiso } from './workflowGuards.js';
 import { resolverEtapaLegacy } from './workflowCompatibility.js';
 import { buildContratoUbicacion, buildContratoEstados, normalizarActor } from '../../../shared/workflow/workflowContract.js';
@@ -200,113 +199,55 @@ export async function executeTransition(context = {}, flags = {}, client = null)
       throw err;
     }
 
-    // 9. domainMutator solo si fue proporcionado
-    let domainResults = null;
-    if (context.domainMutator && typeof context.domainMutator === 'function') {
-      domainResults = await context.domainMutator(tx, {
+    // RC8.6A.1 — dueño único de persistencia: transicionarExpediente (misma tx).
+    // El motor solo validó permiso/catálogo; no escribe estado/asignación por su cuenta.
+    const { transicionarExpediente } = await import('../expedienteTransicion.js');
+    const uidDest = context.usuario_destino_id
+      ?? context.metadata?.usuario_destino_id
+      ?? null;
+    const unidadDest = context.unidad_destino
+      || context.metadata?.unidad_destino
+      || null;
+    const wrappedMutator = context.domainMutator
+      ? async (clientTx, ctx) => context.domainMutator(clientTx, {
         expediente_id: context.expediente_id,
-        transicion,
+        transicion: ctx.transicion || transicion,
         contexto: context,
-        row,
-      });
-    }
+        row: ctx.row || row,
+        ...ctx,
+      })
+      : null;
 
-    // 10-13. Actualizar ubicación SOLO si cambia_ubicacion.
-    // Se usa `mapEtapaDestinoBD` para que el estado_actual escrito sea el código que
-    // los lectores legacy esperan (ej.: COORDINACION_CM → ACTOS_PREPARATORIOS).
-    // El contrato y el evento conservan el código canónico de la matriz.
-    const destino = transicion.etapa_destino;
-    const destinoBD = mapEtapaDestinoBD(destino);
-    const meta = getEtapaMeta(destino) || getEtapaMeta('REGISTRO');
-    const cambia = transicion.cambia_ubicacion;
-    const responsable = context.responsable_destino || transicion.responsable_destino
-      || meta.responsableCodigo || 'SISTEMA';
-
-    if (cambia) {
-      await tx.query(`
-        UPDATE requerimientos SET
-          estado_actual = $2,
-          sub_modulo_actual = $3,
-          responsable_actual = $4,
-          fecha_estado_actual = NOW(),
-          updated_at = NOW()
-        WHERE id = $1
-      `, [context.expediente_id, destinoBD, meta.submoduloLabel, responsable]);
-    } else if (context.responsable_destino) {
-      // Evento sin cambio de ubicación con responsable explícito (ej. EVALUACION_OBSERVADA):
-      // se actualiza responsable_actual (responsable de subsanación) sin mover etapa.
-      await tx.query(`
-        UPDATE requerimientos SET
-          responsable_actual = $2,
-          fecha_estado_actual = NOW(),
-          updated_at = NOW()
-        WHERE id = $1
-      `, [context.expediente_id, context.responsable_destino]);
-    } else {
-      await tx.query(`
-        UPDATE requerimientos SET updated_at = NOW() WHERE id = $1
-      `, [context.expediente_id]);
-    }
-
-    // 14. Insertar workflow_eventos
-    const eventoRow = await insertWorkflowEvento(tx, {
-      expediente_id: context.expediente_id,
-      tipo_contratacion: tipo,
-      evento_codigo: evento,
-      etapa_origen: etapaVigente,
-      etapa_destino: destino,
-      actor_id: actorNormalizado.id ?? null,
-      actor_rol: actorNormalizado.rol || 'SISTEMA',
-      responsable_destino: responsable,
+    const result = await transicionarExpediente({
+      requerimientoId: context.expediente_id,
+      evento,
+      usuarioOrigenId: actorNormalizado.id ?? null,
+      usuarioDestinoId: uidDest,
+      unidadDestino: unidadDest
+        || (!uidDest ? (context.responsable_destino || transicion.responsable_destino || null) : null),
+      motivo: context.metadata?.observacion || context.metadata?.motivo || '',
       metadata: {
         ...(context.metadata || {}),
-        cambia_ubicacion: cambia,
+        idempotency_key: idemKey,
+        tipo_contratacion: tipo,
+        via: 'executeTransition→transicionarExpediente',
         permiso: transicion.permiso,
         guard_codigo: transicion.guard_codigo,
-        domain_results: domainResults || null,
       },
-      idempotency_key: idemKey,
+      actorRol: actorNormalizado.rol || context.actor_rol || 'SISTEMA',
+      domainMutator: wrappedMutator,
+      client: tx,
     });
-
-    // 15. historial_movimientos (append)
-    const entry = buildMovimientoEntry({
-      accion: evento,
-      etapa: cambia ? destino : etapaVigente,
-      usuario: context.actor_rol || 'Sistema',
-      responsable,
-      observacion: context.metadata?.observacion || `Evento ${evento}`,
-      subModuloDestino: cambia ? meta.submoduloCodigo : '',
-    });
-    await appendMovimiento(tx, context.expediente_id, entry);
-
-    // Releer fila actualizada
-    const { rows: freshRows } = await tx.query(
-      'SELECT * FROM requerimientos WHERE id = $1',
-      [context.expediente_id],
-    );
-    const freshRow = freshRows[0];
 
     return {
-      idempotente: false,
-      evento: eventoRow,
-      expediente_actualizado: freshRow,
-      contrato: await buildContratoDesdeRow(freshRow),
-      domain_results: domainResults,
+      idempotente: !!result.idempotente,
+      evento: result.evento,
+      expediente_actualizado: result.expediente,
+      contrato: await buildContratoDesdeRow(result.expediente || row),
+      domain_results: result.domain_results,
+      dueno_persistencia: result.dueno_persistencia || 'transicionarExpediente',
     };
   }, client);
-}
-
-/**
- * Mapea el código de etapa canónico de la matriz al código de estado_actual
- * esperado por los lectores legacy en BD.
- * - COORDINACION_CM → ACTOS_PREPARATORIOS (bandeja Actos).
- * - VALIDACIONES → VALIDACION_USUARIO (bandeja de Validaciones usa ese código).
- * - El resto se conserva igual.
- */
-function mapEtapaDestinoBD(destino) {
-  if (destino === 'COORDINACION_CM') return 'ACTOS_PREPARATORIOS';
-  if (destino === 'VALIDACIONES') return 'VALIDACION_USUARIO';
-  return destino;
 }
 
 async function buildContratoDesdeRow(row) {

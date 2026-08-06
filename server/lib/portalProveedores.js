@@ -625,6 +625,13 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
         (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr
          WHERE sr.solicitud_id = cot.solicitud_id ORDER BY sr.requerimiento_id LIMIT 1)
       ) AS requerimiento_id,
+      (
+        SELECT r.tipo FROM solicitud_requerimientos sr
+        JOIN requerimientos r ON r.id = sr.requerimiento_id
+        WHERE sr.solicitud_id = cot.solicitud_id
+        ORDER BY sr.requerimiento_id
+        LIMIT 1
+      ) AS req_tipo,
       cot.validacion_estado, cot.validacion_responsable, cot.created_at, cot.propuesta_economica,
       p.ruc, p.razon_social, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
       sc.tipo AS solicitud_tipo, sc.tipo,
@@ -733,6 +740,20 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       || estadoCuadro === 'DERIVADO_CCP'
       || estadoCuadro === 'DERIVADO_A_CCP';
     const ccpInfo = ccpBySid.get(Number(r.solicitud_id)) || {};
+    // Tipo canónico: preferir requerimiento (fuente de verdad) sobre SC.
+    const tipoResuelto = r.req_tipo || r.solicitud_tipo || r.tipo || '';
+    // Si ya hay cotización presentada, la ubicación operativa en esta bandeja es Recepción
+    // (evita badge/responsable “Invitaciones” cuando el req aún no sincronizó etapa).
+    let estadoActual = r.req_estado_actual || '';
+    let subModuloActual = r.req_sub_modulo_actual || '';
+    const etapaUp = String(estadoActual).toUpperCase();
+    if (
+      String(r.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA'
+      && (etapaUp === 'INVITACIONES' || !etapaUp)
+    ) {
+      estadoActual = 'RECEPCION_COTIZACIONES';
+      subModuloActual = 'Recepción de Cotizaciones';
+    }
     const base = applyCcpFlagsToRow({
       id: r.id,
       solicitud_id: r.solicitud_id,
@@ -741,8 +762,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       estado: r.estado,
       validacion_estado: valEst,
       solicitud_estado: r.solicitud_estado || '',
-      solicitud_tipo: r.solicitud_tipo || r.tipo || '',
-      tipo: r.solicitud_tipo || r.tipo || '',
+      solicitud_tipo: tipoResuelto,
+      tipo: tipoResuelto,
       estado_cuadro: r.estado_cuadro || '',
       derivado_ccp: derivadoCcp,
       validacion_responsable: r.validacion_responsable || '',
@@ -759,8 +780,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
       requerimientos_codigos: r.requerimientos_texto || '',
       centros_texto: centro,
       centro,
-      estado_actual: r.req_estado_actual || '',
-      sub_modulo_actual: r.req_sub_modulo_actual || '',
+      estado_actual: estadoActual,
+      sub_modulo_actual: subModuloActual,
     }, ccpInfo, {
       ccp_activo: !!ccpInfo.ccp_activo,
       enviada_oppm: !!ccpInfo.enviada_oppm,
@@ -784,8 +805,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
         ccp_registrado: !!ccpInfo.ccp_activo,
         codigo_ccp: ccpInfo.codigo_ccp || '',
         enviada_oppm: !!ccpInfo.enviada_oppm,
-        estado_actual: r.req_estado_actual || '',
-        sub_modulo_actual: r.req_sub_modulo_actual || '',
+        estado_actual: estadoActual,
+        sub_modulo_actual: subModuloActual,
         estadoVigente: (base.estadoVigente && AVANZADO_RECEPCION(base.estadoVigente?.codigo))
           ? base.estadoVigente
           : null,
@@ -807,6 +828,33 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
 
   // RC8.4E — anexar estado_responsable_vigente en batch
   await enrichEstadoResponsableForBandeja(enriched);
+
+  // Ajuste de presentación: cotización ya en Recepción pero req aún en Invitaciones.
+  for (const row of enriched) {
+    if (String(row.estado || '').toUpperCase() !== 'COTIZACION_PRESENTADA') continue;
+    const etapa = String(
+      row.estado_responsable_vigente?.etapaCodigo || row.estado_actual || '',
+    ).toUpperCase();
+    if (etapa && etapa !== 'INVITACIONES') continue;
+    row.estado_actual = 'RECEPCION_COTIZACIONES';
+    row.sub_modulo_actual = 'Recepción de Cotizaciones';
+    if (row.estado_responsable_vigente) {
+      row.estado_responsable_vigente = {
+        ...row.estado_responsable_vigente,
+        etapaCodigo: 'RECEPCION_COTIZACIONES',
+        etapaLabel: 'Recepción de Cotizaciones',
+        estadoCodigo: row.estado_responsable_vigente.estadoCodigo === 'INVITACION_EN_ELABORACION'
+          || row.estado_responsable_vigente.estadoCodigo === 'INVITACION_ENVIADA'
+          ? 'COTIZACIONES_RECIBIDAS'
+          : (row.estado_responsable_vigente.estadoCodigo || 'COTIZACIONES_RECIBIDAS'),
+        estadoLabel: row.estado_responsable_vigente.estadoCodigo === 'INVITACION_EN_ELABORACION'
+          || row.estado_responsable_vigente.estadoCodigo === 'INVITACION_ENVIADA'
+          ? 'Cotizaciones recibidas'
+          : (row.estado_responsable_vigente.estadoLabel || 'Cotizaciones recibidas'),
+        responsableUnidad: 'Recepción de Cotizaciones',
+      };
+    }
+  }
 
   return enriched;
 }

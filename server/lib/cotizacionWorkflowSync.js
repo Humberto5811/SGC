@@ -1,65 +1,62 @@
-// Sincronización mínima requerimiento ↔ workflow al cambiar estado de cotización
-
+/**
+ * Sincronización requerimiento ↔ workflow vía transicionarExpediente (RC8.6A.1).
+ * Dueño único de persistencia: no usa sync best-effort ni doble escritura.
+ */
 import { query } from '../db.js';
-
-import { registrarMovimiento, ETAPAS, getEstadoNegocioFromEtapa } from './trazabilidad.js';
-
 import { getSubModuloMeta } from './movimientos.js';
-
-import { runWorkflowTransition } from './workflow/workflowIntegration.js';
-import { leerFlags } from './workflow/workflowGuards.js';
 import { normalizarTipo } from '../../shared/workflow/tiposContratacion.js';
-
-
-
-const ESTADO_NEGOCIO_ETAPA = {
-
-  RECEPCION_COTIZACIONES: 'En Cotizaciones',
-
-  VALIDACION_USUARIO: 'En Valid. Usuario',
-
-  CUADRO_COMPARATIVO: 'En Cuadro Comparativo',
-
-  CCP: 'En CCP',
-
-};
-
-
-
-function estadoNegocioParaEtapa(etapa) {
-
-  return ESTADO_NEGOCIO_ETAPA[etapa] || getEstadoNegocioFromEtapa(etapa) || '';
-
-}
-
-
+import { transicionarExpediente } from './expedienteTransicion.js';
+import { withTransaction } from './workflow/workflowTransaction.js';
 
 function parsePayload(raw) {
-
   try {
-
     return typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
-
   } catch (_) {
-
     return {};
-
   }
-
 }
 
+/** Mapea etapa destino → evento canónico (si el caller no pasa `evento`). */
+export function eventoParaEtapaDestino(destino, tipo = '', etapaOrigen = '') {
+  const d = String(destino || '').toUpperCase();
+  const t = normalizarTipo(tipo) || '';
+  const o = String(etapaOrigen || '').toUpperCase();
+  if (d === 'RECEPCION_COTIZACIONES') return 'COTIZACION_PRESENTADA';
+  if (d === 'VALIDACIONES' || d === 'VALIDACION_USUARIO') return 'COTIZACIONES_DERIVADAS_VALIDACION';
+  if (d === 'CUADRO_COMPARATIVO') return 'VALIDACION_COMPLETADA';
+  if (d === 'CCP') {
+    if (t === 'LOCACION' || o === 'RECEPCION_COTIZACIONES') return 'LOCACION_APROBADA_RECEPCION';
+    return 'CUADRO_APROBADO_DEC';
+  }
+  if (d === 'INVITACIONES') {
+    if (o === 'VALIDACION_USUARIO' || o === 'VALIDACIONES') return 'COTIZACIONES_INVALIDAS_DEVUELTAS';
+    if (o === 'ACTOS_PREPARATORIOS' || o === 'COORDINACION_CM') return 'COORDINACION_CM_APROBADA';
+    return 'COORDINACION_CM_APROBADA';
+  }
+  if (d === 'REGISTRO_ORDEN' || d === 'ORDEN') return 'CCP_REGISTRADA';
+  if (d === 'RECEPCION_BIENES' || d === 'PRESENTACION_ENTREGABLES' || d === 'EN_EJECUCION') {
+    return 'ORDEN_DERIVADA_EJECUCION';
+  }
+  return null;
+}
 
+function parseUsuarioDestinoId(responsable) {
+  if (responsable == null) return null;
+  if (Number.isFinite(Number(responsable)) && String(responsable).trim() !== '') {
+    const n = Number(responsable);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  const s = String(responsable).trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  return null;
+}
 
-async function persistWorkflowSnapshot(requerimientoId, etapaCode, responsable) {
-
-  const { rows } = await query('SELECT payload FROM requerimientos WHERE id = $1', [requerimientoId]);
-
+async function persistWorkflowSnapshot(tx, requerimientoId, etapaCode, responsable) {
+  const run = (text, params) => tx.query(text, params);
+  const { rows } = await run('SELECT payload FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) return;
-
   const payload = parsePayload(rows[0].payload);
-
   const meta = getSubModuloMeta(etapaCode);
-
   const prevSnap = payload.workflowSnapshot || {};
   const etapaUp = String(etapaCode || '').toUpperCase();
   payload.workflowSnapshot = {
@@ -69,186 +66,122 @@ async function persistWorkflowSnapshot(requerimientoId, etapaCode, responsable) 
     moduloActual: meta.modulo,
     responsableActual: responsable || meta.subModulo,
     fechaEstadoActual: new Date().toISOString(),
-    // OD32 — CCP fija revisionEstado vigente; no hereda OBSERVADO_* histórico
-    ...(etapaUp === 'CCP'
-      ? { revisionEstado: 'DERIVADO_CCP' }
-      : {}),
+    ...(etapaUp === 'CCP' ? { revisionEstado: 'DERIVADO_CCP' } : {}),
   };
-
-  await query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
-
+  await run('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
     requerimientoId,
-
     JSON.stringify(payload),
-
   ]);
-
 }
 
-
-
-async function requerimientoIdsDeSolicitud(solicitudId) {
-
-  const { rows } = await query(`
-
+async function requerimientoIdsDeSolicitud(solicitudId, client = null) {
+  const run = (text, params) => (client ? client.query(text, params) : query(text, params));
+  const { rows } = await run(`
     SELECT DISTINCT requerimiento_id AS id FROM solicitud_requerimientos WHERE solicitud_id = $1 AND requerimiento_id IS NOT NULL
-
     UNION
-
     SELECT DISTINCT requerimiento_id AS id FROM cotizaciones_proveedor WHERE solicitud_id = $1 AND requerimiento_id IS NOT NULL
-
   `, [solicitudId]);
-
   return rows.map((r) => r.id).filter(Boolean);
-
 }
-
-
 
 /**
-
- * Propaga etapa oficial del Workflow a todos los requerimientos de la solicitud.
-
+ * Propaga etapa oficial a todos los requerimientos de la solicitud
+ * vía transicionarExpediente (una tx si se pasa client; si no, una tx por req).
  */
-
 export async function syncRequerimientosSolicitudWorkflow(solicitudId, {
-
   etapaDestino,
-
+  evento = null,
   usuario = 'Sistema',
-
   observacion = '',
-
   etapaEjecutor = null,
-
   responsable = null,
-
+  usuarioDestinoId = null,
+  unidadDestino = null,
   forzar = false,
-
-}) {
-
+  client = null,
+  domainMutatorFactory = null,
+} = {}) {
   if (!solicitudId || !etapaDestino) return { actualizados: 0, omitidos: 0 };
 
-  const reqIds = await requerimientoIdsDeSolicitud(solicitudId);
+  const runAll = async (tx) => {
+    const reqIds = await requerimientoIdsDeSolicitud(solicitudId, tx);
+    const destino = String(etapaDestino).toUpperCase();
+    const uid = usuarioDestinoId != null
+      ? Number(usuarioDestinoId)
+      : parseUsuarioDestinoId(responsable);
+    let actualizados = 0;
+    let omitidos = 0;
 
-  const destino = String(etapaDestino).toUpperCase();
-
-  const estadoNuevo = estadoNegocioParaEtapa(destino);
-
-  const responsableFinal = responsable || ETAPAS[destino]?.responsable;
-
-  let actualizados = 0;
-
-  let omitidos = 0;
-
-
-
-  const flags = leerFlags();
-  const useEngine = flags.WORKFLOW_ENGINE_RECEPCION === true && flags.WORKFLOW_ENGINE_WRITE_ENABLED === true;
-
-  for (const requerimientoId of reqIds) {
-
-    const { rows } = await query('SELECT estado_actual, tipo FROM requerimientos WHERE id = $1', [requerimientoId]);
-
-    if (!rows.length) continue;
-
-    const actual = String(rows[0].estado_actual || '').toUpperCase();
-
-    if (!forzar && actual === destino) {
-
-      omitidos += 1;
-
-      continue;
-
-    }
-
-    // Resolver tipo de contratación REAL (nunca asumir 'BIEN' silenciosamente).
-    const tipoReal = normalizarTipo(rows[0]?.tipo || '');
-    if (!tipoReal) {
-      // Si no puede resolverse, no asumir — advertencia controlada y omitir motor.
-      // eslint-disable-next-line no-console
-      console.warn(`[workflowSync] tipo_contratacion ausente para requerimiento ${requerimientoId}; se omite efecto motor`);
-      omitidos += 1;
-      continue;
-    }
-
-    // Fase 2A — efecto de ubicación de COTIZACION_PRESENTADA / derivaciones.
-    // Con flags on + write on, el motor decide SOLO la ubicación, responsable,
-    // evento e historial. La lógica del portal (adjuntos, convocatoria,
-    // presentación) permanece íntegra en el flujo legacy que llamó a este sync.
-    if (useEngine) {
-      try {
-        await runWorkflowTransition({
-          moduleFlag: 'WORKFLOW_ENGINE_RECEPCION',
-          eventoCodigo: destino === 'RECEPCION_COTIZACIONES' ? 'COTIZACION_PRESENTADA'
-            : destino === 'VALIDACIONES' || destino === 'VALIDACION_USUARIO' ? 'COTIZACIONES_DERIVADAS_VALIDACION'
-              : destino === 'CCP' ? 'LOCACION_APROBADA_RECEPCION'
-                : null,
-          expedienteId: requerimientoId,
-          req: null,
-          metadata: {
-            tipo_contratacion: tipoReal,
-            client_request_id: `sync:${requerimientoId}:${destino}:${usuario}`,
-            observacion,
-          },
-          legacyHandler: async () => {
-            // Nunca debe ejecutarse con motor; el try/catch upstream evita mezclar.
-            await registrarMovimiento({
-              requerimientoId,
-              estadoNuevo,
-              usuario,
-              accion: 'derivado',
-              observacion,
-              responsable: responsableFinal,
-              etapaEjecutor: etapaEjecutor || actual || 'INVITACIONES',
-              etapaDestino: destino,
-            });
-            await persistWorkflowSnapshot(requerimientoId, destino, responsableFinal);
-            return { ok: true };
-          },
-        });
-        // Con motor activo, el motor escribió workflow_eventos + historial_movimientos
-        // y actualizó estado_actual. No se llama registrarMovimiento legacy.
-        actualizados += 1;
+    for (const requerimientoId of reqIds) {
+      const { rows } = await tx.query(
+        'SELECT estado_actual, tipo FROM requerimientos WHERE id = $1 FOR UPDATE',
+        [requerimientoId],
+      );
+      if (!rows.length) continue;
+      const actual = String(rows[0].estado_actual || '').toUpperCase();
+      if (!forzar && (actual === destino
+        || (destino === 'VALIDACIONES' && actual === 'VALIDACION_USUARIO')
+        || (destino === 'VALIDACION_USUARIO' && actual === 'VALIDACIONES'))) {
+        omitidos += 1;
         continue;
+      }
+
+      const tipoReal = normalizarTipo(rows[0]?.tipo || '');
+      const eventoCodigo = evento
+        || eventoParaEtapaDestino(destino, tipoReal, etapaEjecutor || actual);
+      if (!eventoCodigo) {
+        omitidos += 1;
+        continue;
+      }
+
+      const domainMutator = typeof domainMutatorFactory === 'function'
+        ? domainMutatorFactory(requerimientoId)
+        : async (clientTx) => {
+          await persistWorkflowSnapshot(
+            clientTx,
+            requerimientoId,
+            destino === 'VALIDACION_USUARIO' ? 'VALIDACIONES' : destino,
+            responsable || (uid ? String(uid) : null),
+          );
+          return { snapshot: true };
+        };
+
+      try {
+        await transicionarExpediente({
+          requerimientoId,
+          evento: eventoCodigo,
+          usuarioOrigenId: null,
+          usuarioDestinoId: Number.isFinite(uid) && uid > 0 ? uid : null,
+          unidadDestino: unidadDestino
+            || ((!uid && responsable && !/^\d+$/.test(String(responsable)))
+              ? String(responsable)
+              : null),
+          motivo: observacion || `Sync → ${destino}`,
+          metadata: {
+            client_request_id: `sync:${solicitudId}:${requerimientoId}:${eventoCodigo}:${destino}`,
+            tipo_contratacion: tipoReal || undefined,
+            solicitud_id: solicitudId,
+            via: 'syncRequerimientosSolicitudWorkflow',
+          },
+          actorRol: usuario || 'SISTEMA',
+          domainMutator,
+          client: tx,
+        });
+        actualizados += 1;
       } catch (err) {
-        if (err?.code === 'TRANSITION_NOT_FOUND' || err?.message?.includes('WORKFLOW_FEATURE_DISABLED')) {
-          // Fallback: el evento no aplica desde esta etapa → usar legacy (graceful).
-        } else {
-          throw err;
+        if (err?.code === 'TRANSITION_NOT_FOUND' || err?.code === '42P01') {
+          omitidos += 1;
+          continue;
         }
+        throw err;
       }
     }
 
-    await registrarMovimiento({
+    return { actualizados, omitidos };
+  };
 
-      requerimientoId,
-
-      estadoNuevo,
-
-      usuario,
-
-      accion: 'derivado',
-
-      observacion,
-
-      responsable: responsableFinal,
-
-      etapaEjecutor: etapaEjecutor || actual || 'INVITACIONES',
-
-      etapaDestino: destino,
-
-    });
-
-    await persistWorkflowSnapshot(requerimientoId, destino, responsableFinal);
-
-    actualizados += 1;
-
-  }
-
-
-
-  return { actualizados, omitidos };
-
+  if (client) return runAll(client);
+  return withTransaction(runAll);
 }
 
+export default { syncRequerimientosSolicitudWorkflow, eventoParaEtapaDestino };

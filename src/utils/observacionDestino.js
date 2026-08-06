@@ -92,13 +92,20 @@ export function getRolDisplayFromRow(row) {
   if (sub) return getSubmoduloDisplayLabel(sub);
   const byEtapa = {
     ACTOS_PREPARATORIOS: 'Coordinación CM',
+    COORDINACION_CM: 'Coordinación CM',
     INVITACIONES: 'Invitaciones',
+    RECEPCION_COTIZACIONES: 'Recepción de Cotizaciones',
+    VALIDACION_USUARIO: 'Validaciones',
+    VALIDACIONES: 'Validaciones',
     PROGRAMACION: 'Programación',
     DEC: 'DEC',
     EVALUACION: 'Evaluación',
     CCP: 'CCP',
     CUADRO_COMPARATIVO: 'Cuadro Comparativo',
+    REGISTRO_ORDEN: 'Registro de Órdenes',
+    ORDEN: 'Registro de Órdenes',
     EJECUCION: 'Ejecución',
+    RECEPCION_BIENES: 'Almacén',
   };
   return byEtapa[etapa] || sub || '—';
 }
@@ -110,8 +117,8 @@ export const SUBMODULOS_DESTINO = [
   { code: 'PROGRAMACION', label: 'Programación', personas: ['Programador', 'Jefe de Programación'] },
   { code: 'ACTOS_PREPARATORIOS', label: 'Coordinación CM', personas: ['Coordinador de Contratos Menores', 'Analista de Contratos Menores'] },
   { code: 'INVITACIONES', label: 'Invitaciones', personas: ['Especialista Contrataciones'] },
-  { code: 'RECEPCION_COTIZACIONES', label: 'Cotizaciones', personas: ['Especialista Contrataciones'] },
-  { code: 'VALIDACION_USUARIO', label: 'Validación Usuario', personas: ['Área Usuaria', 'Responsable AU'] },
+  { code: 'RECEPCION_COTIZACIONES', label: 'Recepción de Cotizaciones', personas: ['Especialista Contrataciones'] },
+  { code: 'VALIDACION_USUARIO', label: 'Validaciones', personas: ['Área Usuaria', 'Responsable AU'] },
   { code: 'CUADRO_COMPARATIVO', label: 'Cuadro Comparativo', personas: ['Especialista Contrataciones'] },
   { code: 'CCP', label: 'CCP', personas: ['Comité de Compras Públicas'] },
   { code: 'EJECUCION', label: 'Ejecución Contractual', personas: ['Ejecutor Contractual'] },

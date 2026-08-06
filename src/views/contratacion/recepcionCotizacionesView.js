@@ -4,7 +4,6 @@ import {
   bandejaTableStyles,
   getResponsableVigenteLabel,
   getEstadoVigenteLabel,
-  estadoActualBadge,
 } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
@@ -30,6 +29,7 @@ import {
   closeBandejaActionMenus,
   renderActionMenuCell,
   bindActionMenus,
+  renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
 import { recepcionExpedienteMenuItems } from '../../utils/bandejaActions.js';
 import {
@@ -265,7 +265,7 @@ async function showCotizacionDetalleModal(cotId) {
           <div class="modal-body" id="${id}_body">
             <div class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm"></span> Cargando…</div>
           </div>
-          <div class="modal-footer">
+          <div class="modal-footer" id="${id}_footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
           </div>
         </div>
@@ -282,7 +282,13 @@ async function showCotizacionDetalleModal(cotId) {
 
   try {
     const resp = await contratacionesService.getRecepcionCotizacionDetalle(cotId);
-    const c = resp.data || {};
+    const cached = (cotizacionesCache || []).find((r) => String(r.id) === String(cotId)) || {};
+    const c = {
+      ...cached,
+      ...(resp.data || {}),
+      tipo: (resp.data || {}).tipo || cached.tipo || cached.solicitud_tipo || '',
+      solicitud_tipo: (resp.data || {}).solicitud_tipo || cached.solicitud_tipo || cached.tipo || '',
+    };
     const datos = c.datos_proveedor || {};
     const body = document.getElementById(`${id}_body`);
     body.innerHTML = `
@@ -336,6 +342,45 @@ async function showCotizacionDetalleModal(cotId) {
         </div>
       </div>`;
     bindDocumentoButtons(body);
+    const footer = document.getElementById(`${id}_footer`);
+    if (footer) {
+      const acciones = [];
+      if (puedeDerivarACcpRecepcion(c)) {
+        acciones.push(`<button type="button" class="btn btn-success rc-det-ccp" data-id="${c.id}">
+          <i class="bi bi-send"></i> Enviar a CCP</button>`);
+      } else if (puedeEnviarValidarRecepcion(c)) {
+        acciones.push(`<button type="button" class="btn btn-primary rc-det-enviar" data-id="${c.id}">
+          <i class="bi bi-send"></i> Enviar a Validaciones</button>`);
+      } else if (puedeDevolverValidacionRecepcion(c)) {
+        acciones.push(`<button type="button" class="btn btn-warning rc-det-enviar" data-id="${c.id}">
+          <i class="bi bi-arrow-counterclockwise"></i> Devolver a Validación AU</button>`);
+      }
+      if (acciones.length) {
+        footer.insertAdjacentHTML('afterbegin', acciones.join(''));
+        footer.querySelector('.rc-det-ccp')?.addEventListener('click', () => {
+          showDerivarRecepcionCcpModal(c.id, {
+            row: c,
+            onSuccess: () => {
+              modal.hide();
+              loadCotizaciones(true);
+            },
+          });
+        });
+        footer.querySelector('.rc-det-enviar')?.addEventListener('click', () => {
+          const v = String(c.validacion_estado || '').toUpperCase();
+          const esDevolucion = ['OBSERVADO', 'NO_APTO', 'APTO'].includes(v);
+          showEnviarValidarModal(c.id, {
+            title: esDevolucion ? 'Devolver a Validación AU' : 'Enviar a Validaciones',
+            submitLabel: esDevolucion ? 'Devolver a Área Usuaria' : 'Enviar a Validaciones',
+            requireObservacion: esDevolucion,
+            onSuccess: () => {
+              modal.hide();
+              loadCotizaciones(true);
+            },
+          });
+        });
+      }
+    }
   } catch (err) {
     document.getElementById(`${id}_body`).innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
@@ -526,8 +571,7 @@ const RECEPCION_THEAD = `<tr>
 </tr>`;
 
 function badgeEstadoBandejaRecepcion(exp) {
-  // Estándar RC8.4 — badge de contrato estado/responsable cuando hay enrichment.
-  if (exp?.estado_responsable_vigente) return estadoActualBadge(exp);
+  // Dominio Recepción (no mezclar con badge global de Invitaciones).
   return renderBadgeEstadoRecepcionHtml(exp, esc);
 }
 
@@ -544,7 +588,9 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>${badgeEstadoBandejaRecepcion(exp)}</td>
-      <td class="small">${esc(getResponsableVigenteLabel(exp))}</td>
+      <td class="small">${renderResponsableCellHtml(exp, esc, {
+        submodulo: exp.sub_modulo_actual || exp.estado_responsable_vigente?.etapaLabel || 'Recepción de Cotizaciones',
+      })}</td>
       ${renderActionMenuCell(sid, recepcionExpedienteMenuItems(exp), '')}
     </tr>`;
 }

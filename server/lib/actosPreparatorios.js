@@ -344,7 +344,7 @@ export async function observarActos(requerimientoId, body) {
     responsable,
     etapaEjecutor: 'ACTOS_PREPARATORIOS',
     etapaDestinoEvento: etapaDestObs,
-  });
+  }, { soloHistorial: true });
 }
 
 export async function derivarActos(requerimientoId, body) {
@@ -371,6 +371,23 @@ export async function derivarActos(requerimientoId, body) {
   const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'ACTOS_PREPARATORIOS').toUpperCase();
   const estadoNuevo = resolveEstadoFromDestino(destino_submodulo, etapaDest);
   const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+
+  if (etapaDest === 'INVITACIONES') {
+    const { transicionarExpediente } = await import('./expedienteTransicion.js');
+    const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
+    const result = await transicionarExpediente({
+      requerimientoId,
+      evento: 'COORDINACION_CM_APROBADA',
+      usuarioDestinoId: uid,
+      unidadDestino: uid ? null : (responsable || null),
+      motivo: motivo
+        ? formatObservacionTraza(motivo, { destino_persona, destino_submodulo })
+        : `Derivado a ${destino_submodulo || etapaDest}`,
+      metadata: { client_request_id: `actos-derivar:${requerimientoId}`, via: 'derivarActos' },
+      actorRol: usuario || COORDINADOR_ACTOS,
+    });
+    return result.expediente;
+  }
 
   return registrarMovimiento({
     requerimientoId,
@@ -406,16 +423,29 @@ export async function aprobarActosInvitaciones(requerimientoId, { responsableDes
     fecha: new Date().toISOString(),
   });
   autoCerrarObservacionesEmisorAlContinuar(loaded.payload, SUBMODULO_COORDINACION_CM, usuario || CARGO_ANALISTA_ACTOS);
-  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
-  return registrarMovimiento({
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const uid = /^\d+$/.test(String(responsableDestino || '').trim())
+    ? Number(responsableDestino)
+    : null;
+  const result = await transicionarExpediente({
     requerimientoId,
-    estadoNuevo: 'En Invitaciones',
-    usuario: usuario || CARGO_ANALISTA_ACTOS,
-    accion: 'aprobado',
-    observacion: `Aprobado en ${SUBMODULO_COORDINACION_CM} — derivado a Invitaciones`,
-    responsable: responsableDestino || ETAPAS.INVITACIONES.responsable,
-    etapaEjecutor: 'ACTOS_PREPARATORIOS',
-    etapaDestino: 'INVITACIONES',
+    evento: 'COORDINACION_CM_APROBADA',
+    usuarioDestinoId: uid,
+    unidadDestino: uid ? null : (responsableDestino || ETAPAS.INVITACIONES.responsable || null),
+    motivo: `Aprobado en ${SUBMODULO_COORDINACION_CM} — derivado a Invitaciones`,
+    metadata: {
+      client_request_id: `actos-aprobar:${requerimientoId}`,
+      via: 'aprobarActosInvitaciones',
+    },
+    actorRol: usuario || CARGO_ANALISTA_ACTOS,
+    domainMutator: async (tx) => {
+      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+        requerimientoId,
+        JSON.stringify(loaded.payload),
+      ]);
+      return { payload_actos: true };
+    },
   });
+  return result.expediente;
 }

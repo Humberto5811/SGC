@@ -596,7 +596,15 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     SELECT cot.*, p.ruc, p.razon_social,
       sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo, sc.detalle_items,
       sc.docs_solicitados AS sc_docs_solicitados,
-      sc.requisitos_tecnicos AS sc_requisitos_tecnicos
+      sc.requisitos_tecnicos AS sc_requisitos_tecnicos,
+      COALESCE(
+        (SELECT r.tipo FROM requerimientos r WHERE r.id = cot.requerimiento_id),
+        (SELECT r.tipo FROM solicitud_requerimientos sr
+         JOIN requerimientos r ON r.id = sr.requerimiento_id
+         WHERE sr.solicitud_id = cot.solicitud_id
+         ORDER BY sr.requerimiento_id LIMIT 1),
+        sc.tipo
+      ) AS tipo_resuelto
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
@@ -628,6 +636,7 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     cotizacion: cotRow,
     cotizaciones: [cotRow],
   });
+  const tipoResuelto = cot.tipo_resuelto || cot.tipo || '';
 
   return {
     id: cot.id,
@@ -636,7 +645,8 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     solicitud_codigo: cot.solicitud_codigo,
     denominacion: cot.denominacion,
     objeto: cot.objeto,
-    tipo: cot.tipo || '',
+    tipo: tipoResuelto,
+    solicitud_tipo: tipoResuelto,
     detalle_items: parseJson(cot.detalle_items, []),
     ruc: cot.ruc,
     razon_social: cot.razon_social,

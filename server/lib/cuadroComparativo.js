@@ -2071,22 +2071,16 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
 
   const sync = await syncRequerimientosSolicitudWorkflow(cur.solicitud_id, {
     etapaDestino: DESTINO_SALIDA_CUADRO.code,
+    evento: 'CUADRO_APROBADO_DEC',
     usuario: user,
     observacion,
-    etapaEjecutor: DESTINO_SALIDA_CUADRO.etapa_ejecutor,
+    etapaEjecutor: DESTINO_SALIDA_CUADRO.etapa_ejecutor || 'CUADRO_COMPARATIVO',
     responsable: respNombre,
+    usuarioDestinoId: respId,
   });
 
-  // RC8.8 — traza nombrada vía registrarMovimiento
-  const eventoDeriv = await registrarEventoCuadroCcp(cur.solicitud_id, {
-    evento: EVENTOS_TRAZA_CUADRO_CCP.CCP_DERIVADO,
-    usuario: user,
-    observacion: observacion || `CCP derivado — responsable ${respNombre}`,
-    responsable: respNombre,
-    etapaDestino: ETAPAS.CCP,
-    estadoNegocio: 'En CCP',
-    revisionEstado: ESTADOS_CUADRO.DERIVADO_CCP,
-  });
+  // RC8.6A.1 — fuente única ya persistida por sync; sin segunda escritura.
+  const eventoDeriv = { actualizados: sync.actualizados || 0, evento: 'CUADRO_APROBADO_DEC' };
 
   const detalleObs = JSON.stringify({
     cuadro_id: id,
