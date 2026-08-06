@@ -1,3 +1,5 @@
+@import url('./styles/workflow-status.css');
+
 :root {
   --primary-color: #1a73e8;    /* Azul Google más moderno */
   --primary-hover: #1557b0;

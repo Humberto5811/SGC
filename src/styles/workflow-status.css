@@ -1,0 +1,213 @@
+/**
+ * RC8.6B — Tokens y clases institucionales para Estado / Responsable.
+ * Colores solo aquí; las vistas no usan hex inline.
+ */
+
+:root {
+  --sgc-workflow-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --sgc-workflow-font-size: 12px;
+  --sgc-workflow-font-weight: 600;
+  --sgc-workflow-font-weight-resp: 500;
+  --sgc-workflow-radius: 999px;
+  --sgc-workflow-padding-x: 0.55rem;
+  --sgc-workflow-padding-y: 0.2rem;
+  --sgc-workflow-min-height: 1.55rem;
+  --sgc-workflow-gap: 0.25rem;
+  --sgc-workflow-icon-size: 0.85rem;
+
+  --sgc-status-pending-bg: #fff3cd;
+  --sgc-status-pending-text: #664d03;
+  --sgc-status-pending-border: #ffecb5;
+
+  --sgc-status-progress-bg: #cfe2ff;
+  --sgc-status-progress-text: #084298;
+  --sgc-status-progress-border: #9ec5fe;
+
+  --sgc-status-derived-bg: #e2e3ff;
+  --sgc-status-derived-text: #3d348b;
+  --sgc-status-derived-border: #c5c7f7;
+
+  --sgc-status-observed-bg: #f8d7da;
+  --sgc-status-observed-text: #842029;
+  --sgc-status-observed-border: #f5c2c7;
+
+  --sgc-status-returned-bg: #ffe5d0;
+  --sgc-status-returned-text: #984c0c;
+  --sgc-status-returned-border: #ffc107;
+
+  --sgc-status-approved-bg: #d1e7dd;
+  --sgc-status-approved-text: #0f5132;
+  --sgc-status-approved-border: #a3cfbb;
+
+  --sgc-status-completed-bg: #d1e7dd;
+  --sgc-status-completed-text: #0a3622;
+  --sgc-status-completed-border: #75b798;
+
+  --sgc-status-cancelled-bg: #e2e3e5;
+  --sgc-status-cancelled-text: #41464b;
+  --sgc-status-cancelled-border: #c4c8cb;
+
+  --sgc-status-finalized-bg: #198754;
+  --sgc-status-finalized-text: #ffffff;
+  --sgc-status-finalized-border: #146c43;
+
+  --sgc-status-unknown-bg: #f8f9fa;
+  --sgc-status-unknown-text: #6c757d;
+  --sgc-status-unknown-border: #dee2e6;
+
+  --sgc-resp-bg: #f1f3f5;
+  --sgc-resp-text: #343a40;
+  --sgc-resp-border: #dee2e6;
+  --sgc-etapa-text: #6c757d;
+  --sgc-fecha-text: #868e96;
+}
+
+.sgc-estado-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sgc-workflow-gap);
+  max-width: 100%;
+  min-height: var(--sgc-workflow-min-height);
+  padding: var(--sgc-workflow-padding-y) var(--sgc-workflow-padding-x);
+  border-radius: var(--sgc-workflow-radius);
+  border: 1px solid transparent;
+  font-family: var(--sgc-workflow-font-family);
+  font-size: var(--sgc-workflow-font-size);
+  font-weight: var(--sgc-workflow-font-weight);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.sgc-estado-badge__icon {
+  font-size: var(--sgc-workflow-icon-size);
+  flex-shrink: 0;
+}
+
+.sgc-estado-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sgc-estado-badge--pending {
+  background: var(--sgc-status-pending-bg);
+  color: var(--sgc-status-pending-text);
+  border-color: var(--sgc-status-pending-border);
+}
+.sgc-estado-badge--progress {
+  background: var(--sgc-status-progress-bg);
+  color: var(--sgc-status-progress-text);
+  border-color: var(--sgc-status-progress-border);
+}
+.sgc-estado-badge--derived {
+  background: var(--sgc-status-derived-bg);
+  color: var(--sgc-status-derived-text);
+  border-color: var(--sgc-status-derived-border);
+}
+.sgc-estado-badge--observed {
+  background: var(--sgc-status-observed-bg);
+  color: var(--sgc-status-observed-text);
+  border-color: var(--sgc-status-observed-border);
+}
+.sgc-estado-badge--returned {
+  background: var(--sgc-status-returned-bg);
+  color: var(--sgc-status-returned-text);
+  border-color: var(--sgc-status-returned-border);
+}
+.sgc-estado-badge--approved {
+  background: var(--sgc-status-approved-bg);
+  color: var(--sgc-status-approved-text);
+  border-color: var(--sgc-status-approved-border);
+}
+.sgc-estado-badge--completed {
+  background: var(--sgc-status-completed-bg);
+  color: var(--sgc-status-completed-text);
+  border-color: var(--sgc-status-completed-border);
+}
+.sgc-estado-badge--cancelled {
+  background: var(--sgc-status-cancelled-bg);
+  color: var(--sgc-status-cancelled-text);
+  border-color: var(--sgc-status-cancelled-border);
+}
+.sgc-estado-badge--finalized {
+  background: var(--sgc-status-finalized-bg);
+  color: var(--sgc-status-finalized-text);
+  border-color: var(--sgc-status-finalized-border);
+}
+.sgc-estado-badge--unknown {
+  background: var(--sgc-status-unknown-bg);
+  color: var(--sgc-status-unknown-text);
+  border-color: var(--sgc-status-unknown-border);
+}
+
+.sgc-responsable-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sgc-workflow-gap);
+  max-width: 100%;
+  min-height: var(--sgc-workflow-min-height);
+  padding: var(--sgc-workflow-padding-y) var(--sgc-workflow-padding-x);
+  border-radius: var(--sgc-workflow-radius);
+  border: 1px solid var(--sgc-resp-border);
+  background: var(--sgc-resp-bg);
+  color: var(--sgc-resp-text);
+  font-family: var(--sgc-workflow-font-family);
+  font-size: var(--sgc-workflow-font-size);
+  font-weight: var(--sgc-workflow-font-weight-resp);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.sgc-responsable-badge__icon {
+  font-size: var(--sgc-workflow-icon-size);
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.sgc-responsable-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sgc-estado-responsable-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sgc-estado-responsable-cell__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.sgc-estado-responsable-cell__etapa {
+  font-family: var(--sgc-workflow-font-family);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sgc-etapa-text);
+  line-height: 1.2;
+}
+
+.sgc-estado-responsable-cell__fecha {
+  font-family: var(--sgc-workflow-font-family);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--sgc-fecha-text);
+  line-height: 1.2;
+}
+
+/* Compat: badges legacy de workflow redirigen a tipografía institucional */
+.badge-estado-mod.sgc-estado-badge {
+  font-size: var(--sgc-workflow-font-size);
+  font-weight: var(--sgc-workflow-font-weight);
+}
