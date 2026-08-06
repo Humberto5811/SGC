@@ -4,13 +4,13 @@ import { query } from '../db.js';
 import {
   TRAZA_EXTRA_SELECT,
   enrichRequerimientoRow,
-  registrarMovimiento,
   buildListFilters,
   ETAPAS,
 } from '../lib/trazabilidad.js';
 import { buildMatrizSeguimientoPedidos } from '../lib/pedidosMatriz.js';
 import { buildMatrizConsolidacionPaquetes } from '../lib/paquetesMatriz.js';
 import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
+import { transicionarExpediente } from '../lib/expedienteTransicion.js';
 
 const router = express.Router();
 
@@ -330,15 +330,17 @@ router.put('/paquetes/:id/aprobar', async (req, res, next) => {
       [id]
     );
     for (const row of reqIds.rows) {
-      await registrarMovimiento({
+      await transicionarExpediente({
         requerimientoId: row.requerimiento_id,
-        estadoNuevo: 'Programado',
-        usuario: usuario || 'Programación',
-        accion: 'aprobado',
-        observacion: `Paquete ${id} aprobado — consolidación programada`,
-        responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
-        etapaEjecutor: 'PROGRAMACION',
-        etapaDestino: 'ACTOS_PREPARATORIOS',
+        evento: 'PROGRAMACION_APROBADA',
+        unidadDestino: ETAPAS.ACTOS_PREPARATORIOS?.responsable || 'Coordinador de Contratos Menores',
+        motivo: `Paquete ${id} aprobado — consolidación programada`,
+        metadata: {
+          client_request_id: `paquete-aprobar:${id}:${row.requerimiento_id}`,
+          via: 'programacion/paquetes/aprobar',
+          paquete_id: id,
+        },
+        actorRol: usuario || 'Programación',
       });
     }
 

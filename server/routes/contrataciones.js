@@ -5,11 +5,10 @@ import {
   TRAZA_EXTRA_SELECT,
   enrichRequerimientoRow,
   enrichRequerimientoRowsWithCcp,
-  registrarMovimiento,
   buildListFilters,
   ETAPAS,
 } from '../lib/trazabilidad.js';
-import { formatObservacionTraza, resolveEstadoFromDestino, resolveResponsableFromDestino, submoduloLabelToEtapa } from '../lib/observacionDestino.js';
+import { formatObservacionTraza, resolveResponsableFromDestino, submoduloLabelToEtapa } from '../lib/observacionDestino.js';
 import { appendObservacion } from '../lib/observacionesExpediente.js';
 import {
   emitirObservacion,
@@ -34,6 +33,7 @@ import {
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
 } from '../lib/bandejaRequerimientoSql.js';
 import { runWorkflowTransition } from '../lib/workflow/workflowIntegration.js';
+import { transicionarExpediente } from '../lib/expedienteTransicion.js';
 import { getObservacionesAbiertas } from '../../shared/observacionesMotor.js';
 
 /**
@@ -183,19 +183,26 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
         if (!Array.isArray(payload.historial_dec)) payload.historial_dec = [];
         payload.historial_dec.push({ tipo: 'aprobacion_dec', usuario: usuario || '', fecha: new Date().toISOString() });
         autoCerrarObservacionesEmisorAlContinuar(payload, 'DEC', usuario || 'DEC');
-        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-        const updated = await registrarMovimiento({
+        const tr = await transicionarExpediente({
           requerimientoId,
-          estadoNuevo: 'Aprobado DEC',
-          usuario: usuario || 'DEC',
-          accion: 'aprobado',
-          observacion: 'Aprobado por DEC — derivado a Programación',
-          responsable: ETAPAS.PROGRAMACION.responsable,
-          etapaEjecutor: 'DEC',
-          etapaDestino: 'PROGRAMACION',
+          evento: 'DEC_APROBADO',
+          unidadDestino: ETAPAS.PROGRAMACION.responsable,
+          motivo: 'Aprobado por DEC — derivado a Programación',
+          metadata: {
+            client_request_id: req.body?.client_request_id || `dec-aprobar:${requerimientoId}`,
+            via: 'dec/aprobar:legacyHandler',
+          },
+          actorRol: usuario || 'DEC',
+          domainMutator: async (tx) => {
+            await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+              requerimientoId,
+              JSON.stringify(payload),
+            ]);
+            return { historial_dec: true };
+          },
         });
-
+        const updated = tr.expediente;
         return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
       },
     });
@@ -239,24 +246,33 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
       destino_persona: destino_persona || '',
       observacion_padre_id: observacion_padre_id || observacionPadreId || null,
     });
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
-    const estadoNuevo = destino_submodulo || destino_etapa
-      ? resolveEstadoFromDestino(destino_submodulo, destino_etapa)
-      : 'Observado DEC';
+    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
     const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
+    const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
 
-    const updated = await registrarMovimiento({
+    const tr = await transicionarExpediente({
       requerimientoId,
-      estadoNuevo,
-      usuario: usuario || 'DEC',
-      accion: 'observado',
-      observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-      responsable,
-      etapaEjecutor: 'DEC',
-      etapaDestinoEvento: etapaDestObs,
+      evento: 'DEC_OBSERVADA',
+      usuarioDestinoId: uid,
+      unidadDestino: uid ? null : (responsable || null),
+      motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
+      metadata: {
+        client_request_id: req.body?.client_request_id || `dec-obs:${requerimientoId}`,
+        via: 'dec/observar',
+        etapa_destino: etapaDestObs,
+        quien_subsana: destino_persona || responsable,
+      },
+      actorRol: usuario || 'DEC',
+      domainMutator: async (tx) => {
+        await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+          requerimientoId,
+          JSON.stringify(payload),
+        ]);
+        return { observacion: true };
+      },
     });
+    const updated = tr.expediente;
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }
@@ -316,19 +332,26 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
         if (!Array.isArray(payload.historial_programacion)) payload.historial_programacion = [];
         payload.historial_programacion.push({ tipo: 'aprobacion_programacion', usuario: usuario || '', fecha: new Date().toISOString() });
         autoCerrarObservacionesEmisorAlContinuar(payload, 'Programación', usuario || 'Programación');
-        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-        const updated = await registrarMovimiento({
+        const tr = await transicionarExpediente({
           requerimientoId,
-          estadoNuevo: 'Programado',
-          usuario: usuario || 'Programación',
-          accion: 'aprobado',
-          observacion: 'Aprobado en Programación — derivado a Coordinación CM',
-          responsable: ETAPAS.ACTOS_PREPARATORIOS.responsable,
-          etapaEjecutor: 'PROGRAMACION',
-          etapaDestino: 'ACTOS_PREPARATORIOS',
+          evento: 'PROGRAMACION_APROBADA',
+          unidadDestino: ETAPAS.ACTOS_PREPARATORIOS?.responsable || 'Coordinador de Contratos Menores',
+          motivo: 'Aprobado en Programación — derivado a Coordinación CM',
+          metadata: {
+            client_request_id: req.body?.client_request_id || `prog-aprobar:${requerimientoId}`,
+            via: 'programacion/aprobar:legacyHandler',
+          },
+          actorRol: usuario || 'Programación',
+          domainMutator: async (tx) => {
+            await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+              requerimientoId,
+              JSON.stringify(payload),
+            ]);
+            return { historial_programacion: true };
+          },
         });
-
+        const updated = tr.expediente;
         return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
       },
     });
@@ -372,24 +395,33 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
       destino_persona: destino_persona || '',
       observacion_padre_id: observacion_padre_id || observacionPadreId || null,
     });
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
-    const estadoNuevo = destino_submodulo || destino_etapa
-      ? resolveEstadoFromDestino(destino_submodulo, destino_etapa)
-      : 'Observado Programación';
+    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
     const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
+    const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
 
-    const updated = await registrarMovimiento({
+    const tr = await transicionarExpediente({
       requerimientoId,
-      estadoNuevo,
-      usuario: usuario || 'Programación',
-      accion: 'observado',
-      observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-      responsable,
-      etapaEjecutor: 'PROGRAMACION',
-      etapaDestinoEvento: etapaDestObs,
+      evento: 'PROGRAMACION_OBSERVADA',
+      usuarioDestinoId: uid,
+      unidadDestino: uid ? null : (responsable || null),
+      motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
+      metadata: {
+        client_request_id: req.body?.client_request_id || `prog-obs:${requerimientoId}`,
+        via: 'programacion/observar',
+        etapa_destino: etapaDestObs,
+        quien_subsana: destino_persona || responsable,
+      },
+      actorRol: usuario || 'Programación',
+      domainMutator: async (tx) => {
+        await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+          requerimientoId,
+          JSON.stringify(payload),
+        ]);
+        return { observacion: true };
+      },
     });
+    const updated = tr.expediente;
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
   } catch (err) { next(err); }

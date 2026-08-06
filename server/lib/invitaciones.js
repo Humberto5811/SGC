@@ -3,7 +3,6 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { query } from '../db.js';
 import {
-  registrarMovimiento,
   ETAPAS,
 } from './trazabilidad.js';
 import { enviarInvitacionProveedorEmail } from './emailService.js';
@@ -377,17 +376,30 @@ async function ensureInvitacionesEtapa(requerimientoId, usuario) {
   let payload = parsePayload(row);
   if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
   payload.historial_invitaciones.push({ tipo: 'ingreso_invitaciones', usuario, fecha: new Date().toISOString() });
-  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-  await registrarMovimiento({
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const etapaOrigen = String(row.estado_actual || 'ACTOS_PREPARATORIOS').toUpperCase();
+  const evento = (etapaOrigen === 'ACTOS_PREPARATORIOS' || etapaOrigen === 'COORDINACION_CM')
+    ? 'COORDINACION_CM_APROBADA'
+    : 'COORDINACION_CM_APROBADA';
+  await transicionarExpediente({
     requerimientoId,
-    estadoNuevo: row.estado === 'En Invitaciones' ? row.estado : 'En Invitaciones',
-    usuario: usuario || SUBMODULO_INVITACIONES,
-    accion: 'derivado',
-    observacion: 'Expediente en bandeja Invitaciones',
-    responsable: row.responsable_actual || ETAPAS.INVITACIONES.responsable,
-    etapaEjecutor: String(row.estado_actual || 'ACTOS_PREPARATORIOS').toUpperCase(),
-    etapaDestino: 'INVITACIONES',
+    evento,
+    unidadDestino: row.responsable_actual || ETAPAS.INVITACIONES.responsable,
+    motivo: 'Expediente en bandeja Invitaciones',
+    metadata: {
+      client_request_id: `ensure-inv:${requerimientoId}`,
+      via: 'ensureInvitacionesEtapa',
+      origen: 'BOOTSTRAP',
+    },
+    actorRol: usuario || SUBMODULO_INVITACIONES,
+    domainMutator: async (tx) => {
+      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+        requerimientoId,
+        JSON.stringify(payload),
+      ]);
+      return { ingreso_invitaciones: true };
+    },
   });
 }
 
@@ -703,14 +715,17 @@ export async function enviarInvitaciones(requerimientoId, { solicitud_id, invita
   const persisted = await persistirInvitaciones(null, { requerimientoId, solicitud_id, invitacion_ids, usuario, ip }, enviarCorreosInvitacion);
 
   if (persisted.solicitud) {
-    await registrarMovimiento({
+    const { transicionarExpediente } = await import('./expedienteTransicion.js');
+    await transicionarExpediente({
       requerimientoId,
-      estadoNuevo: persisted.estadoNuevo,
-      usuario: usuario || SUBMODULO_INVITACIONES,
-      accion: 'invitacion_enviada',
-      observacion: `${persisted.estadoNuevo} — ${persisted.codigo} (${persisted.enviados.length} proveedor${persisted.enviados.length === 1 ? '' : 'es'})`,
-      responsable: SUBMODULO_INVITACIONES,
-      etapaEjecutor: 'INVITACIONES',
+      evento: 'INVITACION_ENVIADA',
+      unidadDestino: SUBMODULO_INVITACIONES,
+      motivo: `${persisted.estadoNuevo} — ${persisted.codigo} (${persisted.enviados.length} proveedor${persisted.enviados.length === 1 ? '' : 'es'})`,
+      metadata: {
+        client_request_id: `inv-enviar:${requerimientoId}:${persisted.solicitud?.id || ''}:${persisted.contador_envios || 0}`,
+        via: 'enviarInvitaciones',
+      },
+      actorRol: usuario || SUBMODULO_INVITACIONES,
     });
   }
 
@@ -1098,20 +1113,32 @@ export async function observarInvitaciones(requerimientoId, body) {
     destino_persona: destino_persona || '',
     observacion_padre_id: observacion_padre_id || observacionPadreId || null,
   });
-  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
-  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
-  const estadoNuevo = resolveEstadoFromDestino(destino_submodulo, destino_etapa) || 'Observado Invitaciones';
+  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
   const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
+  const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
 
-  return registrarMovimiento({
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const result = await transicionarExpediente({
     requerimientoId,
-    estadoNuevo,
-    usuario: usuario || SUBMODULO_INVITACIONES,
-    accion: 'observado',
-    observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-    responsable,
-    etapaEjecutor: 'INVITACIONES',
-    etapaDestinoEvento: etapaDestObs,
+    evento: 'INVITACIONES_OBSERVADA',
+    usuarioDestinoId: uid,
+    unidadDestino: uid ? null : (responsable || null),
+    motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
+    metadata: {
+      client_request_id: body?.client_request_id || `inv-obs:${requerimientoId}`,
+      via: 'observarInvitaciones',
+      etapa_destino: etapaDestObs,
+      quien_subsana: destino_persona || responsable,
+    },
+    actorRol: usuario || SUBMODULO_INVITACIONES,
+    domainMutator: async (tx) => {
+      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+        requerimientoId,
+        JSON.stringify(loaded.payload),
+      ]);
+      return { observacion: true };
+    },
   });
+  return result.expediente;
 }

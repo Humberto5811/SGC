@@ -5,7 +5,6 @@ import {
   TRAZA_EXTRA_SELECT,
   enrichRequerimientoRow,
   enrichRequerimientoRowsWithCcp,
-  registrarMovimiento,
   registrarSubsanacionDerivacion,
   obtenerTrazabilidad,
   buildListFilters,
@@ -266,16 +265,21 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
         const updated = await ejecutarRegistroDerivar({
           requerimientoId,
           usuario: usuario || 'Usuario AU',
-          legacyExecutor: () => registrarMovimiento({
-            requerimientoId,
-            estadoNuevo: 'En tramite de aprobación',
-            usuario: usuario || 'Usuario AU',
-            accion: 'derivado',
-            observacion: 'Solicitud de aprobación enviada a evaluación',
-            responsable: ETAPAS.EVALUACION.responsable,
-            etapaEjecutor: 'REGISTRADO',
-            etapaDestino: 'EVALUACION',
-          }),
+          legacyExecutor: async () => {
+            const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
+            const tr = await transicionarExpediente({
+              requerimientoId,
+              evento: 'REQUERIMIENTO_ENVIADO_EVALUACION',
+              unidadDestino: ETAPAS.EVALUACION.responsable,
+              motivo: 'Solicitud de aprobación enviada a evaluación',
+              metadata: {
+                client_request_id: req.body?.client_request_id || `reg-derivar:${requerimientoId}`,
+                via: 'requerimientos/derivar:legacy',
+              },
+              actorRol: usuario || 'Usuario AU',
+            });
+            return tr.expediente;
+          },
         });
 
         if (!updated) {
@@ -394,16 +398,19 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
 
         await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-        const updated = await registrarMovimiento({
+        const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
+        const tr = await transicionarExpediente({
           requerimientoId,
-          estadoNuevo: 'Observado',
-          usuario: usuario || 'Gerente',
-          accion: 'observado',
-          observacion: motivo,
-          responsable: ETAPAS.REGISTRADO.responsable,
-          etapaEjecutor: 'EVALUACION',
-          etapaDestinoEvento: 'REGISTRADO',
+          evento: 'EVALUACION_OBSERVADA',
+          unidadDestino: ETAPAS.REGISTRADO?.responsable || ETAPAS.REGISTRO?.responsable || 'Usuario AU',
+          motivo,
+          metadata: {
+            client_request_id: req.body?.client_request_id || `eval-obs:${requerimientoId}`,
+            via: 'requerimientos/observar:legacy',
+          },
+          actorRol: usuario || 'Gerente',
         });
+        const updated = tr.expediente;
 
         return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
       },
@@ -525,16 +532,19 @@ router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
         autoCerrarObservacionesEmisorAlContinuar(payload, 'Evaluación de Requerimiento', usuario || 'Gerente');
         await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
 
-        const updated = await registrarMovimiento({
+        const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
+        const tr = await transicionarExpediente({
           requerimientoId,
-          estadoNuevo: 'Aprobado',
-          usuario: usuario || 'Gerente',
-          accion: 'aprobado',
-          observacion: 'Aprobado en evaluación — derivado a DEC',
-          responsable: ETAPAS.DEC.responsable,
-          etapaEjecutor: 'EVALUACION',
-          etapaDestino: 'DEC',
+          evento: 'EVALUACION_APROBADA',
+          unidadDestino: ETAPAS.DEC.responsable,
+          motivo: 'Aprobado en evaluación — derivado a DEC',
+          metadata: {
+            client_request_id: req.body?.client_request_id || `eval-aprobar:${requerimientoId}`,
+            via: 'requerimientos/aprobar-evaluacion:legacy',
+          },
+          actorRol: usuario || 'Gerente',
         });
+        const updated = tr.expediente;
 
         return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
       },

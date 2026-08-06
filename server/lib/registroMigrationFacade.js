@@ -161,13 +161,38 @@ export async function ejecutarRegistroEditar(ctx) {
         prev.estado,
         body.estado,
       );
+      const nuevo = String(body.estado || '');
+      const { transicionarExpediente } = await import('./expedienteTransicion.js');
+      if (/tramite de aprobaci|en evaluaci/i.test(nuevo)) {
+        const tr = await transicionarExpediente({
+          requerimientoId: row.id,
+          evento: 'REQUERIMIENTO_ENVIADO_EVALUACION',
+          unidadDestino: ETAPAS.EVALUACION.responsable,
+          motivo: observacion || 'Derivado a evaluación',
+          metadata: { client_request_id: `facade-edit-derivar:${row.id}`, via: 'registroMigrationFacade' },
+          actorRol: usuario,
+        });
+        return tr.expediente;
+      }
+      if (/^aprobado$/i.test(nuevo.trim()) || /aprobado.*evaluaci/i.test(nuevo)) {
+        const tr = await transicionarExpediente({
+          requerimientoId: row.id,
+          evento: 'EVALUACION_APROBADA',
+          unidadDestino: ETAPAS.DEC.responsable,
+          motivo: observacion || 'Aprobado en evaluación',
+          metadata: { client_request_id: `facade-edit-aprobar:${row.id}`, via: 'registroMigrationFacade' },
+          actorRol: usuario,
+        });
+        return tr.expediente;
+      }
+      // Sin evento canónico: solo historial (RC8.6A.2 — no escritura de estado).
       return registrarMovimiento({
         requerimientoId: row.id,
         estadoNuevo: body.estado,
         usuario,
         accion: inferAccion(prev.estado, body.estado),
         observacion,
-      });
+      }, { soloHistorial: true });
     }
     return registrarMovimiento({
       requerimientoId: row.id,
@@ -175,7 +200,7 @@ export async function ejecutarRegistroEditar(ctx) {
       usuario,
       accion: 'editado',
       observacion: 'Actualización del expediente',
-    });
+    }, { soloHistorial: true });
   };
 
   const facade = getRegistroMigrationFacade();

@@ -1,7 +1,6 @@
 // Lógica de negocio — Coordinación CM (Contrataciones; código interno ACTOS_PREPARATORIOS)
 import { query } from '../db.js';
 import {
-  registrarMovimiento,
   ETAPAS,
   enrichRequerimientoRow,
   enrichRequerimientoRowsWithCcp,
@@ -14,7 +13,6 @@ import {
   resolveResponsableFromDestino,
   submoduloLabelToEtapa,
 } from './observacionDestino.js';
-import { appendObservacion } from './observacionesExpediente.js';
 import { autoCerrarObservacionesEmisorAlContinuar } from './observacionesWorkflow.js';
 import { emitirObservacion, procesarAccionObservacion } from './observacionesWorkflow.js';
 import { normalizePermisos } from './permissionsCatalog.js';
@@ -31,31 +29,118 @@ const PERMISOS_JSON = `COALESCE(u.permisos, '{}'::jsonb)`;
 
 const ESTADOS_EN_ACTOS = "('Programado', 'Aprobado Programación', 'En Invitaciones')";
 
-/** Normaliza expedientes aprobados en Programación que aún no tienen etapa Actos en BD. */
-export async function syncExpedientesActosPendientes() {
-  await query(`
-    UPDATE requerimientos SET
-      estado = CASE WHEN estado = 'Aprobado Programación' THEN 'Programado' ELSE estado END,
-      estado_actual = 'ACTOS_PREPARATORIOS',
-      sub_modulo_actual = '${SUBMODULO_COORDINACION_CM}',
-      responsable_actual = CASE
-        WHEN responsable_actual IS NULL OR TRIM(responsable_actual) = '' OR responsable_actual ILIKE '%Programador%'
-        THEN $1
-        ELSE responsable_actual
-      END,
-      fecha_estado_actual = COALESCE(fecha_estado_actual, NOW()),
-      updated_at = NOW()
+/**
+ * RC8.6A.2 — Bootstrap / backfill administrativo (NO es transición normal).
+ * - Idempotente: no altera expedientes ya en ACTOS_PREPARATORIOS / COORDINACION_CM / INVITACIONES.
+ * - Usa transicionarExpediente (persistencia oficial).
+ * - origen = BOOTSTRAP; no se ejecuta en cada listado.
+ * - Requiere opts.force === true.
+ */
+export async function bootstrapExpedientesActosPendientes(opts = {}) {
+  if (opts.force !== true) {
+    return { ok: false, skipped: true, motivo: 'Requiere force:true (bootstrap administrativo)' };
+  }
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const { rows } = await query(`
+    SELECT id, estado, estado_actual, responsable_actual
+    FROM requerimientos
     WHERE estado IN ${ESTADOS_EN_ACTOS}
-      AND (estado_actual IS NULL OR estado_actual NOT IN ('ACTOS_PREPARATORIOS', 'INVITACIONES'))
-  `, [COORDINADOR_ACTOS]);
+      AND (
+        estado_actual IS NULL
+        OR UPPER(TRIM(estado_actual)) NOT IN ('ACTOS_PREPARATORIOS', 'COORDINACION_CM', 'INVITACIONES')
+      )
+    ORDER BY id ASC
+    LIMIT ${Math.min(500, Math.max(1, parseInt(opts.limit || '200', 10)))}
+  `);
+
+  const resultados = [];
+  for (const row of rows) {
+    const etapa = String(row.estado_actual || '').toUpperCase();
+    // Solo desde PROGRAMACION (o sin etapa con estado Programado).
+    if (etapa && etapa !== 'PROGRAMACION' && !expedienteEnActos(row)) {
+      resultados.push({ id: row.id, skipped: true, motivo: `etapa=${etapa}` });
+      continue;
+    }
+    try {
+      const r = await transicionarExpediente({
+        requerimientoId: row.id,
+        evento: 'PROGRAMACION_APROBADA',
+        unidadDestino: COORDINADOR_ACTOS,
+        motivo: 'Bootstrap RC8.6A.2 — normalización a Coordinación CM',
+        metadata: {
+          client_request_id: `bootstrap-cm:${row.id}`,
+          origen: 'BOOTSTRAP',
+          via: 'bootstrapExpedientesActosPendientes',
+        },
+        actorRol: 'BOOTSTRAP',
+      });
+      resultados.push({
+        id: row.id,
+        ok: true,
+        idempotente: !!r.idempotente,
+        etapa: r.estado_vigente?.etapa_codigo || null,
+      });
+    } catch (err) {
+      resultados.push({ id: row.id, ok: false, error: err.message, code: err.code });
+    }
+  }
+  return {
+    ok: true,
+    origen: 'BOOTSTRAP',
+    procesados: resultados.length,
+    resultados,
+  };
+}
+
+/**
+ * @deprecated RC8.6A.2 — ya no escribe estado. Usar bootstrapExpedientesActosPendientes({ force:true }).
+ * Conservado como no-op para no romper imports; no se ejecuta en listados.
+ */
+export async function syncExpedientesActosPendientes() {
+  if (process.env.RC86A_BOOTSTRAP_ACTOS === 'true') {
+    return bootstrapExpedientesActosPendientes({ force: true });
+  }
+  return { ok: true, skipped: true, motivo: 'syncExpedientesActosPendientes es no-op (RC8.6A.2)' };
 }
 
 function expedienteEnActos(row) {
   if (!row) return false;
   const etapa = String(row.estado_actual || '').toUpperCase();
-  if (etapa === 'ACTOS_PREPARATORIOS') return true;
+  if (etapa === 'ACTOS_PREPARATORIOS' || etapa === 'COORDINACION_CM') return true;
   const estado = String(row.estado || '').trim();
   return estado === 'Programado' || /^Aprobado Programaci/i.test(estado);
+}
+
+/** Normaliza un expediente puntual a CM si aún está en Programación (vía dueño oficial). */
+async function ensureEtapaCoordinacionCm(requerimientoId, usuario) {
+  const loaded = await loadReqPayload(requerimientoId);
+  if (!loaded) return null;
+  const etapa = String(loaded.row.estado_actual || '').toUpperCase();
+  if (etapa === 'ACTOS_PREPARATORIOS' || etapa === 'COORDINACION_CM' || etapa === 'INVITACIONES') {
+    return loaded;
+  }
+  // Estado de negocio ya indica CM pero falta etapa canónica → no forzar PROGRAMACION_APROBADA
+  // (mapEstadoToEtapa('Programado') = ACTOS; la transición no aplicaría).
+  if (expedienteEnActos(loaded.row) && etapa !== 'PROGRAMACION') {
+    return loaded;
+  }
+  if (etapa === 'PROGRAMACION') {
+    const { transicionarExpediente } = await import('./expedienteTransicion.js');
+    await transicionarExpediente({
+      requerimientoId,
+      evento: 'PROGRAMACION_APROBADA',
+      unidadDestino: COORDINADOR_ACTOS,
+      motivo: 'Normalización puntual a Coordinación CM',
+      metadata: {
+        client_request_id: `ensure-cm:${requerimientoId}`,
+        origen: 'BOOTSTRAP',
+        via: 'ensureEtapaCoordinacionCm',
+      },
+      actorRol: usuario || 'BOOTSTRAP',
+    });
+    return loadReqPayload(requerimientoId);
+  }
+  return loaded;
 }
 
 export async function listUsuariosPerfilActos(perfil, submoduloCode = '') {
@@ -170,7 +255,7 @@ const ETAPAS_BANDEJA_CM = `(
 )`;
 
 export async function listarBandejaActos(page, pageSize, queryParams = {}, options = {}) {
-  await syncExpedientesActosPendientes();
+  // RC8.6A.2 — no bootstrap silencioso en cada listado.
   const offset = (page - 1) * pageSize;
   const { whereExtra, params: filterParams } = buildListFilters(queryParams);
   const params = [...filterParams];
@@ -245,27 +330,12 @@ function resolveEstadoMovimientoObservacion(destinoSubmodulo, destinoEtapa) {
 }
 
 export async function asignarAnalistaActos(requerimientoId, { analista, usuario, submodulo_code, submodulo_label }) {
-  await syncExpedientesActosPendientes();
-  const loaded = await loadReqPayload(requerimientoId);
+  const loaded = await ensureEtapaCoordinacionCm(requerimientoId, usuario);
   if (!loaded) throw new Error('Requerimiento no encontrado');
   if (!expedienteEnActos(loaded.row)) throw new Error(`El expediente no está en ${SUBMODULO_COORDINACION_CM}`);
 
   const code = String(submodulo_code || 'ACTOS_PREPARATORIOS').toUpperCase();
   const subLabel = submodulo_label || submoduloLabelFromCode(code);
-  const origenEtapa = String(loaded.row.estado_actual || 'ACTOS_PREPARATORIOS').toUpperCase();
-
-  if (origenEtapa !== 'ACTOS_PREPARATORIOS') {
-    await query(`
-      UPDATE requerimientos SET
-        estado = CASE WHEN estado = 'Aprobado Programación' THEN 'Programado' ELSE estado END,
-        estado_actual = 'ACTOS_PREPARATORIOS',
-        sub_modulo_actual = '${SUBMODULO_COORDINACION_CM}',
-        updated_at = NOW()
-      WHERE id = $1
-    `, [requerimientoId]);
-    loaded.row.estado_actual = 'ACTOS_PREPARATORIOS';
-    if (loaded.row.estado === 'Aprobado Programación') loaded.row.estado = 'Programado';
-  }
 
   if (!Array.isArray(loaded.payload.historial_actos)) loaded.payload.historial_actos = [];
   loaded.payload.historial_actos.push({
@@ -279,21 +349,30 @@ export async function asignarAnalistaActos(requerimientoId, { analista, usuario,
     usuario: usuario || '',
     fecha: new Date().toISOString(),
   });
-  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
-  const estadoNuevo = code === 'ACTOS_PREPARATORIOS'
-    ? (loaded.row.estado || 'Programado')
-    : resolveEstadoFromDestino(subLabel, code);
-
-  return registrarMovimiento({
+  const uid = /^\d+$/.test(String(analista || '').trim()) ? Number(analista) : null;
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const result = await transicionarExpediente({
     requerimientoId,
-    estadoNuevo,
-    usuario: usuario || COORDINADOR_ACTOS,
-    accion: 'asignacion',
-    observacion: `Asignado a ${analista} — ${subLabel}`,
-    responsable: analista,
-    etapaEjecutor: 'ACTOS_PREPARATORIOS',
+    evento: 'COORDINACION_CM_ASIGNADA',
+    usuarioDestinoId: uid,
+    unidadDestino: uid ? null : (analista || null),
+    motivo: `Asignado a ${analista} — ${subLabel}`,
+    metadata: {
+      client_request_id: `actos-asignar:${requerimientoId}:${analista || ''}`,
+      via: 'asignarAnalistaActos',
+      submodulo: subLabel,
+    },
+    actorRol: usuario || COORDINADOR_ACTOS,
+    domainMutator: async (tx) => {
+      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+        requerimientoId,
+        JSON.stringify(loaded.payload),
+      ]);
+      return { asignacion_analista: true };
+    },
   });
+  return result.expediente;
 }
 
 export async function reasignarActos(requerimientoId, body) {
@@ -319,6 +398,11 @@ export async function observarActos(requerimientoId, body) {
 
   if (!motivo) throw new Error('Motivo requerido');
 
+  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
+  const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
+  const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
+  const estadoDestinoLabel = resolveEstadoMovimientoObservacion(destino_submodulo, destino_etapa);
+
   pushObservacion(loaded.payload, {
     motivo,
     gerente: usuario || COORDINADOR_ACTOS,
@@ -329,30 +413,45 @@ export async function observarActos(requerimientoId, body) {
     destino_persona: destino_persona || '',
     observacion_padre_id: observacion_padre_id || observacionPadreId || null,
   });
-  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
 
-  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRADO').toUpperCase();
-  const estadoNuevo = resolveEstadoMovimientoObservacion(destino_submodulo, destino_etapa);
-  const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
-
-  return registrarMovimiento({
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const result = await transicionarExpediente({
     requerimientoId,
-    estadoNuevo,
-    usuario: usuario || COORDINADOR_ACTOS,
-    accion: 'observado',
-    observacion: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-    responsable,
-    etapaEjecutor: 'ACTOS_PREPARATORIOS',
-    etapaDestinoEvento: etapaDestObs,
-  }, { soloHistorial: true });
+    evento: 'COORDINACION_CM_OBSERVADA',
+    usuarioDestinoId: uid,
+    unidadDestino: uid ? null : (responsable || null),
+    motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
+    metadata: {
+      client_request_id: body?.client_request_id || `actos-obs:${requerimientoId}:${String(motivo).slice(0, 40)}`,
+      via: 'observarActos',
+      estado_destino: estadoDestinoLabel,
+      etapa_destino: etapaDestObs,
+      responsable_destino: responsable,
+      quien_subsana: destino_persona || responsable,
+      destino_submodulo: destino_submodulo || '',
+    },
+    actorRol: usuario || COORDINADOR_ACTOS,
+    domainMutator: async (tx) => {
+      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+        requerimientoId,
+        JSON.stringify(loaded.payload),
+      ]);
+      return {
+        observacion: true,
+        estado_destino: estadoDestinoLabel,
+        etapa_destino: etapaDestObs,
+        quien_subsana: destino_persona || responsable,
+      };
+    },
+  });
+  return result.expediente;
 }
 
 export async function derivarActos(requerimientoId, body) {
   const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = body || {};
   if (!destino_submodulo && !destino_etapa) throw new Error('Destino requerido');
 
-  await syncExpedientesActosPendientes();
-  const loaded = await loadReqPayload(requerimientoId);
+  const loaded = await ensureEtapaCoordinacionCm(requerimientoId, usuario);
   if (!loaded) throw new Error('Requerimiento no encontrado');
 
   if (motivo) {
@@ -365,16 +464,14 @@ export async function derivarActos(requerimientoId, body) {
       destino_etapa: destino_etapa || '',
       destino_persona: destino_persona || '',
     });
-    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(loaded.payload)]);
   }
 
   const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'ACTOS_PREPARATORIOS').toUpperCase();
-  const estadoNuevo = resolveEstadoFromDestino(destino_submodulo, etapaDest);
   const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
+  const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
 
   if (etapaDest === 'INVITACIONES') {
     const { transicionarExpediente } = await import('./expedienteTransicion.js');
-    const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
     const result = await transicionarExpediente({
       requerimientoId,
       evento: 'COORDINACION_CM_APROBADA',
@@ -385,27 +482,48 @@ export async function derivarActos(requerimientoId, body) {
         : `Derivado a ${destino_submodulo || etapaDest}`,
       metadata: { client_request_id: `actos-derivar:${requerimientoId}`, via: 'derivarActos' },
       actorRol: usuario || COORDINADOR_ACTOS,
+      domainMutator: motivo ? async (tx) => {
+        await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+          requerimientoId,
+          JSON.stringify(loaded.payload),
+        ]);
+        return { observacion_en_derivacion: true };
+      } : null,
     });
     return result.expediente;
   }
 
-  return registrarMovimiento({
+  // Otros destinos: reasignación dentro de CM (sin escritura legacy de estado).
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const result = await transicionarExpediente({
     requerimientoId,
-    estadoNuevo,
-    usuario: usuario || COORDINADOR_ACTOS,
-    accion: 'derivado',
-    observacion: motivo ? formatObservacionTraza(motivo, { destino_persona, destino_submodulo }) : `Derivado a ${destino_submodulo || etapaDest}`,
-    responsable,
-    etapaEjecutor: 'ACTOS_PREPARATORIOS',
-    etapaDestino: etapaDest,
+    evento: 'COORDINACION_CM_ASIGNADA',
+    usuarioDestinoId: uid,
+    unidadDestino: uid ? null : (responsable || null),
+    motivo: motivo
+      ? formatObservacionTraza(motivo, { destino_persona, destino_submodulo })
+      : `Derivado a ${destino_submodulo || etapaDest}`,
+    metadata: {
+      client_request_id: `actos-derivar-interno:${requerimientoId}:${etapaDest}`,
+      via: 'derivarActos',
+      etapa_destino_solicitada: etapaDest,
+    },
+    actorRol: usuario || COORDINADOR_ACTOS,
+    domainMutator: motivo ? async (tx) => {
+      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+        requerimientoId,
+        JSON.stringify(loaded.payload),
+      ]);
+      return { derivacion_interna: true };
+    } : null,
   });
+  return result.expediente;
 }
 
 export async function aprobarActosInvitaciones(requerimientoId, { responsableDestino, usuario }) {
-  await syncExpedientesActosPendientes();
-  const loaded = await loadReqPayload(requerimientoId);
+  const loaded = await ensureEtapaCoordinacionCm(requerimientoId, usuario);
   if (!loaded) throw new Error('Requerimiento no encontrado');
-  if (!expedienteEnActos(loaded.row) && String(loaded.row.estado_actual || '').toUpperCase() !== 'ACTOS_PREPARATORIOS') {
+  if (!expedienteEnActos(loaded.row) && !['ACTOS_PREPARATORIOS', 'COORDINACION_CM'].includes(String(loaded.row.estado_actual || '').toUpperCase())) {
     throw new Error(`El expediente no está en ${SUBMODULO_COORDINACION_CM}`);
   }
 

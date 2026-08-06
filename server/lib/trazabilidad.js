@@ -736,6 +736,29 @@ export async function registrarMovimiento({
 
   const cambioEtapa = !esEventoObservacion && etapaNueva !== etapaAnterior;
   const cambioEstado = !esEventoObservacion && String(estadoPersistido) !== String(row.estado);
+  const intentaCambioEstado = !soloHistorial && (cambioEtapa || cambioEstado || !!destinoExplicito);
+  const intentaCambioResponsable = !soloHistorial && responsable != null
+    && String(responsable).trim() !== ''
+    && String(responsable).trim() !== String(row.responsable_actual || '').trim();
+
+  // RC8.6A.2 — registrarMovimiento es SOLO historial/trazabilidad.
+  // Toda transición de estado/responsable debe pasar por transicionarExpediente().
+  if (intentaCambioEstado || intentaCambioResponsable) {
+    const msg = 'registrarMovimiento ya no escribe estado_actual/responsable; use transicionarExpediente()';
+    if (process.env.NODE_ENV === 'development' || process.env.RC86A_STRICT === 'true') {
+      const err = new Error(msg);
+      err.code = 'REGISTRAR_MOVIMIENTO_STATE_FORBIDDEN';
+      err.detalle = {
+        requerimientoId,
+        estadoNuevo,
+        responsable,
+        etapaDestino: destinoExplicito,
+        via: 'registrarMovimiento',
+      };
+      throw err;
+    }
+    console.warn(`[RC8.6A.2] ${msg}`, { requerimientoId, estadoNuevo, responsable });
+  }
 
   if (cambioEtapa || cambioEstado) {
     historial = closeOpenEntry(historial, now);
@@ -760,10 +783,9 @@ export async function registrarMovimiento({
   const responsableActual = esEventoObservacion
     ? (row.responsable_actual || ETAPAS[etapaAnterior]?.responsable || usuario || '')
     : (responsable || ETAPAS[etapaNueva]?.responsable || ETAPAS[ejecutor]?.responsable || usuario || row.responsable_actual || '');
-  const subMeta = getSubModuloMeta(etapaResponsable);
 
   let movimientos = parseMovimientos(row.historial_movimientos);
-  if (esEventoObservacion || cambioEtapa || cambioEstado || observacion) {
+  if (esEventoObservacion || cambioEtapa || cambioEstado || observacion || soloHistorial) {
     movimientos = appendEventosPorAccion(movimientos, {
       accion: accionFinal,
       etapaEjecutor: ejecutor,
@@ -776,57 +798,16 @@ export async function registrarMovimiento({
     });
   }
 
-  // RC8.6A.1 — modo historial: no toca estado/responsable vigente.
-  if (soloHistorial || esEventoObservacion) {
-    await run(`
-      UPDATE requerimientos SET
-        historial_estados = $2::jsonb,
-        historial_movimientos = $3::jsonb,
-        updated_at = NOW()
-      WHERE id = $1
-    `, [requerimientoId, JSON.stringify(historial), JSON.stringify(movimientos)]);
-
-    const { rows: out } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
-    return enrichRequerimientoRow(out[0]);
-  }
-
-  // Escritura legacy de estado: solo cuando NO forma parte de transicionarExpediente.
-  // Las rutas críticas deben usar transicionarExpediente(); este camino queda para
-  // compatibilidad residual (inventario clase A pendiente fuera del alcance crítico).
   await run(`
     UPDATE requerimientos SET
-      estado = $2,
-      estado_actual = $3,
-      sub_modulo_actual = $4,
-      responsable_actual = $5,
-      fecha_estado_actual = $6,
-      historial_estados = $7::jsonb,
-      historial_movimientos = $8::jsonb,
+      historial_estados = $2::jsonb,
+      historial_movimientos = $3::jsonb,
       updated_at = NOW()
     WHERE id = $1
-  `, [
-    requerimientoId, estadoPersistido, etapaNueva, subMeta.subModulo,
-    responsableActual, now, JSON.stringify(historial), JSON.stringify(movimientos),
-  ]);
+  `, [requerimientoId, JSON.stringify(historial), JSON.stringify(movimientos)]);
 
-  const { rows: freshRows } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
-  const fresh = freshRows[0];
-  const historialCompleto = reconstruirHistorialCompleto(fresh);
-  const ultimoEvt = historialCompleto[historialCompleto.length - 1];
-  const fechaEstado = ultimoEvt?.fechaIngreso || now;
-  await run(
-    `UPDATE requerimientos SET historial_estados = $2::jsonb, fecha_estado_actual = $3, sub_modulo_actual = $4 WHERE id = $1`,
-    [
-      requerimientoId,
-      JSON.stringify(historialCompleto),
-      fechaEstado,
-      getSubModuloMeta(etapaNueva).subModulo,
-    ],
-  );
-
-  // RC8.6A.1 — sin sync best-effort a fuente única (evita 2ª tx silenciosa).
-  const { rows: finalRows } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
-  return enrichRequerimientoRow(finalRows[0]);
+  const { rows: out } = await run('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+  return enrichRequerimientoRow(out[0]);
 }
 
 export async function registrarSubsanacionDerivacion({
@@ -841,83 +822,48 @@ export async function registrarSubsanacionDerivacion({
   const { rows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) throw new Error('Requerimiento no encontrado');
   const row = rows[0];
-  const now = new Date().toISOString();
-  const etapaOrigen = submoduloLabelToEtapa(origenSubmodulo) || 'REGISTRADO';
-  const etapaDestino = submoduloLabelToEtapa(destinoSubmodulo) || String(destinoEtapa || 'EVALUACION').toUpperCase();
-  const estadoNuevo = resolveEstadoFromDestino(destinoSubmodulo, etapaDestino);
-  const responsableDestino = resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, etapaDestino);
-  const subMetaDest = getSubModuloMeta(etapaDestino);
+  const etapaActual = String(row.estado_actual || mapEstadoToEtapa(row.estado) || 'REGISTRO').toUpperCase();
+  const etapaCanon = etapaActual === 'ACTOS_PREPARATORIOS' ? 'COORDINACION_CM'
+    : (etapaActual === 'VALIDACION_USUARIO' || etapaActual === 'VALIDACION') ? 'VALIDACIONES'
+      : (etapaActual === 'REGISTRADO' ? 'REGISTRO' : etapaActual);
 
-  let movimientos = parseMovimientos(row.historial_movimientos);
-  movimientos = appendEventosPorAccion(movimientos, {
-    accion: 'subsanado',
-    etapaEjecutor: etapaOrigen,
-    etapaDestino: etapaDestino !== etapaOrigen ? etapaDestino : null,
-    etapaDestinoEvento: etapaDestino,
-    usuario,
-    responsable: responsableDestino,
-    observacion: textoSubsanacion,
-    now,
-  });
+  const etapaDestinoLabel = submoduloLabelToEtapa(destinoSubmodulo) || String(destinoEtapa || '').toUpperCase();
+  const responsableDestino = resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, etapaDestinoLabel || etapaCanon);
+  const uid = /^\d+$/.test(String(destinoPersona || '').trim()) ? Number(destinoPersona) : null;
 
-  let historial = parseHistorial(row.historial_estados);
-  if (!historial.length) historial = initHistorialFromRow(row, usuario);
-  historial = closeOpenEntry(historial, now);
-  historial.push(buildHistorialEntry({
-    etapa: etapaOrigen,
-    usuario,
-    fechaIngreso: now,
-    observacion: textoSubsanacion,
-    accion: 'subsanado',
-  }));
-  const t2 = new Date(Date.now() + 2).toISOString();
-  historial.push(buildHistorialEntry({
-    etapa: etapaDestino,
-    usuario,
-    fechaIngreso: t2,
-    observacion: `Subsanación recibida en ${subMetaDest.subModulo}`,
-    accion: 'subsanado',
-  }));
+  let evento = 'OBSERVACION_SUBSANADA';
+  if (etapaCanon === 'COORDINACION_CM') evento = 'COORDINACION_CM_SUBSANADA';
 
-  await query(`
-    UPDATE requerimientos SET
-      estado = $2,
-      estado_actual = $3,
-      sub_modulo_actual = $4,
-      responsable_actual = $5,
-      fecha_estado_actual = $6,
-      historial_movimientos = $7::jsonb,
-      historial_estados = $8::jsonb,
-      usuario_modificacion = $9,
-      updated_at = NOW()
-    WHERE id = $1
-  `, [
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const result = await transicionarExpediente({
     requerimientoId,
-    estadoNuevo,
-    etapaDestino,
-    subMetaDest.subModulo,
-    responsableDestino,
-    t2,
-    JSON.stringify(movimientos),
-    JSON.stringify(historial),
-    usuario,
-  ]);
-
-  const { rows: freshRows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
-  const fresh = freshRows[0];
-  const historialCompleto = reconstruirHistorialCompleto(fresh);
-  const ultimoEvt = historialCompleto[historialCompleto.length - 1];
-  await query(
-    `UPDATE requerimientos SET historial_estados = $2::jsonb, fecha_estado_actual = $3, sub_modulo_actual = $4 WHERE id = $1`,
-    [
-      requerimientoId,
-      JSON.stringify(historialCompleto),
-      ultimoEvt?.fechaIngreso || t2,
-      subMetaDest.subModulo,
-    ],
-  );
-
-  return enrichRequerimientoRow((await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId])).rows[0]);
+    evento,
+    usuarioDestinoId: uid,
+    unidadDestino: uid ? null : (responsableDestino || null),
+    motivo: textoSubsanacion || 'Subsanación registrada',
+    metadata: {
+      client_request_id: `subsanar:${requerimientoId}:${Date.now()}`,
+      origen_submodulo: origenSubmodulo,
+      destino_submodulo: destinoSubmodulo || '',
+      destino_etapa: etapaDestinoLabel || '',
+      via: 'registrarSubsanacionDerivacion',
+    },
+    actorRol: usuario || 'Sistema',
+    domainMutator: async (tx) => {
+      // Trazabilidad de historial (sin tocar estado/responsable — lo hace el dueño).
+      await registrarMovimiento({
+        requerimientoId,
+        estadoNuevo: row.estado,
+        usuario,
+        accion: 'subsanado',
+        observacion: textoSubsanacion,
+        etapaEjecutor: etapaCanon,
+        etapaDestinoEvento: etapaDestinoLabel || etapaCanon,
+      }, { client: tx, soloHistorial: true });
+      return { subsanacion: true };
+    },
+  });
+  return enrichRequerimientoRow(result.expediente);
 }
 
 export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistema') {
