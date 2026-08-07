@@ -57,6 +57,7 @@ import { renderFormatoConcursoView, initFormatoConcursoView } from './views/glos
 import { renderLogotiposView, initLogotiposView } from './views/institucional/logotiposView.js';
 import { renderEntidadView, initEntidadView } from './views/institucional/entidadView.js';
 import { renderProveedoresMaestroView, initProveedoresMaestroView } from './views/registroDatos/proveedoresMaestroView.js';
+import { renderWorkflowSgcView, initWorkflowSgcView } from './views/mantenimiento/workflowSgcView.js';
 
 const defaultRoute = 'login';
 
@@ -108,6 +109,7 @@ const routes = {
   'admin/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/proveedores': { render: renderProveedoresMaestroView, init: initProveedoresMaestroView },
+  'mantenimiento/workflow-sgc': { render: renderWorkflowSgcView, init: initWorkflowSgcView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
   'mantenimiento/pedidos-sigamef': { render: renderPedidosSigamefView, init: initPedidosSigamefView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },
@@ -200,6 +202,7 @@ function redirectOnDenied(route) {
     location.hash = '#/cambio-password';
     return;
   }
+  // RC8.8 — no redirigir en silencio: banner de acceso denegado en dashboard.
   sessionStorage.setItem('sgc_access_denied', 'No tiene permisos para acceder a este módulo.');
   location.hash = currentUser ? '#/dashboard' : '#/login';
 }

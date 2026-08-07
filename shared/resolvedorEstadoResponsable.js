@@ -193,7 +193,8 @@ export function resolveEstadoResponsableVigente(evidencia = {}, opts = {}) {
         responsableUsuarioId: null,
         responsableUsername: '',
         responsableNombre: '',
-        responsableUnidad: a.unidad || a.responsableUnidad || 'Pendiente de asignación',
+        // No rellenar con unidad inventada (p.ej. Invitaciones).
+        responsableUnidad: a.unidad || a.responsableUnidad || null,
         responsableFuente: a.fuente || 'pendiente_asignacion',
         actualizadoAt,
       });

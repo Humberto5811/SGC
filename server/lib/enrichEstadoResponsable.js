@@ -14,9 +14,11 @@
  */
 
 import { resolveEstadoResponsableBatch } from './resolvedorEstadoResponsable.js';
+import { getEstadoResponsableCanonico } from './estadoResponsableCanonico.js';
 
 /**
  * Enriquece cada fila con estado_responsable_vigente usando true batch (sin N+1).
+ * RC8.8 — delega a getEstadoResponsableCanonico (misma fuente que todas las bandejas).
  *
  * @param {Array<object>} rows — filas de la bandeja (mutadas in-place)
  * @param {string} [idField='requerimiento_id'] — nombre del campo con el ID de requerimiento
@@ -33,14 +35,24 @@ export async function enrichEstadoResponsableForBandeja(rows, idField = 'requeri
     )];
     if (!ids.length) return;
 
-    const resolved = await resolveEstadoResponsableBatch(ids);
+    let resolved;
+    try {
+      resolved = await getEstadoResponsableCanonico({ requerimientoIds: ids });
+    } catch (_) {
+      resolved = await resolveEstadoResponsableBatch(ids);
+    }
 
     for (const row of rows) {
       const rid = parseInt(row?.[idField], 10);
       if (Number.isFinite(rid) && resolved.has(rid)) {
         row.estado_responsable_vigente = resolved.get(rid);
       } else {
-        row.estado_responsable_vigente = null;
+        row.estado_responsable_vigente = {
+          canonicalMissing: true,
+          estadoLabel: 'Estado no disponible',
+          responsableTipo: 'PENDIENTE',
+          responsableFuente: 'sin_vigente',
+        };
       }
     }
   } catch (_) {

@@ -1,13 +1,18 @@
 /**
- * RC8.6A.2 — Inventario de escrituras a estado/responsable.
+ * RC8.6A.2 / RC8.7.1 — Inventario de escrituras a estado/responsable.
  *
  * Clasificación:
  * A. Migrada a transicionarExpediente
  * B. Solo compatibilidad legacy dentro del servicio (dueño / sync oficial)
- * C. Histórica
+ * C. Histórica — bloqueada respecto a vigente confirmado (RC8.7.1)
  * D. Bootstrap controlado
+ * E. Reconciliación autorizada (vía reconciliarEstadoResponsablePorEvidencia / F.3 / RC8.6C)
  *
- * No debe quedar escritura productiva sin clasificar.
+ * Escritores autorizados de expediente_estado_vigente / expediente_asignaciones:
+ *   1. transicionarExpediente()
+ *   2. reconciliarEstadoResponsablePorEvidencia() (+ F.3 / RC8.6C con origenEscritura=RECONCILIACION)
+ *
+ * Backfill: solo si no existe fila vigente (044 WHERE NOT EXISTS / origen BACKFILL_VACIO).
  */
 export const ESCRITURAS_DIRECTAS_RC86A = Object.freeze([
   {
@@ -16,7 +21,31 @@ export const ESCRITURAS_DIRECTAS_RC86A = Object.freeze([
     escritura: 'expediente_estado_vigente + asignaciones + syncLegacyRequerimiento',
     clasificacion: 'B',
     clase: 'B',
-    nota: 'Dueño único de persistencia RC8.6A.2.',
+    nota: 'RC8.7.1 escritor autorizado #1 (origenEscritura=TRANSICION).',
+  },
+  {
+    archivo: 'server/lib/reconciliarEstadoResponsablePorEvidencia.js',
+    funcion: 'reconciliarEstadoResponsablePorEvidencia',
+    escritura: 'delega a F.3 apply con origenEscritura=RECONCILIACION',
+    clasificacion: 'E',
+    clase: 'E',
+    nota: 'RC8.7.1 escritor autorizado #2. Dry-run por defecto; apply con confirmación admin.',
+  },
+  {
+    archivo: 'server/lib/reconciliarEtapaResponsableEjecucion.js#aplicar…',
+    funcion: 'aplicarReconciliarEtapaResponsableEjecucion',
+    escritura: 'vigente + asignaciones (origen RECONCILIACION)',
+    clasificacion: 'E',
+    clase: 'E',
+    nota: 'Motor apply de la fachada RC8.7 / F.3.',
+  },
+  {
+    archivo: 'server/lib/reconciliarAsignacionesExistentes.js',
+    funcion: 'reconciliarAsignacionesExistentes',
+    escritura: 'asignaciones + responsable vigente (no etapa/estado)',
+    clasificacion: 'E',
+    clase: 'E',
+    nota: 'RC8.6C: solo con origenEscritura=RECONCILIACION; dry-run default.',
   },
   {
     archivo: 'server/lib/expedienteEstadoPersistido.js#syncLegacyRequerimiento',
@@ -24,7 +53,7 @@ export const ESCRITURAS_DIRECTAS_RC86A = Object.freeze([
     escritura: 'UPDATE requerimientos SET estado_actual/sub_modulo/responsable',
     clasificacion: 'B',
     clase: 'B',
-    nota: 'Solo invocado desde transicionarExpediente (compat columnas legacy).',
+    nota: 'Solo invocado desde transición/reconciliación (compat columnas legacy).',
   },
   {
     archivo: 'server/lib/workflow/workflowEngine.js#executeTransition',
@@ -53,18 +82,26 @@ export const ESCRITURAS_DIRECTAS_RC86A = Object.freeze([
   {
     archivo: 'server/lib/trazabilidad.js#inicializarTrazabilidad',
     funcion: 'inicializarTrazabilidad',
-    escritura: 'estado_actual inicial si vacío',
+    escritura: 'historial + legacy bootstrap; NUNCA expediente_estado_vigente',
     clasificacion: 'C',
     clase: 'C',
-    nota: 'Histórica / bootstrap de creación; no es transición de flujo.',
+    nota: 'RC8.7.1: si vigente confirmado, no pisa estado_actual/responsable desde REGISTRO.',
   },
   {
     archivo: 'server/lib/trazabilidad.js#rebuildAllHistorial',
     funcion: 'rebuildAllHistorial / backfillTrazabilidad',
-    escritura: 'reconstrucción masiva historial+estado',
+    escritura: 'historial JSON; legacy alineado desde vigente si confirmado',
     clasificacion: 'C',
     clase: 'C',
-    nota: 'Herramienta administrativa one-shot.',
+    nota: 'RC8.7.1 bloqueado: no UPDATE expediente_estado_vigente ni asignaciones.',
+  },
+  {
+    archivo: 'server/migrate.js#postMigrationMaintenance',
+    funcion: 'postMigrationMaintenance',
+    escritura: 'llama rebuildAllHistorial (seguro RC8.7.1)',
+    clasificacion: 'C',
+    clase: 'C',
+    nota: 'No escribe vigente; migrate×N es idempotente respecto a fuente única.',
   },
   {
     archivo: 'server/lib/validacionesCotizacion.js',
@@ -163,12 +200,36 @@ export const ESCRITURAS_DIRECTAS_RC86A = Object.freeze([
     nota: 'Migrada a transicionarExpediente.',
   },
   {
-    archivo: 'server/migrations/037_* / 040_* / 013_* / 044_*',
-    funcion: 'migraciones',
-    escritura: 'estado_actual / backfill',
+    archivo: 'server/routes/workflowMantenimiento.js',
+    funcion: 'diagnóstico / dry-run / reconciliar',
+    escritura: 'solo vía reconciliarEstadoResponsablePorEvidencia; no edición directa',
+    clasificacion: 'E',
+    clase: 'E',
+    nota: 'Mantenimiento → Workflow SGC: no modifica estado directamente.',
+  },
+  {
+    archivo: 'server/migrations/037_* / 040_*',
+    funcion: 'migraciones legacy estado_actual',
+    escritura: 'requerimientos.estado_actual (one-shot; no vigente)',
     clasificacion: 'C',
     clase: 'C',
-    nota: 'Histórico / one-shot. 044 no aplica en VPS aún.',
+    nota: 'Históricas. No tocan expediente_estado_vigente. Ya aplicadas = no-op en migrate.',
+  },
+  {
+    archivo: 'server/migrations/044_expediente_estado_responsable_vigente.js',
+    funcion: 'backfill vigente',
+    escritura: 'INSERT … WHERE NOT EXISTS',
+    clasificacion: 'C',
+    clase: 'C',
+    nota: 'RC8.7.1: nunca pisa vigente existente.',
+  },
+  {
+    archivo: 'server/migrations/045_workflow_sgc_catalogos.js',
+    funcion: 'catálogos workflow',
+    escritura: 'solo tablas workflow_* / log',
+    clasificacion: 'C',
+    clase: 'C',
+    nota: 'RC8.7.1: no altera expedientes ni vigente.',
   },
 ]);
 

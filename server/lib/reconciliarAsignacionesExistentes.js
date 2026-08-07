@@ -9,6 +9,7 @@ import {
   cerrarAsignacionActiva,
   crearAsignacion,
   actualizarResponsableVigente,
+  ORIGEN_ESCRITURA_VIGENTE,
 } from './expedienteEstadoPersistido.js';
 import {
   resolveAsignacionRealExistente,
@@ -223,7 +224,9 @@ export async function reconciliarAsignacionesExistentes({
 
       if (activa) {
         // Cerrar solo si no es persona válida o force / pendiente
-        await cerrarAsignacionActiva(db, rid);
+        await cerrarAsignacionActiva(db, rid, {
+          origenEscritura: ORIGEN_ESCRITURA_VIGENTE.RECONCILIACION,
+        });
       }
 
       const tipo = esPersona ? TIPO_RESPONSABLE.PERSONA : TIPO_RESPONSABLE.UNIDAD;
@@ -236,6 +239,7 @@ export async function reconciliarAsignacionesExistentes({
         origenAsignacion: ORIGEN_RECONCILIACION,
         asignadoPor: 'rc86c_reconciliacion',
         motivo: `fuente=${resolved.fuente}; evidencia=${resolved.evidenciaId ?? ''}`,
+        origenEscritura: ORIGEN_ESCRITURA_VIGENTE.RECONCILIACION,
       });
 
       const updated = await actualizarResponsableVigente(db, {
@@ -245,6 +249,7 @@ export async function reconciliarAsignacionesExistentes({
         responsableUnidad: resolved.unidad,
         responsableFuente: resolved.fuente,
         actualizadoPor: 'rc86c_reconciliacion',
+        origenEscritura: ORIGEN_ESCRITURA_VIGENTE.RECONCILIACION,
         metadataPatch: {
           reconciliacion_rc86c: {
             fuente: resolved.fuente,

@@ -61,7 +61,7 @@ export function renderProgramacionView() {
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi bi-calendar-check"></i> Programación</h3>
-          <p class="text-muted mb-0">Bandeja maestra de seguimiento: todos los expedientes que pasaron por Programación, con estado y responsable actuales.</p>
+          <p class="text-muted mb-0">Bandeja maestra de seguimiento: todos los expedientes que pasaron por Programación, con Estado y Responsable.</p>
         </div>
         <div class="d-flex gap-2">
           <button id="progConsolidar" class="btn btn-sm btn-success" disabled>
@@ -194,8 +194,8 @@ function programacionBandejaHeaders(sortState = null) {
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
-    ${sortableTh('Estado Actual', 'estado', sortState)}
-    ${sortableTh('Responsable Actual', 'responsable', sortState)}
+    ${sortableTh('Estado', 'estado', sortState)}
+    ${sortableTh('Responsable', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
     ${sortableTh('Días', 'dias', sortState)}
     <th>Pedidos Adjuntos</th>

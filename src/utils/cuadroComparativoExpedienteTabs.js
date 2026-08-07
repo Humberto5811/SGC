@@ -101,7 +101,7 @@ export function renderResumenTab({ exp, cuadro, solicitud }) {
       </div>
       <div class="col-12"><div class="small text-muted">Denominación</div><div>${esc(exp?.denominacion || solicitud?.denominacion || '—')}</div></div>
       <div class="col-md-4"><div class="small text-muted">Área usuaria</div><div>${esc(exp?.area_usuaria || '—')}</div></div>
-      <div class="col-md-4"><div class="small text-muted">Responsable actual</div><div>${esc(exp?.responsable_actual || exp?.responsable_revision || '—')}</div></div>
+      <div class="col-md-4"><div class="small text-muted">Responsable</div><div>${esc(exp?.responsable_actual || exp?.responsable_revision || '—')}</div></div>
       <div class="col-md-4"><div class="small text-muted">Ingreso a cuadro</div><div>${esc(fmtFecha(exp?.fecha_ingreso_cuadro || exp?.fecha_actualizacion))}</div></div>
       ${exp?.objeto || solicitud?.objeto ? `<div class="col-12"><div class="small text-muted">Objeto</div><div class="small">${esc(exp?.objeto || solicitud?.objeto)}</div></div>` : ''}
     </div>

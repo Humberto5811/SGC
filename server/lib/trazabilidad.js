@@ -19,6 +19,8 @@ import {
 } from './movimientos.js';
 import { appendEventosPorAccion } from './registroEventos.js';
 import { computeMotorSnapshot, requiereIndicadorObservado, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
+import { isVigenteConfirmado } from './expedienteVigenteGuard.js';
+import { mapEtapaDestinoBD } from './expedienteEstadoPersistido.js';
 
 export { SUBMODULOS, normalizeAccion, getSubModuloMeta };
 
@@ -878,6 +880,72 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
     }
     return enrichRequerimientoRow(row);
   }
+
+  // RC8.7.1: si hay vigente confirmado, no reescribir ubicación/responsable desde bootstrap REGISTRO.
+  let vigente = null;
+  try {
+    const { rows: vRows } = await query(
+      'SELECT * FROM expediente_estado_vigente WHERE requerimiento_id = $1',
+      [requerimientoId],
+    );
+    vigente = vRows[0] || null;
+  } catch (_) {
+    vigente = null;
+  }
+  if (vigente && isVigenteConfirmado(vigente)) {
+    const historial = parseHistorial(row.historial_estados);
+    if (historial.length) {
+      return enrichRequerimientoRow(row);
+    }
+    const usuarioCreador = resolveUsuarioCreadorRequerimiento(
+      row,
+      usuario,
+      row.usuario_modificacion,
+    ) || 'Sistema';
+    const hist = initHistorialFromRow(row, usuarioCreador);
+    const etapaCanon = String(vigente.etapa_codigo || mapEstadoToEtapa(row.estado || 'Registrado')).toUpperCase();
+    const etapaBD = mapEtapaDestinoBD(etapaCanon);
+    const subMeta = getSubModuloMeta(etapaBD) || getSubModuloMeta(etapaCanon);
+    const fecha = row.created_at || new Date().toISOString();
+    let responsableLegacy = row.responsable_actual || '';
+    if (String(vigente.responsable_tipo || '').toUpperCase() === 'PERSONA' && vigente.responsable_usuario_id) {
+      responsableLegacy = String(vigente.responsable_usuario_id);
+    } else if (vigente.responsable_unidad) {
+      responsableLegacy = String(vigente.responsable_unidad);
+    }
+    const movimientos = appendMovimiento([], buildMovimientoEntry({
+      fecha,
+      accion: 'CREADO',
+      etapa: etapaBD || etapaCanon,
+      usuario: usuarioCreador,
+      responsable: responsableLegacy || 'Sistema',
+      observacion: 'Registro inicial (RC8.7.1: alineado a vigente confirmado)',
+    }));
+    await query(`
+      UPDATE requerimientos SET
+        historial_estados = $2::jsonb,
+        historial_movimientos = $3::jsonb,
+        estado_actual = COALESCE(NULLIF(TRIM(estado_actual), ''), $4),
+        sub_modulo_actual = COALESCE(NULLIF(TRIM(sub_modulo_actual), ''), $5),
+        responsable_actual = COALESCE(NULLIF(TRIM(responsable_actual), ''), $6),
+        usuario_modificacion = COALESCE(NULLIF(TRIM(usuario_modificacion), ''), $7)
+      WHERE id = $1
+    `, [
+      requerimientoId,
+      JSON.stringify(hist),
+      JSON.stringify(movimientos),
+      etapaBD || etapaCanon,
+      subMeta?.subModulo || etapaBD || etapaCanon,
+      responsableLegacy || 'Pendiente de asignación',
+      usuarioCreador,
+    ]);
+    return enrichRequerimientoRow({
+      ...row,
+      historial_estados: hist,
+      historial_movimientos: movimientos,
+    });
+  }
+
   // Creador real: candidato explícito / usuario_modificacion. Nunca centro (row.responsable).
   const usuarioCreador = resolveUsuarioCreadorRequerimiento(
     row,
@@ -1644,12 +1712,54 @@ function collapseNotificacionDuplicates(movimientos = []) {
 
 export async function rebuildAllHistorial() {
   const { rows } = await query('SELECT * FROM requerimientos ORDER BY id ASC');
+  let vigentesById = new Map();
+  try {
+    const { rows: vigentes } = await query('SELECT * FROM expediente_estado_vigente');
+    vigentesById = new Map(vigentes.map((v) => [Number(v.requerimiento_id), v]));
+  } catch (_) {
+    vigentesById = new Map();
+  }
+
   for (const row of rows) {
     const historial = reconstruirHistorialCompleto(row);
     const ultimo = historial[historial.length - 1];
+    const movs = movimientosFromHistorialEstados(historial);
+    const vigente = vigentesById.get(Number(row.id));
+
+    // RC8.7.1: con vigente confirmado, NO inferir etapa/responsable desde historial.
+    // Solo reescribe JSON de historial y alinea columnas legacy desde la fuente única.
+    // Nunca UPDATE expediente_estado_vigente / expediente_asignaciones.
+    if (vigente && isVigenteConfirmado(vigente)) {
+      const etapaCanon = String(vigente.etapa_codigo || '').toUpperCase();
+      const etapaBD = mapEtapaDestinoBD(etapaCanon) || row.estado_actual;
+      const subMeta = getSubModuloMeta(etapaBD) || getSubModuloMeta(etapaCanon);
+      let responsableLegacy = row.responsable_actual || '';
+      if (String(vigente.responsable_tipo || '').toUpperCase() === 'PERSONA' && vigente.responsable_usuario_id) {
+        responsableLegacy = String(vigente.responsable_usuario_id);
+      } else if (vigente.responsable_unidad) {
+        responsableLegacy = String(vigente.responsable_unidad);
+      }
+      await query(`
+        UPDATE requerimientos SET
+          historial_estados = $2::jsonb,
+          historial_movimientos = $3::jsonb,
+          estado_actual = $4,
+          sub_modulo_actual = $5,
+          responsable_actual = $6
+        WHERE id = $1
+      `, [
+        row.id,
+        JSON.stringify(historial),
+        JSON.stringify(movs),
+        etapaBD,
+        subMeta?.subModulo || row.sub_modulo_actual || etapaBD,
+        responsableLegacy || row.responsable_actual || '',
+      ]);
+      continue;
+    }
+
     const etapa = ultimo?.estado || mapEstadoToEtapa(row.estado);
     const subMeta = getSubModuloMeta(etapa);
-    const movs = movimientosFromHistorialEstados(historial);
     const estadoNegocio = resolveEstadoNegocioFromRow({ ...row, estado_actual: etapa });
     await query(`
       UPDATE requerimientos SET

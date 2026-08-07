@@ -140,16 +140,66 @@ export function buildPresenterRow(partial = {}) {
 }
 
 /**
- * Presenter único — fuente de verdad del estado visual en toda la UI.
+ * Presenter de indicadores auxiliares (observado / acciones / alertas).
+ * RC8.8.1 — con estado_responsable_vigente NO deriva ni sobrescribe el contrato canónico.
  */
 export function buildEstadoVisual(row, opts = {}) {
   const enriched = enrichReqRow(row);
-  const workflowActual = resolveWorkflowEtapa(enriched);
   const pendienteReceptor = resolvePendienteReceptor(enriched);
-  const snap = extractWorkflowSnapshot(enriched);
+  const erv = row?.estado_responsable_vigente || enriched?.estado_responsable_vigente || null;
+  const hasCanon = erv && typeof erv === 'object' && erv.canonicalMissing !== true
+    && (erv.estadoCodigo || erv.estado_codigo || erv.estadoLabel || erv.estado_label);
 
-  // Estado vigente: el backend debe aportar evidencia (CCP + órdenes).
-  // El presentador NO fuerza "CCP registrada" ni recalcula prioridad.
+  // ── Camino canónico: solo auxiliares; contrato vía adaptEstadoResponsable ──
+  if (hasCanon) {
+    const adapted = adaptEstadoResponsable(row);
+    const snap = extractWorkflowSnapshot(enriched);
+    const moduloContext = opts.moduloContext
+      || adapted.etapaLabel
+      || adapted.etapaCodigo
+      || null;
+    const motorBadge = obtenerEstadoObservaciones(enriched, moduloContext);
+    const motorActions = obtenerEstadoObservaciones(enriched, opts.moduloContext || moduloContext || null);
+    const badgeObservado = !!(pendienteReceptor || motorBadge.requiereBadge === true);
+
+    return {
+      // Passthrough de labels canónicos (no reinferidos) para consumidores legacy de textoPrincipal.
+      textoPrincipal: adapted.estadoLabel,
+      badgeObservado,
+      workflowActual: adapted.etapaCodigo || '',
+      moduloResponsable: adapted.responsableDisplay
+        || adapted.responsableUnidad
+        || adapted.etapaLabel
+        || '',
+      // Color auxiliar legacy; el badge institucional usa categoria del adapter.
+      color: null,
+      puedeSubsanar: motorActions.puedeSubsanar,
+      puedeCerrar: motorActions.puedeCerrar,
+      pendientesCount: motorBadge.pendientesModuloCount ?? motorBadge.pendientesCount ?? 0,
+      motor: motorActions,
+      motorBadge,
+      estadoVigente: null,
+      presentacion: null,
+      // Contrato de referencia (solo lectura; no mutar row).
+      contratoCanonico: {
+        estadoCodigo: adapted.estadoCodigo,
+        estadoLabel: adapted.estadoLabel,
+        estadoCategoria: adapted.categoria,
+        etapaCodigo: adapted.etapaCodigo,
+        etapaLabel: adapted.etapaLabel,
+        responsableTipo: adapted.responsableTipo,
+        responsableUsuarioId: adapted.responsableUsuarioId,
+        responsableNombre: adapted.responsableNombre,
+        responsableUnidad: adapted.responsableUnidad,
+      },
+      _canonico: true,
+      _snapRevision: snap?.revisionEstado || null,
+    };
+  }
+
+  // ── Sin ERV: indicadores auxiliares + evidencia legacy (no es fuente de bandejas RC8.8+) ──
+  const workflowActual = resolveWorkflowEtapa(enriched);
+  const snap = extractWorkflowSnapshot(enriched);
   const vigente = resolveEstadoExpedienteVigente(enriched, {
     revisionEstado: opts.revisionEstado || snap?.revisionEstado || '',
     estadoCuadro: opts.estadoCuadro || enriched.estado_cuadro || row?.estado_cuadro || '',
@@ -220,16 +270,15 @@ export function buildEstadoVisual(row, opts = {}) {
     motorBadge,
     estadoVigente: vigente,
     presentacion,
+    contratoCanonico: null,
+    _canonico: false,
   };
 }
 
 export function renderEstadoVisualHtml(row, opts = {}, escFn = (s) => String(s ?? '')) {
-  // RC8.6B — presentación institucional vía componentes centrales (sin colores inline)
-  const v = buildEstadoVisual(row, opts);
+  // RC8.8.1 — el badge SIEMPRE sale del adapter; buildEstadoVisual solo aporta observed.
   const adapted = adaptEstadoResponsable(row);
-  if (v.textoPrincipal) adapted.estadoLabel = v.textoPrincipal;
-  const code = v.estadoVigente?.codigo || v.estadoVigente?.estadoVigente?.codigo;
-  if (code) adapted.estadoCodigo = code;
+  const v = buildEstadoVisual(row, opts);
   return renderEstadoBadgeHtml(adapted, { observed: !!v.badgeObservado });
 }
 

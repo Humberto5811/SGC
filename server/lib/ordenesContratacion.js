@@ -261,6 +261,73 @@ export function extractItemsAdjudicados(cuadroRow, proveedorId) {
   return items;
 }
 
+/**
+ * Ítems para Locación/sin cuadro — desde propuesta económica de cotización.
+ * Obs45: bandeja RO debe incluir Locadores derivados (EN_ORDEN) sin cuadro comparativo.
+ */
+export function extractItemsDesdePropuestaEconomica(propuestaEconomica, {
+  denominacion = '',
+  cantidadFallback = 1,
+} = {}) {
+  const eco = parseJson(propuestaEconomica, {});
+  const rawItems = Array.isArray(eco?.items) ? eco.items
+    : (Array.isArray(eco?.entregables_cotizados) ? eco.entregables_cotizados
+      : (Array.isArray(eco?.detalle) ? eco.detalle : []));
+  const items = [];
+  for (let i = 0; i < rawItems.length; i += 1) {
+    const it = rawItems[i] || {};
+    const cantidad = Number(it.cantidad ?? it.cant ?? cantidadFallback) || 1;
+    const pu = Number(
+      it.precio_unitario ?? it.pu ?? it.valor_unitario ?? it.precio ?? 0,
+    );
+    let total = Number(it.precio_total ?? it.total ?? it.monto ?? it.precio ?? NaN);
+    if (!Number.isFinite(total) && cantidad > 0 && pu > 0) {
+      total = Number((cantidad * pu).toFixed(2));
+    }
+    if (!(cantidad > 0) && !(total > 0)) continue;
+    const cantFinal = cantidad > 0 ? cantidad : 1;
+    const puFinal = pu > 0
+      ? pu
+      : (total > 0 ? Number((total / cantFinal).toFixed(4)) : 0);
+    items.push({
+      item_adjudicado_ref: String(it.item_key || it.id || it.id_fuente || i + 1),
+      descripcion: String(
+        it.descripcion || it.nombre || it.denominacion || denominacion || `Ítem ${i + 1}`,
+      ).trim(),
+      unidad_medida: String(it.unidad_medida || it.um || 'UND').trim() || 'UND',
+      cantidad: cantFinal,
+      precio_unitario: puFinal,
+      precio_total: Number((Number.isFinite(total) ? total : cantFinal * puFinal).toFixed(2)),
+      moneda: String(it.moneda || eco.moneda || 'PEN'),
+      orden_item: i + 1,
+      plazo_ofertado: it.plazo_entrega != null
+        ? String(it.plazo_entrega)
+        : (it.plazo_texto != null ? String(it.plazo_texto) : null),
+      plazo_ofertado_dias: Number.isFinite(Number(it.plazo_dias)) ? Number(it.plazo_dias) : null,
+      observaciones_propuesta: it.observaciones || null,
+    });
+  }
+  if (!items.length) {
+    const monto = Number(eco?.monto ?? eco?.total ?? eco?.precio_total ?? 0);
+    if (Number.isFinite(monto) && monto > 0) {
+      items.push({
+        item_adjudicado_ref: '1',
+        descripcion: String(eco.descripcion || eco.objeto || denominacion || 'Locación').trim(),
+        unidad_medida: 'UND',
+        cantidad: 1,
+        precio_unitario: Number(monto.toFixed(4)),
+        precio_total: Number(monto.toFixed(2)),
+        moneda: String(eco.moneda || 'PEN'),
+        orden_item: 1,
+        plazo_ofertado: eco.plazo_entrega != null ? String(eco.plazo_entrega) : null,
+        plazo_ofertado_dias: Number.isFinite(Number(eco.plazo_dias)) ? Number(eco.plazo_dias) : null,
+        observaciones_propuesta: null,
+      });
+    }
+  }
+  return items;
+}
+
 async function loadProveedor(proveedorId) {
   if (!proveedorId) return null;
   const { rows } = await query(`
@@ -493,13 +560,17 @@ export async function getOrdenItems(ordenId) {
 }
 
 export async function listarBandejaOrdenes() {
-  const { rows } = await query(`
+  // Fuente A — Bienes/Servicios vía Cuadro Comparativo (DERIVADO_CCP).
+  const { rows: rowsCuadro } = await query(`
     SELECT
       r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
       r.tipo, r.estado_actual, r.payload,
       sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
       cc.id AS cuadro_id, cc.estado AS cuadro_estado, cc.valor_adjudicado,
       cc.proveedor_ganador_id, cc.datos_json, cc.tipo AS cuadro_tipo,
+      NULL::jsonb AS propuesta_economica,
+      NULL::int AS cotizacion_id,
+      'CUADRO_COMPARATIVO'::text AS origen_orden,
       cod.id AS codigo_id, cod.codigo_ccp,
       cf.id AS ccp_firmado_id, cf.nombre_archivo AS ccp_firmado_nombre,
       cf.version AS ccp_firmado_version, cf.subido_at AS ccp_firmado_at,
@@ -544,6 +615,84 @@ export async function listarBandejaOrdenes() {
     ORDER BY COALESCE(oc.actualizado_at, cf.subido_at, cod.registrado_at) DESC NULLS LAST, r.codigo ASC
   `);
 
+  // Fuente B — Locación (sin cuadro) ya derivada a Registro de Órdenes.
+  const { rows: rowsLocacion } = await query(`
+    SELECT
+      r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
+      r.tipo, r.estado_actual, r.payload,
+      sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
+      NULL::int AS cuadro_id, NULL::text AS cuadro_estado,
+      NULL::numeric AS valor_adjudicado,
+      cot.proveedor_id AS proveedor_ganador_id,
+      NULL::jsonb AS datos_json,
+      sc.tipo AS cuadro_tipo,
+      cot.propuesta_economica,
+      cot.id AS cotizacion_id,
+      'RECEPCION_COTIZACION_LOCACION'::text AS origen_orden,
+      cod.id AS codigo_id, cod.codigo_ccp,
+      cf.id AS ccp_firmado_id, cf.nombre_archivo AS ccp_firmado_nombre,
+      cf.version AS ccp_firmado_version, cf.subido_at AS ccp_firmado_at,
+      oc.id AS orden_id, oc.tipo_orden, oc.numero_orden, oc.anio_orden,
+      oc.fecha_orden, oc.monto_total AS orden_monto, oc.estado AS orden_estado,
+      oc.version AS orden_version, oc.enviado_proveedor_at, oc.recibido_proveedor_at,
+      oc.derivado_ejecucion_at, oc.regla_inicio_plazo, oc.tipo_contratacion,
+      rbe.id AS recepcion_bienes_expediente_id,
+      rbe.estado_global AS recepcion_estado_global,
+      rbe.estado_interno AS recepcion_estado_interno
+    FROM requerimientos r
+    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
+    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+    LEFT JOIN LATERAL (
+      SELECT c.* FROM cotizaciones_proveedor c
+      WHERE c.solicitud_id = sc.id AND c.estado = 'COTIZACION_PRESENTADA'
+      ORDER BY
+        CASE WHEN COALESCE(c.validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
+        c.fecha_presentacion DESC NULLS LAST,
+        c.id DESC
+      LIMIT 1
+    ) cot ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT c.* FROM ccp_codigos c
+      WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
+      ORDER BY c.id DESC LIMIT 1
+    ) cod ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT f.* FROM ccp_firmados f
+      WHERE f.requerimiento_id = r.id AND f.activo = TRUE
+      ORDER BY f.version DESC, f.id DESC LIMIT 1
+    ) cf ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT o.* FROM ordenes_contratacion o
+      WHERE o.requerimiento_id = r.id AND o.estado <> 'ORDEN_ANULADA'
+      ORDER BY o.id DESC LIMIT 1
+    ) oc ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT e.id, e.estado_global, e.estado_interno
+      FROM recepcion_bienes_expedientes e
+      WHERE (oc.id IS NOT NULL AND e.orden_id = oc.id)
+         OR e.requerimiento_id = r.id
+      ORDER BY e.id DESC
+      LIMIT 1
+    ) rbe ON TRUE
+    WHERE UPPER(COALESCE(sc.estado, '')) IN ('EN_ORDEN', 'EN_EJECUCION')
+      AND cod.codigo_ccp IS NOT NULL
+      AND cot.id IS NOT NULL
+      AND UPPER(COALESCE(r.estado_actual, '')) NOT LIKE '%ANUL%'
+      AND NOT EXISTS (
+        SELECT 1 FROM cuadros_comparativos cc
+        WHERE cc.solicitud_id = sc.id
+          AND UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
+          AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
+      )
+    ORDER BY COALESCE(oc.actualizado_at, cf.subido_at, cod.registrado_at) DESC NULLS LAST, r.codigo ASC
+  `);
+
+  const { normalizarTipo, TIPOS_CONTRATACION } = await import('../../shared/workflow/tiposContratacion.js');
+  const rows = [
+    ...rowsCuadro,
+    ...rowsLocacion.filter((r) => normalizarTipo(r.tipo || r.cuadro_tipo || '') === TIPOS_CONTRATACION.LOCACION),
+  ];
+
   const out = [];
   const seen = new Set();
   for (const row of rows) {
@@ -551,18 +700,25 @@ export async function listarBandejaOrdenes() {
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const esLocacion = row.origen_orden === 'RECEPCION_COTIZACION_LOCACION';
     if (!row.proveedor_ganador_id) continue;
-    const monto = Number(row.valor_adjudicado || 0);
-    if (!(monto > 0) && !row.orden_id) {
-      const items = extractItemsAdjudicados(row, row.proveedor_ganador_id);
-      const m2 = items.reduce((a, it) => a + Number(it.precio_total || 0), 0);
-      if (!(m2 > 0)) continue;
-    }
+
+    let items = esLocacion
+      ? extractItemsDesdePropuestaEconomica(row.propuesta_economica, {
+        denominacion: row.denominacion || '',
+      })
+      : extractItemsAdjudicados(row, row.proveedor_ganador_id);
+
+    const montoAdjSeed = items.reduce((a, it) => a + Number(it.precio_total || 0), 0)
+      || Number(row.valor_adjudicado || 0);
+    if (!(montoAdjSeed > 0) && !row.orden_id) continue;
 
     // Incluir pendientes de firmado para poder adjuntar; registrar orden exige firmado
     const pedidos = await loadPedidos(row.requerimiento_id);
     const proveedor = await loadProveedor(row.proveedor_ganador_id);
-    const items = extractItemsAdjudicados(row, row.proveedor_ganador_id);
+    if (!esLocacion) {
+      items = extractItemsAdjudicados(row, row.proveedor_ganador_id);
+    }
     const montoAdj = items.reduce((a, it) => a + Number(it.precio_total || 0), 0)
       || Number(row.valor_adjudicado || 0);
 
@@ -576,7 +732,7 @@ export async function listarBandejaOrdenes() {
     }
 
     const tipoRaw = String(row.tipo || row.cuadro_tipo || '').toUpperCase();
-    const esServicio = /SERVIC/.test(tipoRaw) || /LOCADOR/.test(tipoRaw);
+    const esServicio = esLocacion || /SERVIC/.test(tipoRaw) || /LOCADOR/.test(tipoRaw);
 
     let estadoCode = ESTADOS_ORDEN.REGISTRO_ORDENES;
     if (row.orden_estado) {
@@ -675,6 +831,7 @@ export async function listarBandejaOrdenes() {
       })),
       tipo: esServicio ? 'Servicio' : 'Bien',
       tipo_contratacion: esServicio ? 'Servicio' : 'Bien',
+      origen_orden: row.origen_orden || 'CUADRO_COMPARATIVO',
       items_count: items.length,
       items_label: multi ? 'Varios ítems' : (items[0]?.descripcion || '—'),
       cantidad_total: multi ? null : cantTotal,

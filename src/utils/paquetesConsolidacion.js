@@ -173,7 +173,7 @@ export function exportMatrizExcel(grupos) {
   const resumenRows = [['Código Paquete', 'Estado Paquete', 'Requerimientos', 'Pedidos', 'Monto Total', 'Creado por', 'Fecha']];
   const detalleRows = [[
     'Paquete', 'Requerimiento', 'Pedido', 'Tipo', 'Código SIGAMEF', 'Descripción', 'Cantidad', 'Monto Total',
-    'Centro', 'Área Usuaria', 'Estado Actual', 'Responsable', 'Meta', 'Clasificador', 'Días en Estado',
+    'Centro', 'Área Usuaria', 'Estado', 'Responsable', 'Meta', 'Clasificador', 'Días en Estado',
   ]];
 
   (grupos || []).forEach((g) => {
@@ -185,8 +185,9 @@ export function exportMatrizExcel(grupos) {
     g.filas.forEach((f) => {
       detalleRows.push([
         f.codigo_paquete, f.requerimiento_codigo, f.pedido, f.tipo, f.codigo_sigamef, f.descripcion,
-        f.cantidad, f.monto_total, f.centro, f.area_usuaria, f.estado_actual_texto, f.responsable,
-        f.meta, f.clasificador, f.dias_en_estado,
+        f.cantidad, f.monto_total, f.centro, f.area_usuaria,
+        f.estado_actual_texto ?? '', f.responsable ?? '',
+        f.meta, f.clasificador, f.dias_en_estado ?? 0,
       ]);
     });
   });

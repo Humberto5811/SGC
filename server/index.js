@@ -53,6 +53,7 @@ import ccpRouter from './routes/ccp.js';
 import ordenesContratacionRouter from './routes/ordenesContratacion.js';
 import recepcionBienesRouter from './routes/recepcionBienes.js';
 import workflowRouter from './routes/workflow.js';
+import workflowMantenimientoRouter from './routes/workflowMantenimiento.js';
 import requireAuth from './middleware/requireAuth.js';
 
 dotenv.config();
@@ -376,6 +377,7 @@ app.use('/api/recepcion-bienes', recepcionBienesRouter);
 
 // Workflow Engine — FASE BASE (lectura + simulación; write deshabilitado).
 app.use('/api/workflow', workflowRouter);
+app.use('/api/workflow/mantenimiento', workflowMantenimientoRouter);
 
 app.use('/api/requerimientos', crudRouter({
   table: 'requerimientos',

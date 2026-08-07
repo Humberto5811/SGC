@@ -182,7 +182,7 @@ export function paqueteBadgeHtml(codigo) {
 
 export const EXPORT_COLUMNS = [
   'Pedido', 'Requerimiento', 'Paquete', 'Tipo', 'Código SIGAMEF', 'Descripción',
-  'Cantidad', 'Monto Total', 'Centro', 'Área Usuaria', 'Estado Actual', 'Responsable',
+  'Cantidad', 'Monto Total', 'Centro', 'Área Usuaria', 'Estado', 'Responsable',
   'Meta', 'Clasificador', 'Días en Estado',
 ];
 
@@ -200,11 +200,11 @@ export function exportPedidosExcel(filas) {
       f.monto_total,
       f.centro,
       f.area_usuaria,
-      f.estado_actual_texto,
-      f.responsable,
-      f.meta,
-      f.clasificador,
-      f.dias_en_estado,
+      f.estado_actual_texto ?? '',
+      f.responsable ?? '',
+      f.meta ?? '',
+      f.clasificador ?? '',
+      f.dias_en_estado ?? 0,
     ]);
   });
   const wb = XLSX.utils.book_new();

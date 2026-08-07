@@ -57,7 +57,7 @@ function ensurePanelStyles() {
 
 const COLS_FULL = [
   'Paquete', 'Requerimiento', 'Pedido', 'Tipo', 'Código SIGAMEF', 'Descripción',
-  'Cant.', 'Monto Total', 'Centro', 'Área Usuaria', 'Estado Actual', 'Responsable', 'Meta', 'Clasificador', 'Acciones',
+  'Cant.', 'Monto Total', 'Centro', 'Área Usuaria', 'Estado', 'Responsable', 'Meta', 'Clasificador', 'Acciones',
 ];
 
 function ensurePanel() {

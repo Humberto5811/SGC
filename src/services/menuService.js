@@ -78,6 +78,7 @@ export const MENU_STRUCTURE = [
       },
       { path: 'mantenimiento/proveedores', label: 'Maestro de Proveedores', icon: 'bi-building-check', submoduloId: 'MAESTRO_PROVEEDORES' },
       { path: 'mantenimiento/usuarios', label: 'Usuarios', icon: 'bi-people', submoduloId: 'USUARIOS' },
+      { path: 'mantenimiento/workflow-sgc', label: 'Workflow SGC', icon: 'bi-diagram-3', submoduloId: 'WORKFLOW_SGC' },
       {
         label: '📝 Registro de Datos',
         icon: 'bi-database',

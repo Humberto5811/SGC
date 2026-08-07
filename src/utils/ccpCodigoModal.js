@@ -42,7 +42,7 @@ export function openCcpCodigoModal(row, opts = {}) {
                 <strong>${esc(row.centro || '—')}</strong>
               </div>
               <div class="col-6">
-                <span class="text-muted d-block">Estado actual</span>
+                <span class="text-muted d-block">Estado</span>
                 <strong>${esc(row.etiqueta_estado || row.estado_ccp_label || '—')}</strong>
               </div>
             </div>

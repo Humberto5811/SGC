@@ -388,6 +388,18 @@ function resolveEstadoOrdenFromFlags(flags, row = {}, opts = {}) {
   if (opts.ccpFirmado === true || row.ccp_firmado === true || row.ccp_firmado_id) {
     return 'REGISTRO_ORDENES';
   }
+  // Obs45 — solicitud ya derivada a RO (p.ej. Locadores sin OC aún) supera CCP_REGISTRADA.
+  const solEst = String(
+    row.solicitud_estado || row.estado_solicitud || opts.solicitudEstado || '',
+  ).toUpperCase();
+  if (solEst === 'EN_ORDEN') return 'REGISTRO_ORDENES';
+  if (solEst === 'EN_EJECUCION') return 'EN_EJECUCION';
+  const etapaHint = String(
+    row.etapa_codigo || row.etapaCodigo || opts.etapaCodigo || '',
+  ).toUpperCase();
+  if (etapaHint === 'REGISTRO_ORDEN' || etapaHint === 'REGISTRO_ORDENES' || etapaHint === 'ORDEN') {
+    return 'REGISTRO_ORDENES';
+  }
   return '';
 }
 

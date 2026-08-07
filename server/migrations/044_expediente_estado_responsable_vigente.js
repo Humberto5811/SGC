@@ -52,6 +52,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_exp_asig_activa_por_req
   WHERE activo = TRUE;
 
 -- Backfill inicial: solo filas sin registro vigente. No infiere persona.
+-- RC8.7.1: WHERE NOT EXISTS — nunca sobrescribe vigente ya confirmado.
 -- Re-ejecutable: WHERE NOT EXISTS evita duplicados.
 INSERT INTO expediente_estado_vigente (
   requerimiento_id, estado_codigo, estado_label, etapa_codigo, etapa_label,

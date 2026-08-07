@@ -23,14 +23,25 @@ import { isRolGenerico } from '../../shared/identificadoresUsuarios.js';
 
 /** Unidad/submódulo según etapa vigente del expediente. */
 function unidadPorEtapa(estadoVigente) {
-  const etapa = String(estadoVigente?.etapaCodigo || '').toUpperCase();
+  const etapa = String(estadoVigente?.etapaCodigo || estadoVigente?.etapa_codigo || '').toUpperCase();
   if (etapa === 'RECEPCION_COTIZACIONES') return 'Recepción de Cotizaciones';
   if (etapa === 'VALIDACIONES' || etapa === 'VALIDACION_USUARIO') return 'Validaciones';
   if (etapa === 'CUADRO_COMPARATIVO') return 'Cuadro Comparativo';
   if (etapa === 'CCP') return 'CCP';
-  if (etapa === 'REGISTRO_ORDEN' || etapa === 'ORDEN') return 'Registro de Órdenes';
+  if (etapa === 'REGISTRO_ORDEN' || etapa === 'REGISTRO_ORDENES' || etapa === 'ORDEN') {
+    return 'Registro de Órdenes';
+  }
+  if (etapa === 'RECEPCION_BIENES' || etapa === 'EN_EJECUCION' || etapa === 'EJECUCION') {
+    return 'Almacén';
+  }
   if (etapa === 'COORDINACION_CM' || etapa === 'ACTOS_PREPARATORIOS') return 'Coordinación CM';
-  return 'Invitaciones';
+  if (etapa === 'INVITACIONES') return 'Invitaciones';
+  if (etapa === 'PROGRAMACION') return 'Programación';
+  if (etapa === 'DEC') return 'DEC';
+  if (etapa === 'EVALUACION') return 'Evaluación';
+  if (etapa === 'REGISTRO') return 'Registro';
+  // Nunca inventar "Invitaciones" para etapas desconocidas o vacías.
+  return null;
 }
 
 function displayFromUserFields({ usuarioId, username, nombre }) {
@@ -90,13 +101,34 @@ async function loadAsignacionesBatch(ids, rows, estados) {
         continue;
       }
       if (a || e) {
+        const tipo = String(a?.tipo_responsable || e?.responsable_tipo || 'UNIDAD').toUpperCase();
+        // Unidad: preferir persistida; si falta, mapear por ETAPA PERSISTIDA (no evidencia overlay).
+        const etapaPersistida = {
+          etapaCodigo: e?.etapa_codigo || a?.etapa_codigo || '',
+        };
+        let unidad = a?.unidad_codigo || e?.responsable_unidad || null;
+        if (!unidad && tipo !== 'PENDIENTE') {
+          unidad = unidadPorEtapa(etapaPersistida) || unidadPorEtapa(estados.get(rid));
+        }
+        // PENDIENTE sin unidad: no inventar "Invitaciones" ni otra etapa ajena.
+        if (tipo === 'PENDIENTE' && !unidad) {
+          map.set(rid, {
+            usuarioId: null,
+            username: '',
+            nombre: '',
+            unidad: null,
+            fuente: e?.responsable_fuente || a?.origen_asignacion || 'pendiente_asignacion',
+            tipoResponsable: 'PENDIENTE',
+          });
+          continue;
+        }
         map.set(rid, {
           usuarioId: null,
           username: '',
           nombre: '',
-          unidad: a?.unidad_codigo || e?.responsable_unidad || unidadPorEtapa(estados.get(rid)),
+          unidad,
           fuente: e?.responsable_fuente || a?.origen_asignacion || 'unidad_destino_etapa',
-          tipoResponsable: a?.tipo_responsable || e?.responsable_tipo || 'UNIDAD',
+          tipoResponsable: tipo === 'PENDIENTE' ? 'PENDIENTE' : (tipo || 'UNIDAD'),
         });
       }
     }
@@ -229,7 +261,8 @@ export async function resolveEstadoResponsableParaExpediente(requerimientoId, ro
 
 /**
  * True batch: resuelve N expedientes con queries masivas.
- * Single-pass: estado se resuelve UNA vez por expediente.
+ * RC8.8.1 — SOLO getEstadoResponsableCanonico. Sin evidencia en lectura.
+ * Si falta vigente → canonicalMissing (no reconstruir).
  */
 export async function resolveEstadoResponsableBatch(requerimientoIds = [], preloadedRows = null) {
   const ids = [...new Set(
@@ -238,56 +271,68 @@ export async function resolveEstadoResponsableBatch(requerimientoIds = [], prelo
   const resultados = new Map();
   if (!ids.length) return resultados;
 
-  // ── Cargar filas (un solo query) ──
-  let rows;
-  if (preloadedRows && Array.isArray(preloadedRows) && preloadedRows.length) {
-    rows = preloadedRows;
-  } else {
-    const { rows: r } = await query(
-      `SELECT * FROM requerimientos WHERE id = ANY($1::int[])`,
-      [ids],
-    );
-    rows = r;
-  }
-  const rowMap = new Map(rows.map((r) => [Number(r.id), r]));
-
-  // ── Cargar evidencias CCP/Orden/Recepción (un batch) ──
-  const evidenceMap = await loadEstadoExpedienteEvidenceByIds(ids);
-
-  // ── Estado + etapa (single pass) ──
-  const estados = new Map();
+  void preloadedRows; // ya no se usa para reinferir presentación
+  const { getEstadoResponsableCanonico } = await import('./estadoResponsableCanonico.js');
+  const canon = await getEstadoResponsableCanonico({ requerimientoIds: ids });
   for (const id of ids) {
-    const row = rowMap.get(id);
-    if (!row) {
-      resultados.set(id, resolveEstadoResponsableVigente({}));
-      continue;
-    }
-    const evidence = evidenceMap.get(id) || {};
-    const enriched = applyEstadoEvidenceToRow(row, evidence);
-    const vigente = resolveEstadoResponsableVigente(enriched, {});
-    estados.set(id, vigente);
+    resultados.set(id, canon.get(id));
   }
-
-  // ── Cargar asignaciones explícitas en batch ──
-  const asignaciones = await loadAsignacionesBatch(ids, rowMap, estados);
-
-  // ── Reconstruir con asignaciones (sin volver a resolver estado) ──
-  for (const id of ids) {
-    const row = rowMap.get(id);
-    if (!row) continue;
-    const evidence = evidenceMap.get(id) || {};
-    const enriched = applyEstadoEvidenceToRow(row, evidence);
-    const asig = asignaciones.get(id);
-    if (asig) {
-      resultados.set(id, resolveEstadoResponsableVigente(enriched, {
-        asignaciones: { _result: asig },
-      }));
-    } else {
-      resultados.set(id, estados.get(id));
-    }
-  }
-
   return resultados;
+}
+
+/**
+ * @deprecated RC8.8 — use buildContratoCanonico from estadoResponsableCanonico.js
+ */
+function buildContratoDesdePersistido(estadoRow, asignacion = null) {
+  const e = estadoRow || {};
+  const a = asignacion || null;
+  let estadoCodigo = String(e.estado_codigo || '').trim();
+  if (estadoCodigo === 'REGISTRO_ORDEN' || estadoCodigo === 'ORDEN') {
+    estadoCodigo = 'REGISTRO_ORDENES';
+  }
+  const estadoLabel = String(e.estado_label || '').trim()
+    || (estadoCodigo === 'REGISTRO_ORDENES' ? 'Registro de órdenes' : estadoCodigo);
+  let etapaCodigo = String(e.etapa_codigo || '').trim().toUpperCase();
+  if (etapaCodigo === 'REGISTRO_ORDENES' || etapaCodigo === 'ORDEN') etapaCodigo = 'REGISTRO_ORDEN';
+  const etapaLabel = String(e.etapa_label || '').trim()
+    || (etapaCodigo === 'REGISTRO_ORDEN' ? 'Registro de Órdenes' : etapaCodigo);
+  let responsableTipo = String(
+    a?.tipo_responsable || e.responsable_tipo || TIPO_RESPONSABLE.PENDIENTE,
+  ).toUpperCase();
+  let responsableUsuarioId = a?.usuario_id ?? e.responsable_usuario_id ?? null;
+  let responsableUsername = String(a?.usuario_username || e.responsable_username || '').trim();
+  let responsableNombre = String(a?.usuario_nombre || e.responsable_nombre || '').trim();
+  let responsableUnidad = String(a?.unidad_codigo || e.responsable_unidad || '').trim();
+  let responsableFuente = String(
+    e.responsable_fuente || a?.origen_asignacion || 'persistido',
+  ).trim();
+  if (responsableTipo === 'PERSONA' && !responsableUsuarioId && !responsableUsername && !responsableNombre) {
+    responsableTipo = responsableUnidad ? TIPO_RESPONSABLE.UNIDAD : TIPO_RESPONSABLE.PENDIENTE;
+  }
+  if (responsableTipo === 'PENDIENTE') {
+    responsableUsuarioId = null;
+    responsableUsername = '';
+    responsableNombre = '';
+  }
+  if (responsableTipo === 'UNIDAD') {
+    responsableUsuarioId = null;
+    responsableUsername = '';
+    responsableNombre = '';
+  }
+  return {
+    estadoCodigo,
+    estadoLabel,
+    etapaCodigo,
+    etapaLabel,
+    responsableTipo,
+    responsableUsuarioId,
+    responsableUsername,
+    responsableNombre,
+    responsableUnidad: responsableTipo === 'PENDIENTE' ? '' : responsableUnidad,
+    responsableFuente,
+    actualizadoAt: e.actualizado_at || null,
+    canonicalMissing: false,
+  };
 }
 
 // ==========================================================================

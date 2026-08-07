@@ -7,7 +7,7 @@ import { bandejaTableStyles, getResponsableVigenteLabel, getEstadoVigenteLabel }
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
-import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
+import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import {
   registroOrdenesMenuItems, fmtMonto, fmtFecha, fmtFechaHora,
   downloadPdfBase64,
@@ -208,8 +208,8 @@ export function renderRegistroOrdenesView() {
                   <th>Recepción</th>
                   <th>Plazo de<br>entrega</th>
                   <th>Fecha máxima<br>de entrega</th>
-                  <th>Estado vigente</th>
-                  <th>Responsable actual</th>
+                  <th>Estado</th>
+                  <th>Responsable</th>
                   <th>Acciones</th>
                 </tr>
               </thead>
@@ -231,24 +231,8 @@ export function renderRegistroOrdenesView() {
 }
 
 function renderEstado(row) {
-  // Misma evidencia que el resolvedor central (no forzar solo orden_estado)
-  return renderBadgeEstadoVigenteHtml({
-    ...row,
-    orden_id: row.orden_id,
-    orden_estado: row.orden_estado || null,
-    codigo_ccp: row.codigo_ccp,
-    ccp_activo: true,
-    ccp_firmado: row.ccp_firmado,
-    en_registro_ordenes: true,
-    estado_cuadro: row.estado_cuadro || 'DERIVADO_CCP',
-    solicitud_estado: row.solicitud_estado || 'EN_CCP',
-    enviado_proveedor_at: row.fecha_notificacion || row.fecha_envio_proveedor || row.enviado_proveedor_at,
-    recepcion_estado_global: row.recepcion_estado_global
-      || row.estadoVigente?.codigo
-      || row.estado_vigente
-      || null,
-    recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id || null,
-  }, esc);
+  // RC8.8 — contrato canónico únicamente (sin ccp_activo / codigo_ccp reinferencia).
+  return renderEstadoBadgeFromRow(row);
 }
 
 function shouldShowChecklistBadge(row) {
@@ -309,6 +293,26 @@ function renderRow(row) {
     <td class="ro-wrap">${renderResponsableCellHtml(row, esc)}</td>
     ${menu}
   </tr>`;
+}
+
+/**
+ * Etiqueta de etapa bajo el badge de responsable en Registro de Órdenes.
+ * Prioriza estado_responsable_vigente; si hay orden y la etapa persistida
+ * aún no es RO/recepción, muestra "Registro de Órdenes" (no Invitaciones).
+ */
+function resolveRegistroOrdenesEtapaLabel(row = {}) {
+  const erv = row.estado_responsable_vigente || {};
+  const etapa = String(erv.etapaCodigo || erv.etapa_codigo || '').toUpperCase();
+  const label = String(erv.etapaLabel || erv.etapa_label || '').trim();
+  if (etapa === 'REGISTRO_ORDEN' || etapa === 'REGISTRO_ORDENES' || etapa === 'ORDEN') {
+    return label || 'Registro de Órdenes';
+  }
+  if (etapa === 'RECEPCION_BIENES' || etapa === 'EN_EJECUCION') {
+    return label || 'Recepción de Bienes';
+  }
+  if (row.orden_id) return 'Registro de Órdenes';
+  if (label && !/^invitaciones$/i.test(label)) return label;
+  return 'Registro de Órdenes';
 }
 
 function updatePagerUi() {

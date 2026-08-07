@@ -445,7 +445,7 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
     } else if (modo === ROLES_REVISION.DEC && cuadro && enEstadoRevisionDec(cuadro) && puedeDec) {
       html = renderPanelDec(cuadro);
     } else if (modo === ROLES_REVISION.COORDINADOR_CM || modo === ROLES_REVISION.DEC) {
-      html = '<div class="small text-muted py-1">Expediente en solo lectura. Estado actual no admite acciones de este perfil.</div>';
+      html = '<div class="small text-muted py-1">Expediente en solo lectura. El estado no admite acciones de este perfil.</div>';
     }
     actionBar.innerHTML = html
       || '<div class="small text-muted py-1">Revise las pestañas del expediente. Las acciones de revisión aparecen aquí según el estado.</div>';

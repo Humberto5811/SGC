@@ -32,6 +32,7 @@ import {
   renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
 import { recepcionExpedienteMenuItems } from '../../utils/bandejaActions.js';
+import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -311,8 +312,8 @@ async function showCotizacionDetalleModal(cotId) {
               <div class="mt-1">
                 <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(labelEstadoCotizacion(c))}</span>
               </div>
-              <div class="text-muted mt-1">Estado vigente: ${esc(getEstadoVigenteLabel(c))}</div>
-              <div class="text-muted">Responsable vigente: ${esc(getResponsableVigenteLabel(c))}</div>
+              <div class="text-muted mt-1">Estado: ${esc(getEstadoVigenteLabel(c))}</div>
+              <div class="text-muted">Responsable: ${esc(getResponsableVigenteLabel(c))}</div>
             </div>
             <div class="col-md-4">
               <span class="text-muted d-block">Monto total ofertado</span>
@@ -571,7 +572,15 @@ const RECEPCION_THEAD = `<tr>
 </tr>`;
 
 function badgeEstadoBandejaRecepcion(exp) {
-  // Dominio Recepción (no mezclar con badge global de Invitaciones).
+  // RC8.7 — preferir estado_responsable_vigente (mismo color en todas las bandejas).
+  const erv = exp?.estado_responsable_vigente;
+  if (erv && (erv.estadoCodigo || erv.estado_codigo)) {
+    return renderBadgeEstadoVigenteHtml({
+      ...exp,
+      estado_vigente: erv.estadoCodigo || erv.estado_codigo,
+      estado_vigente_label: erv.estadoLabel || erv.estado_label,
+    }, esc);
+  }
   return renderBadgeEstadoRecepcionHtml(exp, esc);
 }
 
@@ -589,7 +598,11 @@ function buildRecepcionRowHtml(exp) {
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>${badgeEstadoBandejaRecepcion(exp)}</td>
       <td class="small">${renderResponsableCellHtml(exp, esc, {
-        submodulo: exp.sub_modulo_actual || exp.estado_responsable_vigente?.etapaLabel || 'Recepción de Cotizaciones',
+        // Obs45 — priorizar etapa fuente única (p.ej. Registro de Órdenes) sobre submódulo legacy.
+        submodulo: exp.estado_responsable_vigente?.etapaLabel
+          || exp.estado_responsable_vigente?.etapa_label
+          || exp.sub_modulo_actual
+          || 'Recepción de Cotizaciones',
       })}</td>
       ${renderActionMenuCell(sid, recepcionExpedienteMenuItems(exp), '')}
     </tr>`;

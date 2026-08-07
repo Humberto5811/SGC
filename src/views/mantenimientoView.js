@@ -15,10 +15,12 @@ import { renderFormatoConcursoView, initFormatoConcursoView } from './glosasRequ
 import { renderLogotiposView, initLogotiposView } from './institucional/logotiposView.js';
 import { renderEntidadView, initEntidadView } from './institucional/entidadView.js';
 import { renderProveedoresMaestroView, initProveedoresMaestroView } from './registroDatos/proveedoresMaestroView.js';
+import { renderWorkflowSgcView, initWorkflowSgcView } from './mantenimiento/workflowSgcView.js';
 
 const subRoutes = {
   'mantenimiento/usuarios': { render: renderUsuariosPermisosView, init: initUsuariosPermisosView },
   'mantenimiento/proveedores': { render: renderProveedoresMaestroView, init: initProveedoresMaestroView },
+  'mantenimiento/workflow-sgc': { render: renderWorkflowSgcView, init: initWorkflowSgcView },
   'mantenimiento/catalogo': { render: renderCatalogoSigamefView, init: initCatalogoSigamefView },
   'mantenimiento/pedidos-sigamef': { render: renderPedidosSigamefView, init: initPedidosSigamefView },
   'mantenimiento/configuracion': { render: renderConfiguracionDocView, init: initConfiguracionDocView },

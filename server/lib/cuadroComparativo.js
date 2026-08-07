@@ -559,6 +559,7 @@ export async function listarCuadroComparativoExpedientes() {
     JOIN cotizaciones_proveedor cot ON cot.solicitud_id = sc.id
     JOIN proveedores p ON p.id = cot.proveedor_id
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
+      AND UPPER(TRIM(COALESCE(sc.tipo, ''))) NOT LIKE 'LOCAC%'
     GROUP BY sc.id, sc.codigo, sc.denominacion, sc.objeto, sc.tipo, sc.estado,
       sc.area_usuaria, sc.updated_at
     HAVING
@@ -933,7 +934,7 @@ export function assertNoMutacionTrasDerivadoCcp(estado, accionLabel = 'modificar
   const e = String(estado || '').toUpperCase();
   if (e === ESTADOS_CUADRO.DERIVADO_CCP || e === 'DERIVADO_A_CCP') {
     const err = new Error(
-      `Expediente derivado a CCP: no se puede ${accionLabel}. Estado vigente: Derivado a CCP.`,
+      `Expediente derivado a CCP: no se puede ${accionLabel}. Estado: Derivado a CCP.`,
     );
     err.code = 'DERIVADO_CCP_READONLY';
     err.status = 409;

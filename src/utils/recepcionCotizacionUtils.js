@@ -1,7 +1,4 @@
 /** Utilidades compartidas — bandeja Recepción de Cotizaciones. */
-import {
-  esExpedienteDerivadoCcp,
-} from '../../shared/estadoExpedienteVigente.js';
 import { renderBadgeEstadoVigenteHtml } from '../ui/workflow/index.js';
 import {
   buildEstadoRecepcionContract,
@@ -102,52 +99,10 @@ export function badgeEstadoCotizacion(c) {
   return badgeClassRecepcion('', cot.codigo);
 }
 
-/** HTML del badge de estado en bandeja Recepción (dominio recepción, no expediente). */
+/** HTML del badge de estado de expediente en bandeja Recepción (contrato canónico). */
 export function renderBadgeEstadoRecepcionHtml(exp, escFn = (s) => String(s ?? '')) {
-  const codigo = String(exp?.estado_recepcion_codigo || '').toUpperCase();
-  const avanzados = [
-    'DERIVADO_CCP', 'CCP_REGISTRADA', 'ENVIADA_OPPM',
-    'ORDEN_NOTIFICADA', 'ORDEN_REGISTRADA', 'REGISTRO_ORDENES',
-    'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
-    'PENDIENTE_ELABORAR', 'CUADRO_BORRADOR', 'CUADRO_COMPARATIVO_APROBADO',
-    // RC8.1B — evidencia global de recepción de bienes
-    'BIEN_RECIBIDO_ALMACEN', 'RECIBIDO_ALMACEN', 'RECIBIDO_POR_ALMACEN',
-    'RECEPCION_BIENES_PENDIENTE', 'RECEPCION_BIENES_OBSERVADA',
-    'CONFORMIDAD_PENDIENTE_AU', 'CONFORMIDAD_RECIBIDA_AU',
-    'CONFORMIDAD_EN_COORDINACION_CM',
-  ];
-  if (
-    avanzados.includes(codigo)
-    || exp?.recepcion_estado_global
-    || exp?.ccp_registrado || exp?.ccp_activo || exp?.codigo_ccp
-    || exp?.derivado_ccp
-    || exp?.orden_estado || exp?.enviado_proveedor_at
-    || esExpedienteDerivadoCcp(exp || {})
-  ) {
-    return renderBadgeEstadoVigenteHtml({
-      ...exp,
-      estado_vigente: codigo || exp.estado_vigente,
-      estado_vigente_label: exp.estado_recepcion_label || exp.estado_recepcion,
-      codigo_ccp: exp.codigo_ccp || '',
-      ccp_activo: !!exp.ccp_activo,
-      orden_estado: exp.orden_estado || '',
-      enviado_proveedor_at: exp.enviado_proveedor_at || null,
-      orden_id: exp.orden_id || null,
-      // RC8.1B — preservar evidencia de recepción de bienes al delegar al resolvedor.
-      recepcion_estado_global: exp.recepcion_estado_global || '',
-      recepcion_estado_interno: exp.recepcion_estado_interno || '',
-      recepcion_bienes_expediente_id: exp.recepcion_bienes_expediente_id ?? null,
-    }, escFn);
-  }
-
-  const label = labelEstadoRecepcionAgregado(exp);
-  return renderBadgeEstadoVigenteHtml({
-    ...exp,
-    estado_responsable_vigente: exp.estado_responsable_vigente || {
-      estadoCodigo: codigo || exp.estado_vigente || '',
-      estadoLabel: label,
-    },
-  }, escFn);
+  // RC8.8.1 — nunca sintetizar ERV desde codigo_ccp / recepción / cuadro.
+  return renderBadgeEstadoVigenteHtml(exp || {}, escFn);
 }
 
 function fechaSortKey(iso) {

@@ -55,9 +55,9 @@ assert(ESTADOS_REVISION_LABEL.FIRMADO_COORDINADOR === 'Firmado por Coordinador C
 assert(ESTADOS_REVISION_LABEL.PENDIENTE_DEC === 'C.C. en revisión DEC', 'label revisión DEC');
 assert(ESTADOS_REVISION_LABEL.PENDIENTE_CCP === 'Listo para CCP', 'label listo CCP');
 
-assert(ESTADOS_CUADRO_LABEL.PENDIENTE_COORDINADOR === 'C.C. en revisión Coordinador CM', 'UI label CM');
-assert(CUADRO_REVISION_ESTADO_LABELS.PENDIENTE_COORDINADOR === 'C.C. en revisión Coordinador CM', 'buildEstadoVisual label');
-assert(CUADRO_REVISION_ESTADO_LABELS.APROBADO_DEC === 'Aprobado por DEC', 'buildEstadoVisual aprobado DEC');
+assert(ESTADOS_CUADRO_LABEL.PENDIENTE_COORDINADOR === 'C.C. en Coordinación CM', 'UI label CM');
+assert(CUADRO_REVISION_ESTADO_LABELS.PENDIENTE_COORDINADOR === 'C.C. en Coordinación CM', 'buildEstadoVisual label');
+assert(CUADRO_REVISION_ESTADO_LABELS.APROBADO_DEC === 'C.C. aprobado', 'buildEstadoVisual aprobado DEC');
 
 assert(isCuadroEnRevisionExterna('PENDIENTE_COORDINADOR'), 'en revisión externa');
 const menu = cuadroComparativoMenuItems({ estado_cuadro: 'PENDIENTE_COORDINADOR', en_revision_externa: true });
@@ -72,8 +72,15 @@ const uiSrc = fs.readFileSync(path.join(root, 'src/utils/cuadroComparativoUtils.
 assert(!/8 UIT/.test(uiSrc), 'sin 8 UIT en utils UI');
 
 const viewSrc = fs.readFileSync(path.join(root, 'src/views/contratacion/cuadroComparativoView.js'), 'utf8');
-assert(/Responsable actual/.test(viewSrc) && /Versión/.test(viewSrc), 'columnas bandeja enriquecidas');
-assert(/verCuadro|descargarCuadro|trazabilidadCuadro/.test(viewSrc), 'handlers Ver/Descargar/Trazabilidad');
+assert(/<th>Estado<\/th>/.test(viewSrc) && /<th>Responsable<\/th>/.test(viewSrc),
+  'columnas bandeja Estado/Responsable');
+assert(!/Responsable actual/i.test(viewSrc) && !/Estado actual/i.test(viewSrc)
+  && !/Estado vigente/i.test(viewSrc) && !/Responsable vigente/i.test(viewSrc),
+  'sin labels visibles legacy Estado/Responsable');
+assert(/cc-ver-exp/.test(viewSrc) && /openTrazabilidadCuadro/.test(viewSrc) && /descargar/i.test(viewSrc),
+  'handlers Ver/Descargar/Trazabilidad');
+assert(/verCuadro|descargarCuadro|trazabilidadCuadro/.test(uiSrc),
+  'acts Ver/Descargar/Trazabilidad en menu utils');
 
 // No tocar Workflow Engine
 const wf = fs.readFileSync(path.join(root, 'core/workflowEngine/WorkflowTransitions.js'), 'utf8');

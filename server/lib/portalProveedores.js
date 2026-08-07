@@ -826,35 +826,8 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
     };
   });
 
-  // RC8.4E — anexar estado_responsable_vigente en batch
+  // RC8.4E / RC8.8 — anexar estado_responsable_vigente en batch (sin reinferencia)
   await enrichEstadoResponsableForBandeja(enriched);
-
-  // Ajuste de presentación: cotización ya en Recepción pero req aún en Invitaciones.
-  for (const row of enriched) {
-    if (String(row.estado || '').toUpperCase() !== 'COTIZACION_PRESENTADA') continue;
-    const etapa = String(
-      row.estado_responsable_vigente?.etapaCodigo || row.estado_actual || '',
-    ).toUpperCase();
-    if (etapa && etapa !== 'INVITACIONES') continue;
-    row.estado_actual = 'RECEPCION_COTIZACIONES';
-    row.sub_modulo_actual = 'Recepción de Cotizaciones';
-    if (row.estado_responsable_vigente) {
-      row.estado_responsable_vigente = {
-        ...row.estado_responsable_vigente,
-        etapaCodigo: 'RECEPCION_COTIZACIONES',
-        etapaLabel: 'Recepción de Cotizaciones',
-        estadoCodigo: row.estado_responsable_vigente.estadoCodigo === 'INVITACION_EN_ELABORACION'
-          || row.estado_responsable_vigente.estadoCodigo === 'INVITACION_ENVIADA'
-          ? 'COTIZACIONES_RECIBIDAS'
-          : (row.estado_responsable_vigente.estadoCodigo || 'COTIZACIONES_RECIBIDAS'),
-        estadoLabel: row.estado_responsable_vigente.estadoCodigo === 'INVITACION_EN_ELABORACION'
-          || row.estado_responsable_vigente.estadoCodigo === 'INVITACION_ENVIADA'
-          ? 'Cotizaciones recibidas'
-          : (row.estado_responsable_vigente.estadoLabel || 'Cotizaciones recibidas'),
-        responsableUnidad: 'Recepción de Cotizaciones',
-      };
-    }
-  }
 
   return enriched;
 }

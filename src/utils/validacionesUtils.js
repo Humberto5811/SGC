@@ -188,13 +188,8 @@ export function renderBadgeEstadoValidacionHtml(exp, escFn = (s) => String(s ?? 
     }, escFn);
   }
   const label = exp?.estado_bandeja || 'Pendiente de validación';
-  return renderBadgeEstadoVigenteHtml({
-    ...exp,
-    estado_responsable_vigente: exp.estado_responsable_vigente || {
-      estadoCodigo: exp.estado_vigente || exp.validacion_estado || '',
-      estadoLabel: label,
-    },
-  }, escFn);
+  void label;
+  return renderBadgeEstadoVigenteHtml(exp || {}, escFn);
 }
 
 export function formatRequerimientosValidacion(c, esc) {

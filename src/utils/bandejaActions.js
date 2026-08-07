@@ -347,27 +347,118 @@ export function paquetesReqMenuItems() {
 }
 
 /**
- * OD35 — menú Acciones bandeja CCP.
- * @param {object} row
- * @param {{ canManage?: boolean }} [opts]
+ * RC8.6F — Contexto explícito del menú CCP (valores reales que gobiernan acciones).
+ * Etapa: estado_responsable_vigente (fuente única). Código: ccp_codigos vía bandeja.
+ */
+export function resolveCcpMenuContext(row = {}, opts = {}) {
+  const modoAcceso = String(opts.modo || (opts.accesoPorAsignacion ? 'ASIGNACION' : 'GLOBAL')).toUpperCase();
+  const canManage = opts.canManage !== false;
+  const erv = row.estado_responsable_vigente || null;
+  const etapaCodigo = String(
+    erv?.etapaCodigo
+    || erv?.etapa_codigo
+    || row.etapa_codigo
+    || '',
+  ).toUpperCase();
+  const estadoCodigo = String(
+    erv?.estadoCodigo
+    || erv?.estado_codigo
+    || row.estado_codigo
+    || '',
+  ).toUpperCase();
+  // Código CCP activo: fuente de bandeja (ccp_codigos ACTIVO), no badge visual.
+  const codigoCcp = String(row.codigo_ccp || '').trim();
+  const tieneCodigoActivo = !!(
+    codigoCcp
+    && (row.ccp_activo !== false)
+    && (row.tiene_codigo !== false || !!codigoCcp)
+  );
+  const consolidacionId = row.consolidacion_id != null ? Number(row.consolidacion_id) : null;
+  const requerimientoId = row.requerimiento_id != null ? Number(row.requerimiento_id) : null;
+  const yaDerivado = !!(
+    row.orden_id
+    || ['REGISTRO_ORDEN', 'REGISTRO_ORDENES', 'ORDEN', 'ORDEN_REGISTRADA',
+      'ORDEN_LISTA_NOTIFICACION', 'ORDEN_NOTIFICADA', 'EN_EJECUCION'].includes(etapaCodigo)
+  );
+  const modoAsignacion = modoAcceso === 'ASIGNACION' || !!opts.accesoPorAsignacion;
+
+  return {
+    modoAcceso,
+    modoAsignacion,
+    canManage,
+    etapaCodigo,
+    estadoCodigo,
+    codigoCcp: codigoCcp || null,
+    tieneCodigoActivo,
+    consolidacionId: Number.isFinite(consolidacionId) ? consolidacionId : null,
+    yaDerivado,
+    requerimientoId: Number.isFinite(requerimientoId) ? requerimientoId : null,
+  };
+}
+
+/**
+ * OD35 / RC8.6F — menú Acciones bandeja CCP.
+ *
+ * Condiciones históricas que ocultaban acciones (CORREGIDAS):
+ * - Word solo si `consolidacion_id` → ocultaba Word individual sin consolidar.
+ * - Derivar no existía en el menú → nunca aparecía.
+ *
+ * Reglas actuales:
+ * - Word individual: visible en CCP si !yaDerivado (NO depende de consolidacion_id).
+ * - Derivar: visible si !yaDerivado (GLOBAL o ASIGNACION; NO exige GLOBAL).
+ * - Word consolidado / Consolidar UI: solo GLOBAL.
  */
 export function ccpMenuItems(row = {}, opts = {}) {
-  const canManage = opts.canManage !== false;
-  const tieneCodigo = !!(row.tiene_codigo || row.ccp_activo || row.codigo_ccp);
+  const ctx = resolveCcpMenuContext(row, opts);
+  const {
+    canManage, tieneCodigoActivo, yaDerivado, consolidacionId, modoAsignacion,
+  } = ctx;
   const items = [];
-  if (canManage && !tieneCodigo) {
+
+  if (canManage && !tieneCodigoActivo && !yaDerivado) {
     items.push({ act: 'registrarCcp', label: 'Registrar CCP', icon: 'bi-plus-circle' });
   }
-  if (canManage && tieneCodigo) {
+  if (canManage && tieneCodigoActivo && !yaDerivado) {
     items.push(
       { act: 'editarCcp', label: 'Editar CCP', icon: 'bi-pencil' },
       { act: 'eliminarCcp', label: 'Eliminar CCP', icon: 'bi-trash' },
     );
   }
   items.push({ act: 'ver', label: 'Ver', icon: 'bi-eye' });
-  // Locación (origen RECEPCION_COTIZACION_LOCACION): sin acciones de Cuadro Comparativo.
-  if (row.consolidacion_id) {
-    items.push({ act: 'descargarWord', label: 'Descargar Word', icon: 'bi-file-earmark-word' });
+
+  // Word individual — NUNCA condicionar a consolidacion_id
+  if (!yaDerivado) {
+    items.push({
+      act: 'generarWord',
+      label: 'Generar Word',
+      icon: 'bi-file-earmark-word',
+      title: tieneCodigoActivo
+        ? 'Generar documento Word de la solicitud CCP'
+        : 'Registre primero el código CCP.',
+    });
   }
+
+  // Word consolidado — solo GLOBAL
+  if (consolidacionId && !modoAsignacion) {
+    items.push({
+      act: 'descargarWord',
+      label: 'Descargar Word consolidado',
+      icon: 'bi-file-earmark-richtext',
+      title: 'Descargar Word de la consolidación',
+    });
+  }
+
+  // Derivar — GLOBAL o ASIGNACION sobre el expediente; no exigir GLOBAL
+  if (!yaDerivado) {
+    items.push({
+      act: 'derivarOrdenes',
+      label: 'Derivar a Registro de Órdenes',
+      icon: 'bi-box-arrow-right',
+      title: tieneCodigoActivo
+        ? 'Derivar expediente a Registro de Órdenes'
+        : 'Registre primero el código CCP.',
+    });
+  }
+
   return items;
 }

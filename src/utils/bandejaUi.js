@@ -165,8 +165,8 @@ export function renderResponsableCellHtml(row, escFn = esc, opts = {}) {
     return renderEstadoResponsableCellHtml(row, opts.variant === 'detailed' ? 'detailed' : 'standard');
   }
   const adapted = adaptEstadoResponsable(row);
-  // Mantener layout nombre + rol (etapa) sin presentar submódulo como persona
-  const etapa = String(opts.submodulo || adapted.etapaLabel || '').trim();
+  // RC8.7 — subtítulo SOLO desde etapaLabel vigente (nunca módulo histórico ni opts locales).
+  const etapa = String(adapted.etapaLabel || '').trim();
   const badge = renderResponsableBadgeFromRow(row);
   if (!etapa) return badge;
   return `<div class="sgc-estado-responsable-cell"><div class="sgc-estado-responsable-cell__row">${badge}</div><div class="sgc-estado-responsable-cell__etapa">${escFn(etapa)}</div></div>`;
@@ -509,7 +509,7 @@ export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '')
           data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false" title="Acciones">⋮</button>
         <ul class="dropdown-menu dropdown-menu-end shadow-sm">
           ${items.map((m) => `
-            <li><button type="button" class="dropdown-item bandeja-menu-act py-1" data-act="${esc(m.act)}" data-id="${id}" ${m.disabled ? 'disabled' : ''}>
+            <li><button type="button" class="dropdown-item bandeja-menu-act py-1" data-act="${esc(m.act)}" data-id="${id}" ${m.disabled ? 'disabled' : ''}${m.title ? ` title="${esc(m.title)}"` : ''}>
               <i class="bi ${m.icon || 'bi-dot'} me-2"></i>${esc(m.label)}
             </button></li>`).join('')}
         </ul>
@@ -633,24 +633,99 @@ export function bindBandejaToolbar({ prefix, onFilter, onClear, onExecutiveToggl
   }
 }
 
+/**
+ * RC8.8.3 — Encabezados institucionales de exportación (visibles).
+ * Las keys técnicas de BD/filtro (estado_actual, responsable_actual) NO se renombran.
+ */
+export const EXPORT_HEADERS = Object.freeze({
+  ESTADO: 'Estado',
+  RESPONSABLE: 'Responsable',
+});
+
+/**
+ * Alias de lectura: archivos/exportaciones antiguas o consumidores que aún
+ * buscan el header legacy. No se muestran en UI ni como columnas nuevas.
+ */
+export const EXPORT_HEADER_ALIASES = Object.freeze({
+  'Estado Actual': EXPORT_HEADERS.ESTADO,
+  'Estado actual': EXPORT_HEADERS.ESTADO,
+  'Estado vigente': EXPORT_HEADERS.ESTADO,
+  'Estado Vigente': EXPORT_HEADERS.ESTADO,
+  'Responsable Actual': EXPORT_HEADERS.RESPONSABLE,
+  'Responsable actual': EXPORT_HEADERS.RESPONSABLE,
+  'Responsable vigente': EXPORT_HEADERS.RESPONSABLE,
+  'Responsable Vigente': EXPORT_HEADERS.RESPONSABLE,
+});
+
+/** Params de filtro/API (legacy BD) — keys técnicas inmutables. */
+export const FILTER_QUERY_KEYS = Object.freeze({
+  estado: 'estado_actual',
+  responsable: 'responsable_actual',
+});
+
+export function resolveExportHeader(name) {
+  const raw = String(name || '').trim();
+  return EXPORT_HEADER_ALIASES[raw] || raw;
+}
+
+/**
+ * Lee valor de fila exportada tolerando headers legacy o institucionales.
+ */
+export function readExportCell(rowObj, institutionalHeader) {
+  if (!rowObj || typeof rowObj !== 'object') return '';
+  const canon = resolveExportHeader(institutionalHeader) || institutionalHeader;
+  if (rowObj[canon] != null && rowObj[canon] !== '') return rowObj[canon];
+  for (const [legacy, target] of Object.entries(EXPORT_HEADER_ALIASES)) {
+    if (target === canon && rowObj[legacy] != null && rowObj[legacy] !== '') {
+      return rowObj[legacy];
+    }
+  }
+  return rowObj[institutionalHeader] ?? '';
+}
+
 export function buildExportRowData(r) {
   const row = enrichReqRow(r);
   const sigamef = getSigamefRaw(row);
   const desc = getRowDescripcionRaw(row);
+  const erv = row.estado_responsable_vigente || null;
+  const estadoVal = String(
+    erv?.estadoLabel || erv?.estado_label || row.estadoActualTexto || row.estado_actual_texto || '',
+  );
+  const responsableVal = String(
+    (erv && (erv.responsableNombre || erv.responsable_nombre
+      || erv.responsableUsername || erv.responsable_username
+      || erv.responsableUnidad || erv.responsable_unidad))
+    || row.responsableActual
+    || row.responsable_actual
+    || '',
+  );
   return {
     'Código': row.codigo || ('#' + row.id),
     'Tipo': row.tipo === 'servicios' ? 'Servicio' : row.tipo === 'locacion' ? 'Locador' : 'Bien',
-    'Código SIGAMEF': sigamef,
-    'Descripción': desc,
+    'Código SIGAMEF': sigamef || '',
+    'Descripción': desc || '',
     'Área usuaria': row.area || '',
     'Centro': row.responsable || row.centro_nombre || '',
     'Monto Total': Number(row.monto_total) || 0,
     'Estado Negocio': row.estado || '',
-    'Estado Actual': row.estadoActualTexto || '',
-    'Responsable Actual': row.responsableActual || '',
+    [EXPORT_HEADERS.ESTADO]: estadoVal,
+    [EXPORT_HEADERS.RESPONSABLE]: responsableVal,
     'Días en Etapa': row.dias_en_estado ?? 0,
-    'Fecha Último Movimiento': fmtDateTime(row.fecha_estado_actual || row.fechaEstadoActual),
+    'Fecha Último Movimiento': fmtDateTime(row.fecha_estado_actual || row.fechaEstadoActual) || '',
     'CMN N°': row.cmn || '',
+  };
+}
+
+/**
+ * Fila técnica con alias legacy (solo para consumidores programáticos / tests).
+ * No usar para Excel/UI visible.
+ */
+export function buildExportRowDataWithLegacyAliases(r) {
+  const base = buildExportRowData(r);
+  return {
+    ...base,
+    'Estado Actual': base[EXPORT_HEADERS.ESTADO],
+    'Responsable Actual': base[EXPORT_HEADERS.RESPONSABLE],
   };
 }
 

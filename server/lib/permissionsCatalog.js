@@ -43,6 +43,7 @@ export const MODULOS = [
     label: 'Mantenimiento',
     submodulos: [
       { id: 'USUARIOS', label: 'Usuarios y Permisos', route: 'mantenimiento/usuarios' },
+      { id: 'WORKFLOW_SGC', label: 'Workflow SGC', route: 'mantenimiento/workflow-sgc' },
       { id: 'MAESTRO_PROVEEDORES', label: 'Maestro de Proveedores', route: 'mantenimiento/proveedores' },
       { id: 'CATALOGO_SIGAMEF', label: 'Catálogo SIGAMEF', route: 'mantenimiento/catalogo' },
       { id: 'PEDIDOS_SIGAMEF', label: 'Pedidos SIGAMEF', route: 'mantenimiento/pedidos-sigamef' },

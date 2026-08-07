@@ -29,6 +29,7 @@ import {
   syncLegacyRequerimiento,
   mapEtapaDestinoBD,
   FUENTE_RESPONSABLE,
+  ORIGEN_ESCRITURA_VIGENTE,
 } from './expedienteEstadoPersistido.js';
 
 /** Dueño único de persistencia (documentación / asserts). */
@@ -180,8 +181,9 @@ export async function transicionarExpediente({
       });
     }
 
-    // 2-3. Cerrar asignación + crear nueva
-    await cerrarAsignacionActiva(tx, rid);
+    // 2-3. Cerrar asignación + crear nueva (RC8.7.1 origen TRANSICION)
+    const origenEscritura = ORIGEN_ESCRITURA_VIGENTE.TRANSICION;
+    await cerrarAsignacionActiva(tx, rid, { origenEscritura });
     const asignacion = await crearAsignacion(tx, {
       requerimientoId: rid,
       etapaCodigo: etapaEfectiva,
@@ -191,6 +193,7 @@ export async function transicionarExpediente({
       origenAsignacion: 'transicionarExpediente',
       asignadoPor: usuarioOrigenId != null ? String(usuarioOrigenId) : actorRol,
       motivo: motivo || null,
+      origenEscritura,
     });
     if (failAfterAsignacion) {
       const err = new Error('Fallo simulado post-asignación');
@@ -216,6 +219,7 @@ export async function transicionarExpediente({
         etapa_origen: etapaOrigen,
         ...(metadata || {}),
       },
+      origenEscritura,
     });
     if (failAfterEstado) {
       const err = new Error('Fallo simulado post-estado');
@@ -328,7 +332,8 @@ export async function persistirEstadoDesdeTransicionMotor(client, {
     etapaCodigo,
   });
   const labels = buildEstadoLabels(etapaCodigo);
-  await cerrarAsignacionActiva(client, requerimientoId);
+  const origenEscritura = ORIGEN_ESCRITURA_VIGENTE.TRANSICION;
+  await cerrarAsignacionActiva(client, requerimientoId, { origenEscritura });
   const asignacion = await crearAsignacion(client, {
     requerimientoId,
     etapaCodigo,
@@ -338,6 +343,7 @@ export async function persistirEstadoDesdeTransicionMotor(client, {
     origenAsignacion: 'legacy_bridge',
     asignadoPor: usuarioOrigenId != null ? String(usuarioOrigenId) : 'SISTEMA',
     motivo,
+    origenEscritura,
   });
   const estado = await upsertEstadoVigente(client, {
     requerimientoId,
@@ -348,6 +354,7 @@ export async function persistirEstadoDesdeTransicionMotor(client, {
     responsableFuente: resp.responsableFuente || FUENTE_RESPONSABLE.UNIDAD_ETAPA,
     actualizadoPor: usuarioOrigenId != null ? String(usuarioOrigenId) : 'SISTEMA',
     metadata,
+    origenEscritura,
   });
   return { estado, asignacion, responsable: resp };
 }

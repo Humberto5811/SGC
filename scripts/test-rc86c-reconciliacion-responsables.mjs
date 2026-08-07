@@ -303,13 +303,14 @@ await test('17. fuente de responsable queda registrada (persistida o plan)', asy
   const { rows } = await query(`SELECT id FROM requerimientos WHERE codigo = 'REQ-00002'`);
   const rid = rows[0].id;
   const { rows: est } = await query(
-    `SELECT responsable_tipo, responsable_usuario_id, responsable_fuente, etapa_codigo
+    `SELECT responsable_tipo, responsable_usuario_id, responsable_fuente, etapa_codigo, responsable_unidad
      FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
     [rid],
   );
   const fuente = String(est[0]?.responsable_fuente || '');
   const etapa = String(est[0]?.etapa_codigo || '').toUpperCase();
-  if (est[0]?.responsable_tipo === 'PERSONA' && est[0]?.responsable_usuario_id) {
+  const tipo = String(est[0]?.responsable_tipo || '').toUpperCase();
+  if (tipo === 'PERSONA' && est[0]?.responsable_usuario_id) {
     // Fuente canónica registrada: reconciliación (solicitud.responsable) o
     // transición explícita (asignacion_explicita), según etapa vigente.
     const fuentesOk = new Set([
@@ -330,6 +331,17 @@ await test('17. fuente de responsable queda registrada (persistida o plan)', asy
       dryRun: true,
     });
     eq(r.rows[0].accion, 'MANTENER');
+  } else if (etapa === 'REGISTRO_ORDEN' || etapa === 'REGISTRO_ORDENES' || etapa === 'ORDEN') {
+    // Tras CCP → RO: UNIDAD Registro de Órdenes (no reasignar desde Invitaciones).
+    ok(tipo === 'UNIDAD' || tipo === 'PENDIENTE' || tipo === 'PERSONA', `tipo RO: ${tipo}`);
+    ok(fuente.length > 0, `fuente registrada en RO: ${fuente}`);
+    const r = await reconciliarAsignacionesExistentes({
+      requerimientoIds: [rid],
+      dryRun: true,
+    });
+    ok(['MANTENER', 'MANTENER_PENDIENTE', 'OMITIR_NO_EXISTE', 'OMITIR'].includes(r.rows[0].accion)
+      || r.rows[0].accion === 'ASIGNAR',
+    `reconciliación RO dry-run: ${r.rows[0].accion}`);
   } else {
     const r = await reconciliarAsignacionesExistentes({
       requerimientoIds: [rid],

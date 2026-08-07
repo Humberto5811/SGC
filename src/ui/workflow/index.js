@@ -1,7 +1,7 @@
 /**
- * RC8.6B — API pública del estándar visual Estado/Responsable.
+ * RC8.6B / RC8.8.1 — API pública del estándar visual Estado/Responsable.
+ * Sin reinferencia por evidencia en lectura.
  */
-import { resolveEstadoExpedienteVigente } from '../../../shared/estadoExpedienteVigente.js';
 import { adaptEstadoResponsable, TIPO_RESPONSABLE_UI } from './adaptEstadoResponsable.js';
 import {
   getEstadoCatalogEntry,
@@ -28,29 +28,14 @@ export {
 };
 
 /**
- * Reemplazo FE de renderBadgeEstadoVigenteHtml (shared) para vistas migradas.
+ * Badge de estado. RC8.8.1: solo contrato canónico / fallback seguro.
+ * NUNCA resolveEstadoExpedienteVigente / codigo_ccp / cuadro / orden.
  */
 export function renderBadgeEstadoVigenteHtml(rowOrCode, escFn = (s) => String(s ?? ''), opts = {}) {
   let row = rowOrCode;
   if (typeof rowOrCode === 'string') {
-    row = { estado: rowOrCode, estado_responsable_vigente: { estadoCodigo: rowOrCode } };
+    row = { estado_responsable_vigente: { estadoCodigo: rowOrCode, estadoLabel: rowOrCode } };
   }
-  const vigente = resolveEstadoExpedienteVigente(row || {}, opts);
-  const code = vigente?.codigo || vigente?.estadoVigente?.codigo || '';
-  const label = vigente?.label || vigente?.estadoVigente?.label || '';
-  const adapted = adaptEstadoResponsable({
-    ...row,
-    estado_responsable_vigente: row?.estado_responsable_vigente || {
-      estadoCodigo: code,
-      estadoLabel: label,
-      etapaCodigo: vigente?.etapa || '',
-      etapaLabel: '',
-    },
-  });
-  if (code) {
-    adapted.estadoCodigo = code;
-    adapted.estadoLabel = label || adapted.estadoLabel;
-  }
-  const observed = vigente?.situacion?.codigo === 'OBSERVADO';
-  return renderEstadoBadgeHtml(adapted, { observed });
+  const adapted = adaptEstadoResponsable(row || {});
+  return renderEstadoBadgeHtml(adapted, opts);
 }

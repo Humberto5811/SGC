@@ -16,11 +16,19 @@ export const MODO_ACCESO_CCP = Object.freeze({
   DENEGADO: 'DENEGADO',
 });
 
-/** Actividades que el modo ASIGNACION puede ejercer sobre sus propios expedientes. */
-const ACTIVIDADES_ASIGNACION = new Set(['VER', 'CREAR', 'EDITAR', 'ELIMINAR', 'OBSERVAR', 'DESCARGAR']);
+/** Actividades que el modo ASIGNACION puede ejercer sobre SUS expedientes. */
+const ACTIVIDADES_ASIGNACION = new Set([
+  'VER', 'CREAR', 'EDITAR', 'ELIMINAR', 'OBSERVAR', 'DESCARGAR', 'DERIVAR',
+]);
 
-/** Actividades solo para acceso GLOBAL (no se conceden solo por estar asignado). */
-const ACTIVIDADES_SOLO_GLOBAL = new Set(['CONSOLIDAR', 'APROBAR', 'DERIVAR', 'FIRMAR', 'RECHAZAR', 'EXPORTAR']);
+/**
+ * Actividades solo GLOBAL (masivas / administración).
+ * DERIVAR individual NO está aquí: el asignado puede derivar SU expediente a Órdenes.
+ * CONSOLIDAR permanece exclusivo de GLOBAL.
+ */
+const ACTIVIDADES_SOLO_GLOBAL = new Set([
+  'CONSOLIDAR', 'APROBAR', 'FIRMAR', 'RECHAZAR', 'EXPORTAR',
+]);
 
 function httpError(message, status = 403, code = 'CCP_FORBIDDEN') {
   const err = new Error(message);
@@ -220,6 +228,10 @@ export async function resolveAccesoCcp({
 
   // 3) Asignación activa CCP (prioridad sobre permiso JSON en roles no-DEC)
   const idsAsig = await listRequerimientoIdsAsignacionCcp(uid, client);
+  // CONSOLIDAR nunca por asignación (aunque el JSON tenga DERIVAR/CREAR).
+  if (act === 'CONSOLIDAR' && idsAsig.length) {
+    return deny('La actividad CONSOLIDAR requiere acceso global CCP (no basta la asignación)');
+  }
   if (idsAsig.length && !ACTIVIDADES_SOLO_GLOBAL.has(act)) {
     if (ACTIVIDADES_ASIGNACION.has(act) || act === 'VER') {
       if (requerimientoId != null) {
@@ -233,9 +245,11 @@ export async function resolveAccesoCcp({
             actividadesPermitidas: [...ACTIVIDADES_ASIGNACION],
           };
         }
-        // Sin asignación sobre este req → denegar (no escalar a GLOBAL por permiso suelto
-        // cuando el usuario opera en modo asignación).
         return deny(check.motivo || 'Expediente fuera de su asignación CCP');
+      }
+      // DERIVAR sin requerimientoId: denegar (solo individual)
+      if (act === 'DERIVAR') {
+        return deny('Derivar requiere indicar el requerimiento asignado');
       }
       return {
         permitido: true,
@@ -247,8 +261,7 @@ export async function resolveAccesoCcp({
     }
   }
 
-  // Actividades de consolidación/derivación: no se conceden solo por asignación.
-  // Admin/DEC ya salieron en pasos 1–2.
+  // Actividades masivas: no se conceden solo por asignación.
   if (idsAsig.length && ACTIVIDADES_SOLO_GLOBAL.has(act)) {
     return deny(`La actividad ${act} requiere acceso global CCP (no basta la asignación)`);
   }

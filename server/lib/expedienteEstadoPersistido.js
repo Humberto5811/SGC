@@ -2,10 +2,19 @@
  * RC8.6A — Persistencia de estado/asignación vigente (fuente única).
  * Lectura/escritura atómica sobre expediente_estado_vigente + expediente_asignaciones.
  * No infiere responsable desde created_by / usuario_modificacion / centro.
+ * RC8.7.1 — escrituras mutantes requieren origenEscritura autorizado.
  */
 import { getEtapaMeta, getLabelEtapa } from '../../shared/workflow/etapas.js';
 import { TIPO_RESPONSABLE } from '../../shared/resolvedorEstadoResponsable.js';
 import { getLabelEstado } from '../../shared/estadoExpedienteVigente.js';
+import {
+  ORIGEN_ESCRITURA_VIGENTE,
+  evaluarEscrituraVigente,
+  assertOrigenEscrituraVigente,
+  isVigenteConfirmado,
+} from './expedienteVigenteGuard.js';
+
+export { ORIGEN_ESCRITURA_VIGENTE, isVigenteConfirmado };
 
 export const FUENTE_RESPONSABLE = Object.freeze({
   ASIGNACION_EXPLICITA: 'asignacion_explicita',
@@ -81,7 +90,10 @@ export async function getAsignacionActivaForUpdate(client, requerimientoId) {
   return rows[0] || null;
 }
 
-export async function cerrarAsignacionActiva(client, requerimientoId) {
+export async function cerrarAsignacionActiva(client, requerimientoId, {
+  origenEscritura = ORIGEN_ESCRITURA_VIGENTE.TRANSICION,
+} = {}) {
+  assertOrigenEscrituraVigente(origenEscritura, { allowBackfill: false });
   const { rows } = await client.query(
     `UPDATE expediente_asignaciones
      SET activo = FALSE, cerrado_at = NOW()
@@ -101,7 +113,9 @@ export async function crearAsignacion(client, {
   origenAsignacion = 'transicion',
   asignadoPor = null,
   motivo = null,
-}) {
+  origenEscritura = ORIGEN_ESCRITURA_VIGENTE.TRANSICION,
+} = {}) {
+  assertOrigenEscrituraVigente(origenEscritura, { allowBackfill: false });
   const { rows } = await client.query(
     `INSERT INTO expediente_asignaciones (
        requerimiento_id, etapa_codigo, usuario_id, unidad_codigo,
@@ -134,7 +148,14 @@ export async function upsertEstadoVigente(client, {
   responsableFuente,
   actualizadoPor = null,
   metadata = null,
-}) {
+  origenEscritura = ORIGEN_ESCRITURA_VIGENTE.TRANSICION,
+} = {}) {
+  const existente = await getEstadoVigenteForUpdate(client, requerimientoId);
+  const decision = evaluarEscrituraVigente({ origenEscritura, existente });
+  if (decision.noop) {
+    return existente;
+  }
+
   const { rows } = await client.query(
     `INSERT INTO expediente_estado_vigente (
        requerimiento_id, estado_codigo, estado_label, etapa_codigo, etapa_label,
@@ -173,7 +194,8 @@ export async function upsertEstadoVigente(client, {
 }
 
 /**
- * RC8.6C — actualiza solo responsable vigente; no toca estado_codigo ni etapa_codigo.
+ * RC8.6C / reconciliación — actualiza solo responsable vigente; no toca estado_codigo ni etapa_codigo.
+ * Requiere origenEscritura autorizado (TRANSICION o RECONCILIACION).
  */
 export async function actualizarResponsableVigente(client, {
   requerimientoId,
@@ -183,7 +205,9 @@ export async function actualizarResponsableVigente(client, {
   responsableFuente,
   actualizadoPor = null,
   metadataPatch = null,
-}) {
+  origenEscritura = ORIGEN_ESCRITURA_VIGENTE.RECONCILIACION,
+} = {}) {
+  assertOrigenEscrituraVigente(origenEscritura, { allowBackfill: false });
   const { rows } = await client.query(
     `UPDATE expediente_estado_vigente SET
        responsable_tipo = $2,

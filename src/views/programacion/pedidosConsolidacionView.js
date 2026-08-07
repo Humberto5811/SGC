@@ -44,7 +44,7 @@ function renderTable() {
     { label: 'Monto Total', sort: null },
     { label: 'Centro', sort: null },
     { label: 'Área Usuaria', sort: null, cls: 'ped-col-area' },
-    { label: 'Estado Actual', sort: 'Estado' },
+    { label: 'Estado', sort: 'Estado' },
     { label: 'Responsable', sort: 'Responsable' },
     { label: 'Meta', sort: null, cls: 'ped-col-meta' },
     { label: 'Clasificador', sort: null, cls: 'ped-col-clas' },

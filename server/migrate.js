@@ -173,9 +173,11 @@ async function seedDefaultUsers() {
 
 async function postMigrationMaintenance() {
   try {
+    // RC8.7.1: rebuildAllHistorial no muta expediente_estado_vigente ni asignaciones.
+    // Con vigente confirmado solo reescribe historial JSON y alinea legacy desde vigente.
     const { rebuildAllHistorial } = await import('./lib/trazabilidad.js');
     const n = await rebuildAllHistorial();
-    if (n > 0) console.log(`[db] Historial de trazabilidad reconstruido en ${n} requerimiento(s).`);
+    if (n > 0) console.log(`[db] Historial de trazabilidad reconstruido en ${n} requerimiento(s) (RC8.7.1: vigente intacto).`);
   } catch (err) {
     console.warn('[db] Rebuild trazabilidad:', err.message);
   }

@@ -571,7 +571,15 @@ export async function listarBandejaCcp() {
   }
   await enrichEstadoResponsableForBandeja(out, 'requerimiento_id');
 
-  return out;
+  // RC8.8 — CCP operativo: excluir expedientes ya en RO/recepción/etc. (visibilidad ≠ estado).
+  const { puedeVerExpedienteEnBandeja, BANDEJA_CODIGOS } = await import('./bandejaVisibilidad.js');
+  return out.filter((row) => puedeVerExpedienteEnBandeja({
+    bandeja: BANDEJA_CODIGOS.CCP,
+    tipo: row.tipo || row.tipo_contratacion || '',
+    etapaCodigo: row.estado_responsable_vigente?.etapaCodigo || '',
+    estadoCodigo: row.estado_responsable_vigente?.estadoCodigo || '',
+    modo: 'operativo',
+  }));
 }
 
 export async function getDetalleCcpRequerimiento(requerimientoId) {
@@ -1032,6 +1040,237 @@ export async function marcarWordGenerado(solicitudId, usuario = '', rol = '') {
     usuario,
     rol,
   });
+}
+
+/**
+ * Payload compatible con generarWordSolicitudCcp para UN solo expediente
+ * (sin crear consolidación masiva). Reutiliza filas presupuestales existentes.
+ */
+export async function buildPayloadWordIndividual(requerimientoId) {
+  const det = await getDetalleCcpRequerimiento(requerimientoId);
+  if (!det.codigo_ccp) {
+    throw httpError(
+      'Registre primero el código CCP.',
+      409,
+      'CCP_CODIGO_PENDIENTE',
+    );
+  }
+  const reqCodes = [det.requerimiento_codigo];
+  const codigosCcp = [det.codigo_ccp];
+  return {
+    id: null,
+    codigo_interno: `CCP-${det.requerimiento_codigo}`,
+    estado: 'INDIVIDUAL',
+    estado_label: 'Solicitud individual',
+    total_monto: det.total,
+    moneda: det.moneda || 'PEN',
+    asunto: buildAsuntoCcp({ reqCodes, codigosCcp }),
+    filas: det.filas || [],
+    requerimientos: [{
+      requerimiento_id: det.requerimiento_id,
+      requerimiento_codigo: det.requerimiento_codigo,
+      denominacion: det.denominacion,
+      solicitud_codigo: det.solicitud_codigo,
+      codigo_ccp: det.codigo_ccp,
+      monto: det.monto_adjudicado,
+    }],
+    individual: true,
+  };
+}
+
+/**
+ * Evalúa si el expediente puede derivarse a Registro de Órdenes.
+ * @returns {{ ok: boolean, motivo?: string, codigo_ccp?: string, etapa?: string }}
+ */
+export async function evaluarPuedeDerivarRegistroOrdenes(requerimientoId) {
+  const id = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(id)) {
+    return { ok: false, motivo: 'Requerimiento inválido' };
+  }
+
+  const { rows: vig } = await query(
+    `SELECT etapa_codigo, estado_codigo FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
+    [id],
+  );
+  const etapa = String(vig[0]?.etapa_codigo || '').toUpperCase();
+  if (etapa === 'REGISTRO_ORDEN' || etapa === 'REGISTRO_ORDENES' || etapa === 'ORDEN') {
+    return { ok: false, motivo: 'El expediente ya fue derivado.', yaDerivado: true, etapa };
+  }
+  if (etapa && etapa !== 'CCP') {
+    return { ok: false, motivo: 'Estado no compatible.', etapa };
+  }
+
+  const { rows: reqRows } = await query(
+    `SELECT estado_actual, tipo FROM requerimientos WHERE id = $1`,
+    [id],
+  );
+  if (!reqRows.length) return { ok: false, motivo: 'Requerimiento no encontrado' };
+  const estadoActual = String(reqRows[0].estado_actual || '').toUpperCase();
+  if (estadoActual === 'REGISTRO_ORDEN' || estadoActual === 'REGISTRO_ORDENES') {
+    return { ok: false, motivo: 'El expediente ya fue derivado.', yaDerivado: true, etapa: estadoActual };
+  }
+  if (estadoActual && estadoActual !== 'CCP' && !etapa) {
+    return { ok: false, motivo: 'Estado no compatible.', etapa: estadoActual };
+  }
+
+  try {
+    await resolveFuenteDatosCcp(id);
+  } catch (err) {
+    if (err?.code === 'CCP_NO_DERIVADO') {
+      return { ok: false, motivo: 'Estado no compatible.', etapa: estadoActual || etapa };
+    }
+    throw err;
+  }
+
+  const { rows: cod } = await query(
+    `SELECT codigo_ccp FROM ccp_codigos WHERE requerimiento_id = $1 AND estado = 'ACTIVO' ORDER BY id DESC LIMIT 1`,
+    [id],
+  );
+  if (!cod.length || !cod[0].codigo_ccp) {
+    return {
+      ok: false,
+      motivo: 'Registre primero el código CCP.',
+      codigoPendiente: true,
+      etapa: etapa || 'CCP',
+    };
+  }
+
+  return {
+    ok: true,
+    codigo_ccp: cod[0].codigo_ccp,
+    etapa: etapa || 'CCP',
+    tipo: reqRows[0].tipo || '',
+  };
+}
+
+/**
+ * Deriva expediente CCP → Registro de Órdenes vía transicionarExpediente (evento CCP_REGISTRADA).
+ */
+export async function derivarCcpARegistroOrdenes(requerimientoId, {
+  usuario = '',
+  usuarioId = null,
+  rol = '',
+  motivo = '',
+  clientRequestId = null,
+} = {}) {
+  const id = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
+
+  const eval_ = await evaluarPuedeDerivarRegistroOrdenes(id);
+  if (!eval_.ok) {
+    if (eval_.yaDerivado) {
+      return {
+        ok: true,
+        idempotente: true,
+        mensaje: eval_.motivo,
+        etapa: eval_.etapa,
+      };
+    }
+    throw httpError(eval_.motivo || 'No se puede derivar', 409, 'CCP_DERIVAR_BLOQUEADO');
+  }
+
+  // Obs45 — preservar analista CCP (asignación activa o actor) como responsable en RO.
+  let usuarioDestinoId = null;
+  const uidActor = usuarioId != null && Number.isFinite(Number(usuarioId))
+    ? Number(usuarioId)
+    : null;
+  const { rows: asgCcp } = await query(`
+    SELECT usuario_id
+    FROM expediente_asignaciones
+    WHERE requerimiento_id = $1
+      AND activo = TRUE
+      AND UPPER(COALESCE(etapa_codigo, '')) = 'CCP'
+      AND usuario_id IS NOT NULL
+    ORDER BY id DESC
+    LIMIT 1
+  `, [id]);
+  if (asgCcp[0]?.usuario_id != null) {
+    usuarioDestinoId = Number(asgCcp[0].usuario_id);
+  } else if (uidActor) {
+    usuarioDestinoId = uidActor;
+  }
+
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const result = await transicionarExpediente({
+    requerimientoId: id,
+    evento: 'CCP_REGISTRADA',
+    usuarioOrigenId: usuarioId,
+    usuarioDestinoId,
+    unidadDestino: 'Registro de Órdenes',
+    motivo: motivo || `CCP ${eval_.codigo_ccp} → Registro de Órdenes`,
+    actorRol: rol || 'usuario',
+    metadata: {
+      client_request_id: clientRequestId || `ccp-derivar-orden:${id}:${eval_.codigo_ccp}`,
+      codigo_ccp: eval_.codigo_ccp,
+      actor: String(usuario || '').slice(0, 150),
+    },
+    domainMutator: async (tx) => {
+      await tx.query(`
+        UPDATE solicitudes_cotizacion sc
+        SET estado = 'EN_ORDEN', updated_at = NOW()
+        FROM solicitud_requerimientos sr
+        WHERE sr.solicitud_id = sc.id
+          AND sr.requerimiento_id = $1
+          AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_CUADRO_COMPARATIVO')
+      `, [id]);
+      await tx.query(`
+        INSERT INTO ccp_eventos (
+          tipo, requerimiento_id, usuario, rol, valor_nuevo, observacion
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        'CCP_DERIVADO_REGISTRO_ORDENES',
+        id,
+        String(usuario || '').slice(0, 150),
+        String(rol || '').slice(0, 80),
+        'REGISTRO_ORDEN',
+        String(eval_.codigo_ccp || '').slice(0, 2000),
+      ]);
+    },
+  });
+
+  return {
+    ok: true,
+    idempotente: !!result?.idempotente,
+    etapa: 'REGISTRO_ORDEN',
+    codigo_ccp: eval_.codigo_ccp,
+    transicion: result,
+  };
+}
+
+/**
+ * Flags de acciones individuales para menú/bandeja.
+ */
+export function buildAccionesCcpIndividual(row = {}, evalDerivar = null) {
+  const tieneCodigo = !!(row.tiene_codigo || row.ccp_activo || row.codigo_ccp);
+  const consolidado = !!row.consolidacion_id;
+  const etapa = String(row.estado_actual || row.etapa_codigo || '').toUpperCase();
+  const yaDerivado = ['REGISTRO_ORDEN', 'REGISTRO_ORDENES', 'ORDEN'].includes(etapa)
+    || !!evalDerivar?.yaDerivado;
+
+  const acciones = {
+    ver: { visible: true },
+    registrarCcp: { visible: !tieneCodigo && !yaDerivado },
+    editarCcp: { visible: tieneCodigo && !yaDerivado },
+    eliminarCcp: { visible: tieneCodigo && !yaDerivado },
+    generarWord: {
+      visible: true,
+      enabled: !!tieneCodigo,
+      motivo: tieneCodigo ? null : 'Registre primero el código CCP.',
+    },
+    descargarWord: {
+      visible: consolidado,
+      enabled: consolidado,
+      motivo: consolidado ? null : 'Consolide el requerimiento para Word consolidado.',
+    },
+    derivarRegistroOrdenes: {
+      visible: !yaDerivado,
+      enabled: !!(evalDerivar?.ok),
+      motivo: yaDerivado
+        ? 'El expediente ya fue derivado.'
+        : (evalDerivar?.motivo || (tieneCodigo ? null : 'Registre primero el código CCP.')),
+    },
+  };
+  return acciones;
 }
 
 export { httpError };

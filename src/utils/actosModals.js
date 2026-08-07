@@ -443,8 +443,8 @@ export function actosBandejaHeaders(opts = {}) {
     <th>Código SIGAMEF</th>
     <th>Descripción</th>
     <th>Área Usuaria</th>
-    <th>Estado Actual</th>
-    <th>Responsable Actual</th>
+    <th>Estado</th>
+    <th>Responsable</th>
     <th>Fecha Asignación</th>
     <th>Días</th>
     ${accCol}`;

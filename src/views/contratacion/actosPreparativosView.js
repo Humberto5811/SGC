@@ -48,8 +48,8 @@ function actosSortBandejaHeaders(sortState = null) {
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
-    ${sortableTh('Estado Actual', 'estado', sortState)}
-    ${sortableTh('Responsable Actual', 'responsable', sortState)}
+    ${sortableTh('Estado', 'estado', sortState)}
+    ${sortableTh('Responsable', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
     ${sortableTh('Días', 'dias', sortState)}
     <th class="req-col-acc"></th>`;

@@ -12,8 +12,8 @@ import { invitacionesMenuItems, invitacionesHiddenActions } from '../../utils/ba
 import { loadInvitacionesBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { estadoModernBadge } from '../../utils/bandejaUi.js';
-import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
+import { estadoModernBadge, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
+import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 import { showSolicitudCotizacionModal, showInvitarProveedoresModal } from '../../utils/invitacionesModals.js';
 import {
@@ -135,8 +135,8 @@ function invitacionesBandejaHeaders(sortState = null) {
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
-    ${sortableTh('Estado Actual', 'estado', sortState)}
-    ${sortableTh('Responsable Actual', 'responsable', sortState)}
+    ${sortableTh('Estado', 'estado', sortState)}
+    ${sortableTh('Responsable', 'responsable', sortState)}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
     ${sortableTh('Días', 'dias', sortState)}
     <th class="text-center actos-col-inv-count" style="min-width:72px;">Invitado</th>
@@ -145,10 +145,9 @@ function invitacionesBandejaHeaders(sortState = null) {
 }
 
 function getResponsableRolDisplayInv(r) {
-  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
-  if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
-  if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
-  return getRolDisplayFromRow(r);
+  // RC8.7 — legado; la celda usa renderResponsableCellHtml (etapaLabel vigente).
+  void r;
+  return '';
 }
 
 function renderInvBandejaRowCells(r, opts = {}) {
@@ -178,9 +177,14 @@ function renderInvBandejaRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsableActual || r.responsable_actual || '—';
-  const rol = getResponsableRolDisplayInv(r);
-  const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
+  // RC8.7 — EstadoBadge + ResponsableBadge desde estado_responsable_vigente únicamente.
+  const estadoBadgeHtml = r.estado_responsable_vigente
+    ? renderBadgeEstadoVigenteHtml({
+      ...r,
+      estado_vigente: r.estado_responsable_vigente.estadoCodigo || r.estado_responsable_vigente.estado_codigo,
+      estado_vigente_label: r.estado_responsable_vigente.estadoLabel || r.estado_responsable_vigente.estado_label,
+    }, escFn)
+    : estadoModernBadge(r);
   const pedidos = resolvePedidoSigamef(r);
   const scCode = r.codigo_solicitud || r.codigoSolicitud || '';
 
@@ -196,7 +200,7 @@ function renderInvBandejaRowCells(r, opts = {}) {
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
     <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
+    <td class="small">${renderResponsableCellHtml(r, escFn)}</td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
 }

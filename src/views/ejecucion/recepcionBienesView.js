@@ -8,7 +8,7 @@ import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
-import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
+import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import { resolveAccionesRecepcionBienes } from '../../../shared/recepcionSaldo.js';
 import {
   createViewLifecycle,
@@ -118,12 +118,8 @@ function menuItems(row) {
 }
 
 function renderEstado(row) {
-  return renderBadgeEstadoVigenteHtml({
-    ...row,
-    recepcion_estado_global: row.estado_vigente || row.estadoVigente?.codigo,
-    enviado_proveedor_at: row.fecha_notificacion,
-    orden_id: row.orden_id,
-  }, esc);
+  // RC8.8 — contrato canónico únicamente
+  return renderEstadoBadgeFromRow(row);
 }
 
 function renderRow(row) {
@@ -139,7 +135,6 @@ function renderRow(row) {
       <td class="text-end">${esc(fmtMonto(row.monto_total, row.moneda))}</td>
       <td class="small">${esc(row.plazo_total || '—')}</td>
       <td>${esc(fmtFecha(row.fecha_notificacion))}</td>
-      <td>${renderEstado(row)}</td>
       <td>${esc(fmtFecha(row.fecha_recepcion_guia))}</td>
       <td>${esc(row.numero_guia || '—')}</td>
       <td class="text-end">${esc(fmtMonto(row.monto_a_liquidar, row.moneda))}</td>
@@ -148,6 +143,7 @@ function renderRow(row) {
       <td>${esc(fmtFecha(row.fecha_envio_au))}</td>
       <td title="${esc(row.entrega_tooltip || '')}">${esc(row.entrega_label || row.numero_entrega || '—')}</td>
       <td>${esc(fmtFecha(row.fecha_entrega_almacen))}</td>
+      <td>${renderEstado(row)}</td>
       <td class="small">${renderResponsableCellHtml(row, esc)}</td>
       ${renderActionMenuCell(id, menuItems(row))}
     </tr>`;
@@ -340,7 +336,6 @@ export function renderRecepcionBienesView() {
               <th>Monto OC</th>
               <th>Plazo</th>
               <th>F. notificación</th>
-              <th>Estado</th>
               <th>F. recepción guía</th>
               <th>N.° guía</th>
               <th>Monto a liquidar</th>
@@ -349,6 +344,7 @@ export function renderRecepcionBienesView() {
               <th>F. envío AU</th>
               <th>Entrega</th>
               <th>F. entrega almacén</th>
+              <th>Estado</th>
               <th>Responsable</th>
               <th>Acciones</th>
             </tr>

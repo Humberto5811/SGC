@@ -134,13 +134,8 @@ function renderEstadoCell(row) {
     return renderBadgeEstadoVigenteHtml(seed, esc);
   }
   const label = row.etiqueta_estado || row.estado_ccp_label || row.estado_ccp || '—';
-  return renderBadgeEstadoVigenteHtml({
-    ...row,
-    estado_responsable_vigente: row.estado_responsable_vigente || {
-      estadoCodigo: row.estado_codigo || row.estado_ccp || '',
-      estadoLabel: label,
-    },
-  }, esc);
+  void label;
+  return renderBadgeEstadoVigenteHtml(row, esc);
 }
 
 function renderRow(row) {
@@ -156,7 +151,11 @@ function renderRow(row) {
   const origenTxt = esLocacion ? 'Recepción de Cotización' : (row.origen_ccp_label || 'Cuadro Comparativo');
   const menu = renderActionMenuCell(
     rid,
-    ccpMenuItems(row, { canManage: canManageCcp() }),
+    ccpMenuItems(row, {
+      canManage: canManageCcp(),
+      modo: bandejaMeta.modo,
+      accesoPorAsignacion: !!bandejaMeta.acceso_por_asignacion,
+    }),
     '',
   );
   return `
@@ -193,7 +192,7 @@ const THEAD = `<tr>
   <th>Solicitud de Cotización</th>
   <th>Centro</th>
   <th>Estado</th>
-  <th>Responsable actual</th>
+  <th>Responsable</th>
   <th style="min-width:100px">CCP</th>
   <th class="text-center" style="width:70px">Acciones</th>
 </tr>`;
@@ -326,7 +325,7 @@ async function actionEliminarCcp(rid) {
 async function actionDescargarWord(rid) {
   const row = findRow(rid);
   if (!row?.consolidacion_id) {
-    showAlert('warning', 'Consolide el requerimiento antes de descargar el Word');
+    showAlert('warning', 'Consolide el requerimiento antes de descargar el Word consolidado');
     return;
   }
   try {
@@ -338,6 +337,63 @@ async function actionDescargarWord(rid) {
     showAlert('success', `Documento descargado: ${nombre}`);
   } catch (err) {
     showAlert('danger', err.message || 'No se pudo generar el Word');
+  }
+}
+
+async function actionGenerarWord(rid) {
+  const row = findRow(rid);
+  if (!row?.codigo_ccp && !row?.tiene_codigo) {
+    showAlert('warning', 'Registre primero el código CCP.');
+    return;
+  }
+  try {
+    const { blob, contentDisposition } = await contratacionesService.generarWordCcpIndividual(rid);
+    let nombre = `CCP-${row?.requerimiento_codigo || rid}.docx`;
+    const m = String(contentDisposition || '').match(/filename="([^"]+)"/i);
+    if (m) nombre = decodeURIComponent(m[1]);
+    downloadBlobFile(blob, nombre);
+    showAlert('success', `Documento generado: ${nombre}`);
+  } catch (err) {
+    const msg = err?.message || 'No se pudo generar el Word';
+    if (/código CCP|CCP_CODIGO|primero/i.test(msg)) {
+      showAlert('warning', 'Registre primero el código CCP.');
+    } else {
+      showAlert('danger', msg);
+    }
+  }
+}
+
+async function actionDerivarOrdenes(rid) {
+  const row = findRow(rid);
+  if (!row?.codigo_ccp && !row?.tiene_codigo) {
+    showAlert('warning', 'Registre primero el código CCP.');
+    return;
+  }
+  const codigo = row?.requerimiento_codigo || rid;
+  if (!window.confirm(`¿Derivar ${codigo} a Registro de Órdenes?`)) return;
+  try {
+    const resp = await contratacionesService.derivarCcpARegistroOrdenes(rid, {
+      client_request_id: `ccp-derivar-ui:${rid}:${Date.now()}`,
+    });
+    if (resp?.idempotente) {
+      showAlert('info', 'El expediente ya fue derivado.');
+    } else {
+      showAlert('success', `${codigo} derivado a Registro de Órdenes`);
+    }
+    await loadBandeja(true);
+  } catch (err) {
+    const msg = err?.message || 'No se pudo derivar';
+    if (/ya fue derivado|ya derivado/i.test(msg)) {
+      showAlert('info', 'El expediente ya fue derivado.');
+    } else if (/código CCP|primero/i.test(msg)) {
+      showAlert('warning', 'Registre primero el código CCP.');
+    } else if (/no compatible|Estado no compatible/i.test(msg)) {
+      showAlert('warning', 'Estado no compatible.');
+    } else if (/autoriz|asignación|FORBIDDEN/i.test(msg)) {
+      showAlert('warning', 'Sin autorización sobre el expediente.');
+    } else {
+      showAlert('danger', msg);
+    }
   }
 }
 
@@ -396,7 +452,9 @@ function paintTable(shell = null) {
         if (row?.consolidacion_id) openConsolidacionModal(row.consolidacion_id);
         else openDetalleReqModal(id);
       },
+      generarWord: (id) => actionGenerarWord(id),
       descargarWord: (id) => actionDescargarWord(id),
+      derivarOrdenes: (id) => actionDerivarOrdenes(id),
     });
   }
   const master = document.getElementById(`${PREFIX}SelectAll`);
@@ -525,7 +583,13 @@ async function openDetalleReqModal(requerimientoId) {
           <div class="modal-body" id="${id}_body">
             <div class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm"></span> Cargando…</div>
           </div>
-          <div class="modal-footer">
+          <div class="modal-footer flex-wrap gap-2" id="${id}_footer">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="${id}_word">
+              <i class="bi bi-file-earmark-word"></i> Generar Word
+            </button>
+            <button type="button" class="btn btn-primary btn-sm" id="${id}_derivar">
+              <i class="bi bi-box-arrow-right"></i> Derivar a Registro de Órdenes
+            </button>
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
           </div>
         </div>
@@ -551,6 +615,31 @@ async function openDetalleReqModal(requerimientoId) {
         ${d.proveedor_nombre ? ` · Proveedor: <strong>${esc(d.proveedor_nombre)}</strong>` : ''}
       </div>
       ${renderFilasTable(d.filas, d.moneda)}`;
+    const btnWord = document.getElementById(`${id}_word`);
+    const btnDerivar = document.getElementById(`${id}_derivar`);
+    if (btnWord) {
+      btnWord.onclick = async () => {
+        modal.hide();
+        await actionGenerarWord(requerimientoId);
+      };
+    }
+    if (btnDerivar) {
+      const canDerivar = d.puede_derivar_ordenes !== false && !!d.codigo_ccp;
+      btnDerivar.title = d.motivo_derivar_ordenes
+        || (!d.codigo_ccp ? 'Registre primero el código CCP.' : 'Derivar a Registro de Órdenes');
+      btnDerivar.onclick = async () => {
+        if (!d.codigo_ccp) {
+          showAlert('warning', 'Registre primero el código CCP.');
+          return;
+        }
+        if (!canDerivar && d.motivo_derivar_ordenes) {
+          showAlert('warning', d.motivo_derivar_ordenes);
+          return;
+        }
+        modal.hide();
+        await actionDerivarOrdenes(requerimientoId);
+      };
+    }
   } catch (err) {
     document.getElementById(`${id}_body`).innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }

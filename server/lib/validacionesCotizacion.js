@@ -719,6 +719,7 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
+      AND UPPER(TRIM(COALESCE(sc.tipo, ''))) NOT LIKE 'LOCAC%'
       AND (
         cot.validacion_estado IN ('DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO')
         OR cot.solicitud_id IN (

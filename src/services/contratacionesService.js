@@ -271,6 +271,14 @@ export const contratacionesService = {
   async generarWordCcp(solicitudId) {
     return api.postBlob(`/ccp/consolidaciones/${solicitudId}/generar-word`, {});
   },
+  /** Word individual del expediente CCP (sin consolidación). */
+  async generarWordCcpIndividual(requerimientoId) {
+    return api.postBlob(`/ccp/${requerimientoId}/generar-word`, {});
+  },
+  /** Deriva CCP → Registro de Órdenes (transicionarExpediente / CCP_REGISTRADA). */
+  async derivarCcpARegistroOrdenes(requerimientoId, body = {}) {
+    return api.post(`/ccp/${requerimientoId}/derivar-ordenes`, body);
+  },
   async transitarRevisionCuadro(cuadroId, body = {}) {
     // RC8.5-G — no enviar cargo/rol en body (privilegios solo por headers de sesión).
     // actuar_como solo lo envía el FE en modo prueba Admin; el BE lo valida.

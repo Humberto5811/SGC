@@ -174,7 +174,7 @@ export function renderPanelCoordinador(cuadro, matriz = {}) {
           ${bloqueDerivar}
         </div>
         ${cuadro?.firmado_nombre ? `<div class="small text-muted mt-2">Firmado: <strong>${esc(cuadro.firmado_nombre)}</strong></div>` : ''}
-        ${!g.enCoord ? '<div class="small text-danger mt-2">Estado actual no admite acciones de Coordinador CM.</div>' : ''}
+        ${!g.enCoord ? '<div class="small text-danger mt-2">El estado no admite acciones de Coordinador CM.</div>' : ''}
       </div>
     </div>`;
 }

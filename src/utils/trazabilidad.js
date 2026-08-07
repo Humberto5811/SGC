@@ -42,7 +42,7 @@ export const ETAPA_LABELS = {
   OBSERVADO: 'Observado',
 };
 
-/** Texto columna "Estado Actual" en bandejas (según etapa real del expediente) */
+/** Texto columna "Estado" en bandejas (según etapa real del expediente) */
 export const ESTADO_ACTUAL_TEXTO = {
   REGISTRADO: 'En Registro',
   EVALUACION: 'En Evaluación de Requerimientos',
@@ -275,6 +275,12 @@ export {
   bindBandejaToolbar,
   bandejaGlobalStyles as bandejaTableStyles,
   buildExportRowData,
+  buildExportRowDataWithLegacyAliases,
+  EXPORT_HEADERS,
+  EXPORT_HEADER_ALIASES,
+  FILTER_QUERY_KEYS,
+  resolveExportHeader,
+  readExportCell,
   updateBandejaAdjCount,
   isExecutiveMode,
   sortBandejaRows,

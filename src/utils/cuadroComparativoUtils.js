@@ -254,13 +254,8 @@ export function renderBadgeEstadoCuadroHtml(rowOrCode, label, escFn = (s) => Str
   const text = label != null
     ? label
     : (labelEstadoExpedienteUnificado(row) || labelCuadroEstado(code));
-  return renderBadgeEstadoVigenteHtml({
-    ...row,
-    estado_responsable_vigente: row.estado_responsable_vigente || {
-      estadoCodigo: n || code || '',
-      estadoLabel: text,
-    },
-  }, escFn);
+  void text;
+  return renderBadgeEstadoVigenteHtml(row, escFn);
 }
 
 /** Actualiza un nodo badge existente (modales). */

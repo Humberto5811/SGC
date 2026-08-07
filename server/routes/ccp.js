@@ -13,6 +13,9 @@ import {
   getConsolidacionCcp,
   retirarRequerimientoConsolidacion,
   marcarWordGenerado,
+  buildPayloadWordIndividual,
+  derivarCcpARegistroOrdenes,
+  evaluarPuedeDerivarRegistroOrdenes,
   httpError,
 } from '../lib/ccpCertificacion.js';
 import { generarWordSolicitudCcp } from '../lib/ccpWord.js';
@@ -182,21 +185,18 @@ router.post('/consolidaciones/:id/retirar', async (req, res, next) => {
   } catch (err) { sendLibError(res, err, next); }
 });
 
-// POST /api/ccp/consolidaciones/:id/generar-word
+// POST /api/ccp/consolidaciones/:id/generar-word — Word consolidado (solo GLOBAL)
 router.post('/consolidaciones/:id/generar-word', async (req, res, next) => {
   try {
     const acceso = await requireCcp(req, 'DESCARGAR');
-    // Word de consolidación: GLOBAL, o ASIGNACION solo si todos los reqs son suyos
-    const consolidacion = await getConsolidacionCcp(req.params.id);
     if (acceso.modo === MODO_ACCESO_CCP.ASIGNACION) {
-      const allow = new Set((acceso.alcanceRequerimientoIds || []).map(Number));
-      const reqs = (consolidacion?.requerimientos || consolidacion?.filas || [])
-        .map((r) => Number(r.requerimiento_id || r.id))
-        .filter(Boolean);
-      if (!reqs.length || !reqs.every((id) => allow.has(id))) {
-        throw httpError('Documento fuera de su asignación CCP', 403, 'CCP_FORBIDDEN');
-      }
+      throw httpError(
+        'Word consolidado requiere acceso global CCP',
+        403,
+        'CCP_WORD_CONSOLIDADO_FORBIDDEN',
+      );
     }
+    const consolidacion = await getConsolidacionCcp(req.params.id);
     const { usuario, rol } = actorFromReq(req);
     if (!consolidacion.filas?.length) {
       throw httpError('La consolidación no tiene filas presupuestales', 409);
@@ -212,6 +212,7 @@ router.post('/consolidaciones/:id/generar-word', async (req, res, next) => {
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
     res.setHeader('Content-Length', String(payload.length));
     res.setHeader('X-CCP-Asunto', encodeURIComponent(asunto || ''));
+    res.setHeader('X-CCP-Word-Mode', 'consolidado');
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).end(payload);
   } catch (err) { sendLibError(res, err, next); }
@@ -222,7 +223,78 @@ router.get('/:id', async (req, res, next) => {
   try {
     await requireCcp(req, 'VER', req.params.id);
     const data = await getDetalleCcpRequerimiento(req.params.id);
-    res.json({ data });
+    const evalDerivar = await evaluarPuedeDerivarRegistroOrdenes(req.params.id);
+    res.json({
+      data: {
+        ...data,
+        puede_derivar_ordenes: !!evalDerivar.ok,
+        motivo_derivar_ordenes: evalDerivar.ok ? null : (evalDerivar.motivo || null),
+      },
+    });
+  } catch (err) { sendLibError(res, err, next); }
+});
+
+/**
+ * POST /api/ccp/:id/generar-word — Word individual (mismo generador: generarWordSolicitudCcp).
+ * No crea consolidación ni segundo motor Word.
+ */
+router.post('/:id/generar-word', async (req, res, next) => {
+  try {
+    const rid = req.params.id;
+    await requireCcp(req, 'DESCARGAR', rid);
+    const payload = await buildPayloadWordIndividual(rid);
+    if (!payload.filas?.length) {
+      throw httpError('El expediente no tiene filas presupuestales para el documento', 409);
+    }
+    const { buffer, filename, asunto } = await generarWordSolicitudCcp(payload);
+    const { usuario, rol } = actorFromReq(req);
+    const reqId = parseInt(rid, 10);
+    // Idempotencia de evento: no duplicar WORD_GENERADO_INDIVIDUAL si ya existe.
+    const { rows: prev } = await query(`
+      SELECT id FROM ccp_eventos
+      WHERE tipo = 'WORD_GENERADO_INDIVIDUAL' AND requerimiento_id = $1
+      ORDER BY id DESC LIMIT 1
+    `, [reqId]);
+    if (!prev.length) {
+      await query(`
+        INSERT INTO ccp_eventos (tipo, requerimiento_id, usuario, rol, valor_nuevo, observacion)
+        VALUES ('WORD_GENERADO_INDIVIDUAL', $1, $2, $3, $4, $5)
+      `, [reqId, usuario, rol, payload.codigo_interno || '', asunto || '']);
+    }
+    const safeName = String(filename || `CCP-${rid}.docx`).replace(/[^\w.\-]+/g, '_');
+    const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Content-Length', String(bytes.length));
+    res.setHeader('X-CCP-Asunto', encodeURIComponent(asunto || ''));
+    res.setHeader('X-CCP-Word-Mode', 'individual');
+    res.setHeader('X-CCP-Word-Reuse', prev.length ? '1' : '0');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).end(bytes);
+  } catch (err) { sendLibError(res, err, next); }
+});
+
+/**
+ * POST /api/ccp/:id/derivar-ordenes — CCP → Registro de Órdenes vía transicionarExpediente.
+ */
+router.post('/:id/derivar-ordenes', async (req, res, next) => {
+  try {
+    const rid = req.params.id;
+    await requireCcp(req, 'DERIVAR', rid);
+    const { usuario, rol, userId } = actorFromReq(req);
+    const result = await derivarCcpARegistroOrdenes(rid, {
+      usuario,
+      usuarioId: userId,
+      rol,
+      motivo: req.body?.motivo || '',
+      clientRequestId: req.body?.client_request_id
+        || req.headers['x-client-request-id']
+        || null,
+    });
+    res.json({ ok: true, ...result });
   } catch (err) { sendLibError(res, err, next); }
 });
 

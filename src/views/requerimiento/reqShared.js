@@ -567,7 +567,7 @@ export async function showTrazabilidadModal(requerimientoId) {
         <div class="small text-muted">${esc(req.area || '')} · ${esc(req.centro || '')}</div>
       </div>
       <div class="row g-2 mb-3 small">
-        <div class="col-md-3"><strong>Estado actual:</strong><br/>${badgeEstadoHtml}</div>
+        <div class="col-md-3"><strong>Estado:</strong><br/>${badgeEstadoHtml}</div>
         <div class="col-md-3"><strong>Submódulo:</strong><br/>${esc(subModuloLabel)}</div>
         <div class="col-md-3"><strong>Responsable:</strong><br/>${esc(data.expediente?.responsableActual || data.responsableActual || '—')}</div>
         <div class="col-md-3"><strong>Días en etapa:</strong><br/>${diasEnEstadoBadge({ dias_en_estado: data.expediente?.diasEnEtapa ?? data.diasEnEstado })}${data.retrasado || Number(data.diasEnEstado) > 10 ? retrasadoIndicator({ dias_en_estado: data.diasEnEstado }) : ''}</div>

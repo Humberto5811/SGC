@@ -1,10 +1,9 @@
 /**
- * RC8.6B — Único adapter de compatibilidad visual Estado/Responsable.
- * Prioriza row.estado_responsable_vigente; fallback legacy SOLO aquí.
- * Nunca infiere persona desde created_by / usuario_modificacion / centro / submódulo.
+ * RC8.6B / RC8.8.1 — Único adapter de compatibilidad visual Estado/Responsable.
+ * Prioriza row.estado_responsable_vigente.
+ * Sin ERV / canonicalMissing: NUNCA reinfiere por evidencia ni legacy.
  */
 import { getEstadoCatalogEntry } from './estadoCatalogo.js';
-import { normalizeEstadoCode, getLabelEstado } from '../../../shared/estadoExpedienteCatalog.js';
 
 export const TIPO_RESPONSABLE_UI = Object.freeze({
   PERSONA: 'PERSONA',
@@ -13,6 +12,7 @@ export const TIPO_RESPONSABLE_UI = Object.freeze({
 });
 
 const PENDIENTE_LABEL = 'Pendiente de asignación';
+const ESTADO_NO_DISPONIBLE = 'Estado no disponible';
 
 function escStr(v) {
   const s = String(v == null ? '' : v).trim();
@@ -21,6 +21,18 @@ function escStr(v) {
 
 function isBareNumericId(s) {
   return /^\d+$/.test(escStr(s));
+}
+
+function warnMissingErv(row) {
+  try {
+    const rid = row?.id ?? row?.requerimiento_id ?? row?.requerimientoId ?? '?';
+    const msg = `[RC8.8.1] estado_responsable_vigente ausente (req=${rid}) — no reinferir; usar reconciliación`;
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV) {
+      console.warn(msg);
+    } else if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
+      console.warn(msg);
+    }
+  } catch (_) { /* ignore */ }
 }
 
 /**
@@ -75,18 +87,35 @@ function looksLikeCentro(s) {
 
 function resolveFromErv(erv) {
   if (!erv || typeof erv !== 'object') return null;
+  if (erv.canonicalMissing === true) return null;
+
   const tipoRaw = escStr(erv.responsableTipo || erv.responsable_tipo).toUpperCase();
   let responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
-  if (tipoRaw === 'PERSONA') responsableTipo = TIPO_RESPONSABLE_UI.PERSONA;
-  else if (tipoRaw === 'UNIDAD') responsableTipo = TIPO_RESPONSABLE_UI.UNIDAD;
-  else if (erv.responsableUsuarioId || erv.responsable_usuario_id || erv.responsableNombre || erv.responsableUsername) {
+  if (tipoRaw === 'PENDIENTE') {
+    responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
+  } else if (tipoRaw === 'PERSONA') {
+    responsableTipo = TIPO_RESPONSABLE_UI.PERSONA;
+  } else if (tipoRaw === 'UNIDAD') {
+    responsableTipo = TIPO_RESPONSABLE_UI.UNIDAD;
+  } else if (erv.responsableUsuarioId || erv.responsable_usuario_id || erv.responsableNombre || erv.responsableUsername) {
     responsableTipo = TIPO_RESPONSABLE_UI.PERSONA;
   } else if (erv.responsableUnidad || erv.responsable_unidad) {
     responsableTipo = TIPO_RESPONSABLE_UI.UNIDAD;
   }
 
+  let responsableUnidad = escStr(erv.responsableUnidad || erv.responsable_unidad) || '';
+  if (responsableTipo === TIPO_RESPONSABLE_UI.PENDIENTE) {
+    responsableUnidad = '';
+  }
+
+  const estadoCodigo = escStr(erv.estadoCodigo || erv.estado_codigo) || '';
+  if (!estadoCodigo && !escStr(erv.estadoLabel || erv.estado_label)) {
+    // ERV vacío sin marca explícita → tratar como missing
+    return null;
+  }
+
   return {
-    estadoCodigo: escStr(erv.estadoCodigo || erv.estado_codigo) || '',
+    estadoCodigo,
     estadoLabel: escStr(erv.estadoLabel || erv.estado_label) || '',
     etapaCodigo: escStr(erv.etapaCodigo || erv.etapa_codigo) || '',
     etapaLabel: escStr(erv.etapaLabel || erv.etapa_label) || '',
@@ -94,67 +123,36 @@ function resolveFromErv(erv) {
     responsableUsuarioId: erv.responsableUsuarioId ?? erv.responsable_usuario_id ?? null,
     responsableUsername: escStr(erv.responsableUsername || erv.responsable_username) || '',
     responsableNombre: escStr(erv.responsableNombre || erv.responsable_nombre) || '',
-    responsableUnidad: escStr(erv.responsableUnidad || erv.responsable_unidad) || '',
+    responsableUnidad,
     responsableFuente: escStr(erv.responsableFuente || erv.responsable_fuente) || '',
     actualizadoAt: erv.actualizadoAt || erv.actualizado_at || null,
     fuente: 'estado_responsable_vigente',
+    canonicalMissing: false,
   };
 }
 
-/**
- * Fallback legacy controlado — exclusivo de este archivo.
- * No usa created_by, usuario_modificacion, centro (responsable CNCC) ni submódulo como persona.
- */
-function fallbackLegacy(row) {
-  const estadoCodigo = normalizeEstadoCode(row?.estado)
-    || escStr(row?.estado_actual || row?.estadoActual).toUpperCase()
-    || '';
-  const estadoLabel = getLabelEstado(estadoCodigo)
-    || escStr(row?.estado)
-    || escStr(row?.estado_actual_texto || row?.estadoActualTexto)
-    || '';
-  const etapaCodigo = escStr(row?.estado_actual || row?.estadoActual).toUpperCase() || estadoCodigo;
-  const etapaLabel = escStr(row?.sub_modulo_actual || row?.subModuloActual || row?.estado_actual_texto) || '';
-
-  // responsable_actual / responsableActual ya enriquecidos — nunca row.responsable (centro)
-  const rawResp = escStr(row?.responsableActual || row?.responsable_actual);
-  let responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
-  let responsableNombre = '';
-  let responsableUnidad = '';
-  let responsableUsername = '';
-  let responsableUsuarioId = null;
-
-  if (!rawResp || rawResp === '—' || /pendiente de asignaci/i.test(rawResp)) {
-    responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
-  } else if (/^\d+$/.test(rawResp)) {
-    // ID numérico legacy en responsable_actual — no presentar como nombre
-    responsableTipo = TIPO_RESPONSABLE_UI.PERSONA;
-    responsableUsuarioId = Number(rawResp);
-    const disp = resolvePersonaDisplay({ responsableUsuarioId });
-    responsableNombre = disp.responsableNombre;
-    responsableUsername = disp.responsableUsername;
-  } else if (/coordinador|programador|especialista|director|gerente|dec\b|analista|almac[eé]n|usuario au|área usuaria|area usuaria/i.test(rawResp)
-    || /coordinaci[oó]n cm|programaci[oó]n|invitaciones|cuadro|validaci|recepci[oó]n|tesorer|pagos/i.test(rawResp)) {
-    responsableTipo = TIPO_RESPONSABLE_UI.UNIDAD;
-    responsableUnidad = rawResp;
-  } else {
-    responsableTipo = TIPO_RESPONSABLE_UI.PERSONA;
-    responsableNombre = rawResp;
-  }
-
+/** Fallback seguro RC8.8.1 — sin evidencia / legacy. */
+function fallbackCanonicalMissing(row) {
+  warnMissingErv(row);
+  const catalog = getEstadoCatalogEntry('', ESTADO_NO_DISPONIBLE);
   return {
-    estadoCodigo,
-    estadoLabel,
-    etapaCodigo,
-    etapaLabel,
-    responsableTipo,
-    responsableUsuarioId,
-    responsableUsername,
-    responsableNombre,
-    responsableUnidad,
-    responsableFuente: 'legacy_fallback',
-    actualizadoAt: row?.fecha_estado_actual || row?.fechaEstadoActual || row?.updated_at || null,
-    fuente: 'legacy_fallback',
+    estadoCodigo: '',
+    estadoLabel: ESTADO_NO_DISPONIBLE,
+    etapaCodigo: '',
+    etapaLabel: '',
+    responsableTipo: TIPO_RESPONSABLE_UI.PENDIENTE,
+    responsableUsuarioId: null,
+    responsableUsername: '',
+    responsableNombre: '',
+    responsableUnidad: '',
+    responsableFuente: 'canonical_missing',
+    actualizadoAt: null,
+    fuente: 'canonical_missing',
+    canonicalMissing: true,
+    categoria: catalog.categoria || 'DESCONOCIDO',
+    icono: catalog.icono,
+    tooltip: ESTADO_NO_DISPONIBLE,
+    responsableDisplay: PENDIENTE_LABEL,
   };
 }
 
@@ -164,23 +162,24 @@ function fallbackLegacy(row) {
  */
 export function adaptEstadoResponsable(row = {}) {
   const fromErv = resolveFromErv(row?.estado_responsable_vigente);
-  const base = fromErv || fallbackLegacy(row || {});
+  if (!fromErv) {
+    return fallbackCanonicalMissing(row || {});
+  }
 
-  const catalog = getEstadoCatalogEntry(base.estadoCodigo, base.estadoLabel);
-  const estadoCodigo = catalog.codigo;
-  const estadoLabel = catalog.label;
+  const catalog = getEstadoCatalogEntry(fromErv.estadoCodigo, fromErv.estadoLabel);
+  const estadoCodigo = fromErv.estadoCodigo || catalog.codigo;
+  const estadoLabel = fromErv.estadoLabel || catalog.label || ESTADO_NO_DISPONIBLE;
 
-  let { responsableTipo, responsableNombre, responsableUsername, responsableUnidad } = base;
+  let { responsableTipo, responsableNombre, responsableUsername, responsableUnidad } = fromErv;
 
   if (responsableTipo === TIPO_RESPONSABLE_UI.PERSONA) {
     const disp = resolvePersonaDisplay({
       responsableNombre,
       responsableUsername,
-      responsableUsuarioId: base.responsableUsuarioId,
+      responsableUsuarioId: fromErv.responsableUsuarioId,
     });
     responsableNombre = disp.responsableNombre;
     responsableUsername = disp.responsableUsername;
-    // Defensa: nunca presentar centro/submódulo como persona
     if (!disp.responsableDisplay || disp.responsableDisplay === PENDIENTE_LABEL) {
       responsableTipo = responsableUnidad ? TIPO_RESPONSABLE_UI.UNIDAD : TIPO_RESPONSABLE_UI.PENDIENTE;
     } else if (looksLikeCentro(responsableNombre)) {
@@ -195,7 +194,7 @@ export function adaptEstadoResponsable(row = {}) {
     responsableDisplay = resolvePersonaDisplay({
       responsableNombre,
       responsableUsername,
-      responsableUsuarioId: base.responsableUsuarioId,
+      responsableUsuarioId: fromErv.responsableUsuarioId,
     }).responsableDisplay;
     if (responsableDisplay === PENDIENTE_LABEL) {
       responsableTipo = TIPO_RESPONSABLE_UI.PENDIENTE;
@@ -211,21 +210,23 @@ export function adaptEstadoResponsable(row = {}) {
   return {
     estadoCodigo,
     estadoLabel,
-    etapaCodigo: base.etapaCodigo || '',
-    etapaLabel: base.etapaLabel || '',
+    etapaCodigo: fromErv.etapaCodigo || '',
+    etapaLabel: fromErv.etapaLabel || '',
     responsableTipo,
-    responsableUsuarioId: base.responsableUsuarioId,
+    responsableUsuarioId: fromErv.responsableUsuarioId,
     responsableUsername,
     responsableNombre,
     responsableUnidad,
-    responsableFuente: base.responsableFuente,
+    responsableFuente: fromErv.responsableFuente,
     responsableDisplay,
-    actualizadoAt: base.actualizadoAt,
+    actualizadoAt: fromErv.actualizadoAt,
     categoria: catalog.categoria,
     icono: catalog.icono,
-    tooltip: catalog.tooltip,
-    fuente: base.fuente,
+    tooltip: catalog.tooltip || estadoLabel,
+    fuente: fromErv.fuente,
+    canonicalMissing: false,
   };
 }
 
-export default { adaptEstadoResponsable, TIPO_RESPONSABLE_UI, PENDIENTE_LABEL };
+export { ESTADO_NO_DISPONIBLE, PENDIENTE_LABEL };
+export default { adaptEstadoResponsable, TIPO_RESPONSABLE_UI, PENDIENTE_LABEL, ESTADO_NO_DISPONIBLE };
