@@ -61,8 +61,13 @@ ok(!/Invitaciones/i.test(html2), '7-like: no Invitaciones en subtítulo REQ-0000
 
 const ccp = await listarBandejaCcp();
 const ro = await listarBandejaOrdenes();
-ok(!ccp.some((x) => x.requerimiento_codigo === 'REQ-00002'), '4: REQ-00002 no activo en CCP');
+ok(ccp.some((x) => x.requerimiento_codigo === 'REQ-00002'), '4: REQ-00002 visible histórico en CCP');
 ok(ro.some((x) => x.requerimiento_codigo === 'REQ-00002'), '3: REQ-00002 operativo en RO');
+const ccp2 = ccp.find((x) => x.requerimiento_codigo === 'REQ-00002');
+ok(ccp2?.tramite_ccp_concluido === true || ccp2?.bandeja_modo === 'historico',
+  '4b: REQ-00002 marcado histórico/concluido en CCP');
+ok(String(ccp2?.estado_responsable_vigente?.estadoCodigo || '').includes('REGISTRO_ORDEN'),
+  '4c: CCP muestra contrato RO vigente, no reinfiere CCP');
 
 // Color categoría única por código
 ok(cat2.categoria === getEstadoCatalogEntry(a2.estadoCodigo).categoria, '1/9: categoría estable');

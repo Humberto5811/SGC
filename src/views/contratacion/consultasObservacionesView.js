@@ -363,7 +363,7 @@ function buildConsultaRowHtml(exp) {
       <td>
         <span class="badge bg-${estadoBadge}">${esc(estadoLabel)}</span>
       </td>
-      <td class="small">${renderResponsableCellHtml(exp, esc, { submodulo: 'Consultas y Observaciones' })}</td>
+      <td class="small">${renderResponsableCellHtml(exp, esc)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary co-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">

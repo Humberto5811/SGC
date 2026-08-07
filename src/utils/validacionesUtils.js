@@ -151,6 +151,13 @@ export function estadoExpedienteValidacion(cotizaciones = [], meta = {}) {
 
 /** HTML del badge de estado en bandeja Validaciones. */
 export function renderBadgeEstadoValidacionHtml(exp, escFn = (s) => String(s ?? '')) {
+  // RC8.10 — contrato canónico primero; sin overlays de validacion_estado / ccp.
+  if (exp?.estado_responsable_vigente
+    && exp.estado_responsable_vigente.canonicalMissing !== true
+    && (exp.estado_responsable_vigente.estadoCodigo || exp.estado_responsable_vigente.estado_codigo
+      || exp.estado_responsable_vigente.estadoLabel || exp.estado_responsable_vigente.estado_label)) {
+    return renderBadgeEstadoVigenteHtml(exp, escFn);
+  }
   if (exp?.estadoVigente?.codigo || exp?.estado_vigente) {
     return renderBadgeEstadoVigenteHtml({
       ...exp,
@@ -159,7 +166,6 @@ export function renderBadgeEstadoValidacionHtml(exp, escFn = (s) => String(s ?? 
       orden_estado: exp.orden_estado || '',
       enviado_proveedor_at: exp.enviado_proveedor_at || null,
       orden_id: exp.orden_id || null,
-      // RC8.1B — preservar evidencia de recepción de bienes en el seed del resolvedor.
       recepcion_estado_global: exp.recepcion_estado_global || '',
       recepcion_estado_interno: exp.recepcion_estado_interno || '',
       recepcion_bienes_expediente_id: exp.recepcion_bienes_expediente_id ?? null,
@@ -265,6 +271,11 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
     const seedCot = g.cotizaciones[0] || {};
     const withOrden = g.cotizaciones.find((c) => c.enviado_proveedor_at || c.orden_estado || c.estadoVigente)
       || seedCot;
+    // RC8.10 — preservar contrato canónico al consolidar
+    const withErv = g.cotizaciones.find((c) => c.estado_responsable_vigente
+      && c.estado_responsable_vigente.canonicalMissing !== true
+      && (c.estado_responsable_vigente.estadoCodigo || c.estado_responsable_vigente.estado_codigo))
+      || withOrden;
     const meta = {
       solicitud_estado: withOrden.solicitud_estado || seedCot.solicitud_estado || g.solicitud_estado || '',
       estado_cuadro: withOrden.estado_cuadro || seedCot.estado_cuadro || g.estado_cuadro || '',
@@ -287,6 +298,8 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
       recepcion_bienes_expediente_id: withOrden.recepcion_bienes_expediente_id
         ?? seedCot.recepcion_bienes_expediente_id ?? null,
       estadoVigente: withOrden.estadoVigente || seedCot.estadoVigente || null,
+      estado_responsable_vigente: withErv.estado_responsable_vigente || null,
+      requerimiento_id: withErv.requerimiento_id || seedCot.requerimiento_id || null,
     };
     const est = estadoExpedienteValidacion(g.cotizaciones, meta);
     const vigente = est.estadoVigente || meta.estadoVigente || {
@@ -332,6 +345,8 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
       estadoVigente: vigente,
       estado_vigente: vigente.codigo,
       estado_vigente_label: vigente.label,
+      estado_responsable_vigente: meta.estado_responsable_vigente || null,
+      requerimiento_id: meta.requerimiento_id || null,
       estadoInterno: withOrden.estadoInterno || estadoInternoVal,
       validacion_estado: est.validacion_estado,
       validacion_responsable: responsables.length === 1

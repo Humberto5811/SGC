@@ -2,8 +2,7 @@
 import { contratacionesService } from '../services/contratacionesService.js';
 import { SUBMODULOS_DESTINO, getSubmoduloByLabel } from './observacionDestino.js';
 import { esc } from './trazabilidad.js';
-import { getRolDisplayFromRow } from './observacionDestino.js';
-import { estadoModernBadge } from './bandejaUi.js';
+import { renderResponsableCellHtml, estadoModernBadge } from './bandejaUi.js';
 
 function formatNombre(u) {
   return String(u?.nombre || '').trim();
@@ -369,13 +368,6 @@ export function actosBandejaStyles() {
   `;
 }
 
-function getResponsableRolDisplay(r) {
-  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
-  if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
-  if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
-  return getRolDisplayFromRow(r);
-}
-
 export function renderActosRowCells(r, opts = {}) {
   const { escFn = esc, includeScColumn = false, narrowArea = false } = opts;
   const sigamef = (() => {
@@ -403,8 +395,6 @@ export function renderActosRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsableActual || r.responsable_actual || '—';
-  const rol = getResponsableRolDisplay(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = r.pedidos_sigamef || r.pedidosSigamef || '—';
   const scCode = r.codigo_solicitud || r.codigoSolicitud || '';
@@ -423,7 +413,7 @@ export function renderActosRowCells(r, opts = {}) {
     <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
     <td class="${areaClass.trim()}">${escFn(r.area || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
+    <td class="small">${renderResponsableCellHtml(r, escFn)}</td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
 }

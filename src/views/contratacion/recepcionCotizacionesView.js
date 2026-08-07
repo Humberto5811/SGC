@@ -597,13 +597,7 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>${badgeEstadoBandejaRecepcion(exp)}</td>
-      <td class="small">${renderResponsableCellHtml(exp, esc, {
-        // Obs45 — priorizar etapa fuente única (p.ej. Registro de Órdenes) sobre submódulo legacy.
-        submodulo: exp.estado_responsable_vigente?.etapaLabel
-          || exp.estado_responsable_vigente?.etapa_label
-          || exp.sub_modulo_actual
-          || 'Recepción de Cotizaciones',
-      })}</td>
+      <td class="small">${renderResponsableCellHtml(exp, esc)}</td>
       ${renderActionMenuCell(sid, recepcionExpedienteMenuItems(exp), '')}
     </tr>`;
 }

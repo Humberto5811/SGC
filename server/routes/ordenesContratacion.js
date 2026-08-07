@@ -45,8 +45,12 @@ import {
   listarEnviosOrden,
 } from '../lib/ordenesProveedor.js';
 
+import {
+  assertAccesoRegistroOrdenes,
+  MODO_ACCESO_RO,
+} from '../lib/accesoRegistroOrdenes.js';
+
 const router = express.Router();
-const ROLES = new Set(['dec', 'admin']);
 
 function actorFromReq(req) {
   const usuario = req.user?.nombre
@@ -54,15 +58,28 @@ function actorFromReq(req) {
     || req.body?.usuario
     || '';
   const rol = String(req.user?.rol || req.headers['x-user-rol'] || '').toLowerCase();
-  return { usuario: String(usuario).slice(0, 150), rol };
+  return { usuario: String(usuario).slice(0, 150), rol, userId: req.user?.id || null };
 }
 
-function assertRol(req) {
-  const rol = String(req.user?.rol || req.headers['x-user-rol'] || '').toLowerCase();
-  if (!ROLES.has(rol)) {
-    throw httpError('No autorizado para Registro de Órdenes', 403, 'ORDEN_FORBIDDEN');
-  }
-  return rol;
+async function requireRo(req, actividad = 'VER', requerimientoId = null) {
+  const rid = requerimientoId != null
+    ? requerimientoId
+    : (req.params?.requerimientoId
+      || req.params?.id
+      || req.body?.requerimiento_id
+      || null);
+  return assertAccesoRegistroOrdenes({
+    usuarioId: req.user?.id,
+    actividad,
+    requerimientoId: rid != null && rid !== '' ? rid : null,
+    userRow: req.user || null,
+  });
+}
+
+function filterByAlcanceRo(data, acceso) {
+  if (acceso.modo !== MODO_ACCESO_RO.ASIGNACION) return data;
+  const allow = new Set((acceso.alcanceRequerimientoIds || []).map(Number));
+  return (data || []).filter((r) => allow.has(Number(r.requerimiento_id)));
 }
 
 function sendLibError(res, err, next) {
@@ -78,11 +95,11 @@ function sendLibError(res, err, next) {
 
 router.get('/bandeja', async (req, res, next) => {
   try {
-    assertRol(req);
+    const acceso = await requireRo(req, 'VER');
     const data = await listarBandejaOrdenes();
+    let filtered = filterByAlcanceRo(data, acceso);
     const q = String(req.query.q || req.query.search || '').trim().toLowerCase();
     const estado = String(req.query.estado || '').trim().toUpperCase();
-    let filtered = data;
     if (estado) filtered = filtered.filter((r) => String(r.estado || '').toUpperCase() === estado);
     if (q) {
       filtered = filtered.filter((r) => {
@@ -100,14 +117,21 @@ router.get('/bandeja', async (req, res, next) => {
     const slice = filtered.slice(start, start + pageSize);
     res.json({
       data: slice,
-      meta: { total: filtered.length, page, pageSize, pages: Math.ceil(filtered.length / pageSize) || 1 },
+      meta: {
+        total: filtered.length,
+        page,
+        pageSize,
+        pages: Math.ceil(filtered.length / pageSize) || 1,
+        modo: acceso.modo,
+        acceso_por_asignacion: acceso.modo === MODO_ACCESO_RO.ASIGNACION,
+      },
     });
   } catch (err) { sendLibError(res, err, next); }
 });
 
 router.get('/contexto/:requerimientoId', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await loadContextoExpediente(req.params.requerimientoId);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -115,7 +139,7 @@ router.get('/contexto/:requerimientoId', async (req, res, next) => {
 
 router.post('/ccp-firmado/:requerimientoId', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await adjuntarCcpFirmado(req.params.requerimientoId, req.body || {}, usuario, rol);
     res.status(201).json({ data });
@@ -124,7 +148,7 @@ router.post('/ccp-firmado/:requerimientoId', async (req, res, next) => {
 
 router.get('/ccp-firmado/:requerimientoId', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const include = String(req.query.include || '') === 'content';
     const data = await getCcpFirmadoActivo(req.params.requerimientoId, { includeContent: include });
     if (!data) return res.status(404).json({ error: 'CCP firmado no encontrado' });
@@ -134,7 +158,7 @@ router.get('/ccp-firmado/:requerimientoId', async (req, res, next) => {
 
 router.get('/ccp-firmado/:requerimientoId/historial', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await listarHistorialCcpFirmado(req.params.requerimientoId);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -142,7 +166,7 @@ router.get('/ccp-firmado/:requerimientoId/historial', async (req, res, next) => 
 
 router.delete('/ccp-firmado/:requerimientoId', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await eliminarCcpFirmado(req.params.requerimientoId, {
       motivo: req.body?.motivo || req.query?.motivo || '',
@@ -155,7 +179,7 @@ router.delete('/ccp-firmado/:requerimientoId', async (req, res, next) => {
 
 router.post('/ccp-firmado/:requerimientoId/eliminar', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await eliminarCcpFirmado(req.params.requerimientoId, {
       motivo: req.body?.motivo || '',
@@ -168,7 +192,7 @@ router.post('/ccp-firmado/:requerimientoId/eliminar', async (req, res, next) => 
 
 router.post('/inicio-actividad', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await guardarInicioActividad(req.body || {}, usuario, rol);
     res.json({ data });
@@ -177,7 +201,7 @@ router.post('/inicio-actividad', async (req, res, next) => {
 
 router.get('/inicio-actividad', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await getInicioActividad({
       ordenId: req.query.orden_id,
       requerimientoId: req.query.requerimiento_id,
@@ -188,7 +212,7 @@ router.get('/inicio-actividad', async (req, res, next) => {
 
 router.post('/inicio-actividad/preview', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const body = req.body || {};
     const data = calcularFechasInicioActividad({ ...body, allowPending: true });
     res.json({ data });
@@ -197,7 +221,7 @@ router.post('/inicio-actividad/preview', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await registrarOrden(req.body || {}, usuario, rol);
     res.status(201).json({ data });
@@ -207,7 +231,7 @@ router.post('/', async (req, res, next) => {
 
 router.get('/checklist/requerimiento/:requerimientoId', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const etapa = req.query.etapa || ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION;
     const data = await obtenerChecklistRequerimiento(req.params.requerimientoId, etapa);
     res.json({ data });
@@ -216,7 +240,7 @@ router.get('/checklist/requerimiento/:requerimientoId', async (req, res, next) =
 
 router.get('/:id/checklist', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const etapa = req.query.etapa || ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION;
     const data = await obtenerChecklistOrden(req.params.id, etapa);
     res.json({ data });
@@ -225,7 +249,7 @@ router.get('/:id/checklist', async (req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await getDetalleOrden(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -233,7 +257,7 @@ router.get('/:id', async (req, res, next) => {
 
 router.get('/:id/expediente', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await getExpedienteOrdenCompleto(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -241,7 +265,7 @@ router.get('/:id/expediente', async (req, res, next) => {
 
 router.put('/:id', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await actualizarOrden(req.params.id, req.body || {}, usuario, rol);
     res.json({ data });
@@ -250,7 +274,7 @@ router.put('/:id', async (req, res, next) => {
 
 router.post('/:id/anular', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await anularOrden(req.params.id, req.body?.motivo || req.body?.motivo_anulacion, usuario, rol);
     res.json({ data });
@@ -259,7 +283,7 @@ router.post('/:id/anular', async (req, res, next) => {
 
 router.get('/:id/items', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await getOrdenItems(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -267,7 +291,7 @@ router.get('/:id/items', async (req, res, next) => {
 
 router.get('/:id/entregas', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await listarEntregas(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -275,7 +299,7 @@ router.get('/:id/entregas', async (req, res, next) => {
 
 router.post('/:id/entregas', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const body = req.body || {};
     const payload = Array.isArray(body) ? body : (body.entregas || []);
@@ -287,7 +311,7 @@ router.post('/:id/entregas', async (req, res, next) => {
 
 router.put('/:id/entregas', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await guardarEntregas(req.params.id, req.body?.entregas || req.body || [], usuario, rol);
     res.json({ data });
@@ -296,7 +320,7 @@ router.put('/:id/entregas', async (req, res, next) => {
 
 router.post('/:id/entregas/recalcular-fechas', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await recalcularFechasEntregas(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -304,7 +328,7 @@ router.post('/:id/entregas/recalcular-fechas', async (req, res, next) => {
 
 router.post('/:id/documentos', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await adjuntarOrdenFirmada(req.params.id, req.body || {}, usuario, rol);
     res.status(201).json({ data });
@@ -313,7 +337,7 @@ router.post('/:id/documentos', async (req, res, next) => {
 
 router.get('/:id/documentos/:documentoId', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const include = String(req.query.include || '') === 'content' || req.query.download === '1';
     const data = await getDocumentoOrden(req.params.id, req.params.documentoId, { includeContent: include });
     res.json({ data });
@@ -323,7 +347,7 @@ router.get('/:id/documentos/:documentoId', async (req, res, next) => {
 
 router.get('/:id/docs-notificacion', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await listarDocsNotificacion(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -331,7 +355,7 @@ router.get('/:id/docs-notificacion', async (req, res, next) => {
 
 router.get('/:id/docs-notificacion/:tipo', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const include = String(req.query.include || '') === 'content' || req.query.download === '1';
     const data = await getDocNotificacion(req.params.id, req.params.tipo, { includeContent: include });
     res.json({ data });
@@ -340,7 +364,7 @@ router.get('/:id/docs-notificacion/:tipo', async (req, res, next) => {
 
 router.post('/:id/enviar-proveedor', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await enviarOrdenProveedor(req.params.id, req.body || {}, usuario, rol);
     res.json({ data });
@@ -349,7 +373,7 @@ router.post('/:id/enviar-proveedor', async (req, res, next) => {
 
 router.post('/:id/reenviar-proveedor', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await reenviarOrdenProveedor(req.params.id, req.body || {}, usuario, rol);
     res.json({ data });
@@ -358,7 +382,7 @@ router.post('/:id/reenviar-proveedor', async (req, res, next) => {
 
 router.get('/:id/envios', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await listarEnviosOrden(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -366,7 +390,7 @@ router.get('/:id/envios', async (req, res, next) => {
 
 router.post('/:id/derivar-ejecucion', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
     const data = await derivarAEjecucion(req.params.id, usuario, rol);
     res.json({ data });
@@ -375,7 +399,7 @@ router.post('/:id/derivar-ejecucion', async (req, res, next) => {
 
 router.get('/:id/ejecucion-payload', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await getPayloadEjecucion(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
@@ -385,7 +409,7 @@ router.get('/:id/ejecucion-payload', async (req, res, next) => {
 
 router.get('/:id/historial', async (req, res, next) => {
   try {
-    assertRol(req);
+    await requireRo(req, 'VER');
     const data = await listarHistorialOrden(req.params.id);
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }

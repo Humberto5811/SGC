@@ -4,12 +4,14 @@ import {
   ETAPA_LABELS, getEstadoActualTexto, mapEstadoToUbicacion,
   computeTraceSummary, filterRowsClient,
 } from './trazabilidad.js';
-import { getRolDisplayFromRow, countPendientesModulo } from './observacionDestino.js';
+import { countPendientesModulo } from './observacionDestino.js';
 import { renderEstadoVisualHtml } from './estadoVisualPresenter.js';
 import { renderResponsableBadgeFromRow } from '../ui/workflow/ResponsableBadge.js';
 import { renderEstadoResponsableCellHtml } from '../ui/workflow/EstadoResponsableCell.js';
-import { adaptEstadoResponsable } from '../ui/workflow/adaptEstadoResponsable.js';
+import { getEtapaDisplayLabel } from '../ui/workflow/getEtapaDisplayLabel.js';
 import { resolveModuloFromPrefix } from './observacionesUi.js';
+
+export { getEtapaDisplayLabel } from '../ui/workflow/getEtapaDisplayLabel.js';
 
 const MODULO_BANDEJA_POR_PREFIX = Object.freeze({
   req: 'Registro de Requerimiento',
@@ -150,8 +152,9 @@ function resolveModuloBandeja(prefix, opts = {}) {
   return opts.moduloLabel || MODULO_BANDEJA_POR_PREFIX[prefix] || null;
 }
 
+/** RC8.10.1 — subtítulo bajo Responsable = etapa canónica (nunca legacy/opts de bandeja). */
 export function getResponsableRol(row) {
-  return getRolDisplayFromRow(row);
+  return getEtapaDisplayLabel(row);
 }
 
 /**
@@ -164,9 +167,8 @@ export function renderResponsableCellHtml(row, escFn = esc, opts = {}) {
   if (opts.variant === 'cell' || opts.withEstado) {
     return renderEstadoResponsableCellHtml(row, opts.variant === 'detailed' ? 'detailed' : 'standard');
   }
-  const adapted = adaptEstadoResponsable(row);
-  // RC8.7 — subtítulo SOLO desde etapaLabel vigente (nunca módulo histórico ni opts locales).
-  const etapa = String(adapted.etapaLabel || '').trim();
+  // RC8.10.1 — subtítulo SOLO getEtapaDisplayLabel (contrato canónico / catálogo).
+  const etapa = getEtapaDisplayLabel(row);
   const badge = renderResponsableBadgeFromRow(row);
   if (!etapa) return badge;
   return `<div class="sgc-estado-responsable-cell"><div class="sgc-estado-responsable-cell__row">${badge}</div><div class="sgc-estado-responsable-cell__etapa">${escFn(etapa)}</div></div>`;
@@ -472,9 +474,8 @@ export function renderCompactRowCells(r, opts = {}) {
     <span class="req-desc-text" title="${escFn(descFull)}">${escFn(descShort || '—')}</span>${metaChips}`;
   const centroCell = `<span class="req-centro-text" title="${escFn(row.centro_nombre || row.centro || '—')}">${escFn(row.centro_nombre || row.centro || '—')}</span>`;
   const areaCell = `<span class="req-area-text" title="${escFn(row.area || row.area_nombre || '—')}">${escFn(row.area || row.area_nombre || '—')}</span>`;
-  const respCell = `
-    <div class="req-resp-name">${escFn(row.responsableActual)}</div>
-    <div class="req-resp-role">${escFn(getResponsableRol(row))}</div>`;
+  // RC8.10.1 — mismo presenter que Invitaciones/CCP (badge + etapaLabel canónica).
+  const respCell = renderResponsableCellHtml(row, escFn);
 
   if (exec) {
     return `

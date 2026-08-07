@@ -13,14 +13,13 @@ import {
   bandejaTableStyles,
   sortBandejaRows, bindSortHandlers, mergeSortParams, sortableTh,
 } from '../../utils/trazabilidad.js';
-import { estadoModernBadge } from '../../utils/bandejaUi.js';
+import { estadoModernBadge, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
 import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
 import { loadProgramacionBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
-import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { loadPaquetesConsolidacionTab, openPaquetePanel, highlightPedidoInPaquetesMatriz } from './paquetesConsolidacionView.js';
 import { loadPedidosConsolidacionTab, invalidatePedidosMatriz, reloadPedidosConsolidacion } from './pedidosConsolidacionView.js';
@@ -167,12 +166,6 @@ function getPayloadItemTexts(r) {
   return { codigosSigamef, descripcionesBien };
 }
 
-function getResponsableRolDisplay(r) {
-  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
-  if (/program/i.test(resp)) return 'Programación';
-  return getRolDisplayFromRow(r);
-}
-
 function renderPedidosAdjuntosCell(pedCnt, reqId) {
   if (pedCnt > 0) {
     return `<button type="button" class="btn btn-sm btn-link p-0 prog-ver-pedidos" data-id="${reqId}" title="Ver pedidos SIGAMEF asociados">
@@ -217,8 +210,6 @@ function renderProgramacionRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsableActual || r.responsable_actual || '—';
-  const rol = getResponsableRolDisplay(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Programación');
   const nombreItem = descripcionesBien || r.denominacion || '—';
 
@@ -233,7 +224,7 @@ function renderProgramacionRowCells(r, opts = {}) {
     <td class="actos-col-area">${esc(r.area || '—')}</td>
     <td class="actos-col-cmn small">${esc(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td><div class="req-resp-name">${esc(resp)}</div><div class="req-resp-role">${esc(rol)}</div></td>
+    <td class="small">${renderResponsableCellHtml(r, esc)}</td>
     <td class="small text-muted">${esc(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>
     <td class="text-center">${renderPedidosAdjuntosCell(pedCnt, r.id)}</td>`;

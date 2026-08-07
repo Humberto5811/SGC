@@ -23,8 +23,7 @@ import {
   showDerivarAnalistaModal,
   actosBandejaStyles,
 } from '../../utils/actosModals.js';
-import { estadoModernBadge } from '../../utils/bandejaUi.js';
-import { getRolDisplayFromRow } from '../../utils/observacionDestino.js';
+import { estadoModernBadge, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
 import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 
 function esc(s) {
@@ -55,13 +54,6 @@ function actosSortBandejaHeaders(sortState = null) {
     <th class="req-col-acc"></th>`;
 }
 
-function getResponsableRolDisplayCm(r) {
-  const resp = String(r?.responsableActual || r?.responsable_actual || '').trim();
-  if (/coordinador.*contratos/i.test(resp)) return 'Coordinador CM';
-  if (/analista.*contratos/i.test(resp) || /\banalista\b/i.test(resp)) return 'Analista CM';
-  return getRolDisplayFromRow(r);
-}
-
 function renderCmBandejaRowCells(r, opts = {}) {
   const { escFn = esc } = opts;
   const sigamef = (() => {
@@ -89,8 +81,6 @@ function renderCmBandejaRowCells(r, opts = {}) {
   const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const resp = r.responsableActual || r.responsable_actual || '—';
-  const rol = getResponsableRolDisplayCm(r);
   const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = resolvePedidoSigamef(r);
 
@@ -105,7 +95,7 @@ function renderCmBandejaRowCells(r, opts = {}) {
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
     <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td><div class="req-resp-name">${escFn(resp)}</div><div class="req-resp-role">${escFn(rol)}</div></td>
+    <td class="small">${renderResponsableCellHtml(r, escFn)}</td>
     <td class="small text-muted">${escFn(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
 }

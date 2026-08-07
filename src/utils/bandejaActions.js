@@ -377,8 +377,17 @@ export function resolveCcpMenuContext(row = {}, opts = {}) {
   const requerimientoId = row.requerimiento_id != null ? Number(row.requerimiento_id) : null;
   const yaDerivado = !!(
     row.orden_id
+    || row.tramite_ccp_concluido
     || ['REGISTRO_ORDEN', 'REGISTRO_ORDENES', 'ORDEN', 'ORDEN_REGISTRADA',
-      'ORDEN_LISTA_NOTIFICACION', 'ORDEN_NOTIFICADA', 'EN_EJECUCION'].includes(etapaCodigo)
+      'ORDEN_LISTA_NOTIFICACION', 'ORDEN_NOTIFICADA', 'EN_EJECUCION',
+      'RECEPCION_BIENES', 'BIEN_RECIBIDO_ALMACEN', 'RECEPCION_BIENES_PENDIENTE',
+      'RECEPCION_BIENES_OBSERVADA', 'FINALIZADO', 'EXPEDIENTE_DERIVADO_PAGO',
+      'ORDEN_RESUELTA', 'ORDEN_ANULADA'].includes(etapaCodigo)
+    || ['REGISTRO_ORDENES', 'REGISTRO_ORDEN', 'ORDEN_REGISTRADA',
+      'ORDEN_LISTA_NOTIFICACION', 'ORDEN_NOTIFICADA', 'EN_EJECUCION',
+      'BIEN_RECIBIDO_ALMACEN', 'RECEPCION_BIENES_PENDIENTE',
+      'RECEPCION_BIENES_OBSERVADA', 'FINALIZADO', 'EXPEDIENTE_DERIVADO_PAGO',
+      'ORDEN_RESUELTA', 'ORDEN_ANULADA'].includes(estadoCodigo)
   );
   const modoAsignacion = modoAcceso === 'ASIGNACION' || !!opts.accesoPorAsignacion;
 

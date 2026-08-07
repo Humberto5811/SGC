@@ -8,6 +8,7 @@ import {
   receptorDebeActuar,
   bloqueaSubsanacionPorHijos,
   getListaObservaciones,
+  getObservacionesAbiertas,
 } from '../../shared/observacionesMotor.js';
 import {
   ESTADOS_CUADRO_VIGENTE_LABEL,
@@ -123,6 +124,16 @@ function resolvePendienteReceptor(row) {
   return pending;
 }
 
+/**
+ * RC8.10 — observación ACTIVA (abierta / pendiente de acción).
+ * Subsanadas/cerradas/históricas → false. Solo UI auxiliar; nunca contrato.
+ */
+export function hasObservacionActiva(row) {
+  if (!row) return false;
+  if (resolvePendienteReceptor(row)) return true;
+  return getObservacionesAbiertas(row).length > 0;
+}
+
 /** Construye fila mínima para el Presenter desde campos sueltos (Paquetes/Pedidos). */
 export function buildPresenterRow(partial = {}) {
   if (partial?.payload != null || partial?.requerimiento) {
@@ -160,7 +171,9 @@ export function buildEstadoVisual(row, opts = {}) {
       || null;
     const motorBadge = obtenerEstadoObservaciones(enriched, moduloContext);
     const motorActions = obtenerEstadoObservaciones(enriched, opts.moduloContext || moduloContext || null);
-    const badgeObservado = !!(pendienteReceptor || motorBadge.requiereBadge === true);
+    // RC8.10 — badgeObservado solo auxiliar (acciones/KPI); no pinta Estado.
+    const badgeObservado = hasObservacionActiva(enriched)
+      && !!(pendienteReceptor || motorBadge.requiereBadge === true);
 
     return {
       // Passthrough de labels canónicos (no reinferidos) para consumidores legacy de textoPrincipal.
@@ -276,10 +289,11 @@ export function buildEstadoVisual(row, opts = {}) {
 }
 
 export function renderEstadoVisualHtml(row, opts = {}, escFn = (s) => String(s ?? '')) {
-  // RC8.8.1 — el badge SIEMPRE sale del adapter; buildEstadoVisual solo aporta observed.
+  // RC8.10 — badge SOLO del adapter/contrato; observed no altera color ni label.
   const adapted = adaptEstadoResponsable(row);
-  const v = buildEstadoVisual(row, opts);
-  return renderEstadoBadgeHtml(adapted, { observed: !!v.badgeObservado });
+  void buildEstadoVisual(row, opts); // mantiene KPIs/acciones auxiliares calculables
+  void escFn;
+  return renderEstadoBadgeHtml(adapted, {});
 }
 
-export default { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow };
+export default { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow, hasObservacionActiva };

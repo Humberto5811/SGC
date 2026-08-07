@@ -173,6 +173,10 @@ function mapCotizacionRow(r, ccpFlags = null) {
     id: r.id,
     solicitud_id: r.solicitud_id,
     proveedor_id: r.proveedor_id,
+    // RC8.10 — ID canónico para enrichEstadoResponsableForBandeja
+    requerimiento_id: r.requerimiento_id
+      || r.solicitud_requerimiento_id
+      || null,
     estado: r.estado,
     validacion_estado: valEst,
     solicitud_estado: r.solicitud_estado || '',
@@ -714,7 +718,14 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
         FROM solicitud_requerimientos sr
         JOIN requerimientos r ON r.id = sr.requerimiento_id
         WHERE sr.solicitud_id = cot.solicitud_id AND COALESCE(r.area, '') <> ''
-      ), '') AS area_usuaria
+      ), '') AS area_usuaria,
+      (
+        SELECT sr.requerimiento_id
+        FROM solicitud_requerimientos sr
+        WHERE sr.solicitud_id = cot.solicitud_id
+        ORDER BY sr.requerimiento_id ASC
+        LIMIT 1
+      ) AS solicitud_requerimiento_id
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id

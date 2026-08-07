@@ -50,6 +50,10 @@ export function buildSafeUser(row, accesoCcpFlags = null) {
     acceso_ccp: flags.acceso_ccp === true,
     acceso_ccp_modo: flags.acceso_ccp_modo || null,
     acceso_ccp_por_asignacion: flags.acceso_ccp_por_asignacion === true,
+    // RC8.9 — menú/ruta Registro de Órdenes por permiso o asignación
+    acceso_registro_ordenes: flags.acceso_registro_ordenes === true,
+    acceso_registro_ordenes_modo: flags.acceso_registro_ordenes_modo || null,
+    acceso_registro_ordenes_por_asignacion: flags.acceso_registro_ordenes_por_asignacion === true,
     debeCambiarPassword: row.debe_cambiar_password !== false,
     estado_password: getEstadoPassword(row),
     ultimo_acceso: row.ultimo_acceso || null,
@@ -63,11 +67,20 @@ async function enrichSafeUser(row) {
     acceso_ccp: false,
     acceso_ccp_modo: null,
     acceso_ccp_por_asignacion: false,
+    acceso_registro_ordenes: false,
+    acceso_registro_ordenes_modo: null,
+    acceso_registro_ordenes_por_asignacion: false,
   };
   try {
     const { resolveFlagAccesoCcpMenu } = await import('../lib/accesoCcp.js');
-    flags = await resolveFlagAccesoCcpMenu(row.id, row);
+    const ccp = await resolveFlagAccesoCcpMenu(row.id, row);
+    Object.assign(flags, ccp);
   } catch (_) { /* tablas CCP/asignación aún no listas */ }
+  try {
+    const { resolveFlagAccesoRoMenu } = await import('../lib/accesoRegistroOrdenes.js');
+    const ro = await resolveFlagAccesoRoMenu(row.id, row);
+    Object.assign(flags, ro);
+  } catch (_) { /* ok */ }
   return buildSafeUser(row, flags);
 }
 

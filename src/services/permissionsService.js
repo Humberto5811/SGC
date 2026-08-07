@@ -68,6 +68,11 @@ export const permissionsService = {
       && (u.acceso_ccp_por_asignacion === true || u.acceso_ccp === true)) {
       if (String(actividad).toUpperCase() === 'VER') return true;
     }
+    // RC8.9 — Registro de Órdenes por permiso o asignación
+    if ((routeKey === 'dec/registro-ordenes' || route === 'dec/registro-ordenes')
+      && (u.acceso_registro_ordenes_por_asignacion === true || u.acceso_registro_ordenes === true)) {
+      if (String(actividad).toUpperCase() === 'VER') return true;
+    }
     const subId = resolveRouteSubmodulo(route);
     // Sin mapeo a submódulo: no abrir por defecto (evita fugas de menú Mantenimiento)
     if (!subId) return false;
@@ -77,6 +82,11 @@ export const permissionsService = {
       // Asignación CCP: permitir VER aunque no tenga submódulo CCP en JSON
       if ((can === 'CCP' || subId === 'CCP')
         && u.acceso_ccp_por_asignacion === true
+        && String(actividad).toUpperCase() === 'VER') {
+        return true;
+      }
+      if ((can === 'REGISTRO_ORDENES_CONTRATACION' || subId === 'REGISTRO_ORDENES_CONTRATACION')
+        && u.acceso_registro_ordenes_por_asignacion === true
         && String(actividad).toUpperCase() === 'VER') {
         return true;
       }

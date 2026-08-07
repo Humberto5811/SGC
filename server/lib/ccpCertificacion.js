@@ -341,7 +341,8 @@ export async function listarBandejaCcp() {
       cod.modificado_at,
       sol.id AS consolidacion_id,
       sol.codigo_interno AS consolidacion_codigo,
-      sol.estado AS consolidacion_estado
+      sol.estado AS consolidacion_estado,
+      COALESCE(cod.registrado_at, cc.derivado_at, sol.fecha_creacion, cc.actualizado_at, sc.updated_at) AS fecha_ingreso_ccp
     FROM cuadros_comparativos cc
     JOIN solicitudes_cotizacion sc ON sc.id = cc.solicitud_id
     JOIN solicitud_requerimientos sr ON sr.solicitud_id = sc.id
@@ -361,8 +362,11 @@ export async function listarBandejaCcp() {
     LEFT JOIN ccp_solicitudes sol ON sol.id = link.solicitud_id AND sol.estado <> 'ANULADA'
     WHERE UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
       AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
-      AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_CUADRO_COMPARATIVO')
-    ORDER BY sc.codigo DESC, r.codigo ASC
+      AND (
+        UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_CUADRO_COMPARATIVO', 'EN_ORDEN', 'EN_EJECUCION')
+        OR cod.codigo_ccp IS NOT NULL
+      )
+    ORDER BY COALESCE(cod.registrado_at, cc.derivado_at, sol.fecha_creacion, cc.actualizado_at, sc.updated_at) DESC NULLS LAST, r.id DESC
   `);
 
   // Fuente B — Locación directa desde Recepción (sin cuadro).
@@ -396,7 +400,8 @@ export async function listarBandejaCcp() {
       cod.modificado_at,
       sol.id AS consolidacion_id,
       sol.codigo_interno AS consolidacion_codigo,
-      sol.estado AS consolidacion_estado
+      sol.estado AS consolidacion_estado,
+      COALESCE(cod.registrado_at, sol.fecha_creacion, cot.fecha_presentacion, sc.updated_at) AS fecha_ingreso_ccp
     FROM requerimientos r
     JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
     JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
@@ -422,16 +427,25 @@ export async function listarBandejaCcp() {
       ORDER BY csr.id DESC LIMIT 1
     ) link ON TRUE
     LEFT JOIN ccp_solicitudes sol ON sol.id = link.solicitud_id AND sol.estado <> 'ANULADA'
-    WHERE UPPER(COALESCE(r.estado_actual, '')) = 'CCP'
-      AND UPPER(COALESCE(sc.estado, '')) = 'EN_CCP'
-      AND cot.id IS NOT NULL
+    WHERE cot.id IS NOT NULL
+      AND (
+        (
+          UPPER(COALESCE(r.estado_actual, '')) = 'CCP'
+          AND UPPER(COALESCE(sc.estado, '')) = 'EN_CCP'
+        )
+        OR (
+          /* RC8.9 — pertenencia histórica: código CCP formal aunque etapa ya avanzó */
+          cod.codigo_ccp IS NOT NULL
+          AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_ORDEN', 'EN_EJECUCION')
+        )
+      )
       AND NOT EXISTS (
         SELECT 1 FROM cuadros_comparativos cc
         WHERE cc.solicitud_id = sc.id
           AND UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
           AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
       )
-    ORDER BY sc.codigo DESC, r.codigo ASC
+    ORDER BY COALESCE(cod.registrado_at, sol.fecha_creacion, cot.fecha_presentacion, sc.updated_at) DESC NULLS LAST, r.id DESC
   `);
 
   const rows = [
@@ -559,6 +573,7 @@ export async function listarBandejaCcp() {
       puede_seleccionar: !enConsolidacionActiva && monto > 0,
       registrado_por: row.registrado_por || '',
       registrado_at: row.registrado_at || null,
+      fecha_ingreso_ccp: row.fecha_ingreso_ccp || row.registrado_at || null,
       orden_id: ev.orden_id || null,
       orden_estado: ev.orden_estado || '',
       enviado_proveedor_at: ev.enviado_proveedor_at || null,
@@ -571,15 +586,48 @@ export async function listarBandejaCcp() {
   }
   await enrichEstadoResponsableForBandeja(out, 'requerimiento_id');
 
-  // RC8.8 — CCP operativo: excluir expedientes ya en RO/recepción/etc. (visibilidad ≠ estado).
-  const { puedeVerExpedienteEnBandeja, BANDEJA_CODIGOS } = await import('./bandejaVisibilidad.js');
-  return out.filter((row) => puedeVerExpedienteEnBandeja({
-    bandeja: BANDEJA_CODIGOS.CCP,
-    tipo: row.tipo || row.tipo_contratacion || '',
-    etapaCodigo: row.estado_responsable_vigente?.etapaCodigo || '',
-    estadoCodigo: row.estado_responsable_vigente?.estadoCodigo || '',
-    modo: 'operativo',
-  }));
+  // RC8.9 — pertenencia CCP: operativo + histórico con evidencia (visibilidad ≠ etapa vigente).
+  // El contrato canónico ya viene de enrichEstadoResponsableForBandeja (ERV).
+  const {
+    puedeVerExpedienteEnBandeja,
+    clasificarModoFilaCcp,
+    BANDEJA_CODIGOS,
+  } = await import('./bandejaVisibilidad.js');
+
+  return out
+    .filter((row) => {
+      const etapaCodigo = row.estado_responsable_vigente?.etapaCodigo || '';
+      const estadoCodigo = row.estado_responsable_vigente?.estadoCodigo || '';
+      const tieneEvidenciaCcp = !!(row.codigo_ccp || row.ccp_activo || row.tiene_codigo);
+      return puedeVerExpedienteEnBandeja({
+        bandeja: BANDEJA_CODIGOS.CCP,
+        tipo: row.tipo || row.tipo_contratacion || '',
+        etapaCodigo,
+        estadoCodigo,
+        modo: 'todos',
+        tieneEvidenciaCcp,
+      });
+    })
+    .map((row) => {
+      const etapaCodigo = row.estado_responsable_vigente?.etapaCodigo || '';
+      const estadoCodigo = row.estado_responsable_vigente?.estadoCodigo || '';
+      const modoFila = clasificarModoFilaCcp({ etapaCodigo, estadoCodigo });
+      const historico = modoFila === 'historico';
+      return {
+        ...row,
+        bandeja_modo: modoFila,
+        tramite_ccp_concluido: historico,
+        // Histórico: no seleccionable para consolidar / reabrir trámite
+        puede_seleccionar: historico ? false : !!row.puede_seleccionar,
+      };
+    })
+    // RC8.10.1 — criterio único: ingreso CCP más reciente primero; desempate req id DESC.
+    .sort((a, b) => {
+      const ta = Date.parse(a.fecha_ingreso_ccp || a.registrado_at || '') || 0;
+      const tb = Date.parse(b.fecha_ingreso_ccp || b.registrado_at || '') || 0;
+      if (tb !== ta) return tb - ta;
+      return Number(b.requerimiento_id || 0) - Number(a.requerimiento_id || 0);
+    });
 }
 
 export async function getDetalleCcpRequerimiento(requerimientoId) {
@@ -1093,8 +1141,15 @@ export async function evaluarPuedeDerivarRegistroOrdenes(requerimientoId) {
     [id],
   );
   const etapa = String(vig[0]?.etapa_codigo || '').toUpperCase();
-  if (etapa === 'REGISTRO_ORDEN' || etapa === 'REGISTRO_ORDENES' || etapa === 'ORDEN') {
-    return { ok: false, motivo: 'El expediente ya fue derivado.', yaDerivado: true, etapa };
+  const estadoVig = String(vig[0]?.estado_codigo || '').toUpperCase();
+  const { etapaEsPostCcp } = await import('./bandejaVisibilidad.js');
+  if (etapaEsPostCcp({ etapaCodigo: etapa, estadoCodigo: estadoVig })) {
+    return {
+      ok: false,
+      motivo: 'El expediente ya fue derivado / trámite CCP concluido.',
+      yaDerivado: true,
+      etapa: etapa || estadoVig,
+    };
   }
   if (etapa && etapa !== 'CCP') {
     return { ok: false, motivo: 'Estado no compatible.', etapa };

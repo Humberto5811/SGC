@@ -234,6 +234,13 @@ export function renderBadgeEstadoCuadroHtml(rowOrCode, label, escFn = (s) => Str
   const row = (rowOrCode && typeof rowOrCode === 'object')
     ? rowOrCode
     : { estado_cuadro: code, estado: code };
+  // RC8.10 — ERV canónico primero; no pisar con estado_cuadro / evidencia.
+  if (row.estado_responsable_vigente
+    && row.estado_responsable_vigente.canonicalMissing !== true
+    && (row.estado_responsable_vigente.estadoCodigo || row.estado_responsable_vigente.estado_codigo
+      || row.estado_responsable_vigente.estadoLabel || row.estado_responsable_vigente.estado_label)) {
+    return renderBadgeEstadoVigenteHtml(row, escFn);
+  }
   const n = normalizeCuadroEstado(code);
   if (row.ccp_activo || row.ccp_registrado || row.codigo_ccp
     || n === 'CCP_REGISTRADO' || n === 'CCP_REGISTRADA' || n === 'ENVIADA_OPPM'

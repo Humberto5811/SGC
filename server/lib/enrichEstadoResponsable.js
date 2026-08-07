@@ -27,11 +27,19 @@ import { getEstadoResponsableCanonico } from './estadoResponsableCanonico.js';
 export async function enrichEstadoResponsableForBandeja(rows, idField = 'requerimiento_id') {
   if (!Array.isArray(rows) || !rows.length) return;
 
+  const resolveRowReqId = (row) => {
+    const direct = parseInt(row?.[idField], 10);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const alt = parseInt(row?.requerimiento_id || row?.solicitud_requerimiento_id, 10);
+    if (Number.isFinite(alt) && alt > 0) return alt;
+    const fromList = parseInt(row?.requerimientos?.[0]?.id, 10);
+    if (Number.isFinite(fromList) && fromList > 0) return fromList;
+    return null;
+  };
+
   try {
     const ids = [...new Set(
-      rows
-        .map((r) => parseInt(r?.[idField], 10))
-        .filter((n) => Number.isFinite(n) && n > 0),
+      rows.map((r) => resolveRowReqId(r)).filter((n) => Number.isFinite(n) && n > 0),
     )];
     if (!ids.length) return;
 
@@ -43,10 +51,15 @@ export async function enrichEstadoResponsableForBandeja(rows, idField = 'requeri
     }
 
     for (const row of rows) {
-      const rid = parseInt(row?.[idField], 10);
+      const rid = resolveRowReqId(row);
       if (Number.isFinite(rid) && resolved.has(rid)) {
+        row.requerimiento_id = row.requerimiento_id || rid;
         row.estado_responsable_vigente = resolved.get(rid);
-      } else {
+      } else if (Number.isFinite(rid)) {
+        // ID conocido pero sin fila ERV real → missing explícito (no inventar).
+        if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
+          console.warn('[CANONICAL_STATE_MISSING_FOR_EXISTING_ERV]', { requerimiento_id: rid });
+        }
         row.estado_responsable_vigente = {
           canonicalMissing: true,
           estadoLabel: 'Estado no disponible',
@@ -54,6 +67,7 @@ export async function enrichEstadoResponsableForBandeja(rows, idField = 'requeri
           responsableFuente: 'sin_vigente',
         };
       }
+      // Sin ID resoluble: no forzar canonicalMissing (evita falsos "Estado no disponible").
     }
   } catch (_) {
     /* resolvedor no disponible — sin enriquecer */

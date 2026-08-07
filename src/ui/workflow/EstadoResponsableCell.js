@@ -5,6 +5,7 @@
 import { adaptEstadoResponsable } from './adaptEstadoResponsable.js';
 import { renderEstadoBadgeHtml } from './EstadoBadge.js';
 import { renderResponsableBadgeHtml } from './ResponsableBadge.js';
+import { getEtapaDisplayLabel } from './getEtapaDisplayLabel.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -46,7 +47,8 @@ export function renderEstadoResponsableCellHtml(row, variant = 'standard', opts 
     return `<div class="sgc-estado-responsable-cell sgc-estado-responsable-cell--compact"><div class="sgc-estado-responsable-cell__row">${estadoHtml}${respHtml}</div></div>`;
   }
 
-  const etapa = data.etapaLabel || data.etapaCodigo || '';
+  // RC8.10.1 — nunca imprimir etapaCodigo técnico en UI.
+  const etapa = getEtapaDisplayLabel(row);
   const etapaHtml = etapa
     ? `<div class="sgc-estado-responsable-cell__etapa" title="${esc(etapa)}">${esc(etapa)}</div>`
     : '';

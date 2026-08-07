@@ -9,7 +9,7 @@ import {
 } from '../../utils/bandejaUi.js';
 import { ccpMenuItems } from '../../utils/bandejaActions.js';
 import { openCcpCodigoModal } from '../../utils/ccpCodigoModal.js';
-import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
+import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -33,6 +33,8 @@ let rowsCache = [];
 let selectedIds = new Set();
 let filtroEstado = '';
 let filtroQ = '';
+/** RC8.9 — '' = Todos | operativo | historico */
+let filtroModoBandeja = '';
 /** @type {{ modo?: string, acceso_por_asignacion?: boolean, puede_consolidar?: boolean }} */
 let bandejaMeta = { modo: 'GLOBAL', acceso_por_asignacion: false, puede_consolidar: true };
 
@@ -95,47 +97,8 @@ function updateSelectionUi() {
 }
 
 function renderEstadoCell(row) {
-  // Preferir contrato central; no reconstruir prioridad con solo flags CCP.
-  if (row.estadoVigente?.codigo || row.estado_vigente) {
-    return renderBadgeEstadoVigenteHtml({
-      ...row,
-      codigo_ccp: row.codigo_ccp || '',
-      ccp_activo: !!row.ccp_activo || !!row.tiene_codigo,
-      orden_estado: row.orden_estado || '',
-      enviado_proveedor_at: row.enviado_proveedor_at || null,
-      orden_id: row.orden_id || null,
-      orden_resuelta: row.orden_resuelta,
-      expediente_derivado_pago: row.expediente_derivado_pago,
-      // RC8.1B — preservar evidencia de recepción de bienes para el badge global.
-      recepcion_estado_global: row.recepcion_estado_global || '',
-      recepcion_estado_interno: row.recepcion_estado_interno || '',
-      recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id ?? null,
-    }, esc);
-  }
-  const seed = {
-    codigo_ccp: row.codigo_ccp || '',
-    ccp_activo: !!row.ccp_activo || !!row.tiene_codigo,
-    estado_cuadro: row.estado_cuadro || 'DERIVADO_CCP',
-    solicitud_estado: row.solicitud_estado || 'EN_CCP',
-    consolidacion_estado: row.consolidacion_estado || '',
-    estado_ccp: row.estado_codigo || row.estado_ccp,
-    orden_estado: row.orden_estado || '',
-    enviado_proveedor_at: row.enviado_proveedor_at || null,
-    orden_id: row.orden_id || null,
-    orden_resuelta: row.orden_resuelta,
-    expediente_derivado_pago: row.expediente_derivado_pago,
-    // RC8.1B — preservar evidencia de recepción de bienes en el seed de fallback.
-    recepcion_estado_global: row.recepcion_estado_global || '',
-    recepcion_estado_interno: row.recepcion_estado_interno || '',
-    recepcion_bienes_expediente_id: row.recepcion_bienes_expediente_id ?? null,
-  };
-  if (row.badge_style || row.ccp_registrado || row.tiene_codigo || row.orden_estado
-    || row.enviado_proveedor_at || row.recepcion_estado_global) {
-    return renderBadgeEstadoVigenteHtml(seed, esc);
-  }
-  const label = row.etiqueta_estado || row.estado_ccp_label || row.estado_ccp || '—';
-  void label;
-  return renderBadgeEstadoVigenteHtml(row, esc);
+  // RC8.10 — solo EstadoBadge canónico; sin texto auxiliar bajo el estado.
+  return renderEstadoBadgeFromRow(row);
 }
 
 function renderRow(row) {
@@ -244,6 +207,14 @@ function renderCcpView() {
               <option value="CCP_REGISTRADO">CCP registrado</option>
               <option value="OBSERVADO_OPPM">Observado por OPPM</option>
               <option value="ANULADO">CCP anulado</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small mb-0">Visibilidad</label>
+            <select class="form-select form-select-sm" id="${PREFIX}FiltroModo">
+              <option value="">Todos</option>
+              <option value="operativo">Pendientes / Activos</option>
+              <option value="historico">Procesados / Históricos</option>
             </select>
           </div>
           <div class="col-md-3 d-flex gap-2">
@@ -499,6 +470,11 @@ async function loadBandeja(silent = false) {
     if (!request.isCurrent() || (lifecycle && !lifecycle.isActive())) return;
 
     rowsCache = Array.isArray(resp?.data) ? resp.data : [];
+    if (filtroModoBandeja === 'operativo') {
+      rowsCache = rowsCache.filter((r) => r.bandeja_modo !== 'historico' && !r.tramite_ccp_concluido);
+    } else if (filtroModoBandeja === 'historico') {
+      rowsCache = rowsCache.filter((r) => r.bandeja_modo === 'historico' || r.tramite_ccp_concluido);
+    }
     bandejaMeta = {
       modo: resp?.meta?.modo || 'GLOBAL',
       acceso_por_asignacion: !!resp?.meta?.acceso_por_asignacion,
@@ -831,6 +807,7 @@ function initCcpView() {
   selectedIds = new Set();
   filtroEstado = '';
   filtroQ = '';
+  filtroModoBandeja = '';
   rowsCache = [];
   bandejaMeta = { modo: 'GLOBAL', acceso_por_asignacion: false, puede_consolidar: true };
   closeBandejaActionMenus();
@@ -841,15 +818,19 @@ function initCcpView() {
   document.getElementById(`${PREFIX}FiltroBtn`)?.addEventListener('click', () => {
     filtroQ = document.getElementById(`${PREFIX}Search`)?.value?.trim() || '';
     filtroEstado = document.getElementById(`${PREFIX}FiltroEstado`)?.value || '';
+    filtroModoBandeja = document.getElementById(`${PREFIX}FiltroModo`)?.value || '';
     loadBandeja();
   });
   document.getElementById(`${PREFIX}FiltroLimpiar`)?.addEventListener('click', () => {
     const s = document.getElementById(`${PREFIX}Search`);
     const e = document.getElementById(`${PREFIX}FiltroEstado`);
+    const m = document.getElementById(`${PREFIX}FiltroModo`);
     if (s) s.value = '';
     if (e) e.value = '';
+    if (m) m.value = '';
     filtroQ = '';
     filtroEstado = '';
+    filtroModoBandeja = '';
     loadBandeja();
   });
   document.getElementById(`${PREFIX}Search`)?.addEventListener('keydown', (ev) => {

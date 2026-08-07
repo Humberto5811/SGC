@@ -15,7 +15,7 @@ export const BANDEJA_CODIGOS = Object.freeze({
   CONSULTAS: 'CONSULTAS',
 });
 
-/** Etapas canónicas posteriores a CCP (operativo CCP ya no aplica). */
+/** Etapas canónicas posteriores a CCP (trámite CCP concluido; sigue consultable). */
 const ETAPAS_POST_CCP = new Set([
   'REGISTRO_ORDEN',
   'REGISTRO_ORDENES',
@@ -70,10 +70,15 @@ export function esBandejaOperativa(bandeja) {
   ].includes(b);
 }
 
-/** Bandejas anteriores que pueden conservar filas solo para seguimiento. */
+/**
+ * Bandejas que conservan filas históricas (pertenencia formal ≠ etapa vigente).
+ * RC8.9 — CCP conserva expedientes con evidencia CCP aunque la etapa haya avanzado.
+ */
 export function esSeguimientoHistorico(bandeja) {
   const b = String(bandeja || '').toUpperCase();
   return [
+    BANDEJA_CODIGOS.CCP,
+    BANDEJA_CODIGOS.REGISTRO_ORDENES,
     BANDEJA_CODIGOS.INVITACIONES,
     BANDEJA_CODIGOS.CONSULTAS,
     BANDEJA_CODIGOS.RECEPCION_COTIZACIONES,
@@ -87,29 +92,44 @@ export function etapaEsPostCcp({ etapaCodigo = '', estadoCodigo = '' } = {}) {
 }
 
 /**
- * Visibilidad operativa (no seguimiento) en una bandeja.
- * NO altera contrato canónico.
+ * Visibilidad en bandeja (NO altera contrato canónico).
+ *
+ * RC8.9 — CCP/RO:
+ * - `operativo`: solo trámites abiertos en esa etapa.
+ * - `historial` / `seguimiento`: conserva pertenencia formal (consulta).
+ * - `todos` (CCP): operativo + histórico con evidencia (default listado CCP).
  */
 export function puedeVerExpedienteEnBandeja({
   bandeja,
   tipo,
   etapaCodigo = '',
   estadoCodigo = '',
-  modo = 'operativo', // 'operativo' | 'seguimiento' | 'historial'
+  modo = 'operativo', // 'operativo' | 'seguimiento' | 'historial' | 'todos'
+  tieneEvidenciaCcp = false,
 } = {}) {
   const b = String(bandeja || '').toUpperCase();
   if (!tipoPermitidoEnBandeja(b, tipo)) return false;
 
-  if (modo === 'seguimiento' || modo === 'historial') {
+  if (modo === 'seguimiento' || modo === 'historial' || modo === 'todos') {
+    if (b === BANDEJA_CODIGOS.CCP) {
+      // Histórico CCP exige evidencia formal; operativo CCP no la exige aún.
+      if (modo === 'todos') return true;
+      return !!tieneEvidenciaCcp || !etapaEsPostCcp({ etapaCodigo, estadoCodigo });
+    }
     return true;
   }
 
-  // Operativo CCP: no listar si ya avanzó a RO/recepción/etc.
+  // Operativo CCP: no listar si ya avanzó (usar modo historial/todos para consulta).
   if (b === BANDEJA_CODIGOS.CCP && etapaEsPostCcp({ etapaCodigo, estadoCodigo })) {
     return false;
   }
 
   return true;
+}
+
+/** Clasifica fila CCP: operativo (trámite abierto) vs historico (concluido/derivado). */
+export function clasificarModoFilaCcp({ etapaCodigo = '', estadoCodigo = '' } = {}) {
+  return etapaEsPostCcp({ etapaCodigo, estadoCodigo }) ? 'historico' : 'operativo';
 }
 
 /** SQL fragment helper: excluye LOCACION de Validaciones/Cuadro. */
@@ -127,5 +147,6 @@ export default {
   esSeguimientoHistorico,
   etapaEsPostCcp,
   puedeVerExpedienteEnBandeja,
+  clasificarModoFilaCcp,
   sqlExcludeLocacion,
 };

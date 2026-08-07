@@ -651,6 +651,8 @@ export async function listarCuadroComparativoExpedientes() {
     return {
       solicitud_id: r.solicitud_id,
       solicitud_codigo: r.solicitud_codigo || '',
+      // RC8.10 — ID para getEstadoResponsableCanonico / enrich
+      requerimiento_id: reqsConCentro[0]?.id || null,
       denominacion: r.denominacion || r.objeto || '',
       objeto: r.objeto || '',
       tipo: normalizeTipoContratacion(r.tipo),
