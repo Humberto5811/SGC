@@ -138,13 +138,30 @@ function renderReconciliacion() {
 }
 
 function renderDiagnostico(data) {
+  const c = data.contadores || {};
+  const counters = `
+    <div class="d-flex flex-wrap gap-2 mb-3 small">
+      <span class="badge text-bg-success">Canónicos: ${c.canonicosConfirmados ?? 0}</span>
+      <span class="badge text-bg-secondary">Backfill inicial: ${c.backfillInicial ?? 0}</span>
+      <span class="badge text-bg-warning">Sin asignación: ${c.sinAsignacion ?? 0}</span>
+      <span class="badge text-bg-danger">Inconsistentes: ${c.inconsistentes ?? 0}</span>
+      <span class="badge text-bg-dark">Tipo/etapa: ${c.inconsistenteTipoEtapa ?? 0}</span>
+      <span class="badge text-bg-light border">Sin evidencia: ${c.sinEvidenciaSuficiente ?? 0}</span>
+      <span class="badge text-bg-primary">A reconciliar: ${c.aReconciliar ?? 0}</span>
+    </div>`;
   const rows = (data.matriz || []).map((m) => {
     const p = m.persistido || {};
     const e = m.evidencia || {};
     const missing = m.canonicalMissing === true;
     const diag = m.diagnostico || (missing ? 'Sin fuente canónica — requiere reconciliación' : '—');
+    const respProp = e.responsablePropuesto;
+    const respPropTxt = respProp
+      ? (respProp.responsableTipo === 'PERSONA'
+        ? (respProp.responsableNombre || respProp.responsableUsername || respProp.responsableUsuarioId || 'PERSONA')
+        : (respProp.responsableUnidad || respProp.responsableTipo || ''))
+      : '—';
     return `<tr class="${missing ? 'table-danger' : (m.inconsistente ? 'table-warning' : '')}">
-      <td><strong>${esc(m.codigo)}</strong></td>
+      <td><strong>${esc(m.codigo)}</strong><div class="text-muted" style="font-size:10px">${esc(m.tipo || '')}</div></td>
       <td>${missing ? esc(diag) : esc(p.estadoLabel || p.estadoCodigo || '—')}</td>
       <td>${missing ? '—' : esc(p.etapaLabel || p.etapaCodigo || '—')}</td>
       <td>${missing ? '—' : esc(
@@ -152,28 +169,32 @@ function renderDiagnostico(data) {
           ? (p.responsableNombre || p.responsableUsername || p.responsableUsuarioId || '')
           : (p.responsableUnidad || p.responsableTipo || ''),
       )}</td>
-      <td>${missing ? '—' : esc(p.responsableFuente || '—')}</td>
-      <td>${missing ? '—' : esc(p.version != null ? String(p.version) : '—')}</td>
+      <td>${missing ? '—' : esc(p.responsableFuente || e.fuenteErv || '—')}</td>
+      <td>${esc(e.evidenciaDetectada || '—')}</td>
+      <td>${esc(e.etapaPropuesta || '—')}</td>
+      <td>${esc(respPropTxt)}</td>
       <td>${esc(diag)}</td>
-      <td>${missing ? '—' : esc(e.etapaPropuesta || '—')}</td>
+      <td>${esc(e.accion || '—')}</td>
     </tr>`;
   }).join('');
   const sin = (data.sinFuenteCanonica || []).map((m) => esc(m.codigo)).join(', ');
   return `
     <div class="d-flex justify-content-between mb-2 flex-wrap gap-2">
-      <span class="small text-muted">Contrato canónico real (misma fuente que bandejas)</span>
+      <span class="small text-muted">RC8.11 — Diagnóstico por evidencia (solo lectura; no aplica)</span>
       <button type="button" class="btn btn-sm btn-outline-secondary" id="wfDiagRefresh">Actualizar</button>
     </div>
+    ${counters}
     ${sin ? `<div class="alert alert-warning py-2 small">Sin fuente canónica — requiere reconciliación: <strong>${sin}</strong></div>` : ''}
     <div class="table-responsive"><table class="table table-sm table-bordered">
       <thead class="table-light">
         <tr>
-          <th>REQ</th><th>Estado</th><th>Etapa</th>
-          <th>Responsable</th><th>Fuente</th><th>Versión</th>
-          <th>Diagnóstico</th><th>Etapa evidencia</th>
+          <th>REQ</th><th>Estado ERV</th><th>Etapa ERV</th>
+          <th>Responsable ERV</th><th>Fuente ERV</th>
+          <th>Evidencia</th><th>Etapa propuesta</th><th>Resp. propuesto</th>
+          <th>Inconsistencia</th><th>Acción</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="8" class="text-muted">Sin datos</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="10" class="text-muted">Sin datos</td></tr>'}</tbody>
     </table></div>`;
 }
 
@@ -208,7 +229,7 @@ async function loadPanel() {
       panel.innerHTML = renderReconciliacion();
       bindReconcile();
     } else {
-      cache.diag = await apiGet('/diagnostico?codigos=REQ-00001,REQ-00002');
+      cache.diag = await apiGet('/diagnostico');
       panel.innerHTML = renderDiagnostico(cache.diag);
       document.getElementById('wfDiagRefresh')?.addEventListener('click', () => loadPanel());
     }

@@ -159,12 +159,21 @@ router.get('/transiciones', async (_req, res, next) => {
 /** GET /api/workflow/mantenimiento/diagnostico?codigos=REQ-00001,REQ-00002 */
 router.get('/diagnostico', async (req, res, next) => {
   try {
-    const raw = String(req.query.codigos || 'REQ-00001,REQ-00002');
+    const raw = String(req.query.codigos || '');
     const codigos = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    const { rows: reqs } = await query(
-      `SELECT id, codigo FROM requerimientos WHERE codigo = ANY($1::text[]) ORDER BY codigo`,
-      [codigos],
-    );
+    let reqs;
+    if (codigos.length) {
+      const { rows } = await query(
+        `SELECT id, codigo, tipo FROM requerimientos WHERE codigo = ANY($1::text[]) ORDER BY codigo`,
+        [codigos],
+      );
+      reqs = rows;
+    } else {
+      const { rows } = await query(
+        `SELECT id, codigo, tipo FROM requerimientos ORDER BY id LIMIT 200`,
+      );
+      reqs = rows;
+    }
     const ids = reqs.map((r) => r.id);
     const plan = await reconciliarEstadoResponsablePorEvidencia({
       requerimientoIds: ids,
@@ -175,13 +184,22 @@ router.get('/diagnostico', async (req, res, next) => {
       const erv = resolved.get(r.id) || {};
       const missing = erv.canonicalMissing === true;
       const p = (plan.rows || []).find((x) => x.requerimientoId === r.id) || null;
+      const clases = p?.clasificaciones || [];
+      let diagnostico = 'OK';
+      if (missing) diagnostico = 'Sin fuente canónica — requiere reconciliación';
+      else if (clases.includes('INCONSISTENTE_TIPO_ETAPA')) diagnostico = 'INCONSISTENTE_TIPO_ETAPA';
+      else if (clases.includes('BACKFILL_INICIAL')) diagnostico = 'BACKFILL_INICIAL — pendiente reconciliar';
+      else if (clases.includes('ASIGNACION_FALTANTE')) diagnostico = 'ASIGNACION_FALTANTE';
+      else if (clases.includes('ERV_ATRASADO')) diagnostico = 'ERV_ATRASADO';
+      else if (p?.accion === 'RECONCILIAR') diagnostico = 'Inconsistente vs evidencia';
       return {
         codigo: r.codigo,
+        tipo: r.tipo || p?.tipo || '',
         persistido: erv,
         canonicalMissing: missing,
-        diagnostico: missing
-          ? 'Sin fuente canónica — requiere reconciliación'
-          : (p?.accion === 'RECONCILIAR' ? 'Inconsistente vs evidencia' : 'OK'),
+        diagnostico,
+        clasificaciones: clases,
+        warnings: p?.warnings || [],
         contratoCanonico: missing ? null : {
           estado: erv.estadoLabel || erv.estadoCodigo,
           etapa: erv.etapaLabel || erv.etapaCodigo,
@@ -193,10 +211,13 @@ router.get('/diagnostico', async (req, res, next) => {
           categoria: erv.estadoCategoria,
         },
         evidencia: p ? {
+          fuenteErv: erv.responsableFuente || p.ervActual?.fuente || null,
+          evidenciaDetectada: p.evidenciaAvanzada,
           etapaPropuesta: p.etapaPropuesta,
           estadoPropuesto: p.estadoPropuesto,
           responsablePropuesto: p.responsablePropuesto,
           accion: p.accion,
+          inconsistencia: clases[0] || null,
         } : null,
         inconsistente: p?.accion === 'RECONCILIAR',
       };
@@ -207,6 +228,8 @@ router.get('/diagnostico', async (req, res, next) => {
       matriz,
       inconsistencias: plan.inconsistencias || [],
       sinFuenteCanonica: sinCanonico,
+      contadores: plan.contadores || null,
+      origen: plan.origen || null,
     });
   } catch (err) {
     next(err);

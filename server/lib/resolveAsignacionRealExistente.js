@@ -311,6 +311,8 @@ async function resolveCoordinacionCm(client, requerimientoId) {
 
 async function resolveCcp(client, requerimientoId) {
   const run = runner(client);
+
+  // 1. responsable_ccp_id / nombre en cuadro (B/S)
   const { rows } = await run(
     `SELECT cc.id, cc.responsable_ccp_id, cc.responsable_ccp_nombre
      FROM cuadros_comparativos cc
@@ -346,7 +348,78 @@ async function resolveCcp(client, requerimientoId) {
     }
   }
 
+  // 2. Locación: derivacion_ccp en informe de cotización (no es Validaciones)
+  try {
+    const { rows: cots } = await run(
+      `SELECT cot.id, cot.validacion_informe
+       FROM cotizaciones_proveedor cot
+       JOIN solicitud_requerimientos sr ON sr.solicitud_id = cot.solicitud_id
+       WHERE sr.requerimiento_id = $1
+         AND cot.validacion_informe ? 'derivacion_ccp'
+       ORDER BY cot.id DESC
+       LIMIT 5`,
+      [requerimientoId],
+    );
+    for (const cot of cots) {
+      const inf = safeJson(cot.validacion_informe);
+      const der = inf?.derivacion_ccp || {};
+      const uid = der.responsable_id ?? der.usuario_id;
+      if (uid != null) {
+        const u = await resolveUsuarioDesdeIdentificador(client, String(uid));
+        if (u) {
+          return packUsuario(u, {
+            unidad: 'CCP',
+            fuente: 'cotizacion.derivacion_ccp.responsable_id',
+            evidenciaId: cot.id,
+          });
+        }
+      }
+      const nom = String(der.responsable_nombre || '').trim();
+      if (nom && !isRolGenerico(nom)) {
+        const u = await resolveUsuarioDesdeIdentificador(client, nom);
+        if (u) {
+          return packUsuario(u, {
+            unidad: 'CCP',
+            fuente: 'cotizacion.derivacion_ccp.responsable_nombre',
+            evidenciaId: cot.id,
+          });
+        }
+      }
+    }
+  } catch (_) { /* ok */ }
+
+  // 3. sc.responsable (Locación EN_CCP sin cuadro)
+  const sc = await loadSolicitudVigente(client, requerimientoId);
+  if (sc) {
+    const respTxt = String(sc.responsable || '').trim();
+    if (respTxt && !isRolGenerico(respTxt)) {
+      const u = await resolveUsuarioDesdeIdentificador(client, respTxt);
+      if (u) {
+        return packUsuario(u, {
+          unidad: 'CCP',
+          fuente: 'solicitud.responsable',
+          evidenciaId: sc.id,
+        });
+      }
+    }
+  }
+
+  // 4. Asignación activa CCP
+  const previa = await loadAsignacionActivaEtapa(client, requerimientoId, new Set(['CCP']));
+  if (previa) return previa;
+
   return packUnidad('CCP', 'unidad_destino_etapa');
+}
+
+async function resolveCuadro(client, requerimientoId) {
+  const previa = await loadAsignacionActivaEtapa(
+    client,
+    requerimientoId,
+    new Set(['CUADRO_COMPARATIVO']),
+  );
+  if (previa) return previa;
+  // No inferir desde creado_por / actualizado_por del cuadro.
+  return packUnidad('Cuadro Comparativo', 'unidad_destino_etapa');
 }
 
 async function resolveRegistroOrdenes(client, requerimientoId) {
@@ -420,7 +493,27 @@ export async function resolveAsignacionRealExistente({
     return resolveFamiliaInvitaciones(client, rid);
   }
   if (ETAPAS_VALIDACIONES.has(etapa)) {
+    // LOCACION nunca resuelve persona de Validaciones
+    const run = runner(client);
+    const { rows: tipoRows } = await run(
+      `SELECT tipo FROM requerimientos WHERE id = $1 LIMIT 1`,
+      [rid],
+    );
+    const tipo = String(tipoRows[0]?.tipo || '').toUpperCase();
+    if (/LOCAC/.test(tipo)) {
+      return null;
+    }
     return resolveValidaciones(client, rid);
+  }
+  if (etapa === 'CUADRO_COMPARATIVO') {
+    const run = runner(client);
+    const { rows: tipoRows } = await run(
+      `SELECT tipo FROM requerimientos WHERE id = $1 LIMIT 1`,
+      [rid],
+    );
+    const tipo = String(tipoRows[0]?.tipo || '').toUpperCase();
+    if (/LOCAC/.test(tipo)) return null;
+    return resolveCuadro(client, rid);
   }
   if (ETAPAS_CM.has(etapa) || etapa === 'COORDINACION_CM') {
     return resolveCoordinacionCm(client, rid);
