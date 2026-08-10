@@ -51,15 +51,23 @@ async function loadSnapshotOrden(ordenId) {
     ORDER BY id DESC LIMIT 1
   `, [ordenId, orden.requerimiento_id]);
 
+  // CCP firmado = documento en ccp_firmados (NO basta codigo_ccp).
   const { rows: ccp } = await query(`
     SELECT id FROM ccp_firmados
     WHERE requerimiento_id = $1 AND activo = TRUE
     ORDER BY version DESC, id DESC LIMIT 1
   `, [orden.requerimiento_id]);
 
+  const { rows: reqTipo } = await query(
+    `SELECT tipo FROM requerimientos WHERE id = $1`,
+    [orden.requerimiento_id],
+  );
+  const tipo = String(reqTipo[0]?.tipo || orden.tipo || '').toLowerCase();
+
   return {
     orden_id: orden.id,
     requerimiento_id: orden.requerimiento_id,
+    tipo,
     estado: orden.estado,
     ccp_firmado: ccp.length > 0,
     numero_orden: orden.numero_orden || '',
@@ -117,7 +125,16 @@ export async function obtenerChecklistRequerimiento(requerimientoId, etapa = ETA
     LIMIT 1
   `, [reqId]);
 
+  // RC8.10.2 — tipo para no confundir reglas; sin orden aún todo pendiente es dominio real.
+  const { rows: reqTipo } = await query(
+    `SELECT tipo FROM requerimientos WHERE id = $1`,
+    [reqId],
+  );
+  const tipo = String(reqTipo[0]?.tipo || '').toLowerCase();
+
   const snapshot = {
+    tipo,
+    // codigo_ccp NO implica ccp_firmado — solo ccp_firmados.activo
     ccp_firmado: ccp.length > 0,
     numero_orden: '',
     fecha_orden: null,

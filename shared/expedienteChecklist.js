@@ -57,7 +57,7 @@ export const REQUISITOS_POR_ETAPA = Object.freeze({
     {
       id: 'inicio_actividad',
       label: 'Inicio de actividad',
-      action: 'adminEntregas',
+      action: 'inicioActividad',
       mensajePendiente: 'Falta configurar el inicio de actividad.',
     },
     {
@@ -110,6 +110,49 @@ export const REQUISITOS_POR_ETAPA = Object.freeze({
     },
   ],
 });
+
+/** RC8.10.4 — normaliza tipo de proceso para checklist RO. */
+export function normalizeTipoChecklist(tipo) {
+  const t = String(tipo || '').trim().toUpperCase();
+  if (!t) return 'BIEN';
+  if (/LOCAC|LOCADOR/.test(t)) return 'LOCACION';
+  if (/SERVIC/.test(t)) return 'SERVICIO';
+  if (/BIEN/.test(t)) return 'BIEN';
+  return 'BIEN';
+}
+
+/**
+ * RC8.10.4 — Matriz de requisitos aplicables por tipo.
+ * LOCACION/SERVICIO no exigen «Cantidades distribuidas» (regla de bienes físicos).
+ */
+export function getOrdenChecklistRules(tipoProceso) {
+  const tipo = normalizeTipoChecklist(tipoProceso);
+  const all = REQUISITOS_POR_ETAPA[ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION] || [];
+  const byId = Object.fromEntries(all.map((d) => [d.id, { ...d }]));
+
+  if (tipo === 'LOCACION' || tipo === 'SERVICIO') {
+    return [
+      byId.ccp_firmado,
+      byId.numero_orden,
+      byId.fecha_orden,
+      byId.orden_firmada,
+      { ...byId.entregas, label: 'Entregables', mensajePendiente: 'Falta configurar el cronograma de entregables.' },
+      byId.inicio_actividad,
+      byId.importes,
+    ].filter(Boolean);
+  }
+
+  // BIEN
+  return [
+    byId.ccp_firmado,
+    byId.numero_orden,
+    byId.fecha_orden,
+    byId.orden_firmada,
+    { ...byId.entregas, label: 'Entregas', mensajePendiente: 'Falta configurar el cronograma de entregas.' },
+    byId.cantidades,
+    byId.importes,
+  ].filter(Boolean);
+}
 
 /**
  * Evalúa si cantidades e importes del snapshot cuadran.
@@ -193,7 +236,12 @@ function okDeSnapshot(id, snap, dist) {
  * @returns {{ etapa, completo, items, pendientes, primerPendiente, resumen }}
  */
 export function evaluarChecklist(etapa, snapshot = {}) {
-  const defs = REQUISITOS_POR_ETAPA[etapa] || [];
+  const tipoProceso = normalizeTipoChecklist(
+    snapshot.tipo || snapshot.tipo_contratacion || snapshot.tipoProceso || '',
+  );
+  const defs = etapa === ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION
+    ? getOrdenChecklistRules(tipoProceso)
+    : (REQUISITOS_POR_ETAPA[etapa] || []);
   const dist = (snapshot.cantidades_ok != null && snapshot.importes_ok != null)
     ? { cantidades_ok: !!snapshot.cantidades_ok, importes_ok: !!snapshot.importes_ok }
     : evaluarDistribucion(snapshot);
@@ -212,6 +260,7 @@ export function evaluarChecklist(etapa, snapshot = {}) {
   const pendientes = items.filter((i) => !i.ok);
   return {
     etapa,
+    tipoProceso,
     completo: pendientes.length === 0,
     items,
     pendientes,

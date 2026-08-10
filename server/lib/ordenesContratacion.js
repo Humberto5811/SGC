@@ -337,57 +337,21 @@ async function loadProveedor(proveedorId) {
   return rows[0] || null;
 }
 
-export async function loadContextoExpediente(requerimientoId) {
-  const id = parseInt(requerimientoId, 10);
-  if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
-
-  const { rows } = await query(`
-    SELECT
-      r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
-      r.tipo, r.estado_actual, r.payload,
-      sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
-      sc.objeto,
-      cc.id AS cuadro_id, cc.estado AS cuadro_estado, cc.valor_adjudicado,
-      cc.proveedor_ganador_id, cc.datos_json, cc.tipo AS cuadro_tipo,
-      cod.id AS codigo_id, cod.codigo_ccp, cod.estado AS codigo_estado,
-      cf.id AS ccp_firmado_id, cf.nombre_archivo AS ccp_firmado_nombre,
-      cf.version AS ccp_firmado_version, cf.subido_at AS ccp_firmado_at,
-      cf.activo AS ccp_firmado_activo
-    FROM requerimientos r
-    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
-    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
-    JOIN cuadros_comparativos cc ON cc.solicitud_id = sc.id
-      AND UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
-    LEFT JOIN LATERAL (
-      SELECT c.* FROM ccp_codigos c
-      WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
-      ORDER BY c.id DESC LIMIT 1
-    ) cod ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT f.* FROM ccp_firmados f
-      WHERE f.requerimiento_id = r.id AND f.activo = TRUE
-      ORDER BY f.version DESC, f.id DESC LIMIT 1
-    ) cf ON TRUE
-    WHERE r.id = $1
-    ORDER BY cc.version DESC NULLS LAST, cc.id DESC
-    LIMIT 1
-  `, [id]);
-
-  if (!rows.length) throw httpError('Expediente no encontrado o sin cuadro derivado a CCP', 404);
-  const row = rows[0];
-  const estadoAct = String(row.estado_actual || '').toUpperCase();
-  if (estadoAct === 'ANULADO' || estadoAct.includes('ANUL')) {
-    throw httpError('Expediente anulado', 409, 'EXPEDIENTE_ANULADO');
-  }
-
+async function buildContextoFromRow(row, {
+  origen = 'CUADRO_COMPARATIVO',
+  items = [],
+  proveedorId = null,
+  montoFallback = 0,
+  moneda = 'PEN',
+} = {}) {
+  const id = row.requerimiento_id;
   const pedidos = await loadPedidos(id);
-  const proveedorId = row.proveedor_ganador_id;
   const proveedor = await loadProveedor(proveedorId);
-  const items = extractItemsAdjudicados(row, proveedorId);
   const monto = items.reduce((a, it) => a + Number(it.precio_total || 0), 0)
-    || Number(row.valor_adjudicado || 0);
+    || Number(montoFallback || 0);
 
   const { resolveAreaUsuaria } = await import('../../shared/ordenCronogramaContractual.js');
+  const { normalizarTipo, TIPOS_CONTRATACION } = await import('../../shared/workflow/tiposContratacion.js');
   const pl = parseJson(row.payload, {});
   let payloadArea = '';
   if (pl.area && typeof pl.area === 'object') {
@@ -427,9 +391,14 @@ export async function loadContextoExpediente(requerimientoId) {
     centro: centroRes.centro || pedidos[0]?.centro || '',
   });
 
-  const tipoRaw = String(row.tipo || row.cuadro_tipo || '').toUpperCase();
-  const esServicio = /SERVIC/.test(tipoRaw) || /LOCADOR/.test(tipoRaw);
+  const tipoCanon = normalizarTipo(row.tipo || row.cuadro_tipo || row.solicitud_tipo || '');
+  const esServicio = tipoCanon === TIPOS_CONTRATACION.SERVICIO
+    || tipoCanon === TIPOS_CONTRATACION.LOCACION;
   const tipoOrdenSugerido = esServicio ? 'OS' : 'OC';
+  const tipoContratacionLabel = tipoCanon === TIPOS_CONTRATACION.LOCACION
+    ? 'Locación'
+    : (tipoCanon === TIPOS_CONTRATACION.SERVICIO ? 'Servicio' : 'Bien');
+
   const pedidosNorm = pedidos.map((p) => ({
     id: p.id,
     pedido_sigamef: p.pedido_sigamef || p.nro_pedido || '',
@@ -449,19 +418,27 @@ export async function loadContextoExpediente(requerimientoId) {
   }));
   const pedidosTexto = [...new Set(pedidosNorm.map((p) => p.pedido_sigamef).filter(Boolean))].join(', ');
 
+  const { rows: ordRows } = await query(`
+    SELECT id FROM ordenes_contratacion
+    WHERE requerimiento_id = $1 AND estado <> 'ORDEN_ANULADA'
+    ORDER BY id DESC LIMIT 1
+  `, [id]);
+
   return {
     requerimiento_id: row.requerimiento_id,
     requerimiento_codigo: row.requerimiento_codigo,
     denominacion: row.denominacion || row.objeto || '',
     tipo: row.tipo || '',
-    tipo_contratacion: esServicio ? 'Servicio' : 'Bien',
+    tipo_proceso: tipoCanon,
+    tipo_contratacion: tipoContratacionLabel,
+    origen_orden: origen,
     solicitud_id: row.solicitud_id,
     solicitud_codigo: row.solicitud_codigo,
     solicitud_estado: row.solicitud_estado,
-    cuadro_id: row.cuadro_id,
-    cuadro_estado: row.cuadro_estado,
+    cuadro_id: row.cuadro_id || null,
+    cuadro_estado: row.cuadro_estado || null,
     monto_adjudicado: Number(Number(monto).toFixed(2)),
-    moneda: 'PEN',
+    moneda: String(moneda || 'PEN').toUpperCase() || 'PEN',
     proveedor_id: proveedorId || null,
     proveedor_ruc: proveedor?.ruc || '',
     proveedor_razon_social: proveedor?.razon_social || '',
@@ -474,6 +451,7 @@ export async function loadContextoExpediente(requerimientoId) {
     ccp_firmado_nombre: row.ccp_firmado_nombre || '',
     ccp_firmado_version: row.ccp_firmado_version || null,
     ccp_firmado_at: row.ccp_firmado_at || null,
+    orden_id: ordRows[0]?.id || null,
     centro: centroRes.centro || '',
     area_usuaria: areaUsuaria,
     pedido_sigamef: pedidosTexto || null,
@@ -483,6 +461,173 @@ export async function loadContextoExpediente(requerimientoId) {
     tipo_orden_sugerido: tipoOrdenSugerido,
     plazo_ofertado_dias: items[0]?.plazo_ofertado_dias ?? null,
     plazo_ofertado: items[0]?.plazo_ofertado ?? null,
+  };
+}
+
+/**
+ * RC8.10.4 — Contexto RO tipo-aware.
+ * BIEN/SERVICIO: cuadro DERIVADO_CCP.
+ * LOCACION: sin cuadro; evidencia ccp_codigos + cotización presentada.
+ */
+export async function loadContextoExpediente(requerimientoId) {
+  const id = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
+
+  const { rows: cuadroRows } = await query(`
+    SELECT
+      r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
+      r.tipo, r.estado_actual, r.payload,
+      sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
+      sc.objeto,
+      cc.id AS cuadro_id, cc.estado AS cuadro_estado, cc.valor_adjudicado,
+      cc.proveedor_ganador_id, cc.datos_json, cc.tipo AS cuadro_tipo,
+      cod.id AS codigo_id, cod.codigo_ccp, cod.estado AS codigo_estado,
+      cf.id AS ccp_firmado_id, cf.nombre_archivo AS ccp_firmado_nombre,
+      cf.version AS ccp_firmado_version, cf.subido_at AS ccp_firmado_at,
+      cf.activo AS ccp_firmado_activo
+    FROM requerimientos r
+    JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
+    JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+    JOIN cuadros_comparativos cc ON cc.solicitud_id = sc.id
+      AND UPPER(COALESCE(cc.estado, '')) = 'DERIVADO_CCP'
+      AND UPPER(COALESCE(cc.tipo, '')) IN ('BIENES', 'SERVICIOS')
+    LEFT JOIN LATERAL (
+      SELECT c.* FROM ccp_codigos c
+      WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
+      ORDER BY c.id DESC LIMIT 1
+    ) cod ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT f.* FROM ccp_firmados f
+      WHERE f.requerimiento_id = r.id AND f.activo = TRUE
+      ORDER BY f.version DESC, f.id DESC LIMIT 1
+    ) cf ON TRUE
+    WHERE r.id = $1
+    ORDER BY cc.version DESC NULLS LAST, cc.id DESC
+    LIMIT 1
+  `, [id]);
+
+  let row = cuadroRows[0] || null;
+  let origen = 'CUADRO_COMPARATIVO';
+  let items = [];
+  let proveedorId = null;
+  let montoFallback = 0;
+  let moneda = 'PEN';
+
+  if (row) {
+    const estadoAct = String(row.estado_actual || '').toUpperCase();
+    if (estadoAct === 'ANULADO' || estadoAct.includes('ANUL')) {
+      throw httpError('Expediente anulado', 409, 'EXPEDIENTE_ANULADO');
+    }
+    proveedorId = row.proveedor_ganador_id;
+    items = extractItemsAdjudicados(row, proveedorId);
+    montoFallback = Number(row.valor_adjudicado || 0);
+  } else {
+    // LOCACION / sin cuadro — pertenencia por ccp_codigos + cotización
+    const { rows: locRows } = await query(`
+      SELECT
+        r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
+        r.tipo, r.estado_actual, r.payload,
+        sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
+        sc.objeto, sc.tipo AS solicitud_tipo,
+        NULL::int AS cuadro_id, NULL::text AS cuadro_estado,
+        cot.id AS cotizacion_id, cot.propuesta_economica, cot.proveedor_id AS proveedor_ganador_id,
+        cod.id AS codigo_id, cod.codigo_ccp, cod.estado AS codigo_estado,
+        cf.id AS ccp_firmado_id, cf.nombre_archivo AS ccp_firmado_nombre,
+        cf.version AS ccp_firmado_version, cf.subido_at AS ccp_firmado_at,
+        cf.activo AS ccp_firmado_activo
+      FROM requerimientos r
+      JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
+      JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+      LEFT JOIN LATERAL (
+        SELECT c.* FROM cotizaciones_proveedor c
+        WHERE c.solicitud_id = sc.id AND c.estado = 'COTIZACION_PRESENTADA'
+        ORDER BY
+          CASE WHEN COALESCE(c.validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
+          c.fecha_presentacion DESC NULLS LAST,
+          c.id DESC
+        LIMIT 1
+      ) cot ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT c.* FROM ccp_codigos c
+        WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
+        ORDER BY c.id DESC LIMIT 1
+      ) cod ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT f.* FROM ccp_firmados f
+        WHERE f.requerimiento_id = r.id AND f.activo = TRUE
+        ORDER BY f.version DESC, f.id DESC LIMIT 1
+      ) cf ON TRUE
+      WHERE r.id = $1
+        AND cot.id IS NOT NULL
+        AND cod.codigo_ccp IS NOT NULL
+        AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_ORDEN', 'EN_EJECUCION')
+      ORDER BY sc.id DESC
+      LIMIT 1
+    `, [id]);
+
+    if (!locRows.length) {
+      throw httpError('Expediente no encontrado o sin pertenencia CCP para Registro de Órdenes', 404);
+    }
+    row = locRows[0];
+    const estadoAct = String(row.estado_actual || '').toUpperCase();
+    if (estadoAct === 'ANULADO' || estadoAct.includes('ANUL')) {
+      throw httpError('Expediente anulado', 409, 'EXPEDIENTE_ANULADO');
+    }
+    const { normalizarTipo, TIPOS_CONTRATACION } = await import('../../shared/workflow/tiposContratacion.js');
+    const tipoCanon = normalizarTipo(row.tipo || row.solicitud_tipo || '');
+    if (tipoCanon !== TIPOS_CONTRATACION.LOCACION) {
+      // Sin cuadro y no locación → no hay fuente válida
+      throw httpError('Expediente no encontrado o sin cuadro derivado a CCP', 404);
+    }
+    origen = 'RECEPCION_COTIZACION_LOCACION';
+    proveedorId = row.proveedor_ganador_id;
+    items = extractItemsDesdePropuestaEconomica(row.propuesta_economica, {
+      denominacion: row.denominacion || row.objeto || '',
+    });
+    const eco = parseJson(row.propuesta_economica, {});
+    moneda = String(eco?.moneda || 'PEN').toUpperCase() || 'PEN';
+    montoFallback = items.reduce((a, it) => a + Number(it.precio_total || 0), 0);
+  }
+
+  return buildContextoFromRow(row, {
+    origen,
+    items,
+    proveedorId,
+    montoFallback,
+    moneda,
+  });
+}
+
+/**
+ * RC8.10.4 — Resolvedor único de contexto RO (shape canónico).
+ */
+export async function resolveRegistroOrdenContext(requerimientoId) {
+  const ctx = await loadContextoExpediente(requerimientoId);
+  let etapaCanonica = '';
+  let responsableCanonico = '';
+  let estadoCanonico = '';
+  try {
+    const { getEstadoResponsableCanonico } = await import('./estadoResponsableCanonico.js');
+    const map = await getEstadoResponsableCanonico({ requerimientoIds: [ctx.requerimiento_id] });
+    const erv = map.get(Number(ctx.requerimiento_id));
+    etapaCanonica = erv?.etapaLabel || erv?.etapaCodigo || '';
+    estadoCanonico = erv?.estadoLabel || erv?.estadoCodigo || '';
+    responsableCanonico = erv?.responsableNombre || erv?.responsableUnidad || '';
+  } catch (_) { /* ok */ }
+
+  return {
+    requerimientoId: ctx.requerimiento_id,
+    tipoProceso: ctx.tipo_proceso || ctx.tipo || '',
+    solicitudCotizacionId: ctx.solicitud_id || null,
+    cuadroId: ctx.cuadro_id || null,
+    codigoCcp: ctx.codigo_ccp || '',
+    ccpCodigoId: ctx.codigo_id || null,
+    ccpFirmadoId: ctx.ccp_firmado_id || null,
+    ordenId: ctx.orden_id || null,
+    etapaCanonica,
+    estadoCanonico,
+    responsableCanonico,
+    contexto: ctx,
   };
 }
 
@@ -1474,31 +1619,120 @@ export async function registrarOrden(payload, usuario, rol) {
     ]);
   }
 
-  // Entrega total inicial sugerida
+  // Entrega inicial desde datos reales del requerimiento (RC8.10.5)
   const itemsDb = await getOrdenItems(orden.id);
   const tipoEntrega = /servic/i.test(ctx.tipo_contratacion) ? 'ENTREGABLE' : 'ENTREGA';
-  const plazo = itemsDb[0]?.plazo_ofertado_dias ?? ctx.plazo_ofertado_dias ?? 0;
-  const { rows: entRows } = await query(`
-    INSERT INTO orden_entregas (
-      orden_id, numero_entrega, tipo_entrega, descripcion,
-      etiqueta_entrega, codigo_entrega,
-      dias_plazo, tipo_dias, evento_inicio_plazo, importe, estado
-    ) VALUES ($1,1,$2,$3,'ÚNICO','UNICO',$4,'calendario',$5,$6,'ACTIVO')
-    RETURNING id
-  `, [
-    orden.id,
-    tipoEntrega,
-    'ÚNICO',
-    Number(plazo) || 0,
-    regla,
-    ctx.monto_adjudicado,
-  ]);
-  for (const it of itemsDb) {
-    await query(`
-      INSERT INTO orden_entrega_items (
-        orden_entrega_id, orden_item_id, cantidad, precio_unitario, precio_total
-      ) VALUES ($1,$2,$3,$4,$5)
-    `, [entRows[0].id, it.id, it.cantidad, it.precio_unitario, it.precio_total]);
+  const esServicioOLocacion = /servic|locac|locador/i.test(ctx.tipo_contratacion || '');
+
+  // RC8.10.5 — Leer entregables reales del payload del requerimiento
+  let entregablesRequerimiento = [];
+  if (esServicioOLocacion) {
+    const { rows: reqRows } = await query(
+      `SELECT payload FROM requerimientos WHERE id = $1`,
+      [ctx.requerimiento_id],
+    );
+    const pl = reqRows[0]?.payload;
+    const payloadObj = typeof pl === 'string' ? JSON.parse(pl || '{}') : (pl || {});
+    const rawInfos = payloadObj.locadorInformacion || payloadObj.servicioInformacion || [];
+    const rawEntregas = payloadObj.locadorEntregas || payloadObj.servicioEntregas || [];
+    entregablesRequerimiento = rawInfos.map((info, i) => {
+      const entMatch = rawEntregas[i] || rawEntregas[0] || {};
+      const nombre = String(info.entregable || '').trim();
+      const plazoRaw = String(info.plazo || '').trim();
+      // RC8.10.5 — soporta formatos: "30 días", "(30) días", "treinta (30) días calendario"
+      const diasMatch = plazoRaw.match(/\((\d+)\)\s*d[ií]a/) || plazoRaw.match(/(\d+)\s*d[ií]a/);
+      const diasPlazo = diasMatch ? parseInt(diasMatch[1], 10) : 0;
+      const descripcionRaw = String(entMatch.condicion || entMatch.plazo || '').trim();
+      // Limpiar prefijos tipo "PRIMER ENTREGABLE:" del campo condicion
+      const descripcion = descripcionRaw.replace(/^(PRIMER|SEGUNDO|TERCER|CUARTO|QUINTO)\s+ENTREGABLE:\s*/i, '').trim();
+      return {
+        nombre: nombre || `Entregable ${i + 1}`,
+        diasPlazo,
+        plazoTexto: plazoRaw,
+        descripcion,
+        numeroEntrega: i + 1,
+      };
+    });
+    // Si no se pudo extraer del payload, fallback a un solo entregable con datos del contexto
+    if (!entregablesRequerimiento.length) {
+      const plazo = itemsDb[0]?.plazo_ofertado_dias ?? 0;
+      entregablesRequerimiento = [{
+        nombre: 'ÚNICO',
+        diasPlazo: Number(plazo) || 0,
+        plazoTexto: plazo ? `${plazo} días` : '',
+        descripcion: '',
+        numeroEntrega: 1,
+      }];
+    }
+  } else {
+    // BIEN: mantener lógica de entrega única física
+    const plazo = itemsDb[0]?.plazo_ofertado_dias ?? 0;
+    entregablesRequerimiento = [{
+      nombre: 'ÚNICO',
+      diasPlazo: Number(plazo) || 0,
+      plazoTexto: plazo ? `${plazo} días` : '',
+      descripcion: '',
+      numeroEntrega: 1,
+    }];
+  }
+
+  // Resolver lugar de entrega desde el requerimiento (RC8.10.5)
+  let lugarEntrega = null;
+  try {
+    const lugarRes = await resolverLugarEntrega({
+      solicitudId: ctx.solicitud_id,
+      proveedorId: ctx.proveedor_id,
+      requerimientoId: ctx.requerimiento_id,
+    });
+    lugarEntrega = lugarRes.lugar || null;
+  } catch (_) { /* ok */ }
+
+  const entRows = [];
+  for (const ent of entregablesRequerimiento) {
+    const total = entregablesRequerimiento.length;
+    const codigo = total === 1 ? 'UNICO' : `E${ent.numeroEntrega}`;
+    const etiqueta = total === 1 && ent.nombre === 'ÚNICO'
+      ? 'ÚNICO'
+      : String(ent.nombre || `Entregable ${ent.numeroEntrega}`);
+    const { rows: inserted } = await query(`
+      INSERT INTO orden_entregas (
+        orden_id, numero_entrega, tipo_entrega, descripcion,
+        etiqueta_entrega, codigo_entrega,
+        dias_plazo, tipo_dias, evento_inicio_plazo, lugar_entrega, importe, estado
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,'calendario',$8,$9,$10,'ACTIVO')
+      RETURNING id
+    `, [
+      orden.id,
+      ent.numeroEntrega,
+      tipoEntrega,
+      ent.descripcion || etiqueta,
+      etiqueta,
+      codigo,
+      ent.diasPlazo || 0,
+      regla,
+      lugarEntrega,
+      // distribuir monto equitativamente entre entregables
+      ctx.monto_adjudicado / total,
+    ]);
+    entRows.push(inserted[0]);
+  }
+
+  // Asociar todos los items a todos los entregables (servicio/locacion)
+  for (const entRow of entRows) {
+    for (const it of itemsDb) {
+      await query(`
+        INSERT INTO orden_entrega_items (
+          orden_entrega_id, orden_item_id, cantidad, precio_unitario, precio_total
+        ) VALUES ($1,$2,$3,$4,$5)
+      `, [
+        entRow.id,
+        it.id,
+        it.cantidad,
+        it.precio_unitario,
+        // distribuir proporcionalmente
+        it.precio_total / entRows.length,
+      ]);
+    }
   }
 
   await registrarEventoOrden({
@@ -1680,7 +1914,7 @@ function formatLugarDesdeItem(it = {}) {
   return parts.join(' / ');
 }
 
-/** Resuelve lugar de entrega: solicitud → ítems SC → cotización → requerimiento. */
+/** Resuelve lugar de entrega: solicitud → ítems SC → cotización → requerimiento → centro. */
 export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimientoId } = {}) {
   let sid = solicitudId != null ? parseInt(solicitudId, 10) : null;
   if (!Number.isFinite(sid) && requerimientoId) {
@@ -1701,7 +1935,13 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
 
     const itemsLugar = parseJson(sc[0]?.lugares_entrega_item, []);
     if (Array.isArray(itemsLugar) && itemsLugar.length) {
-      const unicos = [...new Set(itemsLugar.map(formatLugarDesdeItem).filter(Boolean))];
+      // RC8.10.5 — Extraer centro_nombre como fallback de lugar cuando no hay región/provincia/distrito
+      const unicos = [...new Set(itemsLugar.map((it) => {
+        const formatted = formatLugarDesdeItem(it);
+        if (formatted) return formatted;
+        // fallback a centro_nombre
+        return String(it.centro_nombre || it.centro || '').trim() || '';
+      }).filter(Boolean))];
       if (unicos.length) return { lugar: unicos.join('; '), fuente: 'solicitud_items' };
     }
 
@@ -1718,6 +1958,8 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
           tec.lugar_entrega, tec.lugar, tec.direccion_entrega, tec.direccion,
           tec.datos_proveedor?.lugar_entrega,
           anex.lugar_entrega, anex.datos_proveedor?.lugar_entrega,
+          // RC8.10.5 — fallback a domicilio_fiscal del proveedor
+          anex.datos_proveedor?.domicilio_fiscal,
         ].map((x) => String(x || '').trim()).find(Boolean);
         if (cand) return { lugar: cand, fuente: 'cotizacion' };
       }
@@ -1731,6 +1973,9 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
     const cand = [
       pl.lugar_entrega, pl.lugarEntrega, pl.lugarEntregaBienes, pl.lugar, pl.direccion_entrega, pl.direccion,
       pl.especificaciones?.lugar_entrega, pl.tdr?.lugar_entrega,
+      // RC8.10.5 — buscar en objetivo/finalidad menciones de lugar (ej: "Chorrillos, Lima, Lima")
+      pl.locadorPerfil?.lugar, pl.locadorPerfil?.lugar_entrega,
+      pl.locadorInformacion?.[0]?.lugar,
     ].map((x) => String(x || '').trim()).find(Boolean);
     if (cand) return { lugar: cand, fuente: 'requerimiento' };
   }
@@ -1743,7 +1988,93 @@ export async function getDetalleOrden(ordenId) {
   let items = await sincronizarPreciosItemsDesdeCuadro(ordenId);
   items = await enrichOrdenItemsConPedidos(items, ctx.pedidos || []);
   const { listarEntregas } = await import('./ordenesEntregas.js');
-  const entregas = await listarEntregas(ordenId);
+  const entregasRaw = await listarEntregas(ordenId);
+
+  // RC8.10.5 — Enriquecer entregables placeholder desde payload del requerimiento (SERVICIO/LOCACION)
+  let entregas = entregasRaw;
+  const esServicioOLocacion = /servic|locac|locador/i.test(ctx.tipo_contratacion || '');
+  const esPlaceholder = entregasRaw.length === 1
+    && String(entregasRaw[0]?.codigo_entrega || '').toUpperCase() === 'UNICO'
+    && Number(entregasRaw[0]?.dias_plazo || 0) === 0
+    && !entregasRaw[0]?.lugar_entrega;
+  if (esServicioOLocacion && esPlaceholder) {
+    try {
+      const { rows: reqRows } = await query(
+        `SELECT payload FROM requerimientos WHERE id = $1`,
+        [orden.requerimiento_id],
+      );
+      const pl = reqRows[0]?.payload;
+      const payloadObj = typeof pl === 'string' ? JSON.parse(pl || '{}') : (pl || {});
+      const rawInfos = payloadObj.locadorInformacion || payloadObj.servicioInformacion || [];
+      const rawEntregas = payloadObj.locadorEntregas || payloadObj.servicioEntregas || [];
+      if (rawInfos.length > 0) {
+        const nuevosEntregables = rawInfos.map((info, i) => {
+          const entMatch = rawEntregas[i] || rawEntregas[0] || {};
+          const nombre = String(info.entregable || '').trim();
+          const plazoRaw = String(info.plazo || '').trim();
+          const diasMatch = plazoRaw.match(/(\d+)\s*d[ií]a/);
+          const diasPlazo = diasMatch ? parseInt(diasMatch[1], 10) : 0;
+          const descripcionRaw = String(entMatch.condicion || entMatch.plazo || '').trim();
+          const descripcion = descripcionRaw
+            .replace(/^(PRIMER|SEGUNDO|TERCER|CUARTO|QUINTO)\s+ENTREGABLE:\s*/i, '')
+            .trim();
+          const total = rawInfos.length;
+          const codigo = total === 1 ? 'UNICO' : `E${i + 1}`;
+          const etiqueta = String(nombre || `Entregable ${i + 1}`);
+          return {
+            id: entregasRaw[0].id + i, // virtual id para evitar colisiones en el front
+            orden_id: ordenId,
+            numero_entrega: i + 1,
+            tipo_entrega: entregasRaw[0].tipo_entrega || 'ENTREGABLE',
+            descripcion: descripcion || etiqueta,
+            etiqueta_entrega: etiqueta,
+            codigo_entrega: codigo,
+            correlativo: codigo,
+            dias_plazo: diasPlazo,
+            tipo_dias: 'calendario',
+            evento_inicio_plazo: entregasRaw[0].evento_inicio_plazo || 'INICIO_PLAZO_FECHA_ORDEN',
+            lugar_entrega: null, // se completa con resolverLugarEntrega abajo
+            importe: Number(orden.monto_total / total) || 0,
+            estado: 'ACTIVO',
+            _enriquecido: true,
+          };
+        });
+        // También actualizar la BD para futuras consultas
+        for (const ne of nuevosEntregables) {
+          try {
+            await query(`
+              INSERT INTO orden_entregas (
+                orden_id, numero_entrega, tipo_entrega, descripcion,
+                etiqueta_entrega, codigo_entrega,
+                dias_plazo, tipo_dias, evento_inicio_plazo, lugar_entrega, importe, estado
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'ACTIVO')
+              ON CONFLICT (orden_id, numero_entrega) WHERE estado <> 'ANULADO'
+              DO UPDATE SET
+                descripcion = EXCLUDED.descripcion,
+                etiqueta_entrega = EXCLUDED.etiqueta_entrega,
+                codigo_entrega = EXCLUDED.codigo_entrega,
+                dias_plazo = EXCLUDED.dias_plazo,
+                importe = EXCLUDED.importe,
+                updated_at = NOW()
+            `, [
+              ordenId,
+              ne.numero_entrega,
+              ne.tipo_entrega,
+              ne.descripcion,
+              ne.etiqueta_entrega,
+              ne.codigo_entrega,
+              ne.dias_plazo,
+              ne.evento_inicio_plazo,
+              ne.lugar_entrega,
+              ne.importe / nuevosEntregables.length,
+            ]);
+          } catch (_) { /* ok, fallback a datos en memoria */ }
+        }
+        entregas = nuevosEntregables;
+      }
+    } catch (_) { /* ok, mantener entregas originales */ }
+  }
+
   const { rows: docs } = await query(`
     SELECT id, tipo_documento, nombre_archivo, mime_type, version, firmado, activo,
       subido_por, subido_at, tamanio

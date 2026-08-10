@@ -56,17 +56,23 @@ let page = 1;
 let pageSize = 25;
 let metaTotal = 0;
 let metaPages = 1;
+/** RC8.10.3 — alcance RO desde meta de bandeja (GLOBAL | ASIGNACION). */
+let bandejaMeta = { modo: 'GLOBAL', acceso_por_asignacion: false };
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function canManage() {
+  // Filas ya filtradas por alcance server-side: ASIGNACION y GLOBAL pueden operar lo visible.
+  if (bandejaMeta.modo === 'ASIGNACION' || bandejaMeta.modo === 'GLOBAL') return true;
   try {
     const u = JSON.parse(localStorage.getItem('currentUser') || '{}');
     const rol = String(u.rol || u.role || '').toLowerCase();
-    return rol === 'dec' || rol === 'admin';
-  } catch (_) { return false; }
+    if (rol === 'dec' || rol === 'admin') return true;
+    if (u.acceso_registro_ordenes || u.acceso_registro_ordenes_por_asignacion) return true;
+  } catch (_) { /* ignore */ }
+  return false;
 }
 
 const RO_BANDEJA_CSS = `
@@ -351,6 +357,10 @@ async function loadBandeja(opts = {}) {
     rowsCache = resp?.data || [];
     metaTotal = resp?.meta?.total ?? rowsCache.length;
     metaPages = resp?.meta?.pages || Math.max(1, Math.ceil(metaTotal / pageSize) || 1);
+    bandejaMeta = {
+      modo: String(resp?.meta?.modo || 'GLOBAL').toUpperCase(),
+      acceso_por_asignacion: !!resp?.meta?.acceso_por_asignacion,
+    };
     if (page > metaPages) page = metaPages;
     updatePagerUi();
     if (!rowsCache.length) {
@@ -440,21 +450,38 @@ function buildActMap() {
   };
   const reload = () => loadBandeja({ silent: true });
 
-  const runActionByName = async (action, row) => {
+  const resolveFreshRow = (seed) => {
+    const rid = seed?.requerimiento_id;
+    if (rid == null) return seed;
+    return rowsCache.find((r) => Number(r.requerimiento_id) === Number(rid))
+      || rowsCache.find((r) => seed.orden_id && Number(r.orden_id) === Number(seed.orden_id))
+      || seed;
+  };
+
+  const runActionByName = async (action, row, item = null) => {
+    const fresh = resolveFreshRow({
+      ...row,
+      requerimiento_id: item?.requerimientoId || item?.requerimiento_id || row.requerimiento_id,
+      orden_id: item?.ordenId || item?.orden_id || row.orden_id,
+    });
     const map = {
-      adjuntarCcpFirmado: () => openAdjuntarCcpFirmadoModal(row, { onDone: afterSave(row) }),
-      registrarOrden: () => openRegistrarOrdenModal(row, { onDone: afterSave(row) }),
-      editarOrden: () => openRegistrarOrdenModal(row, {
-        onDone: afterSave(row),
-        editId: row.orden_id || null,
+      adjuntarCcpFirmado: () => openAdjuntarCcpFirmadoModal(fresh, { onDone: afterSave(fresh) }),
+      registrarOrden: () => openRegistrarOrdenModal(fresh, { onDone: afterSave(fresh) }),
+      editarOrden: () => openRegistrarOrdenModal(fresh, {
+        onDone: afterSave(fresh),
+        editId: fresh.orden_id || null,
       }),
       adminEntregas: () => {
-        if (!row.orden_id) return openRegistrarOrdenModal(row, { onDone: afterSave(row) });
-        return openEntregasModal(row.orden_id, { onDone: afterSave(row) });
+        if (!fresh.orden_id) return openRegistrarOrdenModal(fresh, { onDone: afterSave(fresh) });
+        return openEntregasModal(fresh.orden_id, { onDone: afterSave(fresh) });
+      },
+      inicioActividad: () => {
+        if (!fresh.orden_id) return openRegistrarOrdenModal(fresh, { onDone: afterSave(fresh) });
+        return openInicioActividadModal(fresh, { onDone: afterSave(fresh) });
       },
       adjuntarOrdenFirmada: () => {
-        if (!row.orden_id) return openRegistrarOrdenModal(row, { onDone: afterSave(row) });
-        return openAdjuntarOrdenFirmadaModal(row.orden_id, { onDone: afterSave(row) });
+        if (!fresh.orden_id) return openRegistrarOrdenModal(fresh, { onDone: afterSave(fresh) });
+        return openAdjuntarOrdenFirmadaModal(fresh.orden_id, { onDone: afterSave(fresh) });
       },
     };
     const fn = map[action];
@@ -462,15 +489,14 @@ function buildActMap() {
   };
 
   const afterSave = (row) => async () => {
+    const rid = row.requerimiento_id;
     await reload();
-    const fresh = findRow(row.orden_id || `r${row.requerimiento_id}`)
-      || rowsCache.find((r) => r.requerimiento_id === row.requerimiento_id)
-      || row;
+    const fresh = resolveFreshRow({ requerimiento_id: rid, orden_id: row.orden_id });
     await validarYMostrarChecklist({
       ordenId: fresh.orden_id || null,
       requerimientoId: fresh.requerimiento_id,
       titulo: 'Validación del expediente',
-      onCompletar: async (action) => runActionByName(action, fresh),
+      onCompletar: async (action, item) => runActionByName(action, fresh, item),
     });
   };
 
@@ -482,7 +508,9 @@ function buildActMap() {
     openChecklistModal(checklist, {
       titulo: 'Checklist — Registro de Órdenes',
       forzar: true,
-      onCompletar: async (action) => runActionByName(action, row),
+      requerimientoId: row.requerimiento_id,
+      ordenId: row.orden_id || null,
+      onCompletar: async (action, item) => runActionByName(action, row, item),
     });
   };
 
@@ -517,16 +545,29 @@ function buildActMap() {
     }),
     registrarOrden: wrap((row) => openRegistrarOrdenModal(row, { onDone: afterSave(row) })),
     editarOrden: wrap((row) => openRegistrarOrdenModal(row, { onDone: afterSave(row), editId: row.orden_id })),
-    adminEntregas: wrap((row) => openEntregasModal(row.orden_id, { onDone: afterSave(row) })),
-    adjuntarOrdenFirmada: wrap((row) => openAdjuntarOrdenFirmadaModal(row.orden_id, { onDone: afterSave(row) })),
+    adminEntregas: wrap((row) => {
+      if (!row.orden_id) return openRegistrarOrdenModal(row, { onDone: afterSave(row) });
+      return openEntregasModal(row.orden_id, { onDone: afterSave(row) });
+    }),
+    inicioActividad: wrap((row) => {
+      if (!row.orden_id) return openRegistrarOrdenModal(row, { onDone: afterSave(row) });
+      return openInicioActividadModal(row, { onDone: afterSave(row) });
+    }),
+    adjuntarOrdenFirmada: wrap((row) => {
+      if (!row.orden_id) return openRegistrarOrdenModal(row, { onDone: afterSave(row) });
+      return openAdjuntarOrdenFirmadaModal(row.orden_id, { onDone: afterSave(row) });
+    }),
     notificarProveedor: wrap(async (row) => {
+      if (!row.orden_id) throw new Error('Registre primero la orden');
       const data = await fetchChecklistOrden(row.orden_id);
       const checklist = data.checklist || data;
       if (!checklist.completo) {
         openChecklistModal(checklist, {
           titulo: 'No se puede notificar — complete la información',
           forzar: true,
-          onCompletar: async (action) => runActionByName(action, row),
+          requerimientoId: row.requerimiento_id,
+          ordenId: row.orden_id,
+          onCompletar: async (action, item) => runActionByName(action, row, item),
         });
         return;
       }
@@ -534,7 +575,6 @@ function buildActMap() {
     }),
     reenviar: wrap((row) => openEnviarProveedorModal(row.orden_id, { onDone: reload })),
     verChecklist: wrap((row) => openChecklistForRow(row)),
-    inicioActividad: wrap((row) => openInicioActividadModal(row, { onDone: afterSave(row) })),
     verOrdenFirmada: wrap(async (row) => {
       const det = await ordenesContratacionService.getDetalle(row.orden_id);
       const d = det?.data || det;
@@ -572,9 +612,9 @@ function buildActMap() {
       }
       throw new Error('Sin orden');
     }),
-    verConfirmacion: wrap(async (row) => openExpedienteOrdenModal(row)),
-    verFechasMaximas: wrap(async (row) => openExpedienteOrdenModal(row)),
-    verCronograma: wrap(async (row) => openExpedienteOrdenModal(row)),
+    verConfirmacion: wrap((row) => openExpedienteOrdenModal(row)),
+    verFechasMaximas: wrap((row) => openExpedienteOrdenModal(row)),
+    verCronograma: wrap((row) => openExpedienteOrdenModal(row)),
     derivarEjecucion: wrap(async (row) => {
       const ok = await new Promise((resolve) => {
         const w = document.createElement('div');

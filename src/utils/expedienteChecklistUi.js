@@ -1,6 +1,9 @@
 ﻿/**
  * UI reutilizable — Checklist de validación preventiva de expediente.
  * Usable en Registro de Órdenes y futuras etapas (Recepción, Ejecución, Pago).
+ *
+ * RC8.10.3 — Completar información NO navega a bandeja: cierra el checklist,
+ * espera hidden.bs.modal y luego abre el modal del requisito (mismo REQ).
  */
 import { ordenesContratacionService } from '../services/ordenesContratacionService.js';
 import { ETAPAS_CHECKLIST } from '../../shared/expedienteChecklist.js';
@@ -27,6 +30,8 @@ function ensureRoot() {
  * @param {(action: string, item: object) => void|Promise<void>} opts.onCompletar
  * @param {string} [opts.titulo]
  * @param {boolean} [opts.forzar] — mostrar aunque esté completo
+ * @param {number|string} [opts.requerimientoId] — contexto del expediente
+ * @param {number|string} [opts.ordenId]
  */
 export function openChecklistModal(checklist, opts = {}) {
   const {
@@ -34,6 +39,8 @@ export function openChecklistModal(checklist, opts = {}) {
     titulo = 'Checklist de validación',
     forzar = false,
     onClose,
+    requerimientoId = null,
+    ordenId = null,
   } = opts;
   if (!checklist) return null;
   if (checklist.completo && !forzar) {
@@ -42,6 +49,8 @@ export function openChecklistModal(checklist, opts = {}) {
   }
 
   const root = ensureRoot();
+  const ctxReq = requerimientoId != null ? String(requerimientoId) : '';
+  const ctxOrd = ordenId != null ? String(ordenId) : '';
   const rows = (checklist.items || []).map((it) => `
     <tr>
       <td>${esc(it.label)}</td>
@@ -50,14 +59,19 @@ export function openChecklistModal(checklist, opts = {}) {
       </td>
       <td class="small ${it.ok ? 'text-muted' : 'text-danger'}">${esc(it.mensaje || (it.ok ? '—' : 'Pendiente'))}</td>
       <td>
-        ${it.ok ? '' : `<button type="button" class="btn btn-sm btn-primary ro-chk-go" data-action="${esc(it.action)}" data-id="${esc(it.id)}">
+        ${it.ok ? '' : `<button type="button" class="btn btn-sm btn-primary ro-chk-go"
+          data-action="${esc(it.action)}"
+          data-id="${esc(it.id)}"
+          data-requerimiento-id="${esc(ctxReq)}"
+          data-orden-id="${esc(ctxOrd)}">
           Completar información
         </button>`}
       </td>
     </tr>`).join('');
 
   root.innerHTML = `
-    <div class="modal fade" tabindex="-1" id="roChecklistModal">
+    <div class="modal fade" tabindex="-1" id="roChecklistModal"
+      data-requerimiento-id="${esc(ctxReq)}" data-orden-id="${esc(ctxOrd)}">
       <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
@@ -87,20 +101,39 @@ export function openChecklistModal(checklist, opts = {}) {
   const modalEl = root.querySelector('.modal');
   // eslint-disable-next-line no-undef
   const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-  modal.show();
-  modalEl.addEventListener('hidden.bs.modal', () => {
+
+  /** @type {{ action: string, item: object } | null} */
+  let pendingCompletar = null;
+
+  modalEl.addEventListener('hidden.bs.modal', async () => {
     root.innerHTML = '';
+    const pending = pendingCompletar;
+    pendingCompletar = null;
+    if (pending && onCompletar) {
+      // RC8.10.3 — abrir modal del requisito SOLO tras cerrar checklist (evita race Bootstrap).
+      await onCompletar(pending.action, pending.item);
+      return;
+    }
     onClose?.({ completo: !!checklist.completo, checklist });
   }, { once: true });
 
+  modal.show();
+
   modalEl.querySelectorAll('.ro-chk-go').forEach((btn) => {
-    btn.onclick = async () => {
+    btn.onclick = () => {
       const action = btn.dataset.action;
       const id = btn.dataset.id;
-      const item = (checklist.items || []).find((x) => x.id === id);
+      const item = (checklist.items || []).find((x) => x.id === id) || { id, action };
+      pendingCompletar = {
+        action,
+        item: {
+          ...item,
+          requerimientoId: btn.dataset.requerimientoId || ctxReq || null,
+          ordenId: btn.dataset.ordenId || ctxOrd || null,
+        },
+      };
       // eslint-disable-next-line no-undef
       bootstrap.Modal.getInstance(modalEl)?.hide();
-      if (onCompletar) await onCompletar(action, item || { id, action });
     };
   });
   return { modalEl, modal, checklist };
@@ -119,7 +152,9 @@ export async function fetchChecklistRequerimiento(requerimientoId, etapa = ETAPA
 /**
  * Tras guardar una sección: revalida y muestra checklist si hay pendientes.
  */
-export async function validarYMostrarChecklist({ ordenId, requerimientoId, onCompletar, titulo } = {}) {
+export async function validarYMostrarChecklist({
+  ordenId, requerimientoId, onCompletar, titulo,
+} = {}) {
   let data;
   if (ordenId) data = await fetchChecklistOrden(ordenId);
   else if (requerimientoId) data = await fetchChecklistRequerimiento(requerimientoId);
@@ -130,6 +165,8 @@ export async function validarYMostrarChecklist({ ordenId, requerimientoId, onCom
       titulo: titulo || 'Información pendiente del expediente',
       onCompletar,
       forzar: true,
+      requerimientoId,
+      ordenId,
     });
   }
   return { completo: !!checklist.completo, checklist, snapshot: data.snapshot };

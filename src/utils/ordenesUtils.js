@@ -1,5 +1,5 @@
 /**
- * Utilidades y menú Acciones — Registro de Órdenes (OD36).
+ * Utilidades y menú Acciones — Registro de Órdenes (OD36 / RC8.10.4).
  */
 import { ESTADOS_ORDEN_LABEL, normalizeEstadoOrden } from '../../shared/estadoExpedienteVigente.js';
 
@@ -15,11 +15,11 @@ export const CONDICIONES_INICIO_OPTS = [
 ];
 
 export function tipoOrdenSugerido(tipoContratacion) {
-  return /servic|locador/i.test(String(tipoContratacion || '')) ? 'OS' : 'OC';
+  return /servic|locador|locac/i.test(String(tipoContratacion || '')) ? 'OS' : 'OC';
 }
 
 export function esServicioTipo(tipo) {
-  return /servic|locador/i.test(String(tipo || ''));
+  return /servic|locador|locac/i.test(String(tipo || ''));
 }
 
 export function fmtMonto(n, moneda = 'PEN') {
@@ -30,9 +30,7 @@ export function fmtMonto(n, moneda = 'PEN') {
 
 export function fmtFecha(v) {
   if (!v) return '—';
-  // Prefer shared dd/mm/yyyy (no locale inglés)
   try {
-    // lazy sync import avoided — inline ISO parse
     const s = String(v);
     const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
     if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
@@ -58,31 +56,19 @@ export function fmtFechaHora(v) {
 }
 
 /**
- * Menú Acciones OD36 según estado real.
+ * Menú Acciones RO — RC8.10.4.
+ * En preparación: muestra acciones operativas (habilitadas o disabled+tooltip).
+ * No reduce el menú a solo checklist.
  */
 export function registroOrdenesMenuItems(row = {}, opts = {}) {
   const can = opts.canManage !== false;
   const estado = normalizeEstadoOrden(row.estado || row.orden_estado || 'REGISTRO_ORDENES');
   const tieneFirmado = !!row.ccp_firmado || !!row.ccp_firmado_id;
   const tieneOrden = !!row.orden_id;
-  const esServicio = esServicioTipo(row.tipo || row.tipo_contratacion);
+  const esServicio = esServicioTipo(row.tipo || row.tipo_contratacion || row.tipo_proceso);
+  const checklistCompleto = row.checklist_completo === true
+    || row.checklist?.completo === true;
   const items = [];
-
-  // A. Sin CCP firmado
-  if (!tieneFirmado) {
-    items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
-    if (can) items.push({ act: 'adjuntarCcpFirmado', label: 'Adjuntar CCP firmado', icon: 'bi-file-earmark-lock' });
-    return items;
-  }
-
-  // B. Con CCP firmado sin orden
-  if (!tieneOrden) {
-    items.push({ act: 'verCcpFirmado', label: 'Ver CCP firmado', icon: 'bi-file-earmark-pdf' });
-    items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
-    if (can) items.push({ act: 'eliminarCcpFirmado', label: 'Eliminar CCP firmado', icon: 'bi-trash' });
-    if (can) items.push({ act: 'registrarOrden', label: 'Registrar orden', icon: 'bi-plus-circle' });
-    return items;
-  }
 
   // F. Recepción confirmada / ejecución
   if (estado === 'ORDEN_RECEPCION_CONFIRMADA' || estado === 'EN_EJECUCION') {
@@ -108,34 +94,85 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
     return items;
   }
 
-  // D. Lista para notificación — solo si checklist completo
+  // D. Lista para notificación
   if (estado === 'ORDEN_LISTA_NOTIFICACION') {
     items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
     items.push({ act: 'verOrdenFirmada', label: 'Ver orden firmada', icon: 'bi-file-earmark-pdf' });
     items.push({ act: 'descargarOrden', label: 'Descargar orden', icon: 'bi-download' });
-    if (can && row.checklist_completo === false) {
-      items.push({ act: 'verChecklist', label: 'Completar información', icon: 'bi-exclamation-circle' });
-    } else {
-      items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
-      if (can) items.push({ act: 'notificarProveedor', label: 'Notificar al proveedor', icon: 'bi-send' });
+    items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+    if (can) {
+      items.push({
+        act: 'notificarProveedor',
+        label: 'Notificar al proveedor',
+        icon: 'bi-send',
+        disabled: row.checklist_completo === false,
+        title: row.checklist_completo === false ? 'Complete el checklist aplicable' : '',
+      });
     }
     items.push({ act: 'verHistorial', label: 'Ver historial', icon: 'bi-clock-history' });
     return items;
   }
 
-  // C. Orden registrada (incluye cronograma parcial / firmada sin cronograma)
-  items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
+  // Preparación REGISTRO_ORDEN — menú operativo completo (disabled si falta prerequisito)
   items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+
   if (can) {
-    items.push({ act: 'editarOrden', label: 'Editar orden', icon: 'bi-pencil' });
+    if (!tieneFirmado) {
+      items.push({ act: 'adjuntarCcpFirmado', label: 'Adjuntar CCP firmado', icon: 'bi-file-earmark-lock' });
+    } else {
+      items.push({ act: 'verCcpFirmado', label: 'Ver CCP firmado', icon: 'bi-file-earmark-pdf' });
+      items.push({ act: 'eliminarCcpFirmado', label: 'Eliminar CCP firmado', icon: 'bi-trash' });
+    }
+
+    items.push({
+      act: tieneOrden ? 'editarOrden' : 'registrarOrden',
+      label: tieneOrden ? 'Editar orden' : 'Registrar orden',
+      icon: tieneOrden ? 'bi-pencil' : 'bi-plus-circle',
+      disabled: !tieneFirmado,
+      title: !tieneFirmado ? 'Adjuntar primero el CCP firmado' : '',
+    });
+
+    items.push({
+      act: 'adjuntarOrdenFirmada',
+      label: 'Adjuntar orden firmada',
+      icon: 'bi-file-earmark-pdf',
+      disabled: !tieneOrden,
+      title: !tieneOrden ? 'Registre primero la orden' : '',
+    });
+
     items.push({
       act: 'adminEntregas',
-      label: esServicio ? 'Registrar entregables' : 'Registrar entregas',
+      label: esServicio ? 'Configurar entregables' : 'Configurar entregas',
       icon: 'bi-calendar-week',
+      disabled: !tieneOrden,
+      title: !tieneOrden ? 'Registre primero la orden' : '',
     });
-    items.push({ act: 'adjuntarOrdenFirmada', label: 'Adjuntar orden firmada', icon: 'bi-file-earmark-pdf' });
+
+    if (esServicio) {
+      items.push({
+        act: 'inicioActividad',
+        label: 'Configurar inicio de actividad',
+        icon: 'bi-play-circle',
+        disabled: !tieneOrden,
+        title: !tieneOrden ? 'Registre primero la orden' : '',
+      });
+    }
+
+    items.push({
+      act: 'notificarProveedor',
+      label: 'Notificar al proveedor',
+      icon: 'bi-send',
+      disabled: !tieneOrden || !checklistCompleto,
+      title: !tieneOrden
+        ? 'Registre primero la orden'
+        : (!checklistCompleto ? 'Complete el checklist aplicable' : ''),
+    });
   }
-  items.push({ act: 'verHistorial', label: 'Ver historial', icon: 'bi-clock-history' });
+
+  if (tieneOrden) {
+    items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
+  }
+  items.push({ act: 'verHistorial', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
   return items;
 }
 
