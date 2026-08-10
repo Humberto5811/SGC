@@ -180,13 +180,14 @@ export function resolveFechaEfectivaInicio({
  */
 export function resolveOrdenCronogramaContractual(orden = {}, entrega = {}, extras = {}) {
   const notif = resolveOrdenFechaNotificacion(orden, extras.envios || []);
-  const condicion = normalizeCondicionInicio(
-    entrega.evento_inicio_plazo
-    || entrega.condicion_inicio
-    || orden.condicion_inicio
-    || extras.condicionInicio
-    || null,
-  ) || 'EMISION_ORDEN';
+  // Normaliza cada candidato por separado (no un OR crudo) para que un valor
+  // legacy/no-canónico en la entrega (p.ej. placeholder de enriquecimiento)
+  // no enmascare la condición realmente vigente a nivel de orden.
+  const condicion = normalizeCondicionInicio(entrega.evento_inicio_plazo)
+    || normalizeCondicionInicio(entrega.condicion_inicio)
+    || normalizeCondicionInicio(orden.condicion_inicio)
+    || normalizeCondicionInicio(extras.condicionInicio)
+    || 'EMISION_ORDEN';
 
   const plazo = Number(
     entrega.dias_plazo
@@ -218,6 +219,33 @@ export function resolveOrdenCronogramaContractual(orden = {}, entrega = {}, extr
     etiquetaEntrega: etiqueta,
     entregaContract: buildEntregaContract(entrega, { totalEntregas: extras.totalEntregas || 1 }),
   };
+}
+
+/**
+ * Distribuye PU y Total de un ítem entre N entregables contractuales, manteniendo
+ * cantidad × PU = Total en cada línea (RC8.12 Obs.07 punto 6). Con N=1 (caso típico
+ * BIEN) es un no-op: devuelve el PU/Total del ítem sin cambios.
+ */
+export function resolveOrdenEntregaItemLinea(item = {}, totalEntregas = 1) {
+  const n = Number(totalEntregas) > 0 ? Number(totalEntregas) : 1;
+  return {
+    precio_unitario: Number((Number(item?.precio_unitario || 0) / n).toFixed(4)),
+    precio_total: Number((Number(item?.precio_total || 0) / n).toFixed(2)),
+  };
+}
+
+/**
+ * Plazo de entrega contractual a nivel de orden (resumen del expediente).
+ * Con N entregables, el plazo final es el MÁXIMO entre ellos (no el del primer
+ * registro, no la suma) — el último hito contractual acota el plazo total.
+ * Funciona igual para 1 entrega (BIEN típico): devuelve su propio plazo.
+ */
+export function resolveOrdenPlazoContractual(entregas = []) {
+  const dias = (Array.isArray(entregas) ? entregas : [])
+    .map((e) => Number(e?.dias_plazo))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!dias.length) return null;
+  return Math.max(...dias);
 }
 
 /**

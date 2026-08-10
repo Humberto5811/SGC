@@ -279,6 +279,33 @@ export function buildDocumentosConvocatoria(solicitud, requerimientoIds, adjunto
   return docs;
 }
 
+/**
+ * RC8.12 Obs.07 punto 7 — IDs de `requerimientos_adjuntos` referenciados como
+ * plantilla/modelo en la invitación (docs_solicitados / docs_convocatoria /
+ * requisitos_tecnicos de la solicitud de cotización), para poder excluirlos de
+ * vistas que solo deben mostrar documentos efectivamente presentados o generados
+ * (p.ej. el expediente de la orden). A diferencia de `buildDocumentosConvocatoria`
+ * (que arma la lista completa que ve el proveedor, con "Requerimiento original"
+ * como fuente por defecto), esta función NO antepone esa pasada genérica — de lo
+ * contrario el dedupe interno (`seen`) descartaría siempre la coincidencia con la
+ * plantilla y ningún adjunto quedaría identificable como tal.
+ * No compara por nombre de archivo directamente: reutiliza el mismo cruce por
+ * nombre que ya usa el portal del proveedor (`pushDocsFromSolicitudList` /
+ * `matchAdjuntoPorNombre`) para resolver la relación adjunto↔documento solicitado.
+ */
+export function resolveAdjuntosPlantillaInvitacion(solicitud, requerimientoIds, adjuntosMap) {
+  const docs = [];
+  const seen = new Set();
+  [
+    { list: parseJson(solicitud.docs_solicitados), fuente: 'Solicitud de Cotización', prefix: 'sol-ds' },
+    { list: parseJson(solicitud.docs_convocatoria), fuente: 'Documentos convocatoria', prefix: 'sol-dc' },
+    { list: parseJson(solicitud.requisitos_tecnicos), fuente: 'Requisito técnico adjunto', prefix: 'sol-rt' },
+  ].forEach(({ list, fuente, prefix }) => {
+    pushDocsFromSolicitudList(list, fuente, prefix, docs, seen, adjuntosMap, requerimientoIds);
+  });
+  return docs.filter((d) => d.adjunto_id != null).map((d) => Number(d.adjunto_id));
+}
+
 async function loadRequerimientosCentroMap(solicitudId) {
   const { rows } = await query(`
     SELECT r.id, r.codigo, r.tipo, r.denominacion, r.area, r.cmn, r.responsable, r.payload,

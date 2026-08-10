@@ -270,9 +270,10 @@ export function extractItemsDesdePropuestaEconomica(propuestaEconomica, {
   cantidadFallback = 1,
 } = {}) {
   const eco = parseJson(propuestaEconomica, {});
-  const rawItems = Array.isArray(eco?.items) ? eco.items
-    : (Array.isArray(eco?.entregables_cotizados) ? eco.entregables_cotizados
-      : (Array.isArray(eco?.detalle) ? eco.detalle : []));
+  // ÍTEM ≠ ENTREGABLE (RC8.12 Obs.07 punto 4): solo `eco.items` representa ítems
+  // contractuales reales. `entregables_cotizados`/`detalle` son hitos de pago/entrega
+  // de UN mismo ítem — nunca se explotan en un ítem por entregable.
+  const rawItems = Array.isArray(eco?.items) ? eco.items : [];
   const items = [];
   for (let i = 0; i < rawItems.length; i += 1) {
     const it = rawItems[i] || {};
@@ -308,8 +309,26 @@ export function extractItemsDesdePropuestaEconomica(propuestaEconomica, {
     });
   }
   if (!items.length) {
-    const monto = Number(eco?.monto ?? eco?.total ?? eco?.precio_total ?? 0);
+    // Sin `eco.items`: el portal de cotización de Servicios/Locadores solo captura
+    // entregables (ver src/utils/entregablesCotizacion.js), nunca una lista de ítems
+    // distinta. Se agrega UN solo ítem contractual con el monto total — nunca uno
+    // por entregable — para cualquier N de entregables cotizados.
+    const entregables = Array.isArray(eco?.entregables_cotizados) ? eco.entregables_cotizados
+      : (Array.isArray(eco?.detalle) ? eco.detalle : []);
+    const sumaEntregables = entregables.reduce((acc, it) => {
+      const t = Number(it?.precio_total ?? it?.total ?? it?.monto ?? NaN);
+      if (Number.isFinite(t)) return acc + t;
+      const c = Number(it?.cantidad ?? it?.cant ?? 1) || 1;
+      const pu = Number(it?.precio_unitario ?? it?.pu ?? it?.valor_unitario ?? it?.precio ?? 0);
+      return acc + (c * pu);
+    }, 0);
+    const montoDirecto = Number(eco?.monto ?? eco?.total ?? eco?.precio_total ?? NaN);
+    const monto = Number.isFinite(montoDirecto) && montoDirecto > 0 ? montoDirecto : sumaEntregables;
     if (Number.isFinite(monto) && monto > 0) {
+      const plazoMaxEntregables = entregables.reduce((max, it) => {
+        const d = Number(it?.plazo_dias ?? NaN);
+        return Number.isFinite(d) && d > max ? d : max;
+      }, 0);
       items.push({
         item_adjudicado_ref: '1',
         descripcion: String(eco.descripcion || eco.objeto || denominacion || 'Locación').trim(),
@@ -320,7 +339,9 @@ export function extractItemsDesdePropuestaEconomica(propuestaEconomica, {
         moneda: String(eco.moneda || 'PEN'),
         orden_item: 1,
         plazo_ofertado: eco.plazo_entrega != null ? String(eco.plazo_entrega) : null,
-        plazo_ofertado_dias: Number.isFinite(Number(eco.plazo_dias)) ? Number(eco.plazo_dias) : null,
+        plazo_ofertado_dias: plazoMaxEntregables > 0
+          ? plazoMaxEntregables
+          : (Number.isFinite(Number(eco.plazo_dias)) ? Number(eco.plazo_dias) : null),
         observaciones_propuesta: null,
       });
     }
@@ -1717,9 +1738,14 @@ export async function registrarOrden(payload, usuario, rol) {
     entRows.push(inserted[0]);
   }
 
-  // Asociar todos los items a todos los entregables (servicio/locacion)
+  // Asociar todos los items a todos los entregables (servicio/locacion).
+  // PU y Total se dividen ambos entre el N.° de entregables para que cada línea
+  // quede internamente consistente (cantidad × PU = Total) y la suma de Total
+  // entre entregables vuelva a coincidir con el total real del ítem.
+  const { resolveOrdenEntregaItemLinea } = await import('../../shared/ordenCronogramaContractual.js');
   for (const entRow of entRows) {
     for (const it of itemsDb) {
+      const linea = resolveOrdenEntregaItemLinea(it, entRows.length);
       await query(`
         INSERT INTO orden_entrega_items (
           orden_entrega_id, orden_item_id, cantidad, precio_unitario, precio_total
@@ -1728,9 +1754,8 @@ export async function registrarOrden(payload, usuario, rol) {
         entRow.id,
         it.id,
         it.cantidad,
-        it.precio_unitario,
-        // distribuir proporcionalmente
-        it.precio_total / entRows.length,
+        linea.precio_unitario,
+        linea.precio_total,
       ]);
     }
   }
@@ -2032,7 +2057,10 @@ export async function getDetalleOrden(ordenId) {
             correlativo: codigo,
             dias_plazo: diasPlazo,
             tipo_dias: 'calendario',
-            evento_inicio_plazo: entregasRaw[0].evento_inicio_plazo || 'INICIO_PLAZO_FECHA_ORDEN',
+            // Sin valor propio conocido: dejar null (no un placeholder no-canónico) para
+            // que la condición de inicio real de la orden (orden.condicion_inicio) no
+            // quede enmascarada en resolveOrdenCronogramaContractual / COALESCE posterior.
+            evento_inicio_plazo: entregasRaw[0].evento_inicio_plazo || null,
             lugar_entrega: null, // se completa con resolverLugarEntrega abajo
             importe: Number(orden.monto_total / total) || 0,
             estado: 'ACTIVO',
@@ -2168,6 +2196,7 @@ export async function getExpedienteOrdenCompleto(ordenId) {
   const {
     expandItemEntregaCombinaciones,
     resolveOrdenCronogramaContractual,
+    resolveOrdenPlazoContractual,
     labelCondicionInicio,
     formatPlazoLabel,
   } = await import('../../shared/ordenCronogramaContractual.js');
@@ -2208,6 +2237,31 @@ export async function getExpedienteOrdenCompleto(ordenId) {
     `, [orden.requerimiento_id]);
     adjuntosReq = rows;
   } catch (_) { /* ok */ }
+
+  // RC8.12 Obs.07 punto 7 — Excluir del expediente los adjuntos que son
+  // plantillas/modelos que el analista adjuntó en Invitaciones para que el
+  // proveedor las descargue (docs_solicitados / docs_convocatoria / requisitos_tecnicos
+  // de la solicitud de cotización). Se reutiliza la misma relación que ya arma el
+  // portal del proveedor (buildDocumentosConvocatoria) — no se filtra por nombre.
+  try {
+    const solicitudIdPlantillas = orden.solicitud_cotizacion_id || contexto.solicitud_id;
+    if (solicitudIdPlantillas && adjuntosReq.length) {
+      const { rows: scRows } = await query(`
+        SELECT docs_solicitados, docs_convocatoria, requisitos_tecnicos
+        FROM solicitudes_cotizacion WHERE id = $1
+      `, [solicitudIdPlantillas]);
+      if (scRows[0]) {
+        const { resolveAdjuntosPlantillaInvitacion } = await import('./portalDocumentos.js');
+        const adjuntosMap = { [orden.requerimiento_id]: adjuntosReq };
+        const plantillaAdjuntoIds = new Set(
+          resolveAdjuntosPlantillaInvitacion(scRows[0], [orden.requerimiento_id], adjuntosMap),
+        );
+        if (plantillaAdjuntoIds.size) {
+          adjuntosReq = adjuntosReq.filter((a) => !plantillaAdjuntoIds.has(Number(a.id)));
+        }
+      }
+    }
+  } catch (_) { /* tabla/función opcional */ }
 
   // Cotizaciones 5-A / 5-B y adjuntos — solo proveedor adjudicado, sin duplicados
   let docsCotiz = [];
@@ -2323,7 +2377,10 @@ export async function getExpedienteOrdenCompleto(ordenId) {
   ]);
 
   const ultimoEnvio = envios?.[0] || null;
-  const plazoDias = cronOrden.plazoEntrega
+  // Con N entregables, el plazo del resumen es el máximo entre ellos (hito final),
+  // no el de la primera entrega ni la suma — ver RC8.12 Obs.07 punto 2.
+  const plazoDias = resolveOrdenPlazoContractual(entregas)
+    ?? cronOrden.plazoEntrega
     ?? primera.dias_plazo
     ?? items[0]?.plazo_ofertado_dias
     ?? null;

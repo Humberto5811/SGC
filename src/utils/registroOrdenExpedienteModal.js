@@ -5,7 +5,7 @@
 import { ordenesContratacionService } from '../services/ordenesContratacionService.js';
 import { adjuntosService } from '../services/adjuntosService.js';
 import { openBase64Document, previewAdjuntoById } from './documentViewer.js';
-import { fmtMonto, fmtFecha, fmtFechaHora } from './ordenesUtils.js';
+import { fmtMonto, fmtFecha, fmtFechaHora, getOrdenEdicionAcciones } from './ordenesUtils.js';
 import { showTrazabilidadModal } from '../views/requerimiento/reqShared.js';
 
 const API_BASE = '/api';
@@ -141,8 +141,10 @@ async function openDoc(btn, data) {
   throw new Error('No se pudo abrir el documento');
 }
 
-export async function openExpedienteOrdenModal(row) {
+export async function openExpedienteOrdenModal(row, { onAction } = {}) {
   if (!row?.orden_id) throw new Error('La orden aún no está registrada');
+
+  const edicionAcciones = getOrdenEdicionAcciones(row, { canManage: true });
 
   const resp = await ordenesContratacionService.getExpediente(row.orden_id);
   const data = resp?.data || resp;
@@ -369,6 +371,23 @@ export async function openExpedienteOrdenModal(row) {
             </div>
           </div>
           <div class="modal-footer py-2">
+            ${edicionAcciones.length
+    ? `<div class="dropdown">
+                <button type="button" class="btn btn-outline-warning btn-sm dropdown-toggle" data-bs-toggle="dropdown" id="roExpEditar">
+                  <i class="bi bi-pencil"></i> Editar
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" style="font-size:11px">
+                  ${edicionAcciones.map((it) => `
+                    <li><button type="button" class="dropdown-item ro-exp-edit-act" data-act="${esc(it.act)}"
+                      ${it.disabled ? 'disabled' : ''} title="${esc(it.title || '')}">
+                      <i class="bi ${esc(it.icon || 'bi-pencil')}"></i> ${esc(it.label)}
+                    </button></li>`).join('')}
+                </ul>
+              </div>`
+    : `<button type="button" class="btn btn-outline-secondary btn-sm" disabled
+        title="No editable: el estado actual de la orden (${esc(r.estado_global || r.estado || '')}) no admite modificación directa">
+        <i class="bi bi-pencil"></i> Editar
+      </button>`}
             ${r.requerimiento_id
     ? '<button type="button" class="btn btn-outline-primary btn-sm" id="roExpTraza">Trazabilidad completa</button>'
     : ''}
@@ -397,5 +416,19 @@ export async function openExpedienteOrdenModal(row) {
     } catch (e) {
       showErr(modalEl, e.message || 'No se pudo abrir la trazabilidad');
     }
+  });
+
+  modalEl.querySelectorAll('.ro-exp-edit-act').forEach((btn) => {
+    btn.onclick = async () => {
+      const act = btn.dataset.act;
+      if (!act || !onAction) return;
+      // eslint-disable-next-line no-undef
+      bootstrap.Modal.getInstance(modalEl)?.hide();
+      try {
+        await onAction(act);
+      } catch (e) {
+        // El propio handler de la acción (registroOrdenesView) ya maneja sus errores.
+      }
+    };
   });
 }

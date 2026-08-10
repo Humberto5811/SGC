@@ -40,6 +40,11 @@ ok(/enRegistroOrdenes/.test(recepSrc), '5: badge recepción respeta etapa RO fue
 ok(/estado_responsable_vigente\?\.etapaLabel/.test(recepView),
   '6: subtítulo recepción prioriza etapaLabel vigente');
 
+// RC8.12 Obs.07 punto 4 — actualizado: ÍTEM ≠ ENTREGABLE. Antes de RC8.12 este
+// assert exigía `items.length === 2` (uno por entregable), codificando como
+// esperado el bug reportado en Observación 07 (ítems duplicados con datos de
+// entregable). La regla correcta es un único ítem contractual agregado con el
+// monto total, sin importar cuántos entregables tenga la cotización.
 const items = extractItemsDesdePropuestaEconomica({
   monto: 14000,
   precio_total: 14000,
@@ -48,7 +53,8 @@ const items = extractItemsDesdePropuestaEconomica({
     { nombre: 'E2', precio: 7000, cantidad: 1 },
   ],
 }, { denominacion: 'Servicio X' });
-ok(items.length === 2 && items[0].precio_total === 7000, '7: ítems desde entregables_cotizados');
+ok(items.length === 1 && items[0].precio_total === 14000 && items[0].descripcion === 'Servicio X',
+  '7: ítem único agregado desde entregables_cotizados (RC8.12)');
 
 const vEnOrden = resolveEstadoExpedienteVigente({
   codigo_ccp: '2200',

@@ -10,6 +10,7 @@ import {
 } from './ordenesContratacion.js';
 import { calcularFechaMaximaEntrega, normalizeTipoDias } from './diasPlazo.js';
 import { validarCronogramaContraItems, normalizarLineasEntrega } from './ordenesValidaciones.js';
+import { normalizeCondicionInicio } from '../../shared/ordenCronogramaContractual.js';
 import {
   buildEntregaContract,
   normalizeCodigoEntrega,
@@ -68,9 +69,12 @@ function resolveCodigoYEtiqueta(e, total = 1) {
 
 /** Fechas de cronograma con conteo inclusivo (día 1 = fecha efectiva). */
 function fechasEntregaDesdeCondicion(orden, e) {
-  const cond = String(
-    e.evento_inicio_plazo || e.condicion_inicio || orden.condicion_inicio || COND_INICIO.EMISION_ORDEN,
-  ).toUpperCase();
+  // Normaliza cada candidato por separado (no un OR crudo) — un valor legacy/no-canónico
+  // en la entrega no debe enmascarar la condición realmente vigente de la orden.
+  const cond = normalizeCondicionInicio(e.evento_inicio_plazo)
+    || normalizeCondicionInicio(e.condicion_inicio)
+    || normalizeCondicionInicio(orden.condicion_inicio)
+    || COND_INICIO.EMISION_ORDEN;
   const manual = e.fecha_manual || e.fecha_evento || e.fecha_base || null;
   const calc = calcularFechaMaximaEntrega({
     condicionInicio: cond,

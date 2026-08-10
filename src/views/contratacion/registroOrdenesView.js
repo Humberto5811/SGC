@@ -515,7 +515,9 @@ function buildActMap() {
   };
 
   return {
-    verExpediente: wrap((row) => openExpedienteOrdenModal(row)),
+    verExpediente: wrap((row) => openExpedienteOrdenModal(row, {
+      onAction: (act, item) => runActionByName(act, row, item),
+    })),
     adjuntarCcpFirmado: wrap((row) => openAdjuntarCcpFirmadoModal(row, { onDone: afterSave(row) })),
     verCcpFirmado: wrap((row) => openCcpFirmadoViewer(row)),
     eliminarCcpFirmado: wrap(async (row) => {

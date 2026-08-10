@@ -176,6 +176,28 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
   return items;
 }
 
+/** Acciones del menú Acciones que representan edición de información de la orden. */
+const ACCIONES_EDICION_ORDEN = new Set([
+  'editarOrden',
+  'adminEntregas',
+  'inicioActividad',
+  'adjuntarOrdenFirmada',
+  'adjuntarCcpFirmado',
+  'eliminarCcpFirmado',
+]);
+
+/**
+ * RC8.12 Obs.07 punto 1 — Acciones de edición disponibles para una orden, dado su
+ * estado vigente. Reutiliza exactamente la misma regla de estados que ya gobierna
+ * el menú Acciones (registroOrdenesMenuItems): no define una regla nueva de qué es
+ * editable — solo filtra el subconjunto de acciones que corresponden a edición, para
+ * poder exponerlas también desde "Ver expediente" sin un segundo flujo de edición.
+ */
+export function getOrdenEdicionAcciones(row = {}, opts = {}) {
+  return registroOrdenesMenuItems(row, opts)
+    .filter((item) => ACCIONES_EDICION_ORDEN.has(item.act));
+}
+
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
