@@ -560,10 +560,10 @@ async function openDetalleReqModal(requerimientoId) {
             <div class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm"></span> Cargando…</div>
           </div>
           <div class="modal-footer flex-wrap gap-2" id="${id}_footer">
-            <button type="button" class="btn btn-outline-primary btn-sm" id="${id}_word">
+            <button type="button" class="btn btn-outline-primary btn-sm d-none" id="${id}_word">
               <i class="bi bi-file-earmark-word"></i> Generar Word
             </button>
-            <button type="button" class="btn btn-primary btn-sm" id="${id}_derivar">
+            <button type="button" class="btn btn-primary btn-sm d-none" id="${id}_derivar">
               <i class="bi bi-box-arrow-right"></i> Derivar a Registro de Órdenes
             </button>
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
@@ -579,6 +579,15 @@ async function openDetalleReqModal(requerimientoId) {
   try {
     const resp = await contratacionesService.getCcpRequerimiento(requerimientoId);
     const d = resp.data || {};
+    const erv = d.estado_responsable_vigente || {};
+    const historico = !!(d.solo_lectura || d.tramite_ccp_concluido || d.bandeja_modo === 'historico');
+    const docs = Array.isArray(d.documentos) ? d.documentos : [];
+    const docsHtml = docs.length
+      ? `<ul class="small mb-2">${docs.map((doc) => `<li>${esc(doc.label || doc.tipo)}${doc.valor ? `: <strong>${esc(doc.valor)}</strong>` : ''}${doc.nombre ? ` — ${esc(doc.nombre)}` : ''}</li>`).join('')}</ul>`
+      : '<p class="small text-muted mb-2">Sin documentos adicionales.</p>';
+    const regAt = d.registrado_at
+      ? String(d.registrado_at).slice(0, 16).replace('T', ' ')
+      : '—';
     document.getElementById(`${id}_body`).innerHTML = `
       <div class="mb-3 small">
         <strong>${esc(d.requerimiento_codigo)}</strong> · SC ${esc(d.solicitud_codigo || '—')}
@@ -586,21 +595,32 @@ async function openDetalleReqModal(requerimientoId) {
         · Origen: <strong>${esc(d.origen_ccp_label || (d.origen_ccp === 'RECEPCION_COTIZACION_LOCACION' ? 'Recepción de Cotización' : 'Cuadro Comparativo'))}</strong>
         · Cuadro: <strong>${d.cuadro_id == null ? 'No aplica' : esc(String(d.cuadro_id))}</strong>
         · CCP: <strong>${esc(d.codigo_ccp || 'Pendiente')}</strong>
+        · Registrado: <strong>${esc(regAt)}</strong>${d.registrado_por ? ` por ${esc(d.registrado_por)}` : ''}
         · ${d.origen_ccp === 'RECEPCION_COTIZACION_LOCACION' ? 'Propuesta' : 'Adjudicado'}:
           <strong>${fmtMonto(d.monto_adjudicado, d.moneda)}</strong>
         ${d.proveedor_nombre ? ` · Proveedor: <strong>${esc(d.proveedor_nombre)}</strong>` : ''}
       </div>
+      <div class="mb-3 p-2 border rounded bg-light small">
+        <div><strong>Estado vigente:</strong> ${esc(erv.estadoLabel || '—')}</div>
+        <div><strong>Responsable:</strong> ${esc(erv.responsableNombre || erv.responsableUnidad || '—')}</div>
+        <div><strong>Etapa:</strong> ${esc(erv.etapaLabel || '—')}</div>
+        ${historico ? '<div class="text-muted mt-1"><i class="bi bi-lock"></i> Expediente histórico CCP — solo consulta</div>' : ''}
+      </div>
+      <div class="mb-2"><strong class="small">Documentos / evidencia CCP</strong>${docsHtml}</div>
       ${renderFilasTable(d.filas, d.moneda)}`;
     const btnWord = document.getElementById(`${id}_word`);
     const btnDerivar = document.getElementById(`${id}_derivar`);
     if (btnWord) {
+      const canWord = !historico && d.puede_generar_word !== false && !!d.codigo_ccp;
+      btnWord.classList.toggle('d-none', !canWord);
       btnWord.onclick = async () => {
         modal.hide();
         await actionGenerarWord(requerimientoId);
       };
     }
     if (btnDerivar) {
-      const canDerivar = d.puede_derivar_ordenes !== false && !!d.codigo_ccp;
+      const canDerivar = !historico && d.puede_derivar_ordenes === true && !!d.codigo_ccp;
+      btnDerivar.classList.toggle('d-none', !canDerivar);
       btnDerivar.title = d.motivo_derivar_ordenes
         || (!d.codigo_ccp ? 'Registre primero el código CCP.' : 'Derivar a Registro de Órdenes');
       btnDerivar.onclick = async () => {
@@ -608,8 +628,8 @@ async function openDetalleReqModal(requerimientoId) {
           showAlert('warning', 'Registre primero el código CCP.');
           return;
         }
-        if (!canDerivar && d.motivo_derivar_ordenes) {
-          showAlert('warning', d.motivo_derivar_ordenes);
+        if (!canDerivar) {
+          showAlert('warning', d.motivo_derivar_ordenes || 'Expediente histórico CCP — solo consulta.');
           return;
         }
         modal.hide();
@@ -618,6 +638,8 @@ async function openDetalleReqModal(requerimientoId) {
     }
   } catch (err) {
     document.getElementById(`${id}_body`).innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    document.getElementById(`${id}_word`)?.classList.add('d-none');
+    document.getElementById(`${id}_derivar`)?.classList.add('d-none');
   }
 }
 

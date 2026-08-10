@@ -190,13 +190,16 @@ export async function resolveFuenteDatosCcp(requerimientoId) {
     };
   }
 
+  // Locación: operativo (CCP/EN_CCP) O histórico con evidencia formal (ccp_codigos),
+  // alineado con listarBandejaCcp Fuente B — no exige etapa vigente CCP.
   const { rows: locRows } = await query(`
     SELECT r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion, r.tipo,
       r.estado_actual, r.area, r.payload,
       sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
       sc.area_usuaria, sc.objeto, sc.tipo AS solicitud_tipo,
       cot.id AS cotizacion_id, cot.propuesta_economica, cot.proveedor_id,
-      p.razon_social AS proveedor_nombre, p.ruc AS proveedor_ruc
+      p.razon_social AS proveedor_nombre, p.ruc AS proveedor_ruc,
+      cod.id AS codigo_id, cod.codigo_ccp
     FROM requerimientos r
     JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
     JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
@@ -210,9 +213,23 @@ export async function resolveFuenteDatosCcp(requerimientoId) {
       LIMIT 1
     ) cot ON TRUE
     LEFT JOIN proveedores p ON p.id = cot.proveedor_id
+    LEFT JOIN LATERAL (
+      SELECT c.id, c.codigo_ccp FROM ccp_codigos c
+      WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
+      ORDER BY c.id DESC LIMIT 1
+    ) cod ON TRUE
     WHERE r.id = $1
-      AND UPPER(COALESCE(r.estado_actual, '')) = 'CCP'
-      AND UPPER(COALESCE(sc.estado, '')) = 'EN_CCP'
+      AND cot.id IS NOT NULL
+      AND (
+        (
+          UPPER(COALESCE(r.estado_actual, '')) = 'CCP'
+          AND UPPER(COALESCE(sc.estado, '')) = 'EN_CCP'
+        )
+        OR (
+          cod.codigo_ccp IS NOT NULL
+          AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_ORDEN', 'EN_EJECUCION')
+        )
+      )
     LIMIT 1
   `, [id]);
 
@@ -665,6 +682,26 @@ export async function getDetalleCcpRequerimiento(requerimientoId) {
     codigoCcp: cod.codigo_ccp || '',
   });
 
+  // RC8.10.2 — contrato vigente + flags de solo lectura (histórico post-CCP).
+  const { getEstadoResponsableCanonico } = await import('./estadoResponsableCanonico.js');
+  const { clasificarModoFilaCcp } = await import('./bandejaVisibilidad.js');
+  const canonMap = await getEstadoResponsableCanonico({ requerimientoIds: [id] });
+  const erv = canonMap.get(id) || null;
+  const etapaCodigo = erv?.etapaCodigo || '';
+  const estadoCodigo = erv?.estadoCodigo || '';
+  const modoFila = clasificarModoFilaCcp({ etapaCodigo, estadoCodigo });
+  const evalDerivar = await evaluarPuedeDerivarRegistroOrdenes(id);
+  const historico = modoFila === 'historico' || !!evalDerivar.yaDerivado;
+  const tieneCodigo = !!cod.codigo_ccp;
+
+  const { rows: firmRows } = await query(`
+    SELECT id, nombre_archivo, version, activo, subido_at
+    FROM ccp_firmados
+    WHERE requerimiento_id = $1 AND activo = TRUE
+    ORDER BY version DESC, id DESC LIMIT 1
+  `, [id]);
+  const firmado = firmRows[0] || null;
+
   return {
     requerimiento_id: fuente.requerimientoId,
     requerimiento_codigo: fuente.requerimientoCodigo,
@@ -683,11 +720,42 @@ export async function getDetalleCcpRequerimiento(requerimientoId) {
     proveedor_ruc: fuente.proveedorRuc,
     codigo_ccp: cod.codigo_ccp || '',
     codigo_id: cod.id || null,
+    registrado_por: cod.registrado_por || '',
+    registrado_at: cod.registrado_at || null,
     monto_adjudicado: monto,
     filas,
     total: monto,
     moneda: fuente.moneda || 'PEN',
     area_usuaria: fuente.areaUsuaria || '',
+    estado_responsable_vigente: erv,
+    bandeja_modo: modoFila,
+    tramite_ccp_concluido: historico,
+    solo_lectura: historico,
+    puede_derivar_ordenes: !historico && !!evalDerivar.ok,
+    motivo_derivar_ordenes: historico
+      ? 'Trámite CCP concluido — solo lectura.'
+      : (evalDerivar.motivo || ''),
+    puede_generar_word: !historico && tieneCodigo,
+    puede_registrar_ccp: !historico && !tieneCodigo,
+    ccp_firmado: !!firmado,
+    ccp_firmado_id: firmado?.id || null,
+    ccp_firmado_nombre: firmado?.nombre_archivo || '',
+    documentos: [
+      ...(tieneCodigo ? [{
+        tipo: 'CODIGO_CCP',
+        label: 'Código CCP registrado',
+        valor: cod.codigo_ccp,
+        registrado_at: cod.registrado_at || null,
+        registrado_por: cod.registrado_por || '',
+      }] : []),
+      ...(firmado ? [{
+        tipo: 'CCP_FIRMADO',
+        label: 'CCP firmado',
+        nombre: firmado.nombre_archivo,
+        version: firmado.version,
+        subido_at: firmado.subido_at,
+      }] : []),
+    ],
   };
 }
 
@@ -695,10 +763,45 @@ async function assertReqEnCcp(requerimientoId) {
   return resolveFuenteDatosCcp(requerimientoId);
 }
 
+/**
+ * RC8.10.2 — Mutaciones CCP solo en trámite operativo.
+ * Detalle histórico puede leer con resolveFuenteDatosCcp; no reabrir.
+ */
+async function assertTramiteCcpOperativo(requerimientoId) {
+  const id = parseInt(requerimientoId, 10);
+  const { rows: vig } = await query(
+    `SELECT etapa_codigo, estado_codigo FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
+    [id],
+  );
+  const etapaCodigo = String(vig[0]?.etapa_codigo || '').toUpperCase();
+  const estadoCodigo = String(vig[0]?.estado_codigo || '').toUpperCase();
+  const { etapaEsPostCcp } = await import('./bandejaVisibilidad.js');
+  if (etapaEsPostCcp({ etapaCodigo, estadoCodigo })) {
+    throw httpError(
+      'Trámite CCP concluido — expediente en solo lectura.',
+      409,
+      'CCP_HISTORICO_SOLO_LECTURA',
+    );
+  }
+  const { rows: reqRows } = await query(
+    `SELECT estado_actual FROM requerimientos WHERE id = $1`,
+    [id],
+  );
+  const estadoActual = String(reqRows[0]?.estado_actual || '').toUpperCase();
+  if (['REGISTRO_ORDEN', 'REGISTRO_ORDENES', 'EN_EJECUCION', 'RECEPCION_BIENES'].includes(estadoActual)) {
+    throw httpError(
+      'Trámite CCP concluido — expediente en solo lectura.',
+      409,
+      'CCP_HISTORICO_SOLO_LECTURA',
+    );
+  }
+}
+
 export async function registrarCodigoCcp(requerimientoId, body = {}, usuario = '', rol = '') {
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
   const codigo = validateCodigoCcp(body.codigo_ccp || body.codigo);
+  await assertTramiteCcpOperativo(id);
   const reqRow = await assertReqEnCcp(id);
 
   const { rows: existentes } = await query(`
@@ -754,6 +857,7 @@ export async function editarCodigoCcp(requerimientoId, body = {}, usuario = '', 
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
   const codigo = validateCodigoCcp(body.codigo_ccp || body.codigo);
+  await assertTramiteCcpOperativo(id);
   await assertReqEnCcp(id);
 
   const { rows: cur } = await query(`
@@ -807,6 +911,7 @@ export async function editarCodigoCcp(requerimientoId, body = {}, usuario = '', 
 export async function anularCodigoCcp(requerimientoId, body = {}, usuario = '', rol = '') {
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
+  await assertTramiteCcpOperativo(id);
   const motivo = String(body.motivo || body.motivo_eliminacion || '').trim();
   if (motivo.length < 3) throw httpError('Indique el motivo de anulación (mín. 3 caracteres)');
 
