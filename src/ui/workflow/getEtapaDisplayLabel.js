@@ -3,7 +3,7 @@
  * Prioriza estado_responsable_vigente.etapaLabel; nunca imprime códigos técnicos.
  */
 import { adaptEstadoResponsable } from './adaptEstadoResponsable.js';
-import { getLabelEtapa } from '../../../shared/workflow/etapas.js';
+import { getLabelEtapa, esEtapaValida } from '../../../shared/workflow/etapas.js';
 
 const ETAPA_NO_DISPONIBLE = 'Etapa no disponible';
 
@@ -11,6 +11,9 @@ const ETAPA_NO_DISPONIBLE = 'Etapa no disponible';
 export function esCodigoTecnicoEtapa(value) {
   const t = String(value == null ? '' : value).trim();
   if (!t) return false;
+  // Si es un código de etapa válido en el catálogo canónico (CCP, DEC, INVITACIONES, etc.)
+  // NO es un código técnico aunque parezca ALL_CAPS de 3+ caracteres.
+  if (esEtapaValida(t)) return false;
   if (/^[A-Z][A-Z0-9_]*$/.test(t) && (t.includes('_') || t.length >= 3)) return true;
   return false;
 }
