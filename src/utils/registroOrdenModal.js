@@ -239,20 +239,35 @@ export async function openAdjuntarOrdenFirmadaModal(ordenId, { onDone } = {}) {
   modalEl.querySelector('#roOrdPdfSave').onclick = async () => {
     const err = modalEl.querySelector('#roOrdPdfErr');
     err.classList.add('d-none');
+    const saveBtn = modalEl.querySelector('#roOrdPdfSave');
+    saveBtn.disabled = true;
+    const prevLabel = saveBtn.textContent;
+    saveBtn.textContent = 'Guardando…';
     try {
       const file = modalEl.querySelector('#roOrdPdf').files?.[0];
       if (!file) throw new Error('Seleccione el PDF');
       const base64 = await fileToBase64(file);
-      await ordenesContratacionService.adjuntarOrdenFirmada(ordenId, {
+      const resp = await ordenesContratacionService.adjuntarOrdenFirmada(ordenId, {
         nombre_archivo: file.name,
         base64,
       });
+      // RC8.13.2 Obs.50 — Solo avanzar a "Validación del expediente" (onDone) tras
+      // confirmar que el backend realmente persistió el documento (respuesta con id
+      // de la fila insertada en orden_documentos). Si la respuesta no trae el id
+      // esperado, se trata como falla: se muestra error y NO se cierra el modal ni
+      // se dispara onDone, en vez de avanzar automáticamente asumiendo éxito.
+      const saved = resp?.data || resp;
+      if (!saved?.documento?.id) {
+        throw new Error('El servidor no confirmó el guardado del documento. Intente nuevamente.');
+      }
       // eslint-disable-next-line no-undef
       bootstrap.Modal.getInstance(modalEl)?.hide();
       onDone?.();
     } catch (e) {
       err.textContent = e.message || 'Error';
       err.classList.remove('d-none');
+      saveBtn.disabled = false;
+      saveBtn.textContent = prevLabel;
     }
   };
 }

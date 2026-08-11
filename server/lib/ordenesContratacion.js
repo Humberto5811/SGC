@@ -1067,6 +1067,7 @@ export async function listarBandejaOrdenes() {
     const {
       resolveOrdenFechaNotificacion,
       resolveOrdenCronogramaContractual,
+      resolveOrdenPlazoContractual,
       formatPlazoLabel,
     } = await import('../../shared/ordenCronogramaContractual.js');
 
@@ -1128,6 +1129,10 @@ export async function listarBandejaOrdenes() {
       row.entrega_label = fmt.label;
       row.entrega_tooltip = fmt.tooltip;
       row.entregas_resumen = list.map((e) => buildEntregaContract(e, { totalEntregas: list.length }));
+      // RC8.13.1 Obs.49 — plazo total de la orden = máximo contractual entre entregables
+      // (regla RC8.12: resolveOrdenPlazoContractual), no la suma ni el de la primera entrega.
+      row.plazo_total_orden = resolveOrdenPlazoContractual(list);
+      row.plazo_total_orden_label = formatPlazoLabel(row.plazo_total_orden);
 
       const oc = ordMap.get(oid) || {};
       const envios = envByOrden.get(oid) || [];
@@ -1884,6 +1889,7 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
       || (items.length === 1 && srcItems.length === 1 ? srcItems[0] : null);
     if (!src || !(Number(src.precio_unitario) > 0)) continue;
     const pu = Number(src.precio_unitario);
+    const puAnterior = Number(dbItem.precio_unitario) || 0;
     const tot = Number((Number(dbItem.cantidad) * pu).toFixed(2));
     await query(`
       UPDATE orden_items SET
@@ -1893,16 +1899,44 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
         plazo_ofertado_dias = COALESCE($5, plazo_ofertado_dias)
       WHERE id = $1
     `, [dbItem.id, pu, tot, src.plazo_ofertado || null, src.plazo_ofertado_dias]);
-    await query(`
-      UPDATE orden_entrega_items ei
-      SET precio_unitario = $2,
-          precio_total = ROUND((ei.cantidad * $2::numeric), 2)
-      FROM orden_entregas e
-      WHERE ei.orden_entrega_id = e.id
-        AND e.orden_id = $3
-        AND ei.orden_item_id = $1
-        AND e.estado <> 'ANULADO'
-    `, [dbItem.id, pu, ordenId]);
+    // RC8.13.2 Obs.50 — causa exacta de "Importes validados — Pendiente" en órdenes
+    // donde el PU del ítem quedó en 0 al crearse (needs=true arriba): este sync corría
+    // en CADA lectura de la orden (Ver expediente / Configurar entregables) y
+    // recalculaba precio_total = ei.cantidad(completa, tal como quedó repetida en cada
+    // una de las N entregas al crear la orden) × PU NUEVO completo — descartando la
+    // proporción ya dividida entre entregables (resolveOrdenEntregaItemLinea, RC8.12).
+    // Con N>1 eso multiplicaba el monto distribuido por N frente al monto adjudicado
+    // real. Ahora se REESCALA proporcionalmente el precio_total/PU que ya tenía cada
+    // línea (× nuevo_pu / pu_anterior) en vez de recalcularlo desde cantidad × PU
+    // completo, preservando la distribución/redistribución vigente (de creación o de
+    // una edición manual previa) tal como estaba.
+    if (puAnterior > 0) {
+      await query(`
+        UPDATE orden_entrega_items ei
+        SET precio_unitario = ROUND((ei.precio_unitario * $2::numeric / $3::numeric), 4),
+            precio_total = ROUND((ei.precio_total * $2::numeric / $3::numeric), 2)
+        FROM orden_entregas e
+        WHERE ei.orden_entrega_id = e.id
+          AND e.orden_id = $4
+          AND ei.orden_item_id = $1
+          AND e.estado <> 'ANULADO'
+      `, [dbItem.id, pu, puAnterior, ordenId]);
+    } else {
+      // Sin PU anterior para calcular una proporción (línea nunca tuvo precio):
+      // única entrega (N=1, caso típico BIEN) es el único caso seguro para asumir
+      // cantidad × PU completo sin distorsionar una distribución previa.
+      await query(`
+        UPDATE orden_entrega_items ei
+        SET precio_unitario = $2,
+            precio_total = ROUND((ei.cantidad * $2::numeric), 2)
+        FROM orden_entregas e
+        WHERE ei.orden_entrega_id = e.id
+          AND e.orden_id = $3
+          AND ei.orden_item_id = $1
+          AND e.estado <> 'ANULADO'
+          AND (SELECT COUNT(*) FROM orden_entregas e2 WHERE e2.orden_id = $3 AND e2.estado <> 'ANULADO') = 1
+      `, [dbItem.id, pu, ordenId]);
+    }
   }
 
   const { rows: ents } = await query(`
@@ -1939,7 +1973,20 @@ function formatLugarDesdeItem(it = {}) {
   return parts.join(' / ');
 }
 
-/** Resuelve lugar de entrega: solicitud → ítems SC → cotización → requerimiento → centro. */
+/**
+ * RC8.13.2 Obs.50 — Resuelve lugar de entrega con prioridad:
+ *   1. ubicación contractual explícita de la solicitud/cotización (solicitud, ítems SC
+ *      con región/provincia/distrito, propuesta técnica/anexos del proveedor adjudicado);
+ *   2. ubicación del requerimiento/TDR;
+ *   3. fallback documentado — centro organizacional (p. ej. "CNCC") — SOLO si ninguna de
+ *      las fuentes anteriores tiene una ubicación geográfica real.
+ * Antes de esta corrección, el centro organizacional (centro_nombre) se usaba como
+ * fallback apenas los ítems de la solicitud carecían de región/provincia/distrito,
+ * incluso cuando la cotización del proveedor o el TDR del requerimiento sí tenían una
+ * ubicación geográfica real (p. ej. "Lima / Lima / Chorrillos") — esa era la causa
+ * exacta de que apareciera el centro organizacional en vez de la ubicación contractual.
+ * El centro organizacional nunca debe ganarle a una ubicación geográfica contractual.
+ */
 export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimientoId } = {}) {
   let sid = solicitudId != null ? parseInt(solicitudId, 10) : null;
   if (!Number.isFinite(sid) && requerimientoId) {
@@ -1951,6 +1998,8 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
     sid = link[0]?.solicitud_id != null ? Number(link[0].solicitud_id) : null;
   }
 
+  let centroFallback = null;
+
   if (Number.isFinite(sid)) {
     const { rows: sc } = await query(`
       SELECT lugar_entrega, lugares_entrega_item FROM solicitudes_cotizacion WHERE id = $1
@@ -1960,14 +2009,15 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
 
     const itemsLugar = parseJson(sc[0]?.lugares_entrega_item, []);
     if (Array.isArray(itemsLugar) && itemsLugar.length) {
-      // RC8.10.5 — Extraer centro_nombre como fallback de lugar cuando no hay región/provincia/distrito
-      const unicos = [...new Set(itemsLugar.map((it) => {
-        const formatted = formatLugarDesdeItem(it);
-        if (formatted) return formatted;
-        // fallback a centro_nombre
-        return String(it.centro_nombre || it.centro || '').trim() || '';
-      }).filter(Boolean))];
+      const unicos = [...new Set(itemsLugar.map((it) => formatLugarDesdeItem(it)).filter(Boolean))];
       if (unicos.length) return { lugar: unicos.join('; '), fuente: 'solicitud_items' };
+
+      // Guarda el centro organizacional como último recurso documentado (paso 3),
+      // pero NO retorna aún: primero deben intentarse cotización y requerimiento/TDR.
+      const centros = [...new Set(
+        itemsLugar.map((it) => String(it?.centro_nombre || it?.centro || '').trim()).filter(Boolean),
+      )];
+      if (centros.length) centroFallback = { lugar: centros.join('; '), fuente: 'solicitud_items_centro' };
     }
 
     if (proveedorId) {
@@ -2004,6 +2054,8 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
     ].map((x) => String(x || '').trim()).find(Boolean);
     if (cand) return { lugar: cand, fuente: 'requerimiento' };
   }
+  // Paso 3 — fallback documentado: centro organizacional, solo si nada geográfico existe.
+  if (centroFallback) return centroFallback;
   return { lugar: null, fuente: null };
 }
 
@@ -2153,14 +2205,30 @@ export async function getDetalleOrden(ordenId) {
     fecha_notificacion_at: notif.fechaNotificacionAt,
   };
 
+  // RC8.13.2 Obs.50 — corrección de PRESENTACIÓN (no repara BD): el lugar_entrega de
+  // cada orden_entregas se guardó una sola vez, al crear la orden, con la prioridad que
+  // regía en ese momento (podía caer en el fallback de centro organizacional antes de
+  // intentar cotización/requerimiento). Si el valor guardado está vacío o es idéntico al
+  // centro organizacional del expediente, se muestra en su lugar el resultado ya
+  // recalculado por resolverLugarEntrega con la prioridad corregida (lugarRes, arriba).
+  // Un lugar_entrega distinto al centro (p. ej. editado manualmente en Configurar
+  // entregables) nunca se sobrescribe.
+  const centroExpediente = String(ctx.centro || '').trim().toLowerCase();
   const entregasEnriquecidas = entregas.map((e) => {
     const cron = resolveOrdenCronogramaContractual(ordenNorm, e, {
       envios,
       totalEntregas: entregas.length,
       fechaActaInicio: orden.fecha_evento_inicio,
     });
+    const lugarPropio = String(e.lugar_entrega || '').trim();
+    const esFallbackCentro = !!centroExpediente && lugarPropio.toLowerCase() === centroExpediente;
+    const lugarMostrado = (!lugarPropio || esFallbackCentro) && lugarRes.lugar
+      ? lugarRes.lugar
+      : (lugarPropio || null);
     return {
       ...e,
+      lugar_entrega: lugarMostrado,
+      lugar_entrega_fuente: (!lugarPropio || esFallbackCentro) ? lugarRes.fuente : 'orden_entrega',
       evento_inicio_plazo: cron.condicionInicio,
       condicion_inicio_label: cron.condicionLabel,
       fecha_base_calc: cron.fechaEfectiva,

@@ -797,6 +797,52 @@ async function assertTramiteCcpOperativo(requerimientoId) {
   }
 }
 
+/**
+ * RC8.13.2 Obs.50 — Regla controlada para EDITAR (no crear ni anular) el código CCP
+ * desde el tab "Registro de CCP" de Registro de Órdenes. assertTramiteCcpOperativo
+ * bloquea TODO estado posterior a CCP (incluida la sola preparación de la orden, antes
+ * de notificar al proveedor), lo que en la práctica impedía corregir un error de
+ * tipeo del código CCP apenas la orden entraba en preparación.
+ *
+ * Regla: el código CCP se puede editar mientras la orden todavía no fue notificada
+ * al proveedor (estado_codigo del contrato canónico ∈ REGISTRO_ORDENES/REGISTRO_ORDEN/
+ * ORDEN_REGISTRADA/ORDEN_LISTA_NOTIFICACION). Desde ORDEN_NOTIFICADA en adelante — el
+ * proveedor ya tiene documentación oficial referenciando ese CCP — la edición vuelve a
+ * quedar bloqueada, igual que cualquier estado realmente cerrado/histórico
+ * (recepción, ejecución, conformidad, pagos, finalizado, anulado/resuelto).
+ * Registrar y Anular código CCP NO usan esta regla: siguen con
+ * assertTramiteCcpOperativo sin cambios (protección íntegra para crear/eliminar).
+ */
+const ESTADOS_CCP_EDITABLE_EN_ORDEN = new Set([
+  'REGISTRO_ORDENES', 'REGISTRO_ORDEN', 'ORDEN_REGISTRADA', 'ORDEN_LISTA_NOTIFICACION',
+]);
+
+async function assertCcpEditableDesdeOrden(requerimientoId) {
+  const id = parseInt(requerimientoId, 10);
+  const { rows: vig } = await query(
+    `SELECT etapa_codigo, estado_codigo FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
+    [id],
+  );
+  const etapaCodigo = String(vig[0]?.etapa_codigo || '').toUpperCase();
+  const estadoCodigo = String(vig[0]?.estado_codigo || '').toUpperCase();
+  const { etapaEsPostCcp } = await import('./bandejaVisibilidad.js');
+
+  if (!etapaEsPostCcp({ etapaCodigo, estadoCodigo })) {
+    // Aún en trámite CCP (no debería llegar aquí desde Registro de Órdenes, pero si
+    // ocurre, la operación normal de CCP ya lo permite sin restricción adicional).
+    return;
+  }
+  if (ESTADOS_CCP_EDITABLE_EN_ORDEN.has(estadoCodigo)) {
+    return;
+  }
+  throw httpError(
+    'El código CCP ya no es editable: la orden fue notificada al proveedor o se encuentra '
+    + 'en una etapa posterior (recepción, ejecución, conformidad, pagos, finalizado o anulada/resuelta).',
+    409,
+    'CCP_ORDEN_NO_EDITABLE',
+  );
+}
+
 export async function registrarCodigoCcp(requerimientoId, body = {}, usuario = '', rol = '') {
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
@@ -857,8 +903,7 @@ export async function editarCodigoCcp(requerimientoId, body = {}, usuario = '', 
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
   const codigo = validateCodigoCcp(body.codigo_ccp || body.codigo);
-  await assertTramiteCcpOperativo(id);
-  await assertReqEnCcp(id);
+  await assertCcpEditableDesdeOrden(id);
 
   const { rows: cur } = await query(`
     SELECT * FROM ccp_codigos WHERE requerimiento_id = $1 AND estado = 'ACTIVO' LIMIT 1

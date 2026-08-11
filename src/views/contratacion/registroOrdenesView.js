@@ -9,7 +9,7 @@ import {
 } from '../../utils/bandejaUi.js';
 import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import {
-  registroOrdenesMenuItems, fmtMonto, fmtFecha, fmtFechaHora,
+  registroOrdenesMenuItems, splitMenuItemsPorBandeja, fmtMonto, fmtFecha, fmtFechaHora,
   downloadPdfBase64,
 } from '../../utils/ordenesUtils.js';
 import {
@@ -23,6 +23,7 @@ import {
   openBase64Document,
 } from '../../utils/registroOrdenModal.js';
 import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
+import { openCcpCodigoModal } from '../../utils/ccpCodigoModal.js';
 import {
   openChecklistModal,
   validarYMostrarChecklist,
@@ -44,8 +45,52 @@ const VIEW_ID = 'registro-ordenes';
 const SCROLL_SEL = '#roScrollWrap';
 const PREFIX = 'ro';
 const LIST_ID = 'roList';
-const COLS = 22;
 const loadGuard = createRequestSequenceGuard();
+
+/**
+ * RC8.13.1 Obs.49 — dos tabs (Registro de CCP / Registro de Orden) sobre la MISMA
+ * bandeja (ordenesContratacionService.listBandeja → GET /bandeja). No hay una
+ * segunda fuente de datos: cada tab solo proyecta un subconjunto de columnas y de
+ * acciones (splitMenuItemsPorBandeja) sobre el mismo rowsCache. Patrón de tabs
+ * tomado de src/views/contratacion/invitacionesView.js.
+ */
+const TAB_CCP = 'ccp';
+const TAB_ORDEN = 'orden';
+let currentTab = TAB_CCP;
+
+const CCP_COLS = [
+  { th: 'CCP', w: '90px' },
+  { th: 'CCP<br>firmado', w: '70px' },
+  { th: 'Requerimiento', w: '110px' },
+  { th: 'Pedido<br>SIGAMEF', w: '100px' },
+  { th: 'Código<br>SIGAMEF', w: '100px' },
+  { th: 'Descripción', w: '260px' },
+  { th: 'Estado', w: '160px' },
+  { th: 'Responsable', w: '160px' },
+  { th: 'Acciones', w: '60px' },
+];
+
+const ORDEN_COLS = [
+  { th: 'Orden', w: '90px' },
+  { th: 'Fecha<br>orden', w: '85px' },
+  { th: 'RUC<br>proveedor', w: '95px' },
+  { th: 'Nombre<br>proveedor', w: '220px' },
+  { th: 'Monto total<br>orden', w: '100px' },
+  { th: 'Cant.<br>entregables', w: '75px' },
+  { th: 'Plazo total<br>orden', w: '90px' },
+  { th: 'Fecha<br>notificación', w: '95px' },
+  { th: 'Estado', w: '160px' },
+  { th: 'Responsable', w: '160px' },
+  { th: 'Acciones', w: '60px' },
+];
+
+function currentColsDef() {
+  return currentTab === TAB_ORDEN ? ORDEN_COLS : CCP_COLS;
+}
+
+function currentColsCount() {
+  return currentColsDef().length;
+}
 
 let lifecycle = null;
 let refreshIndicator = null;
@@ -75,33 +120,38 @@ function canManage() {
   return false;
 }
 
+/**
+ * RC8.13.2 Obs.50 — ajuste visual scoped a #${VIEW_ID} (Registro de Órdenes) únicamente:
+ * encabezados y valores centrados, Arial 9px, columnas con ancho mínimo dinámico por tab
+ * (ver renderTableChrome) para evitar compresión excesiva. No afecta otras vistas.
+ */
 const RO_BANDEJA_CSS = `
 #${VIEW_ID} .ro-table-wrap { max-height: 68vh; overflow: auto; }
 #${VIEW_ID} table.ro-bandeja {
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 10px;
+  font-size: 9px;
   table-layout: fixed;
   width: 100%;
-  min-width: 1580px;
   border-collapse: collapse;
 }
 #${VIEW_ID} table.ro-bandeja thead th {
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.25;
   vertical-align: middle;
   white-space: normal;
   height: 2.8em;
-  padding: 4px 4px;
+  padding: 4px 6px;
   background: #f8f9fa;
   text-align: center;
 }
 #${VIEW_ID} table.ro-bandeja tbody td {
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 10px;
-  padding: 3px 4px;
+  font-size: 9px;
+  padding: 3px 6px;
   vertical-align: middle;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -133,6 +183,10 @@ export function renderRegistroOrdenesView() {
           </button>
         </div>
       </div>
+      <ul class="nav nav-tabs mb-3" id="roTabs">
+        <li class="nav-item"><a class="nav-link active" href="#" data-tab="${TAB_CCP}">📄 Registro de CCP</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-tab="${TAB_ORDEN}">🧾 Registro de Orden</a></li>
+      </ul>
       <div class="card border-0 shadow-sm">
         <div class="card-body py-2">
           <div class="row g-2 align-items-end mb-2">
@@ -169,58 +223,10 @@ export function renderRegistroOrdenesView() {
           <div id="${PREFIX}BgRefresh"></div>
           <div class="table-responsive ro-table-wrap" id="roScrollWrap">
             <table class="table table-sm table-hover align-middle mb-0 ro-bandeja" id="${PREFIX}Table">
-              <colgroup>
-                <col style="width:55px">
-                <col style="width:60px">
-                <col style="width:90px">
-                <col style="width:85px">
-                <col style="width:95px">
-                <col style="width:150px">
-                <col style="width:100px">
-                <col style="width:160px">
-                <col style="width:58px">
-                <col style="width:55px">
-                <col style="width:75px">
-                <col style="width:75px">
-                <col style="width:70px">
-                <col style="width:75px">
-                <col style="width:70px">
-                <col style="width:80px">
-                <col style="width:70px">
-                <col style="width:70px">
-                <col style="width:80px">
-                <col style="width:100px">
-                <col style="width:100px">
-                <col style="width:60px">
-              </colgroup>
-              <thead class="table-light sticky-top">
-                <tr>
-                  <th>CCP</th>
-                  <th>CCP<br>firmado</th>
-                  <th>Requerimiento</th>
-                  <th>Pedido<br>SIGAMEF</th>
-                  <th>RUC</th>
-                  <th>Proveedor</th>
-                  <th>Código<br>SIGAMEF</th>
-                  <th>Descripción<br>del ítem</th>
-                  <th>Tipo</th>
-                  <th>Cantidad</th>
-                  <th>Precio<br>unitario</th>
-                  <th>Total</th>
-                  <th>N.° de<br>orden</th>
-                  <th>Fecha de<br>emisión</th>
-                  <th>Entrega</th>
-                  <th>Fecha de<br>notificación</th>
-                  <th>Recepción</th>
-                  <th>Plazo de<br>entrega</th>
-                  <th>Fecha máxima<br>de entrega</th>
-                  <th>Estado</th>
-                  <th>Responsable</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
+              <colgroup id="${PREFIX}Colgroup"></colgroup>
+              <thead class="table-light sticky-top" id="${PREFIX}Thead"></thead>
               <tbody id="${LIST_ID}">
-                <tr><td colspan="${COLS}" class="text-center text-muted py-4">Cargando…</td></tr>
+                <tr><td class="text-center text-muted py-4">Cargando…</td></tr>
               </tbody>
             </table>
           </div>
@@ -234,6 +240,27 @@ export function renderRegistroOrdenesView() {
         </div>
       </div>
     </div>`;
+}
+
+/** Pinta colgroup/thead según el tab activo (sin recargar datos). */
+function renderTableChrome() {
+  const cols = currentColsDef();
+  const colgroupEl = document.getElementById(`${PREFIX}Colgroup`);
+  const theadEl = document.getElementById(`${PREFIX}Thead`);
+  const tableEl = document.getElementById(`${PREFIX}Table`);
+  if (colgroupEl) {
+    colgroupEl.innerHTML = cols.map((c) => `<col style="width:${c.w}">`).join('');
+  }
+  if (theadEl) {
+    theadEl.innerHTML = `<tr>${cols.map((c) => `<th>${c.th}</th>`).join('')}</tr>`;
+  }
+  if (tableEl) {
+    // RC8.13.1 Obs.49 — cada tab tiene menos columnas que la tabla mixta original
+    // (22 → 9/11); el ancho mínimo se ajusta a la suma real de columnas del tab
+    // activo para reducir el espacio en blanco/scroll horizontal innecesario.
+    const totalPx = cols.reduce((sum, c) => sum + (parseInt(c.w, 10) || 0), 0);
+    tableEl.style.minWidth = `${totalPx}px`;
+  }
 }
 
 function renderEstado(row) {
@@ -259,18 +286,13 @@ function shouldShowChecklistBadge(row) {
   return true;
 }
 
-function renderRow(row) {
+/** Tab 1 — Registro de CCP (Certificado de Crédito Presupuestal). */
+function renderRowCcp(row) {
   const key = row.orden_id || `r${row.requerimiento_id}`;
-  const menu = renderActionMenuCell(
-    key,
-    registroOrdenesMenuItems(row, { canManage: canManage() }),
-  );
-  const cant = row.cantidad_display || '—';
-  const pu = row.precio_unitario_display
-    || (row.precio_unitario != null ? fmtMonto(row.precio_unitario) : '—');
+  const { ccp } = splitMenuItemsPorBandeja(registroOrdenesMenuItems(row, { canManage: canManage() }));
+  const menu = renderActionMenuCell(key, ccp);
   const tipCod = esc(row.codigo_sigamef_tooltip || row.codigo_sigamef || '');
   const tipDesc = esc(row.item_descripcion_tooltip || row.item_descripcion || '');
-  const tipEnt = esc(row.entrega_tooltip || '');
   const estadoVigente = getEstadoVigenteLabel(row);
   const checklistHtml = shouldShowChecklistBadge(row)
     ? ` ${renderChecklistBadge(row.checklist || row)}`
@@ -280,25 +302,43 @@ function renderRow(row) {
     <td>${row.ccp_firmado ? '<span class="badge bg-success">Sí</span>' : '<span class="badge bg-warning text-dark">No</span>'}</td>
     <td title="${esc(row.requerimiento_codigo)}"><strong>${esc(row.requerimiento_codigo)}</strong></td>
     <td title="${esc(row.pedido_sigamef || '')}">${esc(row.pedido_sigamef || '—')}</td>
-    <td>${esc(row.proveedor_ruc || '—')}</td>
-    <td class="ro-col-wide" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</td>
     <td title="${tipCod}">${esc(row.codigo_sigamef || '—')}</td>
     <td class="ro-col-wide" title="${tipDesc}">${esc(row.item_descripcion || '—')}</td>
-    <td>${esc(row.tipo || '—')}</td>
-    <td class="text-end">${esc(cant)}</td>
-    <td class="text-end">${typeof pu === 'string' && pu.startsWith('Ver') ? `<button type="button" class="btn btn-link btn-sm p-0 ro-ver-items" data-rid="${row.requerimiento_id}" style="font-size:9px">Ver detalle</button>` : esc(pu)}</td>
-    <td class="text-end">${fmtMonto(row.precio_total)}</td>
-    <td>${row.numero_orden ? `${esc(row.tipo_orden || '')} ${esc(row.numero_orden)}` : '—'}</td>
-    <td>${fmtFecha(row.fecha_orden)}</td>
-    <td title="${tipEnt}">${esc(row.entrega_label || '—')}</td>
-    <td>${fmtFecha(row.fecha_notificacion || row.fecha_envio_proveedor)}</td>
-    <td>${fmtFecha(row.fecha_recepcion_confirmada)}</td>
-    <td title="${esc(row.condicion_inicio_label || '')}">${esc(row.plazo_entrega_label || (row.plazo_entrega ? `${row.plazo_entrega} días` : '—'))}</td>
-    <td>${fmtFecha(row.fecha_maxima_entrega)}</td>
     <td class="ro-wrap" title="${esc(estadoVigente)}">${renderEstado(row)}${checklistHtml}</td>
     <td class="ro-wrap">${renderResponsableCellHtml(row, esc)}</td>
     ${menu}
   </tr>`;
+}
+
+/** Tab 2 — Registro de Orden. */
+function renderRowOrden(row) {
+  const key = row.orden_id || `r${row.requerimiento_id}`;
+  const { orden } = splitMenuItemsPorBandeja(registroOrdenesMenuItems(row, { canManage: canManage() }));
+  const menu = renderActionMenuCell(key, orden);
+  const estadoVigente = getEstadoVigenteLabel(row);
+  const checklistHtml = shouldShowChecklistBadge(row)
+    ? ` ${renderChecklistBadge(row.checklist || row)}`
+    : '';
+  // RC8.13.1 Obs.49 — cantidad entregables = COUNT(orden_entregas) real (row.entregas_count,
+  // server/lib/ordenesContratacion.js), nunca combinaciones ítem×entrega. Plazo total orden
+  // = máximo contractual (row.plazo_total_orden_label, regla RC8.12 resolveOrdenPlazoContractual).
+  return `<tr data-rid="${row.requerimiento_id}" data-oid="${row.orden_id || ''}">
+    <td>${row.numero_orden ? `${esc(row.tipo_orden || '')} ${esc(row.numero_orden)}` : '—'}</td>
+    <td>${fmtFecha(row.fecha_orden)}</td>
+    <td>${esc(row.proveedor_ruc || '—')}</td>
+    <td class="ro-col-wide" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</td>
+    <td class="text-end">${fmtMonto(row.precio_total)}</td>
+    <td class="text-end">${row.orden_id ? esc(String(row.entregas_count ?? 0)) : '—'}</td>
+    <td>${row.orden_id ? esc(row.plazo_total_orden_label || '—') : '—'}</td>
+    <td>${fmtFecha(row.fecha_notificacion || row.fecha_envio_proveedor)}</td>
+    <td class="ro-wrap" title="${esc(estadoVigente)}">${renderEstado(row)}${checklistHtml}</td>
+    <td class="ro-wrap">${renderResponsableCellHtml(row, esc)}</td>
+    ${menu}
+  </tr>`;
+}
+
+function renderRow(row) {
+  return currentTab === TAB_ORDEN ? renderRowOrden(row) : renderRowCcp(row);
 }
 
 /**
@@ -341,9 +381,10 @@ function updatePagerUi() {
 async function loadBandeja(opts = {}) {
   const request = loadGuard.begin();
   captureScroll(VIEW_ID, SCROLL_SEL);
+  renderTableChrome();
   const tbody = document.getElementById(LIST_ID);
   if (!opts.silent && tbody) {
-    tbody.innerHTML = `<tr><td colspan="${COLS}" class="text-center text-muted py-4">Cargando…</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${currentColsCount()}" class="text-center text-muted py-4">Cargando…</td></tr>`;
   }
   refreshIndicator?.show?.('Actualizando…');
   try {
@@ -364,49 +405,16 @@ async function loadBandeja(opts = {}) {
     if (page > metaPages) page = metaPages;
     updatePagerUi();
     if (!rowsCache.length) {
-      tbody.innerHTML = `<tr><td colspan="${COLS}" class="text-center text-muted py-4">No hay expedientes en Registro de Órdenes</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${currentColsCount()}" class="text-center text-muted py-4">No hay expedientes en Registro de Órdenes</td></tr>`;
     } else {
       tbody.innerHTML = rowsCache.map(renderRow).join('');
       bindActionMenus(tbody, buildActMap());
-      tbody.querySelectorAll('.ro-ver-items').forEach((btn) => {
-        btn.onclick = async () => {
-          try {
-            const row = rowsCache.find((r) => String(r.requerimiento_id) === String(btn.dataset.rid));
-            if (row?.orden_id) {
-              await openExpedienteOrdenModal(row);
-              return;
-            }
-            const ctx = await ordenesContratacionService.getContexto(btn.dataset.rid);
-            const data = ctx?.data || ctx;
-            const lines = (data.items_adjudicados || []).map((it, i) =>
-              `${i + 1}. ${it.descripcion} · cant ${it.cantidad} · PU ${fmtMonto(it.precio_unitario)} · ${fmtMonto(it.precio_total)}`);
-            // Modal ligero sin alert
-            const wrap = document.createElement('div');
-            wrap.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
-              <div class="modal-dialog"><div class="modal-content">
-                <div class="modal-header"><h6 class="modal-title">Ítems</h6>
-                <button type="button" class="btn-close" id="roItClose"></button></div>
-                <div class="modal-body" style="font-size:12px;font-family:Arial"><pre class="mb-0" style="white-space:pre-wrap">${esc(lines.join('\n') || 'Sin ítems')}</pre></div>
-              </div></div></div>`;
-            document.body.appendChild(wrap);
-            wrap.querySelector('#roItClose').onclick = () => wrap.remove();
-            wrap.querySelector('.modal').onclick = (ev) => { if (ev.target === wrap.querySelector('.modal')) wrap.remove(); };
-          } catch (e) {
-            const wrap = document.createElement('div');
-            wrap.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">
-              <div class="modal-dialog"><div class="modal-content"><div class="modal-body text-danger">${esc(e.message || 'Error')}</div>
-              <div class="modal-footer"><button class="btn btn-sm btn-secondary" id="roItErr">Cerrar</button></div></div></div></div>`;
-            document.body.appendChild(wrap);
-            wrap.querySelector('#roItErr').onclick = () => wrap.remove();
-          }
-        };
-      });
     }
     restoreScroll(VIEW_ID, SCROLL_SEL);
   } catch (err) {
     if (isAbortError(err) || !request.isCurrent()) return;
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="${COLS}" class="text-danger text-center py-4">${esc(err.message || 'Error')}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${currentColsCount()}" class="text-danger text-center py-4">${esc(err.message || 'Error')}</td></tr>`;
     }
   } finally {
     refreshIndicator?.hide?.();
@@ -466,6 +474,7 @@ function buildActMap() {
     });
     const map = {
       adjuntarCcpFirmado: () => openAdjuntarCcpFirmadoModal(fresh, { onDone: afterSave(fresh) }),
+      editarCcp: () => openCcpCodigoModal(fresh, { mode: 'editar', onSuccess: afterSave(fresh) }),
       registrarOrden: () => openRegistrarOrdenModal(fresh, { onDone: afterSave(fresh) }),
       editarOrden: () => openRegistrarOrdenModal(fresh, {
         onDone: afterSave(fresh),
@@ -520,6 +529,7 @@ function buildActMap() {
     })),
     adjuntarCcpFirmado: wrap((row) => openAdjuntarCcpFirmadoModal(row, { onDone: afterSave(row) })),
     verCcpFirmado: wrap((row) => openCcpFirmadoViewer(row)),
+    editarCcp: wrap((row) => openCcpCodigoModal(row, { mode: 'editar', onSuccess: afterSave(row) })),
     eliminarCcpFirmado: wrap(async (row) => {
       const motivoWrap = document.createElement('div');
       const motivo = await new Promise((resolve) => {
@@ -646,6 +656,26 @@ export function initRegistroOrdenesView() {
   page = 1;
   filtroQ = '';
   filtroEstado = '';
+  currentTab = TAB_CCP;
+
+  document.querySelectorAll('#roTabs .nav-link').forEach((link) => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      document.querySelectorAll('#roTabs .nav-link').forEach((l) => l.classList.remove('active'));
+      link.classList.add('active');
+      currentTab = link.dataset.tab || TAB_CCP;
+      // RC8.13.1 Obs.49 — cambiar de tab solo re-proyecta rowsCache ya cargado
+      // (misma fuente /bandeja); no dispara una segunda carga de red.
+      renderTableChrome();
+      const tbody = document.getElementById(LIST_ID);
+      if (tbody) {
+        tbody.innerHTML = rowsCache.length
+          ? rowsCache.map(renderRow).join('')
+          : `<tr><td colspan="${currentColsCount()}" class="text-center text-muted py-4">No hay expedientes en Registro de Órdenes</td></tr>`;
+        bindActionMenus(tbody, buildActMap());
+      }
+    });
+  });
 
   document.getElementById(`${PREFIX}Refresh`)?.addEventListener('click', () => loadBandeja());
   document.getElementById(`${PREFIX}Search`)?.addEventListener('change', (e) => {

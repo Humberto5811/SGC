@@ -124,6 +124,22 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
       items.push({ act: 'eliminarCcpFirmado', label: 'Eliminar CCP firmado', icon: 'bi-trash' });
     }
 
+    // RC8.13.2 Obs.50 — "Editar CCP" reutiliza openCcpCodigoModal + contratacionesService
+    // .editarCodigoCcp (mismo modal/servicio del módulo CCP; ningún flujo nuevo). Regla
+    // controlada (server/lib/ccpCertificacion.js → assertCcpEditableDesdeOrden): editable
+    // mientras la orden sigue en preparación, antes de "lista para notificación"/"notificada"
+    // (esas dos ramas de estado ni siquiera llegan a este bloque — return anticipado arriba).
+    // Bloqueado en el servidor desde ORDEN_NOTIFICADA en adelante y en todo estado
+    // realmente cerrado/histórico (recepción, ejecución, conformidad, pagos, finalizado,
+    // anulada/resuelta) — la protección original no se eliminó, solo se acotó su ventana.
+    items.push({
+      act: 'editarCcp',
+      label: 'Editar CCP',
+      icon: 'bi-pencil-square',
+      disabled: !row.codigo_ccp,
+      title: !row.codigo_ccp ? 'No hay código CCP registrado' : '',
+    });
+
     items.push({
       act: tieneOrden ? 'editarOrden' : 'registrarOrden',
       label: tieneOrden ? 'Editar orden' : 'Registrar orden',
@@ -184,6 +200,7 @@ const ACCIONES_EDICION_ORDEN = new Set([
   'adjuntarOrdenFirmada',
   'adjuntarCcpFirmado',
   'eliminarCcpFirmado',
+  'editarCcp',
 ]);
 
 /**
@@ -196,6 +213,26 @@ const ACCIONES_EDICION_ORDEN = new Set([
 export function getOrdenEdicionAcciones(row = {}, opts = {}) {
   return registroOrdenesMenuItems(row, opts)
     .filter((item) => ACCIONES_EDICION_ORDEN.has(item.act));
+}
+
+/** Acciones exclusivas del tab "Registro de CCP" (RC8.13.1 Obs.49). */
+const ACCIONES_SOLO_CCP = new Set([
+  'adjuntarCcpFirmado', 'verCcpFirmado', 'eliminarCcpFirmado', 'editarCcp',
+]);
+
+/**
+ * RC8.13.1 Obs.49 — separa el menú Acciones (registroOrdenesMenuItems) ya calculado
+ * en el subconjunto correspondiente a cada tab de la bandeja de Registro de Órdenes.
+ * No define una regla nueva de qué acción corresponde a qué estado: solo proyecta el
+ * mismo arreglo de acciones en dos vistas, para no duplicar el dispatcher ni los
+ * handlers existentes.
+ */
+export function splitMenuItemsPorBandeja(items = []) {
+  const list = Array.isArray(items) ? items : [];
+  return {
+    ccp: list.filter((it) => ACCIONES_SOLO_CCP.has(it.act) || it.act === 'verExpediente' || it.act === 'verHistorial'),
+    orden: list.filter((it) => !ACCIONES_SOLO_CCP.has(it.act)),
+  };
 }
 
 export function fileToBase64(file) {

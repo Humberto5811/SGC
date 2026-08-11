@@ -228,11 +228,11 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
                   }).join('')}
                 </tr></thead>
                 <tbody id="roEntregasList"></tbody>
+                <tfoot id="roEntregasFoot"></tfoot>
               </table>
             </div>
             <div class="row g-2 mt-2">
               <div class="col-lg-7">
-                <div class="border rounded p-2 bg-light" id="roResumenDist"></div>
                 <div id="roCronogramaValido" class="mt-1"></div>
               </div>
               <div class="col-lg-5">
@@ -253,7 +253,7 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     </div>`);
 
   const listEl = modalEl.querySelector('#roEntregasList');
-  const resumenEl = modalEl.querySelector('#roResumenDist');
+  const footEl = modalEl.querySelector('#roEntregasFoot');
   const checkEl = modalEl.querySelector('#roCheckList');
   const validoEl = modalEl.querySelector('#roCronogramaValido');
 
@@ -431,43 +431,24 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
         : '<span class="badge text-bg-secondary">Cronograma incompleto</span>');
   }
 
+  /**
+   * RC8.13.2 Obs.50 — separa cálculo de negocio (calcTotales/buildChecklist, sin
+   * cambios) de la presentación. Ya NO existe un bloque "Resumen de distribución"
+   * separado (#roResumenDist eliminado): la única pieza visual nueva es una fila
+   * TOTAL dentro de la misma tabla de Entregables (tfoot), sin tarjetas ni
+   * comparación adjudicado/distribuido/diferencia por fuera de la tabla.
+   * calcTotales()/buildChecklist()/renderChecklist()/cronogramaValido se preservan
+   * intactos — solo cambia qué HTML se pinta con su resultado.
+   */
   function renderResumen() {
-    const { qty, mon, monTotal } = calcTotales();
-    const rows = items.map((it) => {
-      const dist = qty.get(it.id) || 0;
-      const pend = round2(Number(it.cantidad) - dist);
-      const monDist = mon.get(it.id) || 0;
-      const monAdj = Number(it.precio_total);
-      const dif = round2(monAdj - monDist);
-      return `<tr>
-        <td class="small">${esc(it.descripcion)}</td>
-        <td class="text-end">${it.cantidad}</td>
-        <td class="text-end">${dist}</td>
-        <td class="text-end ${Math.abs(pend) > 0.0001 ? 'text-danger fw-semibold' : ''}">${pend}</td>
-        <td class="text-end">${fmtMonto(monAdj)}</td>
-        <td class="text-end">${fmtMonto(monDist)}</td>
-        <td class="text-end ${Math.abs(dif) > 0.01 ? 'text-danger fw-semibold' : ''}">${fmtMonto(dif)}</td>
+    const { monTotal } = calcTotales();
+    if (footEl) {
+      footEl.innerHTML = `<tr class="fw-semibold">
+        <td colspan="3" class="text-end">TOTAL</td>
+        <td class="text-end">${fmtMonto(monTotal)}</td>
+        <td colspan="10"></td>
       </tr>`;
-    }).join('');
-    const monAdjTot = round2(items.reduce((a, it) => a + Number(it.precio_total || 0), 0));
-    resumenEl.innerHTML = `
-      <div class="fw-semibold mb-1 small">Resumen de distribución</div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0">
-          <thead><tr>
-            <th>Ítem</th><th class="text-end">Cantidad adjudicada</th><th class="text-end">Cantidad distribuida</th>
-            <th class="text-end">Pendiente</th><th class="text-end">Monto adjudicado</th>
-            <th class="text-end">Monto distribuido</th><th class="text-end">Diferencia</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-          <tfoot><tr class="fw-semibold">
-            <td>Total</td><td></td><td></td><td></td>
-            <td class="text-end">${fmtMonto(monAdjTot)}</td>
-            <td class="text-end">${fmtMonto(monTotal)}</td>
-            <td class="text-end">${fmtMonto(round2(monAdjTot - monTotal))}</td>
-          </tr></tfoot>
-        </table>
-      </div>`;
+    }
     renderChecklist();
   }
 

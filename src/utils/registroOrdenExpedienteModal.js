@@ -177,7 +177,14 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
     } catch (_) { /* ok */ }
   }
 
-  const combos = data.item_entregas || [];
+  // RC8.13.2 Obs.50 — la pestaña "Entregas" muestra UNA FILA POR ENTREGABLE REAL
+  // (data.entregas, ya construido en getExpedienteOrdenCompleto a partir de
+  // orden_entregas). Antes se usaba data.item_entregas (combinaciones ítem×entrega
+  // de expandItemEntregaCombinaciones), lo que producía N×M filas para una tabla que
+  // debía representar solo los N entregables contractuales. No se tocó
+  // expandItemEntregaCombinaciones ni su consumo en Recepción de Bienes — solo se
+  // cambió qué arreglo consume esta pestaña.
+  const entregasTab = data.entregas || [];
 
   const { modalEl } = showModal(`
     <div class="modal fade" tabindex="-1">
@@ -260,28 +267,43 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
                 <div class="table-responsive">
                   <table class="table table-sm table-bordered" style="font-size:11px">
                     <thead class="table-light"><tr>
-                      <th>Código SIGAMEF</th><th>Descripción</th>
-                      <th class="text-end">Cant.</th><th class="text-end">P.U.</th><th class="text-end">Total</th>
-                      <th>Entrega</th><th>Inicio del plazo</th><th>Fecha efectiva</th>
-                      <th>Plazo</th><th>Fecha máxima</th><th>Lugar</th>
+                      <th>Entregable</th><th>Descripción entregable</th>
+                      <th class="text-end">Cant.</th><th class="text-end">Precio unitario / Importe</th>
+                      <th>Inicio del plazo</th><th>Fecha efectiva</th>
+                      <th>Plazo</th><th>Fecha máxima</th><th>Lugar de entrega</th><th>Acciones</th>
                     </tr></thead>
                     <tbody>
-                      ${combos.length
-    ? combos.map((e) => `
+                      ${entregasTab.length
+    ? entregasTab.map((e, idx) => {
+      const items = e.items || [];
+      const cantidad = items.length
+        ? items.reduce((a, it) => a + Number(it.cantidad || 0), 0)
+        : null;
+      const descripcion = e.descripcion || items[0]?.item_descripcion || '—';
+      const detalleId = `roExpEntDet_${idx}`;
+      return `
                           <tr>
-                            <td>${esc(e.codigo_sigamef || '—')}</td>
-                            <td>${esc(e.descripcion || '—')}</td>
-                            <td class="text-end">${esc(e.cantidad)}</td>
-                            <td class="text-end">${esc(fmtMonto(e.precio_unitario))}</td>
-                            <td class="text-end">${esc(fmtMonto(e.precio_total))}</td>
-                            <td><strong>${esc(e.etiqueta_entrega || '—')}</strong></td>
+                            <td><strong>${esc(e.etiqueta_entrega || e.codigo_entrega || '—')}</strong></td>
+                            <td>${esc(descripcion)}</td>
+                            <td class="text-end">${cantidad != null ? esc(cantidad) : '—'}</td>
+                            <td class="text-end">${esc(fmtMonto(e.importe))}</td>
                             <td>${esc(e.condicion_inicio_label || e.evento_inicio_plazo || '—')}</td>
-                            <td>${esc(e.fecha_efectiva ? fmtFecha(e.fecha_efectiva) : (e.pendiente_motivo || 'Pendiente'))}</td>
+                            <td>${esc(e.fecha_base_calc ? fmtFecha(e.fecha_base_calc) : 'Pendiente')}</td>
                             <td>${esc(e.plazo_label || (e.dias_plazo != null ? `${e.dias_plazo} días` : '—'))}</td>
-                            <td>${esc(e.fecha_maxima ? fmtFecha(e.fecha_maxima) : 'Pendiente')}</td>
+                            <td>${esc(e.fecha_maxima_calc ? fmtFecha(e.fecha_maxima_calc) : 'Pendiente')}</td>
                             <td>${esc(e.lugar_entrega || '—')}</td>
-                          </tr>`).join('')
-    : '<tr><td colspan="11" class="text-muted text-center">Sin entregas</td></tr>'}
+                            <td>${items.length
+        ? `<button type="button" class="btn btn-sm btn-outline-secondary py-0 ro-exp-ent-toggle" data-target="${detalleId}">Ver ítems</button>`
+        : '—'}</td>
+                          </tr>
+                          ${items.length ? `
+                          <tr class="d-none" id="${detalleId}">
+                            <td colspan="10" class="bg-light">
+                              <div class="small">${items.map((it) => `${esc(it.item_descripcion || '—')} · cant ${esc(it.cantidad)} · ${esc(fmtMonto(it.precio_unitario))} / ${esc(fmtMonto(it.precio_total))}`).join('<br>')}</div>
+                            </td>
+                          </tr>` : ''}`;
+    }).join('')
+    : '<tr><td colspan="10" class="text-muted text-center">Sin entregas</td></tr>'}
                     </tbody>
                   </table>
                 </div>
@@ -408,6 +430,13 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
         btn.disabled = false;
       }
     };
+  });
+
+  modalEl.querySelectorAll('.ro-exp-ent-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = modalEl.querySelector(`#${btn.dataset.target}`);
+      target?.classList.toggle('d-none');
+    });
   });
 
   modalEl.querySelector('#roExpTraza')?.addEventListener('click', async () => {
