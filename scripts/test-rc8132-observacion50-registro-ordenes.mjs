@@ -134,11 +134,12 @@ ok(/id="roEntregasFoot"/.test(srcEntregasModal) && /<tfoot id="roEntregasFoot">/
   'E8: existe un <tfoot id="roEntregasFoot"> dentro de la misma tabla de Entregables');
 ok(/footEl\.innerHTML = `<tr class="fw-semibold">/.test(srcEntregasModal) && /TOTAL/.test(srcEntregasModal),
   'E9: el totalizador TOTAL se pinta dentro del tfoot de la tabla (no en un bloque aparte)');
-ok(/function calcTotales\(\)/.test(srcEntregasModal) && /function buildChecklist\(\)/.test(srcEntregasModal)
-  && /function renderChecklist\(\)/.test(srcEntregasModal),
-  'E10: calcTotales/buildChecklist/renderChecklist se preservaron (cálculo de negocio intacto)');
-ok(/renderChecklist\(\);\s*\}\s*$/m.test(srcEntregasModal.slice(srcEntregasModal.indexOf('function renderResumen'), srcEntregasModal.indexOf('function renderResumen') + 700)),
-  'E11: renderResumen sigue invocando renderChecklist() tras pintar el totalizador (cronogramaValido no se pierde)');
+// RC8.13.4 eliminó buildChecklist()/renderChecklist() (presentación local del panel
+// "Validación del cronograma", removido a pedido explícito) — ver
+// scripts/test-rc8134-ui-entregables-registro-ordenes.mjs sección 12/13 para la
+// cobertura vigente. calcTotales() sigue intacta (cálculo de negocio del totalizador).
+ok(/function calcTotales\(\)/.test(srcEntregasModal),
+  'E10: calcTotales() se preservó (cálculo de negocio del totalizador intacto)');
 
 // ---------------------------------------------------------------------------
 console.log('\n-- F. Configurar entregables --');
@@ -244,6 +245,97 @@ ok(/data-tab="\$\{TAB_CCP\}"/.test(srcView) && /data-tab="\$\{TAB_ORDEN\}"/.test
   'I5: los tabs Registro de CCP / Registro de Orden (RC8.13.1) siguen presentes');
 ok(!/recepcionBienes\.js/.test(srcExpModal.match(/import.*from.*/g)?.join('') || ''),
   'I6: registroOrdenExpedienteModal.js no importa/depende de recepcionBienes.js (no se tocó Recepción de Bienes)');
+
+// ---------------------------------------------------------------------------
+console.log('\n-- J. Idempotencia de sincronizarPreciosItemsDesdeCuadro (RC8.13.2 Obs.50 §8) --');
+// Simulación PURA de la fórmula SQL exacta usada en server/lib/ordenesContratacion.js
+// (rama puAnterior > 0 — reescalado proporcional). No sustituye una corrida real con
+// BD: valida que la fórmula, tal como está escrita, es matemáticamente idempotente y
+// conserva el monto contractual sin multiplicarlo por N.
+function round(n, d) { return Number(Number(n).toFixed(d)); }
+function rescaleLinea(linea, puNuevo, puAnterior) {
+  return {
+    precio_unitario: round((linea.precio_unitario * puNuevo) / puAnterior, 4),
+    precio_total: round((linea.precio_total * puNuevo) / puAnterior, 2),
+  };
+}
+
+// Ítem con 2 entregables reales (RC8.12: PU/Total ya divididos al crear la orden).
+const itemBase = { cantidad: 1, precio_unitario: 14000, precio_total: 14000 };
+const lineaCreacionE1 = resolveOrdenEntregaItemLinea(itemBase, 2); // {pu:7000, total:7000}
+const lineaCreacionE2 = resolveOrdenEntregaItemLinea(itemBase, 2);
+const sumaCreacion = round(lineaCreacionE1.precio_total + lineaCreacionE2.precio_total, 2);
+ok(sumaCreacion === 14000, 'J1: estado de creación (RC8.12) — suma de 2 líneas = monto contractual real (14000), no N×14000');
+
+// 1ª "sincronización" con el MISMO PU (caso típico: el precio del cuadro no cambió):
+// puAnterior === puNuevo → ratio = 1 → no debe alterar los valores ya divididos.
+const sync1E1 = rescaleLinea(lineaCreacionE1, 14000, 14000);
+const sync1E2 = rescaleLinea(lineaCreacionE2, 14000, 14000);
+ok(sync1E1.precio_total === lineaCreacionE1.precio_total && sync1E2.precio_total === lineaCreacionE2.precio_total,
+  'J2: con PU sin cambios (ratio=1), la reescala NO altera los importes ya distribuidos — no multiplica por N');
+ok(round(sync1E1.precio_total + sync1E2.precio_total, 2) === 14000,
+  'J3: tras esa "sincronización", la suma sigue siendo el monto contractual real (14000), no 28000 (2×14000)');
+
+// 2ª sincronización consecutiva (misma condición) — debe producir EXACTAMENTE el mismo
+// resultado que la 1ª (no drift monetario por redondeos sucesivos).
+const sync2E1 = rescaleLinea(sync1E1, 14000, 14000);
+const sync2E2 = rescaleLinea(sync1E2, 14000, 14000);
+ok(sync2E1.precio_total === sync1E1.precio_total && sync2E2.precio_total === sync1E2.precio_total,
+  'J4: una 2ª lectura consecutiva de la orden produce EXACTAMENTE el mismo resultado (idempotente, sin drift)');
+
+// Corrección real de precio (el cuadro comparativo se actualizó de 14000 a 15000/u):
+// el reescalado debe preservar la PROPORCIÓN (50/50), no volver a cantidad×PU completo.
+const sync3E1 = rescaleLinea(lineaCreacionE1, 15000, 14000);
+const sync3E2 = rescaleLinea(lineaCreacionE2, 15000, 14000);
+ok(round(sync3E1.precio_total + sync3E2.precio_total, 2) === 15000,
+  'J5: con un PU realmente distinto, la suma reescalada sigue el monto contractual nuevo (15000), no 2×15000 (30000)');
+ok(Math.abs(sync3E1.precio_total - sync3E2.precio_total) < 0.02,
+  'J6: la proporción 50/50 entre entregables se conserva tras reescalar (no colapsa todo en una sola línea)');
+
+// BIEN con varios ítems reales, N=1 entrega (caso típico): rama "sin PU anterior"
+// (cantidad × PU completo) — debe seguir siendo correcta y no mezclarse entre ítems.
+const itemBienA = { cantidad: 10, precio_unitario: 100 }; // total 1000
+const itemBienB = { cantidad: 3, precio_unitario: 50 }; // total 150
+ok(round(itemBienA.cantidad * itemBienA.precio_unitario, 2) === 1000
+  && round(itemBienB.cantidad * itemBienB.precio_unitario, 2) === 150,
+  'J7: BIEN con varios ítems reales (N=1) — cada ítem calcula su propio total de forma independiente, sin mezclarse');
+
+ok(/if \(puAnterior > 0\) \{/.test(srcOrdenesLib),
+  'J8: la rama de reescalado usa puAnterior>0 como guarda explícita (visible en el código fuente)');
+ok(/if \(!needs\) return items;/.test(srcOrdenesLib),
+  'J9: la guarda de idempotencia real (needs) sigue presente — una vez sincronizados los PU, sucesivas lecturas no vuelven a tocar orden_entrega_items');
+console.log('  ⚠ PENDIENTE VALIDACIÓN CON BD REAL: correr sincronizarPreciosItemsDesdeCuadro dos veces seguidas sobre la misma orden real (SERVICIO/LOCACIÓN, N≥2 entregables) y confirmar por consulta SQL que orden_entrega_items no cambia en la 2ª corrida.');
+
+// ---------------------------------------------------------------------------
+console.log('\n-- K. Contrato de upload — Adjuntar orden firmada --');
+const srcRoutes = read('server/routes/ordenesContratacion.js');
+ok(/router\.post\('\/:id\/documentos'/.test(srcRoutes),
+  'K1: el endpoint POST /:id/documentos existe (contrato leído directamente de la ruta)');
+ok(/const data = await adjuntarOrdenFirmada\(req\.params\.id, req\.body \|\| \{\}, usuario, rol\);/.test(srcRoutes)
+  && /res\.status\(201\)\.json\(\{ data \}\);/.test(srcRoutes),
+  'K2: la ruta responde 201 con { data } SOLO tras esperar (await) a que adjuntarOrdenFirmada termine (incluye el INSERT)');
+ok(/return \{ documento: rows\[0\], estado: nuevoEstado \};/.test(srcOrdenesLib),
+  'K3: el campo real devuelto es data.documento.id (rows[0] del INSERT ... RETURNING id), NO data.id — contrato confirmado por lectura de código, no asumido');
+ok(/RETURNING id, version, nombre_archivo, subido_at/.test(srcOrdenesLib),
+  'K4: el INSERT usa RETURNING id — el id solo existe en la respuesta si la fila realmente se insertó');
+ok(/if \(!saved\?\.documento\?\.id\) \{/.test(srcOrdenModal),
+  'K5: el frontend verifica exactamente saved.documento.id (el campo real, no un supuesto saved.id)');
+ok(/throw new Error\('El servidor no confirmó el guardado del documento/.test(srcOrdenModal),
+  'K6: si falta esa confirmación, se lanza error explícito (no se asume éxito por ausencia de excepción HTTP)');
+const uploadBlockK = srcOrdenModal.slice(
+  srcOrdenModal.indexOf('#roOrdPdfSave\').onclick'),
+  srcOrdenModal.indexOf('#roOrdPdfSave\').onclick') + 1600,
+);
+const idxCatch = uploadBlockK.indexOf('} catch (e) {');
+const idxHide = uploadBlockK.indexOf('bootstrap.Modal.getInstance(modalEl)?.hide()');
+const idxDone = uploadBlockK.indexOf('onDone?.()');
+const idxConfirm = uploadBlockK.indexOf('saved?.documento?.id');
+ok(idxConfirm > -1 && idxHide > -1 && idxDone > -1 && idxConfirm < idxHide && idxHide < idxDone,
+  'K7: el orden real en el código es confirmar persistencia → cerrar modal → onDone (abrir Validación) — nunca al revés');
+ok(idxCatch > -1 && uploadBlockK.slice(idxCatch).includes('saveBtn.disabled = false'),
+  'K8: si falla (excepción HTTP o confirmación ausente), el botón se reactiva y el modal permanece abierto (no cierra, no avanza)');
+ok(!uploadBlockK.slice(0, idxCatch).includes('reload()') && !uploadBlockK.slice(0, idxCatch).includes('validarYMostrarChecklist'),
+  'K9: el propio modal de adjuntar no dispara refresh/checklist directamente — delega en onDone (afterSave), que solo se invoca tras confirmar');
 
 console.log('\n=== RC8.13.2 Observación 50 — funciones puras + inspección de código OK ===');
 console.log('Recordatorio: validar manualmente en navegador (dec/registro-ordenes) con BD activa antes de cerrar la observación —');

@@ -82,6 +82,10 @@ function moneyEq(a, b, tol = MONEY_TOL) {
   return Math.abs(Number(a || 0) - Number(b || 0)) <= tol;
 }
 
+function round2Global(n) {
+  return Math.round(Number(n || 0) * 100) / 100;
+}
+
 function qtyEq(a, b, tol = 0.0001) {
   return Math.abs(Number(a || 0) - Number(b || 0)) <= tol;
 }
@@ -2029,12 +2033,16 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
       if (cots.length) {
         const tec = parseJson(cots[0].propuesta_tecnica, {});
         const anex = parseJson(cots[0].anexos, {});
+        // RC8.13.4 — el domicilio fiscal/dirección del PROVEEDOR (RUC) fue removido
+        // como candidato: es la dirección de la empresa que presta el servicio, no el
+        // lugar contractual donde debe ejecutarse/entregarse la prestación. Usarlo como
+        // fallback producía direcciones de proveedor mostradas como si fueran el lugar
+        // de entrega real (p. ej. "Calle 1 N129..." en vez de la ubicación del CNCC).
+        // Solo quedan candidatos que representan explícitamente un LUGAR DE ENTREGA.
         const cand = [
           tec.lugar_entrega, tec.lugar, tec.direccion_entrega, tec.direccion,
           tec.datos_proveedor?.lugar_entrega,
           anex.lugar_entrega, anex.datos_proveedor?.lugar_entrega,
-          // RC8.10.5 — fallback a domicilio_fiscal del proveedor
-          anex.datos_proveedor?.domicilio_fiscal,
         ].map((x) => String(x || '').trim()).find(Boolean);
         if (cand) return { lugar: cand, fuente: 'cotizacion' };
       }
@@ -2059,11 +2067,89 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
   return { lugar: null, fuente: null };
 }
 
+/**
+ * RC8.13.4 — reconciliación de ÍTEM CONTRACTUAL en PRESENTACIÓN (nunca escribe en
+ * orden_items). ITEM CONTRACTUAL ≠ ENTREGABLE ≠ RELACIÓN INTERNA ítem-entrega: esta
+ * función resuelve el primero, reutilizando exactamente las mismas fuentes/funciones
+ * canónicas de RC8.12 (extractItemsAdjudicados / extractItemsDesdePropuestaEconomica)
+ * y el mismo criterio de evidencia que RC8.13.3 (scripts/reconcile-rc8133-...):
+ * solo se sustituyen los ítems físicos por la reconstrucción canónica cuando hay MÁS
+ * ítems físicos que ítems canónicos Y ambos conjuntos reconcilian con el monto
+ * contractual — nunca por similitud de texto ni por cantidad de entregables.
+ * BIEN/SERVICIO con varios ítems reales (que coinciden con la fuente canónica) NO se
+ * ven afectados: se devuelven exactamente como están.
+ */
+async function reconciliarItemsContractuales(orden, itemsFisicos) {
+  const round2Local = (n) => Math.round(Number(n || 0) * 100) / 100;
+  let itemsCanonicos = null;
+  try {
+    if (orden.cuadro_comparativo_id) {
+      const { rows } = await query(`
+        SELECT datos_json, proveedor_ganador_id FROM cuadros_comparativos WHERE id = $1
+      `, [orden.cuadro_comparativo_id]);
+      if (rows[0]) itemsCanonicos = extractItemsAdjudicados(rows[0], orden.proveedor_id);
+    } else if (orden.solicitud_cotizacion_id) {
+      const { rows: cots } = await query(`
+        SELECT propuesta_economica FROM cotizaciones_proveedor
+        WHERE solicitud_id = $1 AND proveedor_id = $2 AND estado = 'COTIZACION_PRESENTADA'
+        ORDER BY
+          CASE WHEN COALESCE(validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
+          fecha_presentacion DESC NULLS LAST, id DESC
+        LIMIT 1
+      `, [orden.solicitud_cotizacion_id, orden.proveedor_id]);
+      if (cots[0]) {
+        const { rows: reqRows } = await query('SELECT denominacion FROM requerimientos WHERE id = $1', [orden.requerimiento_id]);
+        itemsCanonicos = extractItemsDesdePropuestaEconomica(cots[0].propuesta_economica, {
+          denominacion: reqRows[0]?.denominacion || '',
+        });
+      }
+    }
+  } catch (_) { /* sin fuente disponible: se conservan los ítems físicos, sin evidencia no se reconstruye */ }
+
+  if (!itemsCanonicos || !itemsCanonicos.length || !itemsFisicos.length) {
+    return { items: itemsFisicos, reconciliado: false };
+  }
+
+  const sumaFisicos = round2Local(itemsFisicos.reduce((a, it) => a + Number(it.precio_total || 0), 0));
+  const sumaCanon = round2Local(itemsCanonicos.reduce((a, it) => a + Number(it.precio_total || 0), 0));
+  const montoContractual = Number(orden.monto_total || 0);
+  const esFragmentado = itemsFisicos.length > itemsCanonicos.length
+    && moneyEq(sumaFisicos, montoContractual)
+    && moneyEq(sumaCanon, montoContractual);
+  if (!esFragmentado) return { items: itemsFisicos, reconciliado: false };
+
+  const base = itemsFisicos[0] || {};
+  const itemsPresentacion = itemsCanonicos.map((it, idx) => ({
+    id: itemsFisicos[idx]?.id ?? `reconciliado_${idx}`,
+    orden_id: orden.id,
+    descripcion: it.descripcion,
+    unidad_medida: it.unidad_medida || base.unidad_medida,
+    cantidad: it.cantidad,
+    precio_unitario: it.precio_unitario,
+    precio_total: it.precio_total,
+    codigo_sigamef: base.codigo_sigamef || null,
+    codigo_sigamef_tooltip: base.codigo_sigamef_tooltip || null,
+    especifica: base.especifica || null,
+    especifica_gasto: base.especifica_gasto || null,
+    centro: base.centro || null,
+    centro_costo: base.centro_costo || null,
+    pedido_sigamef: base.pedido_sigamef || null,
+    plazo_ofertado: it.plazo_ofertado ?? base.plazo_ofertado ?? null,
+    plazo_ofertado_dias: it.plazo_ofertado_dias ?? base.plazo_ofertado_dias ?? null,
+  }));
+  return { items: itemsPresentacion, reconciliado: true };
+}
+
 export async function getDetalleOrden(ordenId) {
   const orden = await getOrdenById(ordenId);
   const ctx = await loadContextoExpediente(orden.requerimiento_id);
   let items = await sincronizarPreciosItemsDesdeCuadro(ordenId);
   items = await enrichOrdenItemsConPedidos(items, ctx.pedidos || []);
+  // RC8.13.4 — reconciliación en presentación del ÍTEM CONTRACTUAL (ver función arriba).
+  // No modifica orden_items; solo decide qué `items` se devuelve a los consumidores
+  // (pestaña Ítems del expediente y Configurar entregables comparten esta fuente).
+  const reconciliacionItems = await reconciliarItemsContractuales(orden, items);
+  items = reconciliacionItems.items;
   const { listarEntregas } = await import('./ordenesEntregas.js');
   const entregasRaw = await listarEntregas(ordenId);
 
@@ -2225,8 +2311,29 @@ export async function getDetalleOrden(ordenId) {
     const lugarMostrado = (!lugarPropio || esFallbackCentro) && lugarRes.lugar
       ? lugarRes.lugar
       : (lugarPropio || null);
+    // RC8.13.4 — cuando el ítem contractual fue reconciliado (ver arriba), las
+    // relaciones orden_entrega_items originales referencian ítems físicos que ya no
+    // se exponen (o pueden no existir, p. ej. si nunca se guardaron). Se sintetiza,
+    // solo para presentación, UNA línea por ítem canónico usando el importe YA
+    // persistido y confiable de la propia entrega (e.importe) — no se inventa un
+    // reparto: si e.importe existe, se usa tal cual; nunca se asume 1/N por defecto
+    // salvo que sea la única fuente disponible.
+    const itemsMostrados = reconciliacionItems.reconciliado
+      ? items.map((it) => {
+        const cant = Number(it.cantidad) || 1;
+        const totalEntrega = e.importe != null ? Number(e.importe) : Number(it.precio_total) / entregas.length;
+        return {
+          orden_item_id: it.id,
+          item_descripcion: it.descripcion,
+          cantidad: cant,
+          precio_unitario: cant > 0 ? round2Global(totalEntrega / cant) : totalEntrega,
+          precio_total: round2Global(totalEntrega),
+        };
+      })
+      : e.items;
     return {
       ...e,
+      items: itemsMostrados,
       lugar_entrega: lugarMostrado,
       lugar_entrega_fuente: (!lugarPropio || esFallbackCentro) ? lugarRes.fuente : 'orden_entrega',
       evento_inicio_plazo: cron.condicionInicio,

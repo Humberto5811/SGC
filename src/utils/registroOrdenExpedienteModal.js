@@ -5,7 +5,7 @@
 import { ordenesContratacionService } from '../services/ordenesContratacionService.js';
 import { adjuntosService } from '../services/adjuntosService.js';
 import { openBase64Document, previewAdjuntoById } from './documentViewer.js';
-import { fmtMonto, fmtFecha, fmtFechaHora, getOrdenEdicionAcciones } from './ordenesUtils.js';
+import { fmtMonto, fmtFecha, fmtFechaHora } from './ordenesUtils.js';
 import { showTrazabilidadModal } from '../views/requerimiento/reqShared.js';
 
 const API_BASE = '/api';
@@ -141,10 +141,14 @@ async function openDoc(btn, data) {
   throw new Error('No se pudo abrir el documento');
 }
 
-export async function openExpedienteOrdenModal(row, { onAction } = {}) {
+// RC8.13.4 — este modal ya no ofrece un botón "Editar" genérico en el pie (ver
+// modal-footer más abajo): las acciones de edición siguen disponibles desde el menú
+// Acciones ⋮ de la bandeja de Registro de Órdenes (registroOrdenesView.js), que ya
+// las expone con la misma regla de estado (registroOrdenesMenuItems/
+// getOrdenEdicionAcciones, sin cambios) — no se elimina ninguna función de edición,
+// solo su duplicado en este contexto de solo consulta.
+export async function openExpedienteOrdenModal(row) {
   if (!row?.orden_id) throw new Error('La orden aún no está registrada');
-
-  const edicionAcciones = getOrdenEdicionAcciones(row, { canManage: true });
 
   const resp = await ordenesContratacionService.getExpediente(row.orden_id);
   const data = resp?.data || resp;
@@ -232,7 +236,7 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
                   ${kv('Área Usuaria', esc(r.area_usuaria))}
                   ${kv('Tipo de proceso', esc(r.tipo_proceso))}
                   ${kv('Contrato', esc(r.numero_contrato))}
-                  ${kv('Lugar de entrega', esc(r.lugar_entrega))}
+                  ${kv('Lugar de entrega', esc(r.lugar_entrega || 'No especificado'))}
                 </div>
               </div>
               <div class="tab-pane fade" id="roExpIt">
@@ -268,42 +272,28 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
                   <table class="table table-sm table-bordered" style="font-size:11px">
                     <thead class="table-light"><tr>
                       <th>Entregable</th><th>Descripción entregable</th>
-                      <th class="text-end">Cant.</th><th class="text-end">Precio unitario / Importe</th>
+                      <th class="text-end">Precio unitario / Importe</th>
                       <th>Inicio del plazo</th><th>Fecha efectiva</th>
-                      <th>Plazo</th><th>Fecha máxima</th><th>Lugar de entrega</th><th>Acciones</th>
+                      <th>Plazo</th><th>Fecha máxima</th><th>Lugar de entrega</th>
                     </tr></thead>
                     <tbody>
                       ${entregasTab.length
-    ? entregasTab.map((e, idx) => {
+    ? entregasTab.map((e) => {
       const items = e.items || [];
-      const cantidad = items.length
-        ? items.reduce((a, it) => a + Number(it.cantidad || 0), 0)
-        : null;
       const descripcion = e.descripcion || items[0]?.item_descripcion || '—';
-      const detalleId = `roExpEntDet_${idx}`;
       return `
                           <tr>
                             <td><strong>${esc(e.etiqueta_entrega || e.codigo_entrega || '—')}</strong></td>
                             <td>${esc(descripcion)}</td>
-                            <td class="text-end">${cantidad != null ? esc(cantidad) : '—'}</td>
                             <td class="text-end">${esc(fmtMonto(e.importe))}</td>
                             <td>${esc(e.condicion_inicio_label || e.evento_inicio_plazo || '—')}</td>
                             <td>${esc(e.fecha_base_calc ? fmtFecha(e.fecha_base_calc) : 'Pendiente')}</td>
                             <td>${esc(e.plazo_label || (e.dias_plazo != null ? `${e.dias_plazo} días` : '—'))}</td>
                             <td>${esc(e.fecha_maxima_calc ? fmtFecha(e.fecha_maxima_calc) : 'Pendiente')}</td>
-                            <td>${esc(e.lugar_entrega || '—')}</td>
-                            <td>${items.length
-        ? `<button type="button" class="btn btn-sm btn-outline-secondary py-0 ro-exp-ent-toggle" data-target="${detalleId}">Ver ítems</button>`
-        : '—'}</td>
-                          </tr>
-                          ${items.length ? `
-                          <tr class="d-none" id="${detalleId}">
-                            <td colspan="10" class="bg-light">
-                              <div class="small">${items.map((it) => `${esc(it.item_descripcion || '—')} · cant ${esc(it.cantidad)} · ${esc(fmtMonto(it.precio_unitario))} / ${esc(fmtMonto(it.precio_total))}`).join('<br>')}</div>
-                            </td>
-                          </tr>` : ''}`;
+                            <td>${esc(e.lugar_entrega || 'No especificado')}</td>
+                          </tr>`;
     }).join('')
-    : '<tr><td colspan="10" class="text-muted text-center">Sin entregas</td></tr>'}
+    : '<tr><td colspan="8" class="text-muted text-center">Sin entregas</td></tr>'}
                     </tbody>
                   </table>
                 </div>
@@ -393,23 +383,6 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
             </div>
           </div>
           <div class="modal-footer py-2">
-            ${edicionAcciones.length
-    ? `<div class="dropdown">
-                <button type="button" class="btn btn-outline-warning btn-sm dropdown-toggle" data-bs-toggle="dropdown" id="roExpEditar">
-                  <i class="bi bi-pencil"></i> Editar
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end" style="font-size:11px">
-                  ${edicionAcciones.map((it) => `
-                    <li><button type="button" class="dropdown-item ro-exp-edit-act" data-act="${esc(it.act)}"
-                      ${it.disabled ? 'disabled' : ''} title="${esc(it.title || '')}">
-                      <i class="bi ${esc(it.icon || 'bi-pencil')}"></i> ${esc(it.label)}
-                    </button></li>`).join('')}
-                </ul>
-              </div>`
-    : `<button type="button" class="btn btn-outline-secondary btn-sm" disabled
-        title="No editable: el estado actual de la orden (${esc(r.estado_global || r.estado || '')}) no admite modificación directa">
-        <i class="bi bi-pencil"></i> Editar
-      </button>`}
             ${r.requerimiento_id
     ? '<button type="button" class="btn btn-outline-primary btn-sm" id="roExpTraza">Trazabilidad completa</button>'
     : ''}
@@ -432,32 +405,11 @@ export async function openExpedienteOrdenModal(row, { onAction } = {}) {
     };
   });
 
-  modalEl.querySelectorAll('.ro-exp-ent-toggle').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const target = modalEl.querySelector(`#${btn.dataset.target}`);
-      target?.classList.toggle('d-none');
-    });
-  });
-
   modalEl.querySelector('#roExpTraza')?.addEventListener('click', async () => {
     try {
       await showTrazabilidadModal(r.requerimiento_id);
     } catch (e) {
       showErr(modalEl, e.message || 'No se pudo abrir la trazabilidad');
     }
-  });
-
-  modalEl.querySelectorAll('.ro-exp-edit-act').forEach((btn) => {
-    btn.onclick = async () => {
-      const act = btn.dataset.act;
-      if (!act || !onAction) return;
-      // eslint-disable-next-line no-undef
-      bootstrap.Modal.getInstance(modalEl)?.hide();
-      try {
-        await onAction(act);
-      } catch (e) {
-        // El propio handler de la acción (registroOrdenesView) ya maneja sus errores.
-      }
-    };
   });
 }

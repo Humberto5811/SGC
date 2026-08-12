@@ -231,17 +231,6 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
                 <tfoot id="roEntregasFoot"></tfoot>
               </table>
             </div>
-            <div class="row g-2 mt-2">
-              <div class="col-lg-7">
-                <div id="roCronogramaValido" class="mt-1"></div>
-              </div>
-              <div class="col-lg-5">
-                <div class="border rounded p-2" id="roChecklistCronograma">
-                  <div class="fw-semibold small mb-1">Validación del cronograma</div>
-                  <ul class="list-unstyled small mb-0" id="roCheckList"></ul>
-                </div>
-              </div>
-            </div>
             <div class="alert alert-danger d-none mt-2 py-2 small" id="roEntErr"></div>
           </div>
           <div class="modal-footer py-2">
@@ -254,8 +243,6 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
 
   const listEl = modalEl.querySelector('#roEntregasList');
   const footEl = modalEl.querySelector('#roEntregasFoot');
-  const checkEl = modalEl.querySelector('#roCheckList');
-  const validoEl = modalEl.querySelector('#roCronogramaValido');
 
   function usedCorrelativos(exceptIdx) {
     const s = new Set();
@@ -300,145 +287,19 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     return calc;
   }
 
-  function buildChecklist() {
-    const { qty, mon, monTotal } = calcTotales();
-    const monAdjTot = round2(items.reduce((a, it) => a + Number(it.precio_total || 0), 0));
-    let qtyOk = true;
-    let qtyPend = false;
-    items.forEach((it) => {
-      const dist = qty.get(it.id) || 0;
-      const pend = round2(Number(it.cantidad) - dist);
-      if (Math.abs(pend) > 0.0001) {
-        if (pend > 0) qtyPend = true;
-        else qtyOk = false;
-      }
-      if (dist > Number(it.cantidad) + 0.0001) qtyOk = false;
-    });
-    const monOk = Math.abs(monTotal - monAdjTot) <= 0.01;
-    const plazosOk = entregas.every((e) => Number(e.dias_plazo) >= 1);
-    const inicioOk = entregas.every((e) => !!e.condicion_inicio);
-    const manualOk = entregas.every((e) => {
-      if (!needsManual(e.condicion_inicio)) return true;
-      return !!e.fecha_manual;
-    });
-    const fechasOk = entregas.every((e) => {
-      syncFechasEntrega(e);
-      if (e.pendiente) return true;
-      return !!e.fecha_efectiva && (!!e.fecha_maxima || Number(e.dias_plazo) >= 1);
-    });
-    const lugarOk = entregas.every((e) => String(e.lugar_entrega || '').trim());
-    const corrOk = (() => {
-      const s = new Set();
-      for (const e of entregas) {
-        const n = e.correlativo === 'UNICO' ? 1 : Number(e.numero_entrega);
-        if (s.has(n)) return false;
-        s.add(n);
-      }
-      return true;
-    })();
-
-    const status = (ok, pend = false) => {
-      if (ok && !pend) return { cls: 'ro-check-ok', label: 'Completo', icon: 'bi-check-circle-fill' };
-      if (pend && ok !== false) return { cls: 'ro-check-warn', label: 'Pendiente', icon: 'bi-exclamation-circle-fill' };
-      return { cls: 'ro-check-err', label: 'Error', icon: 'bi-x-circle-fill' };
-    };
-
-    const rows = [
-      {
-        key: 'cant', label: 'Cantidades distribuidas',
-        ...status(qtyOk && !qtyPend, qtyPend),
-        focus: '.ro-cant',
-      },
-      {
-        key: 'mon', label: 'Montos correctos',
-        ...status(monOk),
-        focus: '.ro-cant',
-      },
-      {
-        key: 'plazo', label: 'Plazo aplicable',
-        ...status(plazosOk, !plazosOk),
-        focus: '.ro-dias',
-      },
-      {
-        key: 'inicio', label: 'Inicio de actividad',
-        ...status(inicioOk),
-        focus: '.ro-ini-cond',
-      },
-      {
-        key: 'evento', label: 'Fecha del evento',
-        ...status(manualOk && (fechasOk || entregas.some((e) => e.pendiente)),
-          entregas.some((e) => e.pendiente) || !manualOk),
-        focus: needsManual(entregas[0]?.condicion_inicio) ? '.ro-ini-manual' : '.ro-ini-cond',
-      },
-      {
-        key: 'efectiva', label: 'Fecha efectiva',
-        ...status(fechasOk || entregas.every((e) => e.pendiente), entregas.some((e) => e.pendiente)),
-        focus: '.ro-ini-cond',
-      },
-      {
-        key: 'maxima', label: 'Fecha máxima o pendiente de notificación',
-        ...status(
-          entregas.every((e) => e.pendiente || !!e.fecha_maxima),
-          entregas.some((e) => e.pendiente),
-        ),
-        focus: '.ro-dias',
-      },
-      {
-        key: 'lugar', label: 'Lugar de entrega disponible',
-        ...status(lugarOk, !lugarOk),
-        focus: '.ro-lugar',
-      },
-    ];
-
-    const estructuralOk = qtyOk && !qtyPend && monOk && plazosOk && inicioOk && manualOk && corrOk
-      && entregas.length >= 1;
-    const cronogramaValido = estructuralOk && fechasOk && lugarOk !== false;
-
-    return { rows, estructuralOk, cronogramaValido, corrOk, lugarOk };
-  }
-
-  function renderChecklist() {
-    const { rows, cronogramaValido, estructuralOk } = buildChecklist();
-    checkEl.innerHTML = rows.map((r) => {
-      const st = r.cls.includes('ok') ? 'Completo' : (r.cls.includes('warn') ? 'Pendiente' : 'Error');
-      const showBtn = (r.cls.includes('err') || r.cls.includes('warn')) && r.focus;
-      return `
-      <li class="d-flex align-items-start justify-content-between gap-2 py-1 border-bottom">
-        <span><i class="bi ${r.icon} ${r.cls} me-1"></i>${esc(r.label)}</span>
-        <span class="text-end">
-          <span class="${r.cls} fw-semibold d-block">${st}</span>
-          ${showBtn ? `<button type="button" class="btn btn-link btn-sm p-0 ro-check-focus" data-focus="${esc(r.focus)}">Completar información</button>` : ''}
-        </span>
-      </li>`;
-    }).join('');
-
-    checkEl.querySelectorAll('.ro-check-focus').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const sel = btn.dataset.focus;
-        if (!sel) return;
-        const el = listEl.querySelector(sel);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-          el.focus?.();
-        }
-      });
-    });
-
-    validoEl.innerHTML = cronogramaValido
-      ? '<span class="badge text-bg-success">Cronograma válido</span>'
-      : (estructuralOk
-        ? '<span class="badge text-bg-warning">Cronograma guardable (fechas pendientes de notificación u opcionalidades)</span>'
-        : '<span class="badge text-bg-secondary">Cronograma incompleto</span>');
-  }
-
   /**
-   * RC8.13.2 Obs.50 — separa cálculo de negocio (calcTotales/buildChecklist, sin
-   * cambios) de la presentación. Ya NO existe un bloque "Resumen de distribución"
-   * separado (#roResumenDist eliminado): la única pieza visual nueva es una fila
-   * TOTAL dentro de la misma tabla de Entregables (tfoot), sin tarjetas ni
-   * comparación adjudicado/distribuido/diferencia por fuera de la tabla.
-   * calcTotales()/buildChecklist()/renderChecklist()/cronogramaValido se preservan
-   * intactos — solo cambia qué HTML se pinta con su resultado.
+   * RC8.13.4 — este modal ya NO renderiza el badge de estado estructural del
+   * cronograma ni el panel lateral de requisitos con foco por campo: eran
+   * presentación exclusiva de esta ventana, no un helper canónico reutilizado en
+   * otros flujos, así que se eliminaron junto con su cálculo (antes
+   * buildChecklist/renderChecklist). Esto NO afecta la validación real de
+   * "Notificar proveedor": esa vive en server/lib/ordenesChecklist.js
+   * (obtenerChecklistOrden/evaluarDistribucion, shared/expedienteChecklist.js),
+   * completamente separada de este modal — ver REGISTRO_ORDENES_NOTIFICACION en
+   * getOrdenChecklistRules. Este modal conserva su propia validación de guardado
+   * (bloqueo con mensaje en #roEntErr dentro del handler de #roEntSave, sin
+   * cambios) para impedir persistir un cronograma con cantidades/montos/plazos
+   * inconsistentes.
    */
   function renderResumen() {
     const { monTotal } = calcTotales();
@@ -449,7 +310,6 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
         <td colspan="10"></td>
       </tr>`;
     }
-    renderChecklist();
   }
 
   function syncFromDom(tr, idx) {
@@ -765,7 +625,6 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     } catch (e) {
       err.textContent = e.message || 'Error al guardar';
       err.classList.remove('d-none');
-      renderChecklist();
     }
   };
 }

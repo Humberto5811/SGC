@@ -524,9 +524,7 @@ function buildActMap() {
   };
 
   return {
-    verExpediente: wrap((row) => openExpedienteOrdenModal(row, {
-      onAction: (act, item) => runActionByName(act, row, item),
-    })),
+    verExpediente: wrap((row) => openExpedienteOrdenModal(row)),
     adjuntarCcpFirmado: wrap((row) => openAdjuntarCcpFirmadoModal(row, { onDone: afterSave(row) })),
     verCcpFirmado: wrap((row) => openCcpFirmadoViewer(row)),
     editarCcp: wrap((row) => openCcpCodigoModal(row, { mode: 'editar', onSuccess: afterSave(row) })),
