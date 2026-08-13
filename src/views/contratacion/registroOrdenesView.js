@@ -58,30 +58,34 @@ const TAB_CCP = 'ccp';
 const TAB_ORDEN = 'orden';
 let currentTab = TAB_CCP;
 
+/**
+ * RC8.14.1 Obs.52 — anchos ajustados ~30% (proporcional al salto de 10px a 13px de
+ * fuente) para que las columnas no se compriman con el texto más grande.
+ */
 const CCP_COLS = [
-  { th: 'CCP', w: '90px' },
-  { th: 'CCP<br>firmado', w: '70px' },
-  { th: 'Requerimiento', w: '110px' },
-  { th: 'Pedido<br>SIGAMEF', w: '100px' },
-  { th: 'Código<br>SIGAMEF', w: '100px' },
-  { th: 'Descripción', w: '260px' },
-  { th: 'Estado', w: '160px' },
-  { th: 'Responsable', w: '160px' },
-  { th: 'Acciones', w: '60px' },
+  { th: 'CCP', w: '115px' },
+  { th: 'CCP<br>firmado', w: '90px' },
+  { th: 'Requerimiento', w: '140px' },
+  { th: 'Pedido<br>SIGAMEF', w: '130px' },
+  { th: 'Código<br>SIGAMEF', w: '130px' },
+  { th: 'Descripción', w: '320px' },
+  { th: 'Estado', w: '200px' },
+  { th: 'Responsable', w: '200px' },
+  { th: 'Acciones', w: '75px' },
 ];
 
 const ORDEN_COLS = [
-  { th: 'Orden', w: '90px' },
-  { th: 'Fecha<br>orden', w: '85px' },
-  { th: 'RUC<br>proveedor', w: '95px' },
-  { th: 'Nombre<br>proveedor', w: '220px' },
-  { th: 'Monto total<br>orden', w: '100px' },
-  { th: 'Cant.<br>entregables', w: '75px' },
-  { th: 'Plazo total<br>orden', w: '90px' },
-  { th: 'Fecha<br>notificación', w: '95px' },
-  { th: 'Estado', w: '160px' },
-  { th: 'Responsable', w: '160px' },
-  { th: 'Acciones', w: '60px' },
+  { th: 'Orden', w: '115px' },
+  { th: 'Fecha<br>orden', w: '105px' },
+  { th: 'RUC<br>proveedor', w: '120px' },
+  { th: 'Nombre<br>proveedor', w: '280px' },
+  { th: 'Monto total<br>orden', w: '125px' },
+  { th: 'Cant.<br>entregables', w: '95px' },
+  { th: 'Plazo total<br>orden', w: '115px' },
+  { th: 'Fecha<br>notificación', w: '120px' },
+  { th: 'Estado', w: '200px' },
+  { th: 'Responsable', w: '200px' },
+  { th: 'Acciones', w: '75px' },
 ];
 
 function currentColsDef() {
@@ -121,22 +125,26 @@ function canManage() {
 }
 
 /**
- * RC8.13.2 Obs.50 — ajuste visual scoped a #${VIEW_ID} (Registro de Órdenes) únicamente:
- * encabezados y valores centrados, Arial 9px, columnas con ancho mínimo dinámico por tab
- * (ver renderTableChrome) para evitar compresión excesiva. No afecta otras vistas.
+ * RC8.13.2 Obs.50 / RC8.14 Obs.51 / RC8.14.1 Obs.52 — ajuste visual scoped a
+ * #${VIEW_ID} (Registro de Órdenes) únicamente: encabezados y valores centrados,
+ * Arial 13px — escala visual equivalente a la usada en Recepción de Cotizaciones
+ * (bandejaGlobalStyles: font-size 0.8125rem ≈ 13px con la raíz de 16px del proyecto),
+ * no solo el mínimo de 10px pedido en RC8.14 — columnas con ancho mínimo dinámico
+ * por tab (ver renderTableChrome), ajustado ~30% para no comprimirse con el texto
+ * más grande. No afecta otras vistas ni la lógica de datos/acciones.
  */
 const RO_BANDEJA_CSS = `
 #${VIEW_ID} .ro-table-wrap { max-height: 68vh; overflow: auto; }
 #${VIEW_ID} table.ro-bandeja {
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 9px;
+  font-size: 13px;
   table-layout: fixed;
   width: 100%;
   border-collapse: collapse;
 }
 #${VIEW_ID} table.ro-bandeja thead th {
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1.25;
   vertical-align: middle;
@@ -148,7 +156,7 @@ const RO_BANDEJA_CSS = `
 }
 #${VIEW_ID} table.ro-bandeja tbody td {
   font-family: Arial, Helvetica, sans-serif;
-  font-size: 9px;
+  font-size: 13px;
   padding: 3px 6px;
   vertical-align: middle;
   text-align: center;

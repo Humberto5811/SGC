@@ -47,8 +47,11 @@ const theadBlock = cssBlock.slice(cssBlock.indexOf('thead th'), cssBlock.indexOf
 const tbodyBlock = cssBlock.slice(cssBlock.indexOf('tbody td'), cssBlock.indexOf('.ro-wrap'));
 ok(/text-align:\s*center/.test(theadBlock), 'A1: encabezados centrados (thead th text-align:center)');
 ok(/text-align:\s*center/.test(tbodyBlock), 'A2: valores centrados (tbody td text-align:center)');
-ok(/font-family:\s*Arial/.test(cssBlock) && /font-size:\s*9px/.test(cssBlock),
-  'A3: Arial 9px aplicado en la tabla de Registro de Órdenes');
+// RC8.14 Obs.51 cambió el tamaño de 9px a 10px (instrucción explícita posterior) —
+// ver scripts/test-rc814-observacion51-registro-ordenes.mjs sección 1 para la
+// cobertura vigente del tamaño de fuente.
+ok(/font-family:\s*Arial/.test(cssBlock),
+  'A3: Arial aplicado en la tabla de Registro de Órdenes (tamaño verificado en RC8.14)');
 ok(cssBlock.includes('#${VIEW_ID}'),
   'A4: el CSS está scoped al contenedor de Registro de Órdenes (template ${VIEW_ID}, no global)');
 
@@ -149,14 +152,16 @@ ok(/'Plazo ofertado por el proveedor', 'Plazo aplicable', 'Inicio de actividad',
   'F2: COL_HEADERS conserva plazo ofertado/aplicable/inicio de actividad');
 ok(/'Fecha del evento', 'Fecha efectiva de inicio', 'Fecha máxima de entrega',/.test(srcEntregasModal),
   'F3: COL_HEADERS conserva fecha del evento/efectiva/máxima');
-ok(/'Lugar de entrega', 'Acciones',/.test(srcEntregasModal),
-  'F4: COL_HEADERS conserva lugar de entrega y acciones');
+// RC8.14 Obs.51 retiró "Lugar de entrega" de Configurar entregables (instrucción
+// explícita posterior) y agregó el modo plano (1 fila por entregable) — ver
+// scripts/test-rc814-observacion51-registro-ordenes.mjs secciones 5/6 para la
+// cobertura vigente de columnas y de "Lugar de entrega" ausente.
+ok(/Acciones/.test(srcEntregasModal),
+  'F4: la columna Acciones se conserva (Lugar de entrega retirado, ver RC8.14)');
 ok(/needsManual\(e\.condicion_inicio\)[\s\S]{0,80}ro-ini-manual/.test(srcEntregasModal),
   'F5: la fecha del evento es editable (input) cuando la condición de inicio lo exige (needsManual)');
 ok(/ro-cant[\s\S]{0,160}\$\{e\.correlativo === 'UNICO' \? 'readonly' : ''\}/.test(srcEntregasModal),
-  'F6: la cantidad es editable salvo en el caso ÚNICO (N=1), donde no aplica distribución');
-ok(/class="form-control form-control-sm ro-lugar"/.test(srcEntregasModal),
-  'F7: el lugar de entrega es editable por fila (input .ro-lugar)');
+  'F6: la cantidad es editable salvo en el caso ÚNICO (N=1), donde no aplica distribución (modo multiítem)');
 
 // ---------------------------------------------------------------------------
 console.log('\n-- G. Adjuntar orden firmada --');

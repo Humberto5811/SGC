@@ -236,12 +236,25 @@ export async function openExpedienteOrdenModal(row) {
                   ${kv('Área Usuaria', esc(r.area_usuaria))}
                   ${kv('Tipo de proceso', esc(r.tipo_proceso))}
                   ${kv('Contrato', esc(r.numero_contrato))}
-                  ${kv('Lugar de entrega', esc(r.lugar_entrega || 'No especificado'))}
                 </div>
               </div>
               <div class="tab-pane fade" id="roExpIt">
                 <div class="table-responsive">
+                  <style>
+                    #roExpIt table { table-layout: fixed; width: 100%; }
+                    #roExpIt col.roIt-desc { width: 32%; }
+                    #roExpIt col.roIt-sigamef { width: 11%; }
+                    #roExpIt col.roIt-um, #roExpIt col.roIt-cant { width: 7%; }
+                    #roExpIt col.roIt-pu, #roExpIt col.roIt-tot { width: 9%; }
+                    #roExpIt col.roIt-esp, #roExpIt col.roIt-centro, #roExpIt col.roIt-cc, #roExpIt col.roIt-pedido { width: 9.5%; }
+                    #roExpIt td { white-space: normal; word-break: break-word; vertical-align: top; }
+                  </style>
                   <table class="table table-sm table-bordered" style="font-size:11px">
+                    <colgroup>
+                      <col class="roIt-sigamef"><col class="roIt-desc"><col class="roIt-um">
+                      <col class="roIt-cant"><col class="roIt-pu"><col class="roIt-tot">
+                      <col class="roIt-esp"><col class="roIt-centro"><col class="roIt-cc"><col class="roIt-pedido">
+                    </colgroup>
                     <thead class="table-light"><tr>
                       <th>Código SIGAMEF</th><th>Descripción</th><th>U.M.</th>
                       <th class="text-end">Cant.</th><th class="text-end">P.U.</th><th class="text-end">Total</th>
@@ -271,26 +284,27 @@ export async function openExpedienteOrdenModal(row) {
                 <div class="table-responsive">
                   <table class="table table-sm table-bordered" style="font-size:11px">
                     <thead class="table-light"><tr>
-                      <th>Entregable</th><th>Descripción entregable</th>
-                      <th class="text-end">Precio unitario / Importe</th>
-                      <th>Inicio del plazo</th><th>Fecha efectiva</th>
-                      <th>Plazo</th><th>Fecha máxima</th><th>Lugar de entrega</th>
+                      <th>Entregable</th><th>Descripción entregable</th><th>Plazo</th>
+                      <th class="text-end">Precio unitario</th><th class="text-end">Precio total</th>
+                      <th>Inicio del plazo</th><th>Fecha efectiva</th><th>Fecha máxima</th>
                     </tr></thead>
                     <tbody>
                       ${entregasTab.length
     ? entregasTab.map((e) => {
       const items = e.items || [];
       const descripcion = e.descripcion || items[0]?.item_descripcion || '—';
+      const pu = items[0]?.precio_unitario ?? e.importe;
+      const total = items[0]?.precio_total ?? e.importe;
       return `
                           <tr>
                             <td><strong>${esc(e.etiqueta_entrega || e.codigo_entrega || '—')}</strong></td>
                             <td>${esc(descripcion)}</td>
-                            <td class="text-end">${esc(fmtMonto(e.importe))}</td>
+                            <td>${esc(e.plazo_label || (e.dias_plazo != null ? `${e.dias_plazo} días` : '—'))}</td>
+                            <td class="text-end">${esc(fmtMonto(pu))}</td>
+                            <td class="text-end">${esc(fmtMonto(total))}</td>
                             <td>${esc(e.condicion_inicio_label || e.evento_inicio_plazo || '—')}</td>
                             <td>${esc(e.fecha_base_calc ? fmtFecha(e.fecha_base_calc) : 'Pendiente')}</td>
-                            <td>${esc(e.plazo_label || (e.dias_plazo != null ? `${e.dias_plazo} días` : '—'))}</td>
                             <td>${esc(e.fecha_maxima_calc ? fmtFecha(e.fecha_maxima_calc) : 'Pendiente')}</td>
-                            <td>${esc(e.lugar_entrega || 'No especificado')}</td>
                           </tr>`;
     }).join('')
     : '<tr><td colspan="8" class="text-muted text-center">Sin entregas</td></tr>'}

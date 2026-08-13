@@ -100,6 +100,21 @@ export function registroOrdenesMenuItems(row = {}, opts = {}) {
     items.push({ act: 'verOrdenFirmada', label: 'Ver orden firmada', icon: 'bi-file-earmark-pdf' });
     items.push({ act: 'descargarOrden', label: 'Descargar orden', icon: 'bi-download' });
     items.push({ act: 'verChecklist', label: 'Ver checklist', icon: 'bi-ui-checks' });
+    // RC8.14.2 Obs.52 (corrección de regresión) — "Configurar entregas/entregables"
+    // NO estaba en esta rama: checklist.completo===true (requisito económico, RC8.14.1)
+    // hace que sincronizarEstadoSegunChecklist avance la orden a
+    // ORDEN_LISTA_NOTIFICACION, pero eso no significa que el cronograma esté
+    // completamente configurado (p. ej. Fecha efectiva/Fecha máxima pueden seguir
+    // "Pendiente" hasta notificar). ORDEN_LISTA_NOTIFICACION sigue siendo un estado
+    // de preparación editable (aún no se notificó al proveedor) — la acción debe
+    // seguir disponible hasta que la orden realmente se notifique (rama E).
+    if (can) {
+      items.push({
+        act: 'adminEntregas',
+        label: esServicio ? 'Configurar entregables' : 'Configurar entregas',
+        icon: 'bi-calendar-week',
+      });
+    }
     if (can) {
       items.push({
         act: 'notificarProveedor',

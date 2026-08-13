@@ -118,7 +118,11 @@ const entTab = srcExpModal.slice(srcExpModal.indexOf('id="roExpEnt"'), srcExpMod
 ok(!/<th class="text-end">Cant\.<\/th>/.test(entTab), '10.1: la pestaña Entregas ya no tiene columna "Cant."');
 ok(!/<th>Acciones<\/th>/.test(entTab), '11.1: la pestaña Entregas ya no tiene columna "Acciones"');
 ok(!/ro-exp-ent-toggle/.test(srcExpModal), '11.2: se removió el botón "Ver ítems" asociado a la columna Acciones eliminada');
-['Entregable', 'Descripción entregable', 'Precio unitario / Importe', 'Inicio del plazo', 'Fecha efectiva', 'Plazo', 'Fecha máxima', 'Lugar de entrega']
+// RC8.14 Obs.51 retiró "Lugar de entrega" de esta pestaña y separó "Precio unitario /
+// Importe" en columnas independientes "Precio unitario"/"Precio total" — ver
+// scripts/test-rc814-observacion51-registro-ordenes.mjs sección 9 para la cobertura
+// vigente (incluye el orden exacto Plazo → Precio unitario → Precio total).
+['Entregable', 'Descripción entregable', 'Inicio del plazo', 'Fecha efectiva', 'Fecha máxima']
   .forEach((col) => ok(entTab.includes(col), `10/11.x: columna "${col}" se conserva`));
 
 // ---------------------------------------------------------------------------

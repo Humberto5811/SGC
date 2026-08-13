@@ -333,10 +333,20 @@ export function extractItemsDesdePropuestaEconomica(propuestaEconomica, {
         const d = Number(it?.plazo_dias ?? NaN);
         return Number.isFinite(d) && d > max ? d : max;
       }, 0);
+      // RC8.14.1 Obs.52 — unidad de medida contractual real: prioriza la propuesta
+      // económica (eco.unidad_medida) y, si falta, la de los propios entregables
+      // cotizados (todos comparten la misma UM del servicio/locación, p. ej.
+      // "Servicio"). "UND" solo se usa como último fallback documentado — antes
+      // quedaba hardcodeado siempre, sin importar el tipo de contratación.
+      const umCotizada = String(
+        eco?.unidad_medida || eco?.um
+        || entregables.map((it) => it?.unidad_medida || it?.um).find(Boolean)
+        || '',
+      ).trim();
       items.push({
         item_adjudicado_ref: '1',
         descripcion: String(eco.descripcion || eco.objeto || denominacion || 'Locación').trim(),
-        unidad_medida: 'UND',
+        unidad_medida: umCotizada || 'UND',
         cantidad: 1,
         precio_unitario: Number(monto.toFixed(4)),
         precio_total: Number(monto.toFixed(2)),
@@ -2079,7 +2089,7 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
  * BIEN/SERVICIO con varios ítems reales (que coinciden con la fuente canónica) NO se
  * ven afectados: se devuelven exactamente como están.
  */
-async function reconciliarItemsContractuales(orden, itemsFisicos) {
+export async function reconciliarItemsContractuales(orden, itemsFisicos) {
   const round2Local = (n) => Math.round(Number(n || 0) * 100) / 100;
   let itemsCanonicos = null;
   try {

@@ -11,6 +11,7 @@ import {
 import {
   getOrdenById,
   getOrdenItems,
+  reconciliarItemsContractuales,
   ESTADOS_ORDEN,
   httpError,
 } from './ordenesContratacion.js';
@@ -20,7 +21,14 @@ export { ETAPAS_CHECKLIST, evaluarChecklist, listoParaNotificacion };
 
 async function loadSnapshotOrden(ordenId) {
   const orden = await getOrdenById(ordenId);
-  const items = await getOrdenItems(ordenId);
+  const itemsFisicos = await getOrdenItems(ordenId);
+  // RC8.14 Obs.51 — misma reconciliación en presentación de getDetalleOrden
+  // (reutilizada, no reimplementada): si hay evidencia contractual canónica de que
+  // los orden_items físicos están fragmentados (p. ej. 2 filas de 7000 en vez de 1
+  // de 14000), el checklist debe evaluarse contra el ítem contractual real, no
+  // contra el dato histórico fragmentado. No escribe BD.
+  const reconciliacion = await reconciliarItemsContractuales(orden, itemsFisicos);
+  const items = reconciliacion.items;
 
   const { rows: docs } = await query(`
     SELECT id FROM orden_documentos
@@ -42,6 +50,24 @@ async function loadSnapshotOrden(ordenId) {
       WHERE orden_entrega_id = ANY($1::int[])
     `, [entIds]);
     entregaItems = ei;
+  }
+  // RC8.14 Obs.51 — cuando el ítem fue reconciliado (ver arriba) las relaciones
+  // orden_entrega_items físicas referencian ítems que ya no se exponen (o, como en
+  // el caso observado, nunca se guardaron: 0 filas pese a 2 entregas activas reales).
+  // Se sintetiza, solo para evaluar el checklist, una línea por ítem canónico y
+  // entrega usando el importe YA persistido y confiable de cada orden_entregas
+  // (no se inventa una distribución: si faltan relaciones reales, se usa el importe
+  // real de la entrega, repartido entre los ítems canónicos si hay más de uno).
+  const relacionesInsuficientes = ents.length > 0
+    && entregaItems.length < ents.length * Math.max(items.length, 1);
+  if (reconciliacion.reconciliado && relacionesInsuficientes) {
+    const nItems = Math.max(items.length, 1);
+    entregaItems = ents.flatMap((e) => items.map((it) => ({
+      orden_item_id: it.id,
+      cantidad: Number(it.cantidad) || 1,
+      precio_total: Number(e.importe || 0) / nItems,
+      precio_unitario: (Number(e.importe || 0) / nItems) / (Number(it.cantidad) || 1),
+    })));
   }
 
   const { rows: ini } = await query(`

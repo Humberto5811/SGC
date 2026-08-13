@@ -7,6 +7,7 @@ import {
   fmtMonto, fmtFecha, CONDICIONES_INICIO_OPTS, esServicioTipo,
 } from './ordenesUtils.js';
 import { calcularFechaMaximaEntrega } from '../../shared/diasPlazo.js';
+import { resolveOrdenPlazoContractual } from '../../shared/ordenCronogramaContractual.js';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -76,11 +77,31 @@ function fechasPreviewLocal({ condicion, fechaOrden, fechaNotificacion, fechaMan
   });
 }
 
-const COL_HEADERS = [
+/**
+ * RC8.14 Obs.51 §5 — columnas exactas para el caso general (1 ítem/servicio
+ * contractual, el más común tras la reconciliación de RC8.13.4): UNA fila por
+ * entregable real, sin matriz orden_items × orden_entregas. "Lugar de entrega" se
+ * retira de esta tabla a propósito (Obs.51 §5).
+ */
+const COL_HEADERS_FLAT = [
+  'N.°', 'Descripción del servicio', 'N.° de Entregable', 'Unidad de medida',
+  'Cantidad', 'Precio unitario', 'Precio total', 'Plazo de presentación',
+  'Plazo aplicable', 'Inicio de actividad', 'Fecha del evento',
+  'Fecha efectiva de inicio', 'Fecha máxima de entrega', 'Acciones',
+];
+
+/**
+ * Columnas para el caso EXCEPCIONAL de varios ítems contractuales reales (p. ej.
+ * BIEN con 3 productos distintos en una sola entrega): se conserva la tabla con
+ * bloques de ítem por fila (una fila por entregable, cada una desglosando sus
+ * ítems) para no perder la distribución de cantidad/PU por ítem — colapsar esto a
+ * una sola columna "Descripción del servicio" perdería información real. "Lugar de
+ * entrega" también se retira aquí (Obs.51 §5).
+ */
+const COL_HEADERS_MULTIITEM = [
   'Ítem', 'Cantidad', 'Precio unitario', 'Precio total', 'Tipo de entrega', 'Entrega',
   'Plazo ofertado por el proveedor', 'Plazo aplicable', 'Inicio de actividad',
-  'Fecha del evento', 'Fecha efectiva de inicio', 'Fecha máxima de entrega',
-  'Lugar de entrega', 'Acciones',
+  'Fecha del evento', 'Fecha efectiva de inicio', 'Fecha máxima de entrega', 'Acciones',
 ];
 
 export async function openEntregasModal(ordenId, { onDone } = {}) {
@@ -91,8 +112,10 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
   const ctx = det.contexto || {};
   const esServ = esServicioTipo(orden.tipo_contratacion || ctx.tipo_contratacion);
   const tipoDefault = esServ ? 'ENTREGABLE' : 'ENTREGA';
+  // RC8.14 Obs.51 §5 — "Lugar de entrega" ya no se muestra/edita en esta tabla; se
+  // conserva lugarGlobal solo para completar el campo interno de cada entrega al
+  // guardar (orden_entregas.lugar_entrega sigue existiendo en BD, sin cambios).
   const lugarGlobal = String(det.lugar_entrega || ctx.lugar_entrega || '').trim();
-  const lugarFuente = det.lugar_entrega_fuente || ctx.lugar_entrega_fuente || null;
   const proveedorNombre = orden.proveedor_razon_social || ctx.proveedor_razon_social || ctx.razon_social || '—';
   const proveedorRuc = orden.proveedor_ruc || ctx.proveedor_ruc || ctx.ruc || '—';
 
@@ -101,6 +124,14 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     const iniResp = await ordenesContratacionService.getInicioActividad({ orden_id: ordenId });
     ini = iniResp?.data || iniResp;
   } catch (_) { /* opcional */ }
+
+  // RC8.14 Obs.51 \u00a75 \u2014 modo "plano" (1 fila por entregable, sin matriz \u00edtem\u00d7entrega)
+  // cuando hay exactamente 1 \u00edtem/servicio contractual (el caso general tras la
+  // reconciliaci\u00f3n de RC8.13.4: LOCACI\u00d3N/SERVICIO con Anexo 11). Con m\u00e1s de 1 \u00edtem
+  // real (p. ej. BIEN con varios productos) se conserva la tabla existente por
+  // \u00edtem\u00d7entrega para no perder la distribuci\u00f3n real de cantidad/PU por producto.
+  const esFlatMode = items.length === 1;
+  const singleItem = esFlatMode ? items[0] : null;
 
   const entregas = (det.entregas || []).map((e) => ({
     correlativo: e.correlativo
@@ -119,14 +150,27 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     fecha_efectiva: '',
     fecha_maxima: e.fecha_maxima ? String(e.fecha_maxima).slice(0, 10) : '',
     pendiente: false,
-    items: items.map((it) => {
-      const li = (e.items || []).find((x) => Number(x.orden_item_id) === Number(it.id));
-      return {
-        orden_item_id: it.id,
-        cantidad: li ? Number(li.cantidad) : 0,
-        precio_unitario: Number(it.precio_unitario),
-      };
-    }),
+    // Importe ya persistido/confiable de esta entrega real (server/lib/
+    // ordenesContratacion.js \u2192 entregasEnriquecidas). Fuente principal del Total en
+    // modo plano \u2014 no una cantidad\u00d7PU derivada de relaciones que pueden faltar.
+    importe: e.importe != null ? Number(e.importe) : null,
+    items: esFlatMode
+      // Modo plano: cantidad = la del \u00fanico \u00edtem contractual (referencia fija, no
+      // se reparte); PU se deriva del importe REAL de esta entrega (no del PU
+      // completo del \u00edtem, que multiplicar\u00eda el monto por N entregables).
+      ? [{
+        orden_item_id: singleItem.id,
+        cantidad: Number(singleItem.cantidad) || 1,
+        precio_unitario: (Number(e.importe) || 0) / (Number(singleItem.cantidad) || 1),
+      }]
+      : items.map((it) => {
+        const li = (e.items || []).find((x) => Number(x.orden_item_id) === Number(it.id));
+        return {
+          orden_item_id: it.id,
+          cantidad: li ? Number(li.cantidad) : 0,
+          precio_unitario: Number(it.precio_unitario),
+        };
+      }),
   }));
 
   if (!entregas.length && items.length) {
@@ -143,6 +187,7 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
       fecha_efectiva: '',
       fecha_maxima: '',
       pendiente: false,
+      importe: Number(items.reduce((a, it) => a + Number(it.precio_total || 0), 0)) || 0,
       items: items.map((it) => ({
         orden_item_id: it.id,
         cantidad: Number(it.cantidad),
@@ -222,8 +267,8 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
             <div class="ro-ent-wrap" id="roEntregasWrap">
               <table class="table table-sm table-bordered ro-ent-table" id="roEntregasTable">
                 <thead><tr>
-                  ${COL_HEADERS.map((h, i) => {
-                    const cls = i === 0 ? 'ro-col-item' : (i === 13 ? 'ro-col-act' : '');
+                  ${(esFlatMode ? COL_HEADERS_FLAT : COL_HEADERS_MULTIITEM).map((h, i, arr) => {
+                    const cls = i === 0 ? 'ro-col-item' : (i === arr.length - 1 ? 'ro-col-act' : '');
                     return `<th class="${cls}">${esc(h)}</th>`;
                   }).join('')}
                 </tr></thead>
@@ -258,6 +303,20 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     const qty = new Map();
     const mon = new Map();
     let monTotal = 0;
+    if (esFlatMode) {
+      // RC8.14 Obs.51 — el Total de cada entregable es su propio importe real
+      // (e.importe), no cantidad × PU completo del ítem (eso multiplicaría el monto
+      // distribuido por N entregables, la causa exacta del bug de "Importes
+      // validados"). La cantidad contractual (referencia, no distribuida) sigue
+      // registrada para mostrarse en la columna Cantidad.
+      entregas.forEach((e) => {
+        const tot = round2(Number(e.importe) || 0);
+        monTotal = round2(monTotal + tot);
+      });
+      qty.set(singleItem.id, Number(singleItem.cantidad) || 0);
+      mon.set(singleItem.id, monTotal);
+      return { qty, mon, monTotal };
+    }
     entregas.forEach((e) => {
       (e.items || []).forEach((li) => {
         const it = items.find((x) => x.id === li.orden_item_id);
@@ -303,13 +362,31 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
    */
   function renderResumen() {
     const { monTotal } = calcTotales();
-    if (footEl) {
+    // RC8.14 Obs.51 §6 — TOTAL PLAZO reutiliza la regla contractual canónica
+    // (resolveOrdenPlazoContractual, RC8.12): el máximo entre los plazos de los
+    // entregables cuando representan hitos acumulativos (p. ej. 30/60 → 60), no la
+    // suma. Es la MISMA función ya usada por getExpedienteOrdenCompleto — no se
+    // define una regla nueva aquí.
+    const plazoTotal = resolveOrdenPlazoContractual(entregas);
+    const plazoTotalLabel = plazoTotal != null ? `${plazoTotal} días` : '—';
+    if (!footEl) return;
+    if (esFlatMode) {
       footEl.innerHTML = `<tr class="fw-semibold">
-        <td colspan="3" class="text-end">TOTAL</td>
+        <td colspan="6" class="text-end">TOTAL</td>
         <td class="text-end">${fmtMonto(monTotal)}</td>
-        <td colspan="10"></td>
+        <td></td>
+        <td>TOTAL PLAZO: ${esc(plazoTotalLabel)}</td>
+        <td colspan="5"></td>
       </tr>`;
+      return;
     }
+    footEl.innerHTML = `<tr class="fw-semibold">
+      <td colspan="3" class="text-end">TOTAL</td>
+      <td class="text-end">${fmtMonto(monTotal)}</td>
+      <td colspan="3"></td>
+      <td>TOTAL PLAZO: ${esc(plazoTotalLabel)}</td>
+      <td colspan="5"></td>
+    </tr>`;
   }
 
   function syncFromDom(tr, idx) {
@@ -321,62 +398,133 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     e.dias_plazo = Number(tr.querySelector('.ro-dias')?.value || 0);
     e.condicion_inicio = tr.querySelector('.ro-ini-cond')?.value || e.condicion_inicio;
     e.fecha_manual = tr.querySelector('.ro-ini-manual')?.value || '';
-    e.lugar_entrega = tr.querySelector('.ro-lugar')?.value?.trim() || '';
-    tr.querySelectorAll('.ro-cant').forEach((inp) => {
-      const j = Number(inp.dataset.j);
-      if (e.items[j]) {
-        const v = Number(inp.value || 0);
-        e.items[j].cantidad = v < 0 ? 0 : v;
-        const it = items.find((x) => x.id === e.items[j].orden_item_id);
-        e.items[j].precio_unitario = Number(it?.precio_unitario || 0);
+    // RC8.14 Obs.51 §5 — "Lugar de entrega" ya no se edita desde esta tabla; e.lugar_entrega
+    // conserva el valor con el que se construyó (dato de la solicitud/cotización).
+    if (esFlatMode) {
+      const importeInp = tr.querySelector('.ro-importe');
+      if (importeInp) {
+        const v = Number(importeInp.value || 0);
+        e.importe = v < 0 ? 0 : v;
       }
-    });
-    if (corr === 'UNICO') {
-      e.items = items.map((it) => ({
-        orden_item_id: it.id,
-        cantidad: Number(it.cantidad),
-        precio_unitario: Number(it.precio_unitario),
-      }));
+      const cant = Number(singleItem.cantidad) || 1;
+      e.items = [{
+        orden_item_id: singleItem.id,
+        cantidad: cant,
+        precio_unitario: (Number(e.importe) || 0) / cant,
+      }];
+    } else {
+      tr.querySelectorAll('.ro-cant').forEach((inp) => {
+        const j = Number(inp.dataset.j);
+        if (e.items[j]) {
+          const v = Number(inp.value || 0);
+          e.items[j].cantidad = v < 0 ? 0 : v;
+          const it = items.find((x) => x.id === e.items[j].orden_item_id);
+          e.items[j].precio_unitario = Number(it?.precio_unitario || 0);
+        }
+      });
+      if (corr === 'UNICO') {
+        e.items = items.map((it) => ({
+          orden_item_id: it.id,
+          cantidad: Number(it.cantidad),
+          precio_unitario: Number(it.precio_unitario),
+        }));
+      }
     }
     syncFechasEntrega(e);
   }
 
-  function renderList() {
-    const plazoTxt = plazoOfertadoTexto(items);
-    listEl.innerHTML = entregas.map((e, idx) => {
-      syncFechasEntrega(e);
-      const used = usedCorrelativos(idx);
-      const iniOpts = CONDICIONES_INICIO_OPTS.map((o) => `
-        <option value="${o.value}" ${e.condicion_inicio === o.value ? 'selected' : ''}>${esc(o.label)}</option>
-      `).join('');
+  function renderFechaEventoHtml(e) {
+    return needsManual(e.condicion_inicio)
+      ? `<input type="date" class="form-control form-control-sm ro-ini-manual" value="${esc(e.fecha_manual)}">
+         <div class="text-muted" style="font-size:.65rem">Fecha acta/contrato</div>`
+      : (e.pendiente
+        ? `<span class="ro-pend">Pendiente de notificación</span>`
+        : `<span class="text-nowrap">${e.fecha_evento ? fmtFecha(e.fecha_evento) : '—'}</span>`);
+  }
 
-      const itemCells = (e.items || []).map((li, j) => {
-        const it = items.find((x) => x.id === li.orden_item_id) || {};
-        const tot = round2(Number(li.cantidad || 0) * Number(it.precio_unitario || 0));
-        const desc = String(it.descripcion || '');
-        return {
-          itemHtml: `
+  function renderRowCommonTail(e, idx, used, plazoTxt) {
+    const iniOpts = CONDICIONES_INICIO_OPTS.map((o) => `
+      <option value="${o.value}" ${e.condicion_inicio === o.value ? 'selected' : ''}>${esc(o.label)}</option>
+    `).join('');
+    return `
+        <td style="min-width:120px;max-width:160px">
+          <div class="ro-item-desc" title="${esc(plazoTxt)}">${esc(plazoTxt)}</div>
+        </td>
+        <td style="min-width:110px">
+          <div class="input-group input-group-sm">
+            <input type="number" min="1" step="1" class="form-control ro-dias" value="${e.dias_plazo || ''}" required>
+            <span class="input-group-text ro-sufijo">días calendario</span>
+          </div>
+        </td>
+        <td style="min-width:200px">
+          <select class="form-select form-select-sm ro-ini-cond">${iniOpts}</select>
+        </td>
+        <td style="min-width:120px">${renderFechaEventoHtml(e)}</td>
+        <td style="min-width:100px">
+          ${e.pendiente
+    ? '<span class="ro-pend">Pendiente de notificación</span>'
+    : `<span class="text-nowrap">${e.fecha_efectiva ? fmtFecha(e.fecha_efectiva) : '—'}</span>`}
+        </td>
+        <td style="min-width:100px">
+          ${e.pendiente
+    ? '<span class="ro-pend">Pendiente de notificación</span>'
+    : `<span class="text-nowrap">${e.fecha_maxima ? fmtFecha(e.fecha_maxima) : '—'}</span>`}
+        </td>
+        <td class="ro-col-act text-center">
+          <button type="button" class="btn btn-link btn-sm p-0 me-1 ro-edit" title="Editar">
+            <i class="bi bi-pencil"></i>
+          </button>
+          <button type="button" class="btn btn-link btn-sm p-0 text-danger ro-del"
+            title="Eliminar" ${entregas.length <= 1 ? 'disabled' : ''}>
+            <i class="bi bi-trash"></i>
+          </button>
+        </td>`;
+  }
+
+  /** RC8.14 Obs.51 §5 — 1 fila por entregable, sin bloques de ítem ni Lugar de entrega. */
+  function renderRowFlat(e, idx, used, plazoTxt) {
+    const importe = Number(e.importe) || 0;
+    const cant = Number(singleItem.cantidad) || 1;
+    const pu = cant > 0 ? importe / cant : importe;
+    return `<tr data-idx="${idx}">
+        <td class="text-center" style="min-width:36px">${idx + 1}</td>
+        <td class="ro-col-item">
+          <div class="ro-item-desc" title="${esc(singleItem.descripcion)}">${esc(singleItem.descripcion)}</div>
+        </td>
+        <td style="min-width:78px">
+          <select class="form-select form-select-sm ro-corr">${correlativoOptions(e.correlativo, used)}</select>
+        </td>
+        <td>${esc(singleItem.unidad_medida || '—')}</td>
+        <td class="text-end">${esc(cant)}</td>
+        <td class="text-end">${fmtMonto(pu)}</td>
+        <td class="text-end" style="min-width:110px">
+          <input type="number" step="any" min="0" class="form-control form-control-sm ro-importe" value="${importe}">
+        </td>
+        ${renderRowCommonTail(e, idx, used, plazoTxt)}
+      </tr>`;
+  }
+
+  /** Caso excepcional: varios ítems contractuales reales (p. ej. BIEN multiproducto). */
+  function renderRowMultiItem(e, idx, used, plazoTxt) {
+    const itemCells = (e.items || []).map((li, j) => {
+      const it = items.find((x) => x.id === li.orden_item_id) || {};
+      const tot = round2(Number(li.cantidad || 0) * Number(it.precio_unitario || 0));
+      const desc = String(it.descripcion || '');
+      return {
+        itemHtml: `
             <div class="mb-1 ${j ? 'border-top pt-1' : ''}">
               <div class="ro-item-desc" title="${esc(desc)}">${esc(desc)}</div>
               <div class="text-muted" style="font-size:.7rem">
                 UM: ${esc(it.unidad_medida || '—')} · Adj.: ${esc(it.cantidad)} · ${fmtMonto(it.precio_total)}
               </div>
             </div>`,
-          cantHtml: `<input type="number" step="any" min="0" class="form-control form-control-sm ro-cant mb-1"
+        cantHtml: `<input type="number" step="any" min="0" class="form-control form-control-sm ro-cant mb-1"
             data-j="${j}" value="${li.cantidad}" ${e.correlativo === 'UNICO' ? 'readonly' : ''}>`,
-          puHtml: `<div class="mb-1 text-nowrap">${fmtMonto(it.precio_unitario)}</div>`,
-          totHtml: `<div class="mb-1 text-nowrap ro-tot" data-j="${j}">${fmtMonto(tot)}</div>`,
-        };
-      });
-
-      const fechaEventoHtml = needsManual(e.condicion_inicio)
-        ? `<input type="date" class="form-control form-control-sm ro-ini-manual" value="${esc(e.fecha_manual)}">
-           <div class="text-muted" style="font-size:.65rem">Fecha acta/contrato</div>`
-        : (e.pendiente
-          ? `<span class="ro-pend">Pendiente de notificación</span>`
-          : `<span class="text-nowrap">${e.fecha_evento ? fmtFecha(e.fecha_evento) : '—'}</span>`);
-
-      return `<tr data-idx="${idx}">
+        puHtml: `<div class="mb-1 text-nowrap">${fmtMonto(it.precio_unitario)}</div>`,
+        totHtml: `<div class="mb-1 text-nowrap ro-tot" data-j="${j}">${fmtMonto(tot)}</div>`,
+      };
+    });
+    return `<tr data-idx="${idx}">
         <td class="ro-col-item">${itemCells.map((c) => c.itemHtml).join('')}</td>
         <td style="min-width:88px">${itemCells.map((c) => c.cantHtml).join('')}</td>
         <td class="text-end" style="min-width:90px">${itemCells.map((c) => c.puHtml).join('')}</td>
@@ -391,45 +539,18 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
         <td style="min-width:78px">
           <select class="form-select form-select-sm ro-corr">${correlativoOptions(e.correlativo, used)}</select>
         </td>
-        <td style="min-width:120px;max-width:160px">
-          <div class="ro-item-desc" title="${esc(plazoTxt)}">${esc(plazoTxt)}</div>
-        </td>
-        <td style="min-width:110px">
-          <div class="input-group input-group-sm">
-            <input type="number" min="1" step="1" class="form-control ro-dias" value="${e.dias_plazo || ''}" required>
-            <span class="input-group-text ro-sufijo">días calendario</span>
-          </div>
-        </td>
-        <td style="min-width:200px">
-          <select class="form-select form-select-sm ro-ini-cond">${iniOpts}</select>
-        </td>
-        <td style="min-width:120px">${fechaEventoHtml}</td>
-        <td style="min-width:100px">
-          ${e.pendiente
-            ? '<span class="ro-pend">Pendiente de notificación</span>'
-            : `<span class="text-nowrap">${e.fecha_efectiva ? fmtFecha(e.fecha_efectiva) : '—'}</span>`}
-        </td>
-        <td style="min-width:100px">
-          ${e.pendiente
-            ? '<span class="ro-pend">Pendiente de notificación</span>'
-            : `<span class="text-nowrap">${e.fecha_maxima ? fmtFecha(e.fecha_maxima) : '—'}</span>`}
-        </td>
-        <td style="min-width:140px;max-width:200px">
-          <textarea class="form-control form-control-sm ro-lugar" rows="2"
-            placeholder="No registrado">${esc(e.lugar_entrega || lugarGlobal || '')}</textarea>
-          ${!(e.lugar_entrega || lugarGlobal) ? '<div class="text-warning" style="font-size:.65rem">Sin dato en solicitud; complete aquí</div>' : ''}
-          ${lugarFuente && (e.lugar_entrega || lugarGlobal) ? `<div class="text-muted" style="font-size:.65rem">Fuente: ${esc(lugarFuente)}</div>` : ''}
-        </td>
-        <td class="ro-col-act text-center">
-          <button type="button" class="btn btn-link btn-sm p-0 me-1 ro-edit" title="Editar">
-            <i class="bi bi-pencil"></i>
-          </button>
-          <button type="button" class="btn btn-link btn-sm p-0 text-danger ro-del"
-            title="Eliminar" ${entregas.length <= 1 ? 'disabled' : ''}>
-            <i class="bi bi-trash"></i>
-          </button>
-        </td>
+        ${renderRowCommonTail(e, idx, used, plazoTxt)}
       </tr>`;
+  }
+
+  function renderList() {
+    const plazoTxt = plazoOfertadoTexto(items);
+    listEl.innerHTML = entregas.map((e, idx) => {
+      syncFechasEntrega(e);
+      const used = usedCorrelativos(idx);
+      return esFlatMode
+        ? renderRowFlat(e, idx, used, plazoTxt)
+        : renderRowMultiItem(e, idx, used, plazoTxt);
     }).join('');
 
     listEl.querySelectorAll('tr[data-idx]').forEach((tr) => {
@@ -453,6 +574,7 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
             fecha_efectiva: '',
             fecha_maxima: '',
             pendiente: false,
+            importe: Number(items.reduce((a, it) => a + Number(it.precio_total || 0), 0)) || 0,
             items: items.map((it) => ({
               orden_item_id: it.id, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario),
             })),
@@ -472,13 +594,9 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
         }
         renderList();
       });
-      tr.querySelectorAll('.ro-cant, .ro-dias, .ro-tipo, .ro-ini-cond, .ro-ini-manual, .ro-lugar').forEach((el) => {
+      tr.querySelectorAll('.ro-cant, .ro-importe, .ro-dias, .ro-tipo, .ro-ini-cond, .ro-ini-manual').forEach((el) => {
         el.addEventListener('change', () => {
           syncFromDom(tr, idx);
-          if (el.classList.contains('ro-lugar')) {
-            renderResumen();
-            return;
-          }
           renderList();
         });
         el.addEventListener('input', () => {
@@ -491,7 +609,7 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
             syncFromDom(tr, idx);
             renderResumen();
           }
-          if (el.classList.contains('ro-lugar')) {
+          if (el.classList.contains('ro-importe')) {
             syncFromDom(tr, idx);
             renderResumen();
           }
@@ -509,9 +627,11 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
     if (entregas.length === 1 && entregas[0].correlativo === 'UNICO') {
       entregas[0].correlativo = '1';
       entregas[0].numero_entrega = 1;
-      entregas[0].items = items.map((it) => ({
-        orden_item_id: it.id, cantidad: 0, precio_unitario: Number(it.precio_unitario),
-      }));
+      if (!esFlatMode) {
+        entregas[0].items = items.map((it) => ({
+          orden_item_id: it.id, cantidad: 0, precio_unitario: Number(it.precio_unitario),
+        }));
+      }
     }
     const used = usedCorrelativos(-1);
     let n = 1;
@@ -528,9 +648,12 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
       fecha_efectiva: '',
       fecha_maxima: '',
       pendiente: false,
-      items: items.map((it) => ({
-        orden_item_id: it.id, cantidad: 0, precio_unitario: Number(it.precio_unitario),
-      })),
+      importe: 0,
+      items: esFlatMode
+        ? [{ orden_item_id: singleItem.id, cantidad: Number(singleItem.cantidad) || 1, precio_unitario: 0 }]
+        : items.map((it) => ({
+          orden_item_id: it.id, cantidad: 0, precio_unitario: Number(it.precio_unitario),
+        })),
     });
     renderList();
   };
@@ -544,18 +667,31 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
       });
       if (!entregas.length) throw new Error('Debe existir al menos una entrega');
       const { qty, monTotal } = calcTotales();
-      for (const it of items) {
-        const dist = qty.get(it.id) || 0;
-        if (dist > Number(it.cantidad) + 0.0001) {
-          throw new Error(`La cantidad del ítem "${it.descripcion}" supera la adjudicada`);
-        }
-        if (Math.abs(dist - Number(it.cantidad)) > 0.0001) {
-          throw new Error(`La cantidad distribuida del ítem "${it.descripcion}" no coincide con la adjudicada`);
+      // RC8.14.1 Obs.52 — con 1 solo ítem/servicio contractual (esFlatMode) la
+      // cantidad no se distribuye entre entregables (son hitos del mismo servicio),
+      // así que esta validación de cantidad por ítem solo aplica al caso multiítem.
+      if (!esFlatMode) {
+        for (const it of items) {
+          const dist = qty.get(it.id) || 0;
+          if (dist > Number(it.cantidad) + 0.0001) {
+            throw new Error(`La cantidad del ítem "${it.descripcion}" supera la adjudicada`);
+          }
+          if (Math.abs(dist - Number(it.cantidad)) > 0.0001) {
+            throw new Error(`La cantidad distribuida del ítem "${it.descripcion}" no coincide con la adjudicada`);
+          }
         }
       }
       const monAdj = round2(items.reduce((a, it) => a + Number(it.precio_total || 0), 0));
       if (Math.abs(monTotal - monAdj) > 0.01) {
-        throw new Error('El monto distribuido no coincide con el monto adjudicado');
+        const diferencia = round2(monAdj - monTotal);
+        // RC8.14.1 Obs.52 — mensaje funcional por monto (nunca menciona Cuadro
+        // Comparativo cuando no aplica: la validación real es económica —
+        // SUM(entregables) vs monto adjudicado de la fuente canónica del proceso).
+        throw new Error(
+          'El monto total de los entregables debe coincidir con el monto adjudicado. '
+          + `Monto adjudicado: ${fmtMonto(monAdj)}. Monto registrado: ${fmtMonto(monTotal)}. `
+          + `Diferencia: ${fmtMonto(diferencia)}.`,
+        );
       }
       const nums = new Set();
       for (const e of entregas) {

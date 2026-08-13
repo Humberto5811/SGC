@@ -67,6 +67,23 @@ export function normalizarLineasEntrega(items, lineasPayload) {
   return out;
 }
 
+/**
+ * RC8.14.1 Obs.52 — función canónica de validación económica del cronograma. Con
+ * exactamente 1 ítem/servicio contractual (el caso general de LOCACIÓN/SERVICIO sin
+ * cuadro, ya reconciliado — mismo criterio que esFlatMode en el frontend), el PU por
+ * línea NO se valida contra "el adjudicado del Cuadro Comparativo": ese PU completo
+ * (p. ej. 14000) no es comparable contra el importe de UN entregable (p. ej. 7000) —
+ * ambos son correctos, representan una distribución en hitos del mismo servicio, no
+ * ítems distintos. La validación real es económica: SUM(importes de los entregables
+ * configurados) === monto adjudicado de la orden (que ya es la fuente correcta según
+ * el tipo de proceso: cuadro comparativo o cotización adjudicada — resuelta una sola
+ * vez al registrar la orden, no se recalcula aquí ni se reintroduce una dependencia
+ * del Cuadro Comparativo para LOCACIÓN).
+ * Con más de 1 ítem contractual real (BIEN multiítem, o SERVICIO/BIEN con cuadro y
+ * varios productos) se preserva SIN CAMBIOS la validación original por línea
+ * (cantidad exacta distribuida + PU exacto adjudicado), necesaria para no permitir
+ * que se mezclen cantidades/precios entre productos distintos.
+ */
 export function validarCronogramaContraItems(orden, items, entregasPayload) {
   if (!Array.isArray(entregasPayload) || !entregasPayload.length) {
     throw httpError('Debe existir al menos una entrega o entregable', 400, 'SIN_ENTREGAS');
@@ -75,6 +92,7 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
     throw httpError('La orden no tiene ítems adjudicados', 400, 'SIN_ITEMS');
   }
 
+  const esItemUnico = items.length === 1;
   const correlativos = new Set();
   let sumaImportes = 0;
   const qtyPorItem = new Map();
@@ -98,7 +116,16 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
     const lineasRaw = Array.isArray(e.items) ? e.items : [];
     let importeEntrega = 0;
 
-    if (lineasRaw.length) {
+    if (esItemUnico && lineasRaw.length) {
+      // Monto del entregable tal cual lo registró el usuario (importe real del
+      // hito), sin validar PU aislado contra el ítem contractual completo.
+      importeEntrega = round2(lineasRaw.reduce((a, li) => {
+        const cant = Number(li.cantidad || 0);
+        const pu = Number(li.precio_unitario || 0);
+        const tot = li.precio_total != null ? Number(li.precio_total) : cant * pu;
+        return a + (Number.isFinite(tot) ? tot : 0);
+      }, 0));
+    } else if (lineasRaw.length) {
       const lineas = normalizarLineasEntrega(items, lineasRaw);
       for (const li of lineas) {
         qtyPorItem.set(li.orden_item_id, (qtyPorItem.get(li.orden_item_id) || 0) + li.cantidad);
@@ -122,7 +149,10 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
     sumaImportes += importeEntrega;
   }
 
-  const hayDistribucion = entregasPayload.some((e) => Array.isArray(e.items) && e.items.length);
+  // La validación de cantidad distribuida por ítem solo aplica con varios ítems
+  // contractuales reales — con 1 solo ítem/servicio, la cantidad (típicamente 1) no
+  // se reparte entre entregables (son hitos del mismo servicio, no unidades físicas).
+  const hayDistribucion = !esItemUnico && entregasPayload.some((e) => Array.isArray(e.items) && e.items.length);
   if (hayDistribucion) {
     for (const it of items) {
       const sum = qtyPorItem.get(it.id) || 0;
@@ -137,11 +167,14 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
   }
 
   if (!moneyEq(sumaImportes, orden.monto_total)) {
-    throw httpError(
-      `La suma de importes (${sumaImportes.toFixed(2)}) no coincide con el total adjudicado (${Number(orden.monto_total).toFixed(2)})`,
-      400,
-      'MONTO_MISMATCH',
-    );
+    const montoAdj = Number(orden.monto_total || 0);
+    const diferencia = round2(montoAdj - sumaImportes);
+    const mensaje = esItemUnico
+      ? 'El monto total de los entregables debe coincidir con el monto adjudicado de la cotización. '
+        + `Monto adjudicado: S/ ${montoAdj.toFixed(2)}. Monto registrado: S/ ${sumaImportes.toFixed(2)}. `
+        + `Diferencia: S/ ${diferencia.toFixed(2)}.`
+      : `La suma de importes (${sumaImportes.toFixed(2)}) no coincide con el total adjudicado (${montoAdj.toFixed(2)})`;
+    throw httpError(mensaje, 400, 'MONTO_MISMATCH');
   }
 
   return { sumaImportes: round2(sumaImportes), qtyPorItem };

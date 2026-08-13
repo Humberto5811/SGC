@@ -26,7 +26,9 @@ import {
   resolveUserDataScope,
   buildRequerimientoScopeSql,
   assertCanAccessRequirement,
+  canAccessRequirement,
 } from '../lib/userDataScope.js';
+import { assertAccesoRegistroOrdenes } from '../lib/accesoRegistroOrdenes.js';
 import { resolveResponsablePersonaDisplay } from '../lib/usuarioDisplay.js';
 
 const router = express.Router();
@@ -217,8 +219,56 @@ router.get('/listar-con-detalles', async (req, res, next) => {
   }
 });
 
+/**
+ * RC8.14 Obs.51 — Guard de trazabilidad: acepta alcance organizacional (el mismo de
+ * guardRequirementAccess, sin cambios) O acceso vigente a Registro de Órdenes
+ * (server/lib/accesoRegistroOrdenes.js, reutilizado sin modificar), lo que exista
+ * primero. Causa raíz del "No tiene autorización...": el resto de endpoints de
+ * Registro de Órdenes (server/routes/ordenesContratacion.js → requireRo) ya usan
+ * assertAccesoRegistroOrdenes — un sistema de autorización propio de RO (modo
+ * GLOBAL/ASIGNACION), independiente del alcance organizacional por área/centro que
+ * usa este archivo. Un usuario con acceso legítimo a Registro de Órdenes puede
+ * gestionar una orden cuya área/centro no esté dentro de su alcance organizacional
+ * — por eso el botón "Trazabilidad" fallaba aunque el usuario sí podía ver y operar
+ * la orden. No se otorga acceso global nuevo: solo se reconoce, para esta consulta
+ * de solo lectura, una autorización que el usuario YA tiene y que otros endpoints
+ * de RO ya aceptan.
+ */
+async function guardRequirementAccessOrRoAcceso(req, res, next) {
+  try {
+    const reqId = req.params.requerimientoId || req.params.id;
+    if (!reqId) return next();
+    const userId = authUserId(req);
+    if (!userId) return res.status(401).json({ error: 'No autenticado' });
+
+    const orgScope = await canAccessRequirement(userId, reqId, String(req.method || 'GET'));
+    if (orgScope.ok) return next();
+
+    try {
+      await assertAccesoRegistroOrdenes({
+        usuarioId: userId,
+        actividad: 'VER',
+        requerimientoId: reqId,
+        userRow: req.user || null,
+      });
+      return next();
+    } catch (_) {
+      throw orgScope.error;
+    }
+  } catch (err) {
+    if (err.status === 403) {
+      return res.status(403).json({
+        code: err.code || 'REQUERIMIENTO_FUERA_DE_ALCANCE',
+        error: err.message,
+        message: err.message,
+      });
+    }
+    return next(err);
+  }
+}
+
 // Guard de alcance en operaciones por id (especiales)
-router.use('/:requerimientoId/trazabilidad', guardRequirementAccess);
+router.use('/:requerimientoId/trazabilidad', guardRequirementAccessOrRoAcceso);
 router.use('/:requerimientoId/solicitar-aprobacion', guardRequirementAccess);
 router.use('/:requerimientoId/observar', guardRequirementAccess);
 router.use('/:requerimientoId/subsanar', guardRequirementAccess);
