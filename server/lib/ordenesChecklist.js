@@ -19,24 +19,25 @@ import { normalizeEstadoOrden } from '../../shared/estadoExpedienteVigente.js';
 
 export { ETAPAS_CHECKLIST, evaluarChecklist, listoParaNotificacion };
 
-async function loadSnapshotOrden(ordenId) {
-  const orden = await getOrdenById(ordenId);
-  const itemsFisicos = await getOrdenItems(ordenId);
+async function loadSnapshotOrden(ordenId, client = null) {
+  const run = client?.query ? client.query.bind(client) : query;
+  const orden = await getOrdenById(ordenId, client);
+  const itemsFisicos = await getOrdenItems(ordenId, client);
   // RC8.14 Obs.51 — misma reconciliación en presentación de getDetalleOrden
   // (reutilizada, no reimplementada): si hay evidencia contractual canónica de que
   // los orden_items físicos están fragmentados (p. ej. 2 filas de 7000 en vez de 1
   // de 14000), el checklist debe evaluarse contra el ítem contractual real, no
   // contra el dato histórico fragmentado. No escribe BD.
-  const reconciliacion = await reconciliarItemsContractuales(orden, itemsFisicos);
+  const reconciliacion = await reconciliarItemsContractuales(orden, itemsFisicos, client);
   const items = reconciliacion.items;
 
-  const { rows: docs } = await query(`
+  const { rows: docs } = await run(`
     SELECT id FROM orden_documentos
     WHERE orden_id = $1 AND tipo_documento = 'ORDEN_FIRMADA' AND activo = TRUE
     LIMIT 1
   `, [ordenId]);
 
-  const { rows: ents } = await query(`
+  const { rows: ents } = await run(`
     SELECT id, importe FROM orden_entregas
     WHERE orden_id = $1 AND estado <> 'ANULADO'
   `, [ordenId]);
@@ -44,7 +45,7 @@ async function loadSnapshotOrden(ordenId) {
   const entIds = ents.map((e) => e.id);
   let entregaItems = [];
   if (entIds.length) {
-    const { rows: ei } = await query(`
+    const { rows: ei } = await run(`
       SELECT orden_item_id, cantidad, precio_total, precio_unitario
       FROM orden_entrega_items
       WHERE orden_entrega_id = ANY($1::int[])
@@ -70,7 +71,7 @@ async function loadSnapshotOrden(ordenId) {
     })));
   }
 
-  const { rows: ini } = await query(`
+  const { rows: ini } = await run(`
     SELECT id FROM orden_inicio_actividad
     WHERE orden_id = $1
        OR (requerimiento_id = $2 AND orden_id IS NULL)
@@ -78,13 +79,13 @@ async function loadSnapshotOrden(ordenId) {
   `, [ordenId, orden.requerimiento_id]);
 
   // CCP firmado = documento en ccp_firmados (NO basta codigo_ccp).
-  const { rows: ccp } = await query(`
+  const { rows: ccp } = await run(`
     SELECT id FROM ccp_firmados
     WHERE requerimiento_id = $1 AND activo = TRUE
     ORDER BY version DESC, id DESC LIMIT 1
   `, [orden.requerimiento_id]);
 
-  const { rows: reqTipo } = await query(
+  const { rows: reqTipo } = await run(
     `SELECT tipo FROM requerimientos WHERE id = $1`,
     [orden.requerimiento_id],
   );
@@ -127,8 +128,12 @@ async function loadSnapshotOrden(ordenId) {
   };
 }
 
-export async function obtenerChecklistOrden(ordenId, etapa = ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION) {
-  const snapshot = await loadSnapshotOrden(ordenId);
+export async function obtenerChecklistOrden(
+  ordenId,
+  etapa = ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION,
+  client = null,
+) {
+  const snapshot = await loadSnapshotOrden(ordenId, client);
   const checklist = evaluarChecklist(etapa, snapshot);
   return { snapshot, checklist };
 }
@@ -178,8 +183,9 @@ export async function obtenerChecklistRequerimiento(requerimientoId, etapa = ETA
  * Recalcula y persiste el estado de la orden según checklist.
  * No retrocede estados posteriores a notificación/ejecución.
  */
-export async function sincronizarEstadoSegunChecklist(ordenId, usuario = '') {
-  const orden = await getOrdenById(ordenId);
+export async function sincronizarEstadoSegunChecklist(ordenId, usuario = '', client = null) {
+  const run = client?.query ? client.query.bind(client) : query;
+  const orden = await getOrdenById(ordenId, client);
   const norm = normalizeEstadoOrden(orden.estado);
   const avanzados = new Set([
     'ORDEN_NOTIFICADA',
@@ -188,11 +194,19 @@ export async function sincronizarEstadoSegunChecklist(ordenId, usuario = '') {
     'ORDEN_ANULADA',
   ]);
   if (avanzados.has(norm) || orden.estado === ESTADOS_ORDEN.ORDEN_ANULADA) {
-    const { checklist } = await obtenerChecklistOrden(ordenId);
+    const { checklist } = await obtenerChecklistOrden(
+      ordenId,
+      ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION,
+      client,
+    );
     return { estado: orden.estado, checklist, sincronizado: false };
   }
 
-  const { checklist } = await obtenerChecklistOrden(ordenId);
+  const { checklist } = await obtenerChecklistOrden(
+    ordenId,
+    ETAPAS_CHECKLIST.REGISTRO_ORDENES_NOTIFICACION,
+    client,
+  );
   let nuevo = ESTADOS_ORDEN.ORDEN_REGISTRADA;
   if (checklist.completo) {
     nuevo = ESTADOS_ORDEN.ORDEN_LISTA_NOTIFICACION;
@@ -203,7 +217,7 @@ export async function sincronizarEstadoSegunChecklist(ordenId, usuario = '') {
   }
 
   if (orden.estado !== nuevo) {
-    await query(`
+    await run(`
       UPDATE ordenes_contratacion SET
         estado = $2, actualizado_por = $3, actualizado_at = NOW()
       WHERE id = $1

@@ -9,6 +9,7 @@ import {
   listarDocsNotificacion,
   getDocNotificacion,
 } from '../server/lib/ordenesContratacion.js';
+import pool, { query } from '../server/db.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(join(root, rel), 'utf8');
@@ -44,8 +45,32 @@ ok(/fechaDocumento\(fila\.fechaInicio\)/.test(server)
   && /fechaDocumento\(fila\.fechaMaxima\)/.test(server),
 '8. fechas de inicio y máxima usan formato documental sin hora');
 
+// ---------------------------------------------------------------------------
+// Validación real (solo lectura) contra la OS 1105. La orden se resuelve por
+// su identidad lógica (tipo + número + año) y NO por un id físico.
+// ---------------------------------------------------------------------------
+const OS_TIPO = 'OS';
+const OS_NUMERO = '1105';
+const OS_ANIO = 2026;
+let realOk = false;
+
 try {
-  const meta = await listarDocsNotificacion(2);
+  const { rows } = await query(
+    `SELECT id FROM ordenes_contratacion
+     WHERE tipo_orden = $1 AND numero_orden = $2 AND anio_orden = $3
+     ORDER BY id ASC
+     LIMIT 1`,
+    [OS_TIPO, OS_NUMERO, OS_ANIO],
+  );
+  const orden = rows[0];
+  if (!orden) {
+    throw new Error(
+      `OS ${OS_NUMERO}/${OS_ANIO} (tipo ${OS_TIPO}) no encontrada en ordenes_contratacion`,
+    );
+  }
+  const ordenId = Number(orden.id);
+
+  const meta = await listarDocsNotificacion(ordenId);
   const tipos = meta.documentos.map((d) => d.tipo);
   assert.deepEqual(tipos, ['ORDEN_FIRMADA', 'CRONOGRAMA', 'COTIZACION']);
   ok(true, '9. OS 1105 devuelve exactamente los tres documentos requeridos');
@@ -53,16 +78,22 @@ try {
   ok(/Anexo_11/i.test(meta.documentos.find((d) => d.tipo === 'COTIZACION')?.nombre || ''),
     '11. documento económico real es Anexo 11');
 
-  const cron = await getDocNotificacion(2, 'CRONOGRAMA', { includeContent: true });
+  const cron = await getDocNotificacion(ordenId, 'CRONOGRAMA', { includeContent: true });
   const html = Buffer.from(cron.contenido_base64, 'base64').toString('utf8');
   ok(/24\/07\/2026/.test(html), '12. fecha de inicio en dd/mm/yyyy');
   ok(/22\/08\/2026/.test(html) && /21\/09\/2026/.test(html),
     '13. fechas máximas en dd/mm/yyyy');
   ok(!/T\d{2}:\d{2}|GMT|00:00:00/.test(html), '14. cronograma no muestra horas');
   ok(/<th>14000\.00<\/th>/.test(html), '15. total de precios totales = 14000.00');
+
+  realOk = true;
 } catch (error) {
-  console.log(`  ⚠ Validación real omitida: ${error.message}`);
+  console.log(`  ✗ Validación real FALLÓ: ${error.message}`);
   process.exitCode = 1;
+} finally {
+  await pool.end().catch(() => {});
 }
 
-console.log('\n=== RC8.14.3 — pruebas OK ===\n');
+console.log(realOk
+  ? '\n=== RC8.14.3 — pruebas OK ===\n'
+  : '\n=== RC8.14.3 — pruebas FALLARON ===\n');

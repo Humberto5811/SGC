@@ -114,8 +114,10 @@ export async function registrarEventoOrden({
   ordenId = null, requerimientoId = null, tipo,
   estadoAnterior = null, estadoNuevo = null,
   usuario = '', rol = '', observacion = '', datos = null,
+  client = null,
 }) {
-  await query(`
+  const run = client?.query ? client.query.bind(client) : query;
+  await run(`
     INSERT INTO orden_eventos (
       orden_id, requerimiento_id, tipo_evento, estado_anterior, estado_nuevo,
       usuario_id, rol, observacion, datos_json
@@ -504,11 +506,12 @@ async function buildContextoFromRow(row, {
  * BIEN/SERVICIO: cuadro DERIVADO_CCP.
  * LOCACION: sin cuadro; evidencia ccp_codigos + cotización presentada.
  */
-export async function loadContextoExpediente(requerimientoId) {
+export async function loadContextoExpediente(requerimientoId, client = null) {
   const id = parseInt(requerimientoId, 10);
   if (!Number.isFinite(id)) throw httpError('Requerimiento inválido');
+  const run = client?.query ? client.query.bind(client) : query;
 
-  const { rows: cuadroRows } = await query(`
+  const { rows: cuadroRows } = await run(`
     SELECT
       r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
       r.tipo, r.estado_actual, r.payload,
@@ -558,7 +561,7 @@ export async function loadContextoExpediente(requerimientoId) {
     montoFallback = Number(row.valor_adjudicado || 0);
   } else {
     // LOCACION / sin cuadro — pertenencia por ccp_codigos + cotización
-    const { rows: locRows } = await query(`
+    const { rows: locRows } = await run(`
       SELECT
         r.id AS requerimiento_id, r.codigo AS requerimiento_codigo, r.denominacion,
         r.tipo, r.estado_actual, r.payload,
@@ -707,16 +710,18 @@ function mapOrdenRow(row) {
   };
 }
 
-export async function getOrdenById(ordenId) {
+export async function getOrdenById(ordenId, client = null) {
   const id = parseInt(ordenId, 10);
   if (!Number.isFinite(id)) throw httpError('Orden inválida');
-  const { rows } = await query('SELECT * FROM ordenes_contratacion WHERE id = $1', [id]);
+  const run = client?.query ? client.query.bind(client) : query;
+  const { rows } = await run('SELECT * FROM ordenes_contratacion WHERE id = $1', [id]);
   if (!rows.length) throw httpError('Orden no encontrada', 404);
   return mapOrdenRow(rows[0]);
 }
 
-export async function getOrdenItems(ordenId) {
-  const { rows } = await query(`
+export async function getOrdenItems(ordenId, client = null) {
+  const run = client?.query ? client.query.bind(client) : query;
+  const { rows } = await run(`
     SELECT * FROM orden_items WHERE orden_id = $1 ORDER BY orden_item ASC, id ASC
   `, [ordenId]);
   return rows.map((r) => ({
@@ -1357,13 +1362,14 @@ export function calcularFechasInicioActividad(input = {}) {
   };
 }
 
-export async function guardarInicioActividad(payload, usuario, rol) {
+export async function guardarInicioActividad(payload, usuario, rol, client = null) {
   const reqId = parseInt(payload.requerimiento_id, 10);
   const ordenId = payload.orden_id != null ? parseInt(payload.orden_id, 10) : null;
   if (!Number.isFinite(reqId)) throw httpError('Requerimiento inválido');
+  const run = client?.query ? client.query.bind(client) : query;
 
   let orden = null;
-  if (Number.isFinite(ordenId)) orden = await getOrdenById(ordenId);
+  if (Number.isFinite(ordenId)) orden = await getOrdenById(ordenId, client);
 
   const calc = calcularFechasInicioActividad({
     condicion: payload.condicion_inicio,
@@ -1376,7 +1382,7 @@ export async function guardarInicioActividad(payload, usuario, rol) {
     allowPending: true,
   });
 
-  const { rows: existing } = await query(`
+  const { rows: existing } = await run(`
     SELECT id FROM orden_inicio_actividad
     WHERE (${Number.isFinite(ordenId) ? 'orden_id = $1' : 'requerimiento_id = $1 AND orden_id IS NULL'})
     LIMIT 1
@@ -1384,7 +1390,7 @@ export async function guardarInicioActividad(payload, usuario, rol) {
 
   let row;
   if (existing.length) {
-    const { rows } = await query(`
+    const { rows } = await run(`
       UPDATE orden_inicio_actividad SET
         condicion_inicio = $2, fecha_evento = $3, fecha_efectiva_inicio = $4,
         tipo_dias = $5, sustento = $6, actualizado_por = $7, actualizado_at = NOW(),
@@ -1399,7 +1405,7 @@ export async function guardarInicioActividad(payload, usuario, rol) {
     ]);
     row = rows[0];
   } else {
-    const { rows } = await query(`
+    const { rows } = await run(`
       INSERT INTO orden_inicio_actividad (
         orden_id, requerimiento_id, condicion_inicio, fecha_evento, fecha_efectiva_inicio,
         tipo_dias, sustento, creado_por
@@ -1419,7 +1425,7 @@ export async function guardarInicioActividad(payload, usuario, rol) {
   }
 
   if (Number.isFinite(ordenId)) {
-    await query(`
+    await run(`
       UPDATE ordenes_contratacion SET
         condicion_inicio = $2, fecha_evento_inicio = $3, fecha_efectiva_inicio = $4,
         actualizado_por = $5, actualizado_at = NOW()
@@ -1428,13 +1434,13 @@ export async function guardarInicioActividad(payload, usuario, rol) {
 
     // Recalcular fechas máximas solo cuando ya existe fecha efectiva (p.ej. no pendiente de notificación)
     if (calc.fecha_efectiva_inicio) {
-      const { rows: entregas } = await query(`
+      const { rows: entregas } = await run(`
         SELECT id, dias_plazo, tipo_dias FROM orden_entregas
         WHERE orden_id = $1 AND estado <> 'ANULADO'
       `, [ordenId]);
       for (const e of entregas) {
         const fm = calcularFechaMaxima(calc.fecha_efectiva_inicio, e.dias_plazo, normalizeTipoDias(e.tipo_dias));
-        await query(`
+        await run(`
           UPDATE orden_entregas SET fecha_base = $2, fecha_maxima = $3, updated_at = NOW() WHERE id = $1
         `, [e.id, calc.fecha_efectiva_inicio, fm]);
       }
@@ -1449,11 +1455,12 @@ export async function guardarInicioActividad(payload, usuario, rol) {
     rol,
     observacion: calc.condicion_label,
     datos: calc,
+    client,
   });
 
     if (Number.isFinite(ordenId)) {
     const { sincronizarEstadoSegunChecklist } = await import('./ordenesChecklist.js');
-    await sincronizarEstadoSegunChecklist(ordenId, usuario);
+    await sincronizarEstadoSegunChecklist(ordenId, usuario, client);
   }
   return { ...calc, id: row.id };
 }
@@ -1889,13 +1896,14 @@ export async function anularOrden(ordenId, motivo, usuario, rol) {
 
 
 /** OD37 — repara PU=0 en orden_items desde el Cuadro Comparativo adjudicado. */
-export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
-  const orden = await getOrdenById(ordenId);
-  let items = await getOrdenItems(ordenId);
+export async function sincronizarPreciosItemsDesdeCuadro(ordenId, client = null) {
+  const run = client?.query ? client.query.bind(client) : query;
+  const orden = await getOrdenById(ordenId, client);
+  let items = await getOrdenItems(ordenId, client);
   const needs = items.some((it) => !(Number(it.precio_unitario) > 0));
   if (!needs) return items;
 
-  const ctx = await loadContextoExpediente(orden.requerimiento_id);
+  const ctx = await loadContextoExpediente(orden.requerimiento_id, client);
   const srcItems = ctx.items_adjudicados || [];
   for (const dbItem of items) {
     const src = srcItems.find((a) => String(a.item_adjudicado_ref) === String(dbItem.item_adjudicado_ref))
@@ -1905,7 +1913,7 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
     const pu = Number(src.precio_unitario);
     const puAnterior = Number(dbItem.precio_unitario) || 0;
     const tot = Number((Number(dbItem.cantidad) * pu).toFixed(2));
-    await query(`
+    await run(`
       UPDATE orden_items SET
         precio_unitario = $2,
         precio_total = $3,
@@ -1925,7 +1933,7 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
     // completo, preservando la distribución/redistribución vigente (de creación o de
     // una edición manual previa) tal como estaba.
     if (puAnterior > 0) {
-      await query(`
+      await run(`
         UPDATE orden_entrega_items ei
         SET precio_unitario = ROUND((ei.precio_unitario * $2::numeric / $3::numeric), 4),
             precio_total = ROUND((ei.precio_total * $2::numeric / $3::numeric), 2)
@@ -1939,7 +1947,7 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
       // Sin PU anterior para calcular una proporción (línea nunca tuvo precio):
       // única entrega (N=1, caso típico BIEN) es el único caso seguro para asumir
       // cantidad × PU completo sin distorsionar una distribución previa.
-      await query(`
+      await run(`
         UPDATE orden_entrega_items ei
         SET precio_unitario = $2,
             precio_total = ROUND((ei.cantidad * $2::numeric), 2)
@@ -1953,11 +1961,11 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
     }
   }
 
-  const { rows: ents } = await query(`
+  const { rows: ents } = await run(`
     SELECT id FROM orden_entregas WHERE orden_id = $1 AND estado <> 'ANULADO'
   `, [ordenId]);
   for (const e of ents) {
-    await query(`
+    await run(`
       UPDATE orden_entregas SET
         importe = COALESCE((
           SELECT ROUND(SUM(precio_total)::numeric, 2)
@@ -1970,10 +1978,10 @@ export async function sincronizarPreciosItemsDesdeCuadro(ordenId) {
 
   const monto = srcItems.reduce((a, it) => a + Number(it.precio_total || 0), 0);
   if (monto > 0) {
-    await query(`UPDATE ordenes_contratacion SET monto_total = $2, actualizado_at = NOW() WHERE id = $1`,
+    await run(`UPDATE ordenes_contratacion SET monto_total = $2, actualizado_at = NOW() WHERE id = $1`,
       [ordenId, Number(monto.toFixed(2))]);
   }
-  return getOrdenItems(ordenId);
+  return getOrdenItems(ordenId, client);
 }
 
 
@@ -2089,17 +2097,18 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
  * BIEN/SERVICIO con varios ítems reales (que coinciden con la fuente canónica) NO se
  * ven afectados: se devuelven exactamente como están.
  */
-export async function reconciliarItemsContractuales(orden, itemsFisicos) {
+export async function reconciliarItemsContractuales(orden, itemsFisicos, client = null) {
   const round2Local = (n) => Math.round(Number(n || 0) * 100) / 100;
+  const run = client?.query ? client.query.bind(client) : query;
   let itemsCanonicos = null;
   try {
     if (orden.cuadro_comparativo_id) {
-      const { rows } = await query(`
+      const { rows } = await run(`
         SELECT datos_json, proveedor_ganador_id FROM cuadros_comparativos WHERE id = $1
       `, [orden.cuadro_comparativo_id]);
       if (rows[0]) itemsCanonicos = extractItemsAdjudicados(rows[0], orden.proveedor_id);
     } else if (orden.solicitud_cotizacion_id) {
-      const { rows: cots } = await query(`
+      const { rows: cots } = await run(`
         SELECT propuesta_economica FROM cotizaciones_proveedor
         WHERE solicitud_id = $1 AND proveedor_id = $2 AND estado = 'COTIZACION_PRESENTADA'
         ORDER BY
@@ -2108,7 +2117,7 @@ export async function reconciliarItemsContractuales(orden, itemsFisicos) {
         LIMIT 1
       `, [orden.solicitud_cotizacion_id, orden.proveedor_id]);
       if (cots[0]) {
-        const { rows: reqRows } = await query('SELECT denominacion FROM requerimientos WHERE id = $1', [orden.requerimiento_id]);
+        const { rows: reqRows } = await run('SELECT denominacion FROM requerimientos WHERE id = $1', [orden.requerimiento_id]);
         itemsCanonicos = extractItemsDesdePropuestaEconomica(cots[0].propuesta_economica, {
           denominacion: reqRows[0]?.denominacion || '',
         });

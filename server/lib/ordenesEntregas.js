@@ -1,12 +1,14 @@
 /**
  * Cronograma de entregas / entregables de órdenes de contratación.
  */
-import { query } from '../db.js';
+import { getClient, query } from '../db.js';
 import {
   httpError,
   getOrdenById,
   reconciliarItemsContractuales,
   registrarEventoOrden,
+  guardarInicioActividad,
+  sincronizarPreciosItemsDesdeCuadro,
   ESTADOS_ORDEN,
 } from './ordenesContratacion.js';
 import { calcularFechaMaximaEntrega, normalizeTipoDias } from './diasPlazo.js';
@@ -100,8 +102,9 @@ function fechasEntregaDesdeCondicion(orden, e) {
   };
 }
 
-export async function listarEntregas(ordenId) {
-  const { rows: entregas } = await query(`
+export async function listarEntregas(ordenId, client = null) {
+  const run = client?.query ? client.query.bind(client) : query;
+  const { rows: entregas } = await run(`
     SELECT * FROM orden_entregas
     WHERE orden_id = $1 AND estado <> 'ANULADO'
     ORDER BY numero_entrega ASC, id ASC
@@ -110,7 +113,7 @@ export async function listarEntregas(ordenId) {
   const total = entregas.length;
   const out = [];
   for (const e of entregas) {
-    const { rows: items } = await query(`
+    const { rows: items } = await run(`
       SELECT ei.*, oi.descripcion AS item_descripcion, oi.orden_item
       FROM orden_entrega_items ei
       JOIN orden_items oi ON oi.id = ei.orden_item_id
@@ -175,22 +178,48 @@ export async function recalcularFechasEntregas(ordenId) {
   return updated;
 }
 
-export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
-  const orden = await getOrdenById(ordenId);
+/**
+ * Ejecuta el reemplazo completo usando un client que YA está en transacción.
+ * Exportado para pruebas de rollback con un client controlado.
+ */
+export async function guardarEntregasConClient(
+  client,
+  ordenId,
+  entregasPayload,
+  usuario,
+  rol,
+  deps = {},
+) {
+  if (!client?.query) throw new TypeError('client transaccional requerido');
+  const run = client.query.bind(client);
+  const getOrden = deps.getOrdenById || getOrdenById;
+  const syncPrices = deps.sincronizarPreciosItemsDesdeCuadro
+    || sincronizarPreciosItemsDesdeCuadro;
+  const saveInicio = deps.guardarInicioActividad || guardarInicioActividad;
+  const syncChecklist = deps.sincronizarEstadoSegunChecklist
+    || (await import('./ordenesChecklist.js')).sincronizarEstadoSegunChecklist;
+  const registerEvent = deps.registrarEventoOrden || registrarEventoOrden;
+  const listEntregas = deps.listarEntregas || listarEntregas;
+
+  // Serializa ediciones concurrentes del mismo cronograma.
+  await run('SELECT id FROM ordenes_contratacion WHERE id = $1 FOR UPDATE', [ordenId]);
+  const orden = await getOrden(ordenId, client);
   assertEditableCronograma(orden);
-  const { sincronizarPreciosItemsDesdeCuadro } = await import('./ordenesContratacion.js');
-  const itemsFisicos = await sincronizarPreciosItemsDesdeCuadro(ordenId);
-  const ordenFresh = await getOrdenById(ordenId);
-  const { items } = await reconciliarItemsContractuales(ordenFresh, itemsFisicos);
+  const itemsFisicos = await syncPrices(ordenId, client);
+  const ordenFresh = await getOrden(ordenId, client);
+  // Conserva la reconciliación contractual previa al reemplazo:
+  // reconciliarItemsContractuales(ordenFresh, itemsFisicos), ahora con el mismo client.
+  const { items } = deps.reconciliarItemsContractuales
+    ? await deps.reconciliarItemsContractuales(ordenFresh, itemsFisicos, client)
+    : await reconciliarItemsContractuales(ordenFresh, itemsFisicos, client);
 
   // Persistir inicio de actividad si viene en el payload raíz
   if (entregasPayload._inicio_actividad) {
-    const { guardarInicioActividad } = await import('./ordenesContratacion.js');
-    await guardarInicioActividad({
+    await saveInicio({
       requerimiento_id: ordenFresh.requerimiento_id,
       orden_id: ordenId,
       ...entregasPayload._inicio_actividad,
-    }, usuario, rol);
+    }, usuario, rol, client);
   }
 
   const list = Array.isArray(entregasPayload) ? [...entregasPayload]
@@ -209,7 +238,7 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
 
   validarCronogramaContraItems(ordenFresh, items, list);
 
-  await query(`UPDATE orden_entregas SET estado = 'ANULADO', updated_at = NOW() WHERE orden_id = $1`, [ordenId]);
+  await run(`UPDATE orden_entregas SET estado = 'ANULADO', updated_at = NOW() WHERE orden_id = $1`, [ordenId]);
 
   for (const e of list) {
     const tipoOk = e.tipo_entrega;
@@ -230,7 +259,7 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
       importe = (Number(e.porcentaje) / 100) * Number(ordenFresh.monto_total);
     }
 
-    const { rows } = await query(`
+    const { rows } = await run(`
       INSERT INTO orden_entregas (
         orden_id, numero_entrega, tipo_entrega, descripcion,
         etiqueta_entrega, codigo_entrega,
@@ -257,7 +286,7 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
     ]);
 
     for (const li of lineas) {
-      await query(`
+      await run(`
         INSERT INTO orden_entrega_items (
           orden_entrega_id, orden_item_id, cantidad, precio_unitario, precio_total, porcentaje
         ) VALUES ($1,$2,$3,$4,$5,$6)
@@ -273,7 +302,7 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
   }
 
   const nEnt = list.length;
-  await query(`
+  await run(`
     UPDATE ordenes_contratacion SET
       cronograma_version = cronograma_version + 1,
       actualizado_por = $2,
@@ -281,10 +310,9 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
     WHERE id = $1
   `, [ordenId, String(usuario || '').slice(0, 150)]);
 
-  const { sincronizarEstadoSegunChecklist } = await import('./ordenesChecklist.js');
-  const sync = await sincronizarEstadoSegunChecklist(ordenId, usuario);
+  const sync = await syncChecklist(ordenId, usuario, client);
 
-  await registrarEventoOrden({
+  await registerEvent({
     ordenId,
     requerimientoId: ordenFresh.requerimiento_id,
     tipo: 'CRONOGRAMA_ACTUALIZADO',
@@ -293,9 +321,43 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
     usuario,
     rol,
     datos: { entregas: nEnt, checklist_completo: sync.checklist.completo },
+    client,
   });
 
-  return listarEntregas(ordenId);
+  return listEntregas(ordenId, client);
+}
+
+export async function guardarEntregas(
+  ordenId,
+  entregasPayload,
+  usuario,
+  rol,
+  options = {},
+) {
+  const clientFactory = options.getClient || getClient;
+  const client = await clientFactory();
+  try {
+    await client.query('BEGIN');
+    const result = await guardarEntregasConClient(
+      client,
+      ordenId,
+      entregasPayload,
+      usuario,
+      rol,
+      options.deps || {},
+    );
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      // Conexión rota: conservar el error original.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function assertCronogramaListoParaEnvio(ordenId) {
