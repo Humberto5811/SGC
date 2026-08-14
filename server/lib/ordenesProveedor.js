@@ -355,6 +355,18 @@ export async function getOrdenPortalPorToken(token) {
   };
 }
 
+/**
+ * Valida que una orden esté en un estado que permita confirmar recepción.
+ * Compartida por confirmarRecepcionOrden (token) y confirmarRecepcionDesdeSesion.
+ */
+export function assertOrdenPendienteConfirmacion(orden) {
+  if (!['ORDEN_NOTIFICADA', 'ORDEN_ENVIADA', 'ORDEN_ENVIADA_PENDIENTE_CONFIRMACION']
+    .includes(String(orden?.estado || '').toUpperCase())
+    && normalizeEstadoOrden(orden?.estado) !== 'ORDEN_NOTIFICADA') {
+    throw httpError('La orden no está pendiente de confirmación', 409);
+  }
+}
+
 export async function confirmarRecepcionOrden(token, meta = {}) {
   const envio = await resolverEnvioPorToken(token);
   if (!envio) throw httpError('Enlace de orden inválido', 404, 'TOKEN_INVALIDO');
@@ -376,11 +388,7 @@ export async function confirmarRecepcionOrden(token, meta = {}) {
     };
   }
 
-  if (!['ORDEN_NOTIFICADA', 'ORDEN_ENVIADA', 'ORDEN_ENVIADA_PENDIENTE_CONFIRMACION']
-    .includes(String(orden.estado).toUpperCase())
-    && normalizeEstadoOrden(orden.estado) !== 'ORDEN_NOTIFICADA') {
-    throw httpError('La orden no está pendiente de confirmación', 409);
-  }
+  assertOrdenPendienteConfirmacion(orden);
 
   const now = new Date();
   await query(`
@@ -526,6 +534,10 @@ export async function confirmarRecepcionDesdeSesion(ordenId, proveedorId, meta =
       estado: orden.estado,
     };
   }
+
+  // RC8.14.10 — validar estado solo para una NUEVA confirmación (después de la
+  // idempotencia, para no bloquear una orden ya en ORDEN_RECEPCION_CONFIRMADA).
+  assertOrdenPendienteConfirmacion(orden);
 
   const now = new Date();
   await query(`
