@@ -390,7 +390,9 @@ export async function confirmarRecepcionOrden(token, meta = {}) {
 
   assertOrdenPendienteConfirmacion(orden);
 
-  const now = new Date();
+  // RC8.14.11 — timestamp en UTC (misma convención que NOW()); evitar que el
+  // driver pg serialice new Date() en hora local del servidor (America/Lima).
+  const now = new Date().toISOString();
   await query(`
     UPDATE orden_envios_proveedor SET
       confirmado_at = $2,
@@ -539,7 +541,8 @@ export async function confirmarRecepcionDesdeSesion(ordenId, proveedorId, meta =
   // idempotencia, para no bloquear una orden ya en ORDEN_RECEPCION_CONFIRMADA).
   assertOrdenPendienteConfirmacion(orden);
 
-  const now = new Date();
+  // RC8.14.11 — timestamp en UTC (misma convención que NOW()).
+  const now = new Date().toISOString();
   await query(`
     UPDATE orden_envios_proveedor SET
       confirmado_at = $2, confirmado_ip = $3, confirmado_user_agent = $4, estado = 'CONFIRMADO'
