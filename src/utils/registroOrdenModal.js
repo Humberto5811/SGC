@@ -432,6 +432,9 @@ export async function openEnviarProveedorModal(ordenId, { onDone } = {}) {
       const data = resp?.data || resp;
       ok.innerHTML = `Orden notificada. Enlace: <code>${esc(data.url || '')}</code>`;
       ok.classList.remove('d-none');
+      // RC8.14.7 — en éxito el botón queda deshabilitado y cambia su texto,
+      // en vez de quedarse en "Enviando…".
+      btn.textContent = '✓ Notificado';
       if (data.url) {
         try { await navigator.clipboard.writeText(data.url); } catch (_) {}
       }
