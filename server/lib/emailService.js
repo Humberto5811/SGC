@@ -1,10 +1,67 @@
 // Servicio de correo — notificaciones Portal de Proveedores (SMTP configurable)
 import dotenv from 'dotenv';
+import nodemailer from 'nodemailer';
 import { buildInvitacionUrl, PORTAL_PUBLIC_BASE } from './proveedorPortal.js';
 
 dotenv.config();
 
-const SMTP_ENABLED = String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true';
+let smtpTransport = null;
+
+function isSmtpEnabled() {
+  return String(process.env.SMTP_ENABLED || 'false').toLowerCase() === 'true';
+}
+
+function getSmtpConfig() {
+  const config = {
+    host: String(process.env.SMTP_HOST || '').trim(),
+    port: Number(process.env.SMTP_PORT),
+    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    user: String(process.env.SMTP_USER || '').trim(),
+    pass: String(process.env.SMTP_PASS || ''),
+    fromEmail: String(process.env.SMTP_FROM_EMAIL || '').trim(),
+    fromName: String(process.env.SMTP_FROM_NAME || '').trim(),
+  };
+  const required = [
+    ['SMTP_HOST', config.host],
+    ['SMTP_PORT', Number.isInteger(config.port) && config.port > 0],
+    ['SMTP_USER', config.user],
+    ['SMTP_PASS', config.pass],
+    ['SMTP_FROM_EMAIL', config.fromEmail],
+  ];
+  const missing = required.filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length) {
+    throw new Error(`Configuración SMTP incompleta. Falta: ${missing.join(', ')}`);
+  }
+  return config;
+}
+
+function getSmtpTransport() {
+  const config = getSmtpConfig();
+  if (!smtpTransport) {
+    smtpTransport = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      auth: {
+        user: config.user,
+        pass: config.pass,
+      },
+    });
+  }
+  return { transport: smtpTransport, config };
+}
+
+function safeSmtpError(error) {
+  let message = String(error?.message || 'Error SMTP desconocido');
+  const secrets = [
+    process.env.SMTP_PASS,
+    process.env.SMTP_USER,
+  ].filter(Boolean);
+  for (const secret of secrets) {
+    message = message.split(String(secret)).join('[REDACTED]');
+  }
+  return message;
+}
 
 export function getPortalBaseUrl() {
   return String(process.env.PORTAL_BASE_URL || 'http://localhost:5173/#/proveedor/login').replace(/\/$/, '');
@@ -56,14 +113,46 @@ export async function sendMail({ to, subject, text, html }) {
   const recipients = Array.isArray(to) ? to : [to];
   const payload = { to: recipients, subject, text, html };
 
-  if (!SMTP_ENABLED) {
+  if (!isSmtpEnabled()) {
     console.log('[email:simulado]', JSON.stringify(payload, null, 2));
     return { success: true, simulated: true, messageId: `sim-${Date.now()}` };
   }
 
-  console.warn('[email] SMTP_ENABLED=true pero transporte no configurado; simulando envío.');
-  console.log('[email:simulado]', JSON.stringify(payload, null, 2));
-  return { success: true, simulated: true, messageId: `sim-${Date.now()}` };
+  try {
+    const { transport, config } = getSmtpTransport();
+    const info = await transport.sendMail({
+      from: {
+        name: config.fromName || config.fromEmail,
+        address: config.fromEmail,
+      },
+      to: recipients,
+      subject,
+      text,
+      html,
+    });
+    return {
+      success: true,
+      simulated: false,
+      messageId: info.messageId,
+    };
+  } catch (error) {
+    console.error(`[email:smtp] Error de envío: ${safeSmtpError(error)}`);
+    throw error;
+  }
+}
+
+export async function verifySmtpTransport() {
+  if (!isSmtpEnabled()) {
+    return { success: true, simulated: true, verified: false };
+  }
+  try {
+    const { transport } = getSmtpTransport();
+    await transport.verify();
+    return { success: true, simulated: false, verified: true };
+  } catch (error) {
+    console.error(`[email:smtp] Error de verificación: ${safeSmtpError(error)}`);
+    throw error;
+  }
 }
 
 export async function enviarInvitacionProveedorEmail(opts) {
