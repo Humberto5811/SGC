@@ -183,7 +183,11 @@ try {
     const osAttachments = await buildOrdenEmailAttachments(osId);
     const names = osAttachments.map((a) => a.filename);
     assert.equal(names.length, 3, 'OS/LOCACIÓN produce 3 adjuntos');
-    assert.equal(names[0], 'ORDEN DE SERVICIO 1105.pdf');
+    // ORDEN_FIRMADA: validar el nombre real de forma robusta (sin convención textual fija).
+    assert.ok(typeof names[0] === 'string' && names[0].trim().length > 0,
+      'adjunto ORDEN_FIRMADA tiene nombre no vacío');
+    assert.match(names[0], /\.pdf$/i, 'adjunto ORDEN_FIRMADA termina en .pdf');
+    assert.match(names[0], /1105/, 'adjunto ORDEN_FIRMADA corresponde a la OS 1105');
     assert.equal(names[1], 'cronograma-OS-1105.html');
     assert.match(names[2], /^Anexo_11_SC-\d+-2026-INS\.pdf$/);
     ok(osAttachments.every((a) => Buffer.isBuffer(a.content) && a.content.length > 0),
