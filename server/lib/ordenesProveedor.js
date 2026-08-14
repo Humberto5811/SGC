@@ -10,6 +10,8 @@ import {
   getOrdenById,
   getDetalleOrden,
   getDocumentoActivo,
+  listarDocsNotificacion,
+  getDocNotificacion,
   registrarEventoOrden,
   ESTADOS_ORDEN,
   loadContextoExpediente,
@@ -50,6 +52,35 @@ function buildOrdenEmail({ orden, contexto, url, correos }) {
 <p><a href="${url}">Ver orden y confirmar recepción</a></p>
 <p>Portal: <a href="${portalLogin}">${portalLogin}</a></p>`;
   return { subject, text, html, to: correos };
+}
+
+export async function buildOrdenEmailAttachments(ordenId) {
+  const meta = await listarDocsNotificacion(ordenId);
+  const documentos = Array.isArray(meta?.documentos) ? meta.documentos : [];
+  const faltantes = documentos.filter((doc) => !doc.disponible);
+  if (!documentos.length || faltantes.length) {
+    throw httpError(
+      `Documentos de notificación incompletos: ${faltantes.map((doc) => doc.tipo).join(', ') || 'sin documentos'}`,
+      409,
+      'DOCUMENTOS_INCOMPLETOS',
+    );
+  }
+
+  const attachments = [];
+  for (const doc of documentos) {
+    const full = await getDocNotificacion(ordenId, doc.tipo, { includeContent: true });
+    const raw = String(full?.contenido_base64 || '');
+    const base64 = raw.includes('base64,') ? raw.split('base64,')[1] : raw;
+    if (!base64) {
+      throw httpError(`Documento sin contenido: ${doc.nombre || doc.tipo}`, 409, 'DOCUMENTO_SIN_CONTENIDO');
+    }
+    attachments.push({
+      filename: full.nombre_archivo || doc.nombre || `${doc.tipo}.bin`,
+      content: Buffer.from(base64, 'base64'),
+      contentType: full.mime_type || doc.mime_type || 'application/octet-stream',
+    });
+  }
+  return attachments;
 }
 
 export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
@@ -103,17 +134,7 @@ export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
     throw httpError('Indique el correo del proveedor.', 400, 'SIN_CORREO');
   }
 
-  await ensureProveedorPortalAccount({
-    id: ctx.proveedor_id,
-    ruc: ctx.proveedor_ruc,
-    razon_social: ctx.proveedor_razon_social,
-    emails: correos,
-  }, {
-    passwordTemporal: ctx.proveedor_ruc,
-    estadoInvitacion: 'ORDEN_ENVIADA',
-    fechaEnvio: new Date(),
-  });
-
+  const attachments = await buildOrdenEmailAttachments(ordenId);
   const token = generarTokenAcceso();
   const url = buildOrdenPortalUrl(token);
   const { rows: intentos } = await query(
@@ -126,7 +147,12 @@ export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
   let errorMsg = null;
   try {
     const mail = buildOrdenEmail({ orden, contexto: ctx, url, correos: correoDestino ? [correoDestino] : ['sin-correo@localhost'] });
-    emailResult = await sendMail(mail);
+    emailResult = await sendMail({ ...mail, attachments });
+    if (!emailResult?.success || emailResult.simulated) {
+      errorMsg = emailResult?.simulated
+        ? 'SMTP no habilitado: el correo fue simulado y no se considera enviado.'
+        : 'El transporte SMTP no confirmó el envío.';
+    }
   } catch (err) {
     errorMsg = err.message || String(err);
   }
@@ -154,6 +180,18 @@ export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
   ]);
 
   if (!errorMsg) {
+    // La cuenta portal solo refleja ORDEN_ENVIADA después de que sendMail terminó
+    // correctamente. Un fallo SMTP no altera estado_invitacion ni fecha_ultimo_envio.
+    await ensureProveedorPortalAccount({
+      id: ctx.proveedor_id,
+      ruc: ctx.proveedor_ruc,
+      razon_social: ctx.proveedor_razon_social,
+      emails: correos,
+    }, {
+      passwordTemporal: ctx.proveedor_ruc,
+      estadoInvitacion: 'ORDEN_ENVIADA',
+      fechaEnvio: new Date(),
+    });
     await query(`
       UPDATE ordenes_contratacion SET
         estado = $2,
@@ -184,32 +222,38 @@ export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
     }
   }
 
-    await registrarEventoOrden({
-      ordenId,
-      requerimientoId: orden.requerimiento_id,
-      tipo: errorMsg ? 'ORDEN_ENVIO_ERROR' : 'ORDEN_NOTIFICADA',
-      estadoAnterior: orden.estado,
-      estadoNuevo: errorMsg ? orden.estado : ESTADOS_ORDEN.ORDEN_NOTIFICADA,
-      usuario,
-      rol,
-      observacion: errorMsg || `Intento ${intento}`,
-      datos: {
-        documento_version: doc.version,
-        cronograma_version: orden.cronograma_version,
-        entregas: entregas.length,
-        email: emailResult,
-      },
-    });
+  await registrarEventoOrden({
+    ordenId,
+    requerimientoId: orden.requerimiento_id,
+    tipo: errorMsg ? 'ORDEN_ENVIO_ERROR' : 'ORDEN_NOTIFICADA',
+    estadoAnterior: orden.estado,
+    estadoNuevo: errorMsg ? orden.estado : ESTADOS_ORDEN.ORDEN_NOTIFICADA,
+    usuario,
+    rol,
+    observacion: errorMsg || `Intento ${intento}`,
+    datos: {
+      documento_version: doc.version,
+      cronograma_version: orden.cronograma_version,
+      entregas: entregas.length,
+      email: emailResult,
+    },
+  });
 
-    // Ingreso automático a Ejecución → Recepción de Bienes (solo OC / bienes)
-    if (!errorMsg) {
-      try {
-        const { asegurarExpedienteRecepcionDesdeOrden } = await import('./recepcionBienes.js');
-        await asegurarExpedienteRecepcionDesdeOrden(ordenId, usuario);
-      } catch (rbErr) {
-        console.error('[recepcion-bienes] ingreso automático:', rbErr?.message || rbErr);
-      }
-    }
+  if (errorMsg) {
+    throw httpError(
+      'No se pudo enviar la notificación por correo. Puede volver a intentarlo.',
+      502,
+      'SMTP_ERROR',
+    );
+  }
+
+  // Ingreso automático a Ejecución → Recepción de Bienes (solo OC / bienes)
+  try {
+    const { asegurarExpedienteRecepcionDesdeOrden } = await import('./recepcionBienes.js');
+    await asegurarExpedienteRecepcionDesdeOrden(ordenId, usuario);
+  } catch (rbErr) {
+    console.error('[recepcion-bienes] ingreso automático:', rbErr?.message || rbErr);
+  }
 
   return {
     envio: rows[0],

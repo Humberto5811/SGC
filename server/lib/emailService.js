@@ -109,7 +109,9 @@ function formatRange(inicio, fin) {
   return `${f(inicio)} — ${f(fin)}`;
 }
 
-export async function sendMail({ to, subject, text, html }) {
+export async function sendMail({
+  to, subject, text, html, attachments = [],
+}) {
   const recipients = Array.isArray(to) ? to : [to];
   const payload = { to: recipients, subject, text, html };
 
@@ -129,6 +131,7 @@ export async function sendMail({ to, subject, text, html }) {
       subject,
       text,
       html,
+      attachments,
     });
     return {
       success: true,
