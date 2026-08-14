@@ -2884,8 +2884,7 @@ export async function listarDocsNotificacion(ordenId) {
     }
   }
 
-  const docs = [
-    {
+  const ordenFirmadaDoc = {
       tipo: 'ORDEN_FIRMADA',
       nombre: firmada?.nombre_archivo || 'Orden firmada',
       version: firmada?.version || null,
@@ -2893,8 +2892,8 @@ export async function listarDocsNotificacion(ordenId) {
       disponible: !!firmada,
       documento_id: firmada?.id || null,
       mime_type: firmada?.mime_type || 'application/pdf',
-    },
-    {
+    };
+  const requerimientoDoc = {
       tipo: 'REQUERIMIENTO',
       nombre: adj[0]?.nombre_archivo || `Requerimiento ${contexto.requerimiento_codigo}`,
       version: adj[0] ? 1 : null,
@@ -2902,8 +2901,8 @@ export async function listarDocsNotificacion(ordenId) {
       disponible: true,
       documento_id: adj[0]?.id || null,
       mime_type: adj[0]?.mime_type || 'text/html',
-    },
-    {
+    };
+  const cotizacionDoc = {
       tipo: 'COTIZACION',
       nombre: cotDoc?.nombre || 'Cotización del proveedor adjudicado',
       version: cots[0]?.id || null,
@@ -2912,8 +2911,8 @@ export async function listarDocsNotificacion(ordenId) {
       documento_id: cots[0]?.id || null,
       ref: cotDoc?.ref || null,
       mime_type: 'application/pdf',
-    },
-    {
+    };
+  const cronogramaDoc = {
       tipo: 'CRONOGRAMA',
       nombre: `Cronograma ${orden.tipo_orden || ''} ${orden.numero_orden || ''}`.trim(),
       version: orden.cronograma_version || entregas.length || 1,
@@ -2921,8 +2920,16 @@ export async function listarDocsNotificacion(ordenId) {
       disponible: entregas.length > 0,
       documento_id: null,
       mime_type: 'text/html',
-    },
-  ];
+    };
+  const esServicioOLocacion = /servicio|locad|locaci|^os$/i.test(
+    `${orden.tipo_contratacion || ''} ${orden.tipo_orden || ''}`.trim(),
+  );
+  // Obs.53: para OS/LOCACIÓN se adjuntan únicamente la orden firmada, su
+  // cronograma y el Anexo 11 económico. Los adjuntos del requerimiento (p. ej.
+  // declaraciones de canje propias de bienes) no forman parte de este envío.
+  const docs = esServicioOLocacion
+    ? [ordenFirmadaDoc, cronogramaDoc, cotizacionDoc]
+    : [ordenFirmadaDoc, requerimientoDoc, cotizacionDoc, cronogramaDoc];
   return { documentos: docs, faltantes: docs.filter((d) => !d.disponible).map((d) => d.tipo) };
 }
 
@@ -3016,35 +3023,61 @@ export async function getDocNotificacion(ordenId, tipo, { includeContent = false
 
   if (t === 'CRONOGRAMA') {
     if (!entregas.length) throw httpError('Falta el cronograma de entregas/entregables.', 409, 'SIN_CRONOGRAMA');
-    const rowsHtml = entregas.map((e) => `
+    const fechaDocumento = (value) => {
+      const iso = toIsoDateString(value);
+      if (!iso) return '—';
+      const [y, m, d] = iso.split('-');
+      return y && m && d ? `${d}/${m}/${y}` : '—';
+    };
+    const filasCronograma = entregas.flatMap((e) => {
+      const lineas = Array.isArray(e.items) && e.items.length
+        ? e.items
+        : [{
+          item_descripcion: items[0]?.descripcion || '',
+          cantidad: items[0]?.cantidad || 1,
+          precio_unitario: Number(e.importe || 0) / Number(items[0]?.cantidad || 1),
+          precio_total: Number(e.importe || 0),
+        }];
+      return lineas.map((li) => ({
+        numero: e.numero_entrega,
+        entregable: e.descripcion || e.etiqueta_entrega || `Entregable ${e.numero_entrega}`,
+        descripcion: li.item_descripcion || items.find((it) => Number(it.id) === Number(li.orden_item_id))?.descripcion || '',
+        cantidad: Number(li.cantidad || 0),
+        precioUnitario: Number(li.precio_unitario || 0),
+        precioTotal: Number(li.precio_total || 0),
+        dias: Number(e.dias_plazo || 0),
+        tipoDias: e.tipo_dias || 'calendario',
+        fechaInicio: e.fecha_base_calc || e.fecha_base,
+        fechaMaxima: e.fecha_maxima_calc || e.fecha_maxima,
+      }));
+    });
+    const totalImporte = filasCronograma.reduce((acc, fila) => acc + fila.precioTotal, 0);
+    const rowsHtml = filasCronograma.map((fila) => `
       <tr>
-        <td>${e.numero_entrega}</td>
-        <td>${escapeHtml(e.tipo_entrega)}</td>
-        <td>${escapeHtml(e.descripcion)}</td>
-        <td>${e.dias_plazo}</td>
-        <td>${escapeHtml(e.tipo_dias)}</td>
-        <td>${Number(e.importe || 0).toFixed(2)}</td>
-        <td>${e.fecha_maxima || '—'}</td>
-      </tr>`).join('');
-    const itemsHtml = items.map((it) => `
-      <tr>
-        <td>${escapeHtml(it.descripcion)}</td>
-        <td>${escapeHtml(it.unidad_medida || '')}</td>
-        <td>${it.cantidad}</td>
-        <td>${Number(it.precio_unitario).toFixed(4)}</td>
-        <td>${Number(it.precio_total).toFixed(2)}</td>
+        <td>${fila.numero}</td>
+        <td>${escapeHtml(fila.entregable)}</td>
+        <td>${escapeHtml(fila.descripcion)}</td>
+        <td>${fila.cantidad}</td>
+        <td>${fila.precioUnitario.toFixed(2)}</td>
+        <td>${fila.precioTotal.toFixed(2)}</td>
+        <td>${fila.dias}</td>
+        <td>${escapeHtml(fila.tipoDias)}</td>
+        <td>${fechaDocumento(fila.fechaInicio)}</td>
+        <td>${fechaDocumento(fila.fechaMaxima)}</td>
       </tr>`).join('');
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cronograma</title>
       <style>table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:4px 8px;font-size:12px}</style>
       </head><body>
       <h1>Cronograma de entregas / entregables</h1>
       <p>Orden ${escapeHtml(orden.tipo_orden)} ${escapeHtml(orden.numero_orden)} · ${escapeHtml(contexto.proveedor_razon_social)}</p>
-      <h2>Ítems adjudicados</h2>
-      <table><thead><tr><th>Descripción</th><th>UM</th><th>Cant.</th><th>P.U.</th><th>Total</th></tr></thead>
-      <tbody>${itemsHtml}</tbody></table>
-      <h2>Entregas</h2>
-      <table><thead><tr><th>N°</th><th>Tipo</th><th>Descripción</th><th>Días</th><th>Tipo días</th><th>Importe</th><th>Fecha máx.</th></tr></thead>
-      <tbody>${rowsHtml}</tbody></table>
+      <table><thead><tr>
+        <th>N°</th><th>Entregable</th><th>Descripción del entregable</th>
+        <th>Cantidad</th><th>Precio unitario</th><th>Precio total</th>
+        <th>Días</th><th>Tipo días</th><th>Fecha inicio</th><th>Fecha máxima</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+      <tfoot><tr><th colspan="5">TOTAL</th><th>${totalImporte.toFixed(2)}</th><th colspan="4"></th></tr></tfoot>
+      </table>
     </body></html>`;
     const b64 = Buffer.from(html, 'utf8').toString('base64');
     return {

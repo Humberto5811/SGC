@@ -17,6 +17,10 @@ function round2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
 
+function round4(n) {
+  return Math.round(Number(n || 0) * 10000) / 10000;
+}
+
 export function httpError(message, status = 400, code = 'ORDEN_ERROR') {
   const err = new Error(message);
   err.status = status;
@@ -68,6 +72,52 @@ export function normalizarLineasEntrega(items, lineasPayload) {
 }
 
 /**
+ * Normaliza hitos de un único servicio contractual por su importe real.
+ * El PU del ítem representa el servicio completo; el PU del entregable representa
+ * solo ese hito y por ello no son magnitudes comparables.
+ */
+export function normalizarLineasEntregableItemUnico(items, lineasPayload) {
+  if (!Array.isArray(items) || items.length !== 1) {
+    return normalizarLineasEntrega(items, lineasPayload);
+  }
+  const item = items[0];
+  const lineas = Array.isArray(lineasPayload) ? lineasPayload : [];
+  const out = [];
+  for (const li of lineas) {
+    if (Number(item.id) !== Number(li.orden_item_id)) {
+      throw httpError('Ítem de entrega inválido', 400, 'ITEM_INVALIDO');
+    }
+    const cant = Number(li.cantidad || 0);
+    if (cant < 0) {
+      throw httpError('Cantidades negativas no permitidas', 400, 'CANTIDAD_INVALIDA');
+    }
+    if (!(cant > 0)) continue;
+    const totalRaw = li.precio_total != null
+      ? Number(li.precio_total)
+      : cant * Number(li.precio_unitario || 0);
+    if (!Number.isFinite(totalRaw) || totalRaw < 0) {
+      throw httpError('Importe de entregable inválido', 400, 'IMPORTE_INVALIDO');
+    }
+    const total = round2(totalRaw);
+    out.push({
+      orden_item_id: item.id,
+      cantidad: cant,
+      precio_unitario: round4(total / cant),
+      precio_total: total,
+      porcentaje: li.porcentaje != null ? Number(li.porcentaje) : null,
+    });
+  }
+  return out;
+}
+
+export function esCronogramaPorHitos(orden, items) {
+  const tipo = String(orden?.tipo_contratacion || '').toLowerCase();
+  return Array.isArray(items)
+    && items.length === 1
+    && /servicio|locad|locaci/.test(tipo);
+}
+
+/**
  * RC8.14.1 Obs.52 — función canónica de validación económica del cronograma. Con
  * exactamente 1 ítem/servicio contractual (el caso general de LOCACIÓN/SERVICIO sin
  * cuadro, ya reconciliado — mismo criterio que esFlatMode en el frontend), el PU por
@@ -92,7 +142,7 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
     throw httpError('La orden no tiene ítems adjudicados', 400, 'SIN_ITEMS');
   }
 
-  const esItemUnico = items.length === 1;
+  const esPorHitos = esCronogramaPorHitos(orden, items);
   const correlativos = new Set();
   let sumaImportes = 0;
   const qtyPorItem = new Map();
@@ -116,15 +166,11 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
     const lineasRaw = Array.isArray(e.items) ? e.items : [];
     let importeEntrega = 0;
 
-    if (esItemUnico && lineasRaw.length) {
+    if (esPorHitos && lineasRaw.length) {
       // Monto del entregable tal cual lo registró el usuario (importe real del
       // hito), sin validar PU aislado contra el ítem contractual completo.
-      importeEntrega = round2(lineasRaw.reduce((a, li) => {
-        const cant = Number(li.cantidad || 0);
-        const pu = Number(li.precio_unitario || 0);
-        const tot = li.precio_total != null ? Number(li.precio_total) : cant * pu;
-        return a + (Number.isFinite(tot) ? tot : 0);
-      }, 0));
+      const lineas = normalizarLineasEntregableItemUnico(items, lineasRaw);
+      importeEntrega = round2(lineas.reduce((a, li) => a + li.precio_total, 0));
     } else if (lineasRaw.length) {
       const lineas = normalizarLineasEntrega(items, lineasRaw);
       for (const li of lineas) {
@@ -152,7 +198,8 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
   // La validación de cantidad distribuida por ítem solo aplica con varios ítems
   // contractuales reales — con 1 solo ítem/servicio, la cantidad (típicamente 1) no
   // se reparte entre entregables (son hitos del mismo servicio, no unidades físicas).
-  const hayDistribucion = !esItemUnico && entregasPayload.some((e) => Array.isArray(e.items) && e.items.length);
+  const hayDistribucion = !esPorHitos
+    && entregasPayload.some((e) => Array.isArray(e.items) && e.items.length);
   if (hayDistribucion) {
     for (const it of items) {
       const sum = qtyPorItem.get(it.id) || 0;
@@ -169,7 +216,7 @@ export function validarCronogramaContraItems(orden, items, entregasPayload) {
   if (!moneyEq(sumaImportes, orden.monto_total)) {
     const montoAdj = Number(orden.monto_total || 0);
     const diferencia = round2(montoAdj - sumaImportes);
-    const mensaje = esItemUnico
+    const mensaje = esPorHitos
       ? 'El monto total de los entregables debe coincidir con el monto adjudicado de la cotización. '
         + `Monto adjudicado: S/ ${montoAdj.toFixed(2)}. Monto registrado: S/ ${sumaImportes.toFixed(2)}. `
         + `Diferencia: S/ ${diferencia.toFixed(2)}.`

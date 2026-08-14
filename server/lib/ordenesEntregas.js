@@ -5,11 +5,17 @@ import { query } from '../db.js';
 import {
   httpError,
   getOrdenById,
+  reconciliarItemsContractuales,
   registrarEventoOrden,
   ESTADOS_ORDEN,
 } from './ordenesContratacion.js';
 import { calcularFechaMaximaEntrega, normalizeTipoDias } from './diasPlazo.js';
-import { validarCronogramaContraItems, normalizarLineasEntrega } from './ordenesValidaciones.js';
+import {
+  validarCronogramaContraItems,
+  normalizarLineasEntrega,
+  normalizarLineasEntregableItemUnico,
+  esCronogramaPorHitos,
+} from './ordenesValidaciones.js';
 import { normalizeCondicionInicio } from '../../shared/ordenCronogramaContractual.js';
 import {
   buildEntregaContract,
@@ -173,8 +179,9 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
   const orden = await getOrdenById(ordenId);
   assertEditableCronograma(orden);
   const { sincronizarPreciosItemsDesdeCuadro } = await import('./ordenesContratacion.js');
-  const items = await sincronizarPreciosItemsDesdeCuadro(ordenId);
+  const itemsFisicos = await sincronizarPreciosItemsDesdeCuadro(ordenId);
   const ordenFresh = await getOrdenById(ordenId);
+  const { items } = await reconciliarItemsContractuales(ordenFresh, itemsFisicos);
 
   // Persistir inicio de actividad si viene en el payload raíz
   if (entregasPayload._inicio_actividad) {
@@ -211,7 +218,11 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
     const fechaMax = f.fechaMaxima;
 
     const lineasRaw = Array.isArray(e.items) ? e.items : [];
-    const lineas = lineasRaw.length ? normalizarLineasEntrega(items, lineasRaw) : [];
+    const lineas = lineasRaw.length
+      ? (esCronogramaPorHitos(ordenFresh, items)
+        ? normalizarLineasEntregableItemUnico(items, lineasRaw)
+        : normalizarLineasEntrega(items, lineasRaw))
+      : [];
     let importe = lineas.length
       ? lineas.reduce((a, li) => a + li.precio_total, 0)
       : Number(e.importe || 0);
@@ -289,8 +300,9 @@ export async function guardarEntregas(ordenId, entregasPayload, usuario, rol) {
 
 export async function assertCronogramaListoParaEnvio(ordenId) {
   const { sincronizarPreciosItemsDesdeCuadro } = await import('./ordenesContratacion.js');
-  const items = await sincronizarPreciosItemsDesdeCuadro(ordenId);
   const orden = await getOrdenById(ordenId);
+  const itemsFisicos = await sincronizarPreciosItemsDesdeCuadro(ordenId);
+  const { items } = await reconciliarItemsContractuales(orden, itemsFisicos);
   const entregas = await listarEntregas(ordenId);
   if (!entregas.length) throw httpError('Debe definir el cronograma antes de enviar', 409, 'SIN_CRONOGRAMA');
 

@@ -6,7 +6,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validarCronogramaContraItems } from '../server/lib/ordenesValidaciones.js';
+import {
+  validarCronogramaContraItems,
+  normalizarLineasEntregableItemUnico,
+} from '../server/lib/ordenesValidaciones.js';
 import { resolveOrdenPlazoContractual } from '../shared/ordenCronogramaContractual.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +26,7 @@ console.log('\n=== RC8.14.1 — Observación 52 · UI / U.M. / Validación econ�
 const srcView = read('src/views/contratacion/registroOrdenesView.js');
 const srcOrdenesLib = read('server/lib/ordenesContratacion.js');
 const srcValidaciones = read('server/lib/ordenesValidaciones.js');
+const srcEntregasServer = read('server/lib/ordenesEntregas.js');
 const srcEntregasModal = read('src/utils/registroOrdenEntregasModal.js');
 
 // ---------------------------------------------------------------------------
@@ -59,15 +63,16 @@ ok(/export function extractItemsAdjudicados/.test(srcOrdenesLib)
 
 // ---------------------------------------------------------------------------
 console.log('\n-- 5/6. LOCACIÓN no depende de Cuadro Comparativo; valida monto total vs entregables --');
-ok(/const esItemUnico = items\.length === 1;/.test(srcValidaciones),
-  '5.1: existe la función canónica validarCronogramaContraItems con rama por ítem único (LOCACIÓN/SERVICIO sin cuadro)');
-ok(/esItemUnico && lineasRaw\.length/.test(srcValidaciones),
-  '5.2: con 1 ítem, NO se llama normalizarLineasEntrega (que exige PU == adjudicado del Cuadro Comparativo)');
+ok(/export function esCronogramaPorHitos/.test(srcValidaciones)
+  && /servicio\|locad\|locaci/.test(srcValidaciones),
+  '5.1: la rama por importe aplica solo a LOCACIÓN/SERVICIO con un ítem contractual');
+ok(/esPorHitos && lineasRaw\.length/.test(srcValidaciones),
+  '5.2: LOCACIÓN/SERVICIO por hitos no exige PU del ítem contractual completo');
 ok(!/cuadro_comparativo/i.test(srcValidaciones), '5.3: la función de validación no consulta ni referencia Cuadro Comparativo');
 
 // ---------------------------------------------------------------------------
 console.log('\n-- 7/8/9. Casos numéricos — Anexo 11 (14000 = 7000+7000) --');
-const ordenCaso = { monto_total: 14000 };
+const ordenCaso = { monto_total: 14000, tipo_contratacion: 'Locación' };
 const itemUnico = [{ id: 1, descripcion: 'Servicio contractual', cantidad: 1, precio_total: 14000, precio_unitario: 14000 }];
 const entregasValidas = [
   { numero_entrega: 1, dias_plazo: 30, items: [{ orden_item_id: 1, cantidad: 1, precio_unitario: 7000, precio_total: 7000 }] },
@@ -99,6 +104,28 @@ ok(/Monto adjudicado: S\/ 14000\.00/.test(errorMonto.message) && /Monto registra
   && /Diferencia: S\/ 1000\.00/.test(errorMonto.message),
   '7.2: el mensaje informa monto adjudicado, monto registrado y diferencia');
 
+const lineasPersistibles = entregasValidas.map((e) => (
+  normalizarLineasEntregableItemUnico(itemUnico, e.items)[0]
+));
+assert.deepEqual(lineasPersistibles.map((li) => li.precio_total), [7000, 7000]);
+assert.deepEqual(lineasPersistibles.map((li) => li.precio_unitario), [7000, 7000]);
+ok('PU_MISMATCH' !== (() => {
+  try {
+    normalizarLineasEntregableItemUnico(itemUnico, entregasValidas[0].items);
+    return null;
+  } catch (e) { return e.code; }
+})(), '9.2: la normalización usada al GUARDAR conserva 7000 por entregable y no exige PU contractual 14000');
+ok(/esCronogramaPorHitos\(ordenFresh, items\)[\s\S]*normalizarLineasEntregableItemUnico/.test(srcEntregasServer),
+  '9.3: guardarEntregas usa la normalización por importe para un único servicio contractual');
+ok(/reconciliarItemsContractuales\(ordenFresh, itemsFisicos\)/.test(srcEntregasServer),
+  '9.3b: guardarEntregas reconcilia filas físicas heredadas antes de validar el servicio contractual');
+ok(/reconciliarItemsContractuales\(orden, itemsFisicos\)/.test(srcEntregasServer),
+  '9.3c: la validación previa al envío reutiliza la misma reconciliación contractual');
+ok(/const monAdj = round2\(Number\(orden\.monto_total \|\| 0\)\)/.test(srcEntregasModal),
+  '9.4: frontend contrasta contra monto_total de la orden, fuente canónica adjudicada');
+ok(/const total = esPorHitos[\s\S]*Number\(e\.importe \|\| 0\)/.test(srcEntregasModal),
+  '9.5: payload de Guardar cronograma conserva el importe real de cada entregable');
+
 // ---------------------------------------------------------------------------
 console.log('\n-- 11/12. Totalizadores consistentes --');
 ok(/const \{ monTotal \} = calcTotales\(\);/.test(srcEntregasModal),
@@ -116,7 +143,7 @@ const itemsBien = [
   { id: 10, descripcion: 'Guantes', cantidad: 100, precio_unitario: 2, precio_total: 200 },
   { id: 11, descripcion: 'Mascarillas', cantidad: 50, precio_unitario: 4, precio_total: 200 },
 ];
-const ordenBien = { monto_total: 400 };
+const ordenBien = { monto_total: 400, tipo_contratacion: 'Bien' };
 const entregasBienOk = [{
   numero_entrega: 1,
   dias_plazo: 15,
@@ -143,6 +170,21 @@ try {
 ok(errPuBien && errPuBien.code === 'PU_MISMATCH',
   '13.2: BIEN multiítem SIGUE bloqueando un PU distinto al adjudicado por línea (no se relajó para multiítem)');
 
+let errPuBienUnico = null;
+try {
+  validarCronogramaContraItems(
+    { monto_total: 200, tipo_contratacion: 'Bien' },
+    [itemsBien[0]],
+    [{
+      numero_entrega: 1,
+      dias_plazo: 15,
+      items: [{ orden_item_id: 10, cantidad: 100, precio_unitario: 1, precio_total: 100 }],
+    }],
+  );
+} catch (e) { errPuBienUnico = e; }
+ok(errPuBienUnico && errPuBienUnico.code === 'PU_MISMATCH',
+  '13.2b: BIEN de un ítem conserva validación física por PU (no usa la excepción de hitos)');
+
 let errCantBien = null;
 try {
   const entregasBienCantMal = [{
@@ -164,7 +206,7 @@ const itemsServicioMulti = [
   { id: 20, descripcion: 'Capacitación A', cantidad: 1, precio_unitario: 5000, precio_total: 5000 },
   { id: 21, descripcion: 'Capacitación B', cantidad: 1, precio_unitario: 3000, precio_total: 3000 },
 ];
-const ordenServicioMulti = { monto_total: 8000 };
+const ordenServicioMulti = { monto_total: 8000, tipo_contratacion: 'Servicio' };
 const entregasServicioMulti = [{
   numero_entrega: 1,
   dias_plazo: 30,

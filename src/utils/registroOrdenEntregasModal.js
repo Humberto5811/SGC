@@ -131,6 +131,7 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
   // real (p. ej. BIEN con varios productos) se conserva la tabla existente por
   // \u00edtem\u00d7entrega para no perder la distribuci\u00f3n real de cantidad/PU por producto.
   const esFlatMode = items.length === 1;
+  const esPorHitos = esFlatMode && esServ;
   const singleItem = esFlatMode ? items[0] : null;
 
   const entregas = (det.entregas || []).map((e) => ({
@@ -681,7 +682,9 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
           }
         }
       }
-      const monAdj = round2(items.reduce((a, it) => a + Number(it.precio_total || 0), 0));
+      // Fuente contractual canónica: la orden ya conserva el monto adjudicado de la
+      // cotización para LOCACIÓN/SERVICIO y del cuadro cuando este sí corresponde.
+      const monAdj = round2(Number(orden.monto_total || 0));
       if (Math.abs(monTotal - monAdj) > 0.01) {
         const diferencia = round2(monAdj - monTotal);
         // RC8.14.1 Obs.52 — mensaje funcional por monto (nunca menciona Cuadro
@@ -743,12 +746,20 @@ export async function openEntregasModal(ordenId, { onDone } = {}) {
           items: (e.items || []).map((li) => {
             const it = items.find((x) => x.id === li.orden_item_id);
             const cant = Number(li.cantidad || 0);
-            const pu = Number(it?.precio_unitario || 0);
+            // En modo plano el importe pertenece al entregable/hito, no al servicio
+            // contractual completo. Preservarlo hasta el backend evita reconstruir
+            // cada fila con el PU total adjudicado.
+            const total = esPorHitos
+              ? round2(Number(e.importe || 0))
+              : round2(cant * Number(it?.precio_unitario || 0));
+            const pu = esPorHitos && cant > 0
+              ? total / cant
+              : Number(it?.precio_unitario || 0);
             return {
               orden_item_id: li.orden_item_id,
               cantidad: cant,
               precio_unitario: pu,
-              precio_total: round2(cant * pu),
+              precio_total: total,
             };
           }).filter((li) => li.cantidad > 0),
         };

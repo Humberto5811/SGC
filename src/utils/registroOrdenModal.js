@@ -286,10 +286,13 @@ export async function openEnviarProveedorModal(ordenId, { onDone } = {}) {
     docsLoadError = e.message || 'No se pudieron cargar los documentos a remitir.';
     docsMeta = [];
   }
+  const esServicioOLocacion = /servicio|locad|locaci|^os$/i.test(
+    `${det.orden?.tipo_contratacion || det.contexto?.tipo_contratacion || ''} ${det.orden?.tipo_orden || ''}`.trim(),
+  );
   const labels = {
     ORDEN_FIRMADA: 'Orden firmada',
     REQUERIMIENTO: 'Copia del requerimiento',
-    COTIZACION: 'Cotización presentada por el proveedor adjudicado',
+    COTIZACION: esServicioOLocacion ? 'Anexo 11' : 'Cotización presentada por el proveedor adjudicado',
     CRONOGRAMA: 'Cronograma de entregas/entregables',
   };
   const faltantes = docsMeta.filter((d) => !d.disponible);
@@ -358,22 +361,20 @@ export async function openEnviarProveedorModal(ordenId, { onDone } = {}) {
               <label class="form-label">Mensaje</label>
               <textarea class="form-control" id="roEnvioMsg" rows="3">Se remite la orden para su revisión y confirmación de recepción en el Portal de Proveedores.</textarea>
             </div>
-            <h6 class="fs-6">Documentos a remitir</h6>
+            <h6 class="fs-6">Documentos adjuntos</h6>
             <div class="table-responsive mb-2">
               <table class="table table-sm align-middle">
-                <thead><tr><th>Nombre</th><th>Tipo</th><th>Versión</th><th>Estado</th><th></th></tr></thead>
+                <thead><tr><th>Nombre</th><th>Tipo</th><th></th></tr></thead>
                 <tbody>
                   ${docsMeta.map((d) => `
                     <tr data-tipo="${esc(d.tipo)}">
                       <td>${esc(d.nombre)}</td>
                       <td>${esc(labels[d.tipo] || d.tipo)}</td>
-                      <td>${esc(d.version ?? '—')}</td>
-                      <td><span class="badge ${d.disponible ? 'bg-success' : 'bg-danger'}">${esc(d.estado)}</span></td>
                       <td class="text-nowrap">
                         <button type="button" class="btn btn-sm btn-outline-primary ro-doc-ver" ${d.disponible ? '' : 'disabled'}>Ver</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary ro-doc-dl" ${d.disponible ? '' : 'disabled'}>Descargar</button>
                       </td>
-                    </tr>`).join('') || `<tr><td colspan="5" class="text-muted">${docsLoadError ? esc(docsLoadError) : 'Sin documentos'}</td></tr>`}
+                    </tr>`).join('') || `<tr><td colspan="3" class="text-muted">${docsLoadError ? esc(docsLoadError) : 'Sin documentos'}</td></tr>`}
                 </tbody>
               </table>
             </div>
