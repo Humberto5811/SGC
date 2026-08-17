@@ -168,7 +168,16 @@ export function adaptEstadoResponsable(row = {}) {
 
   const catalog = getEstadoCatalogEntry(fromErv.estadoCodigo, fromErv.estadoLabel);
   const estadoCodigo = fromErv.estadoCodigo || catalog.codigo;
-  const estadoLabel = fromErv.estadoLabel || catalog.label || ESTADO_NO_DISPONIBLE;
+  let estadoLabel = fromErv.estadoLabel || catalog.label || ESTADO_NO_DISPONIBLE;
+  // RC8.15.1F — Normalización central de labels que fueron persistidos con el
+  // código técnico (p. ej. PRESENTACION_ENTREGABLES → "Presentación de Entregables").
+  // Si estadoLabel es código técnico (igual a estadoCodigo) y existe etapa_label
+  // humano, usar etapa_label como etiqueta visible. Sin tocar BD ni workflow.
+  if (estadoCodigo
+    && (estadoLabel === estadoCodigo || estadoLabel === estadoCodigo.replace(/_/g, ' '))
+    && fromErv.etapaLabel) {
+    estadoLabel = fromErv.etapaLabel;
+  }
 
   let { responsableTipo, responsableNombre, responsableUsername, responsableUnidad } = fromErv;
 

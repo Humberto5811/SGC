@@ -50,7 +50,7 @@ export const MENU_STRUCTURE = [
     roles: ['dec', 'admin', 'au'],
     submenu: [
       { path: 'ejecucion/recepcion-bienes', label: 'Recepción de Bienes', icon: 'bi-box-seam', submoduloId: 'RECEPCION_BIENES' },
-      { path: 'ejecucion/presentacion', label: 'Presentación Entregable', icon: 'bi-file-check', submoduloId: 'ALMACEN' },
+      { path: 'ejecucion/presentacion', label: 'Presentación Entregables de Servicios', icon: 'bi-file-check', submoduloId: 'PRESENTACION_ENTREGABLES' },
       { path: 'ejecucion/ampliacion', label: 'Ampliación Resolución', icon: 'bi-calendar-plus', submoduloId: 'AMPLIACION' },
       { path: 'ejecucion/pago', label: 'Pagos', icon: 'bi-credit-card', submoduloId: 'TESORERIA' },
     ],

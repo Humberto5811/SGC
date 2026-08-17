@@ -217,6 +217,14 @@ async function renderApp() {
         module.initRecepcionBienesView();
       }, 50);
     }
+    else if (currentRoute === 'ejecucion/presentacion') {
+      const module = await import('./views/ejecucion/presentacionEntregableView.js');
+      content = module.renderPresentacionEntregableView();
+      setTimeout(() => {
+        if (mySeq !== renderAppSeq) return;
+        module.initPresentacionEntregableView();
+      }, 50);
+    }
     else if (currentRoute === 'dec/cuadro') {
       const module = await import('./views/contratacion/cuadroComparativoView.js');
       content = module.renderCuadroComparativoView();
@@ -230,7 +238,6 @@ async function renderApp() {
     }
     // ========== EJECUCIÓN Y SUBRUTAS ==========
     else if (currentRoute === 'ejecucion' ||
-             currentRoute === 'ejecucion/presentacion' ||
              currentRoute === 'ejecucion/ampliacion' ||
              currentRoute === 'ejecucion/pago') {
       const module = await import('./views/ejecucionView.js');

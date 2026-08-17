@@ -31,7 +31,7 @@ export const MODULOS = [
     label: 'Ejecución Contractual',
     submodulos: [
       { id: 'RECEPCION_BIENES', label: 'Recepción de Bienes', route: 'ejecucion/recepcion-bienes' },
-      { id: 'ALMACEN', label: 'Almacén / Presentación Entregable', route: 'ejecucion/presentacion' },
+      { id: 'PRESENTACION_ENTREGABLES', label: 'Presentación Entregables de Servicios', route: 'ejecucion/presentacion' },
       { id: 'TESORERIA', label: 'Pagos', route: 'ejecucion/pago' },
       { id: 'AMPLIACION', label: 'Ampliación Resolución', route: 'ejecucion/ampliacion' },
     ],
@@ -84,6 +84,10 @@ export function resolveCanonicalRoute(route) {
 export const SUBMODULO_ID_ALIASES = {
   CONSULTAS: 'CONSULTAS_OBSERVACIONES',
   COTIZACIONES: 'RECEPCION_COTIZACIONES',
+  // Legacy: la antigua opción "Almacén / Presentación Entregable" ahora es
+  // Presentación Entregables de Servicios (Área Usuaria). ALMACEN se conserva
+  // SOLO como alias de compatibilidad; sigue siendo actor del dominio BIENES.
+  ALMACEN: 'PRESENTACION_ENTREGABLES',
 };
 
 /** Actividades asignables en los nuevos submódulos de Contrataciones. */
@@ -157,7 +161,7 @@ export function permisosFromRol(rol) {
   const p = emptyPermisos();
   if (rol === 'au') {
     p.modulos = ['REQUERIMIENTOS', 'EJECUCION'];
-    p.submodulos = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO', 'RECEPCION_BIENES'];
+    p.submodulos = ['REGISTRO_REQUERIMIENTO', 'EVALUACION_REQUERIMIENTO', 'RECEPCION_BIENES', 'PRESENTACION_ENTREGABLES'];
     p.actividades = ['VER', 'CREAR', 'EDITAR', 'APROBAR', 'OBSERVAR', 'DERIVAR', 'EXPORTAR', 'DESCARGAR'];
     p.actividadesPorSubmodulo = {};
     p.submodulos.forEach((sid) => { p.actividadesPorSubmodulo[sid] = [...p.actividades]; });
