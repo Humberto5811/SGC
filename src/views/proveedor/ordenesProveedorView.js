@@ -3,9 +3,18 @@
  */
 import { portalService } from '../../services/portalService.js';
 import {
-  esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
+  esc, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
   PROVEEDOR_ROUTES,
 } from '../../utils/proveedorShared.js';
+import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
+
+// RC8.14.13: enviado_proveedor_at/recibido_proveedor_at son TIMESTAMP (instante UTC).
+// Se formatean con formatDateTimeLima (America/Lima explícito) en vez de fmtDt()
+// (proveedorShared.js), que depende del timezone del runtime. fmtDt() no se toca
+// aquí porque es compartida por otros módulos fuera de alcance de RC8.14.13.
+function fmtTs(v) {
+  return esc(formatDateTimeLima(v));
+}
 
 function fmtMonto(n, moneda = 'PEN') {
   const val = Number(n || 0);
@@ -66,7 +75,7 @@ async function loadList() {
                 <td>${esc(r.requerimiento_codigo)}</td>
                 <td>${esc(r.codigo_ccp || '—')}</td>
                 <td>${fmtMonto(r.monto_total, r.moneda)}</td>
-                <td class="small">${fmtDt(r.enviado_proveedor_at || r.envio_at)}</td>
+                <td class="small">${fmtTs(r.enviado_proveedor_at || r.envio_at)}</td>
                 <td><span class="badge bg-secondary">${esc(r.estado)}</span></td>
                 <td><button type="button" class="btn btn-sm btn-outline-primary prov-ord-ver" data-id="${r.id}">Ver</button></td>
               </tr>`).join('')}
@@ -110,7 +119,7 @@ async function openDetalle(ordenId) {
     ${d.documento ? `<button type="button" class="btn btn-sm btn-outline-secondary" id="provOrdDescargar">
       <i class="bi bi-download"></i> Descargar orden firmada</button>` : '<p class="text-muted small">Sin documento</p>'}
     ${d.orden?.recibido_proveedor_at
-      ? `<div class="alert alert-success mt-2 small">Recepción confirmada: ${fmtDt(d.orden.recibido_proveedor_at)}</div>`
+      ? `<div class="alert alert-success mt-2 small">Recepción confirmada: ${fmtTs(d.orden.recibido_proveedor_at)}</div>`
       : ''}
   `;
   body.querySelector('#provOrdDescargar')?.addEventListener('click', async () => {

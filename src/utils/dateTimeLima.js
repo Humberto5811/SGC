@@ -7,11 +7,14 @@ const TZ_LIMA = 'America/Lima';
 
 /**
  * @param {string|Date|number|null|undefined} valor
- * @param {{ empty?: string }} [opts]
- * @returns {string} p.ej. "2026-07-31 12:41" o "—"
+ * @param {{ empty?: string, style?: 'ymd'|'dmy' }} [opts]
+ *   style 'ymd' (por defecto): "2026-07-31 12:41"
+ *   style 'dmy': "31/07/2026 12:41"
+ * @returns {string}
  */
 export function formatDateTimeLima(valor, opts = {}) {
   const empty = opts.empty != null ? opts.empty : '—';
+  const style = opts.style === 'dmy' ? 'dmy' : 'ymd';
   if (valor == null || valor === '') return empty;
 
   let d;
@@ -41,7 +44,9 @@ export function formatDateTimeLima(valor, opts = {}) {
     const get = (type) => parts.find((p) => p.type === type)?.value || '';
     let hour = get('hour');
     if (hour === '24') hour = '00';
-    return `${get('year')}-${get('month')}-${get('day')} ${hour}:${get('minute')}`;
+    return style === 'dmy'
+      ? `${get('day')}/${get('month')}/${get('year')} ${hour}:${get('minute')}`
+      : `${get('year')}-${get('month')}-${get('day')} ${hour}:${get('minute')}`;
   } catch (_) {
     return empty;
   }

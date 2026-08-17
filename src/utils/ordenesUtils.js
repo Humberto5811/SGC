@@ -2,6 +2,7 @@
  * Utilidades y menú Acciones — Registro de Órdenes (OD36 / RC8.10.4).
  */
 import { ESTADOS_ORDEN_LABEL, normalizeEstadoOrden } from '../../shared/estadoExpedienteVigente.js';
+import { formatDateTimeLima } from './dateTimeLima.js';
 
 export { ESTADOS_ORDEN_LABEL, normalizeEstadoOrden };
 
@@ -43,16 +44,16 @@ export function fmtFecha(v) {
   return String(v);
 }
 
+/**
+ * Formatea un TIMESTAMP (instante UTC) en hora America/Lima, independientemente
+ * del timezone del navegador/servidor. RC8.14.13: delega en el helper central
+ * dateTimeLima.js en lugar de usar getters locales (getHours/getDate/...).
+ * NO usar con campos DATE contractuales (fecha_base, fecha_maxima): usar fmtFecha().
+ */
 export function fmtFechaHora(v) {
   if (!v) return '—';
-  try {
-    const d = v instanceof Date ? v : new Date(v);
-    if (Number.isNaN(d.getTime())) return fmtFecha(v);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch (_) {
-    return String(v);
-  }
+  const out = formatDateTimeLima(v, { style: 'dmy' });
+  return out === '—' ? fmtFecha(v) : out;
 }
 
 /**

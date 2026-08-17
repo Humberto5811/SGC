@@ -445,12 +445,17 @@ export async function confirmarRecepcionOrden(token, meta = {}) {
 }
 
 export async function listarOrdenesPortalProveedor(proveedorId) {
+  // RC8.14.13C: enviado_proveedor_at/recibido_proveedor_at/enviado_at son TIMESTAMP
+  // WITHOUT TIME ZONE = UTC lógico (RC8.14.11). Se reinterpretan explícitamente como
+  // UTC (ver getOrdenById para el detalle del problema del parser de pg).
   const { rows } = await query(`
     SELECT o.id, o.tipo_orden, o.numero_orden, o.anio_orden, o.fecha_orden,
-      o.monto_total, o.moneda, o.estado, o.enviado_proveedor_at, o.recibido_proveedor_at,
+      o.monto_total, o.moneda, o.estado,
+      o.enviado_proveedor_at AT TIME ZONE 'UTC' AS enviado_proveedor_at,
+      o.recibido_proveedor_at AT TIME ZONE 'UTC' AS recibido_proveedor_at,
       r.codigo AS requerimiento_codigo, r.denominacion,
       cod.codigo_ccp,
-      e.id AS ultimo_envio_id, e.url_acceso, e.enviado_at AS envio_at
+      e.id AS ultimo_envio_id, e.url_acceso, (e.enviado_at AT TIME ZONE 'UTC') AS envio_at
     FROM ordenes_contratacion o
     JOIN requerimientos r ON r.id = o.requerimiento_id
     LEFT JOIN LATERAL (

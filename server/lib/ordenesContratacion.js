@@ -714,7 +714,20 @@ export async function getOrdenById(ordenId, client = null) {
   const id = parseInt(ordenId, 10);
   if (!Number.isFinite(id)) throw httpError('Orden inválida');
   const run = client?.query ? client.query.bind(client) : query;
-  const { rows } = await run('SELECT * FROM ordenes_contratacion WHERE id = $1', [id]);
+  // RC8.14.13C: creado_at/actualizado_at/enviado_proveedor_at/recibido_proveedor_at son
+  // TIMESTAMP WITHOUT TIME ZONE almacenados como UTC lógico (RC8.14.11). El parser por
+  // defecto de pg los interpreta como hora local del proceso Node, introduciendo un
+  // desplazamiento espurio (ver RC8.14.13B). Se reinterpretan explícitamente como UTC
+  // solo para estas 4 columnas confirmadas; los alias duplicados sobrescriben el valor
+  // de SELECT * sin tocar fecha_orden (DATE) ni ninguna otra columna.
+  const { rows } = await run(`
+    SELECT *,
+      creado_at AT TIME ZONE 'UTC' AS creado_at,
+      actualizado_at AT TIME ZONE 'UTC' AS actualizado_at,
+      enviado_proveedor_at AT TIME ZONE 'UTC' AS enviado_proveedor_at,
+      recibido_proveedor_at AT TIME ZONE 'UTC' AS recibido_proveedor_at
+    FROM ordenes_contratacion WHERE id = $1
+  `, [id]);
   if (!rows.length) throw httpError('Orden no encontrada', 404);
   return mapOrdenRow(rows[0]);
 }
@@ -2266,9 +2279,12 @@ export async function getDetalleOrden(ordenId) {
     FROM orden_documentos WHERE orden_id = $1
     ORDER BY version DESC, id DESC
   `, [ordenId]);
+  // RC8.14.13C: enviado_at/confirmado_at son TIMESTAMP WITHOUT TIME ZONE = UTC lógico.
+  // Se reinterpretan explícitamente como UTC (ver getOrdenById arriba).
   const { rows: envios } = await query(`
     SELECT id, documento_version, cronograma_version, correo_destino, enviado_por,
-      enviado_at, estado, intento, error, confirmado_at, url_acceso
+      enviado_at AT TIME ZONE 'UTC' AS enviado_at, estado, intento, error,
+      confirmado_at AT TIME ZONE 'UTC' AS confirmado_at, url_acceso
     FROM orden_envios_proveedor WHERE orden_id = $1
     ORDER BY id DESC
   `, [ordenId]);
@@ -2727,10 +2743,13 @@ export async function getDocumentoActivo(ordenId, tipo = 'ORDEN_FIRMADA') {
 }
 
 export async function listarHistorialOrden(ordenId) {
+  // RC8.14.13C: creado_at es TIMESTAMP WITHOUT TIME ZONE = UTC lógico. ORDER BY se
+  // califica con el nombre de tabla para evitar ambigüedad con el alias duplicado.
   const { rows } = await query(`
-    SELECT * FROM orden_eventos
+    SELECT *, creado_at AT TIME ZONE 'UTC' AS creado_at
+    FROM orden_eventos
     WHERE orden_id = $1
-    ORDER BY creado_at DESC, id DESC
+    ORDER BY orden_eventos.creado_at DESC, id DESC
   `, [ordenId]);
   return rows;
 }
