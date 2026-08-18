@@ -1,23 +1,30 @@
 /**
- * RC8.15.1 — Ejecución → Presentación Entregables de Servicios.
- * Bandeja real (SERVICIO / LOCACIÓN). Reutiliza la ruta/menú "Presentación Entregable".
- *
- * NO se registra ningún entregable ficticio: la bandeja deriva los entregables
- * ACTIVOS de órdenes OS notificadas (o estados posteriores compatibles) desde
- * orden_entregas. La recepción real se registra vía /api/entregables-servicios.
+ * RC8.15.3 — Ejecución → Presentación Entregables de Servicios.
+ * Bandeja con DOS pestañas: Órdenes (una fila por orden) y Entregables (una fila
+ * por entregable ACTIVO). Reutiliza componentes centrales de estado/responsable
+ * y el patrón de menú Acciones (bandejaUi) de Registro de Órdenes.
+ * La recepción real se registra vía /api/entregables-servicios.
  */
 import { entregablesServiciosService } from '../../services/entregablesServiciosService.js';
+import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
+import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
+import {
+  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
+} from '../../utils/bandejaUi.js';
+import { openBase64Document, previewAdjuntoById } from '../../utils/documentViewer.js';
+import { fmtFecha, fmtMonto } from '../../utils/ordenesUtils.js';
 
 const VIEW_ID = 'presentacion-entregables-servicios';
 const LIST_ID = 'peList';
+const LIST_ORD_ID = 'peListOrdenes';
 const PREFIX = 'pe';
+const TAB_ORDENES = 'ordenes';
+const TAB_ENTREGABLES = 'entregables';
 
-let rowsCache = [];
-let filtroEstado = '';
+let currentTab = TAB_ORDENES;
+let ordenesCache = [];
+let entregablesCache = [];
 let filtroQ = '';
-let filtroArea = '';
-let page = 1;
-const PAGE_SIZE = 15;
 
 const ESC_MAP = {
   '&': `${String.fromCharCode(38)}amp;`,
@@ -31,151 +38,166 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 }
 
-function fmtFecha(iso) {
-  if (!iso) return '—';
-  const s = String(iso).slice(0, 10);
-  return s || '—';
-}
-
-function fmtMonto(n) {
-  const v = Number(n || 0);
-  return `S/ ${v.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
+/** N.° Orden: solo prefijo + número, sin "/anio". */
 function ordenLabel(row) {
-  return `${row.tipo_orden || 'OS'} ${row.numero_orden || ''}${row.anio_orden ? ` / ${row.anio_orden}` : ''}`;
+  return `${row.tipo_orden || 'OS'} ${row.numero_orden || ''}`;
 }
 
-function estadoBadge(row) {
-  // RC8.15.1F — columna Estado = etapa del expediente (no situación).
-  const label = row.estado_etapa_label || row.etapa_label || row.estado_ejecucion_label || 'Presentación de Entregables';
-  return `<span class="badge" style="background:#495057;color:#fff;">${esc(label)}</span>`;
-}
-
+/** Situación a nivel de orden (NO es estado workflow). */
 function situacionBadge(row) {
-  const codigo = row.situacion_codigo || row.estado_ejecucion || 'PENDIENTE_RECEPCION';
-  const label = row.situacion_label || row.estado_ejecucion_label || 'Pendiente de recepción';
-  const bg = codigo === 'PENDIENTE_RECEPCION' ? '#0d6efd' : '#198754';
-  return `<span class="badge" style="background:${bg};color:#fff;">${esc(label)}</span>`;
+  const codigo = row.situacion_codigo || 'PENDIENTE_RECEPCION';
+  const label = row.situacion_label || 'Pendiente de recepción';
+  let bg = '#0d6efd';
+  let fg = '#fff';
+  if (codigo === 'RECIBIDO_PARCIAL') { bg = '#ffc107'; fg = '#212529'; }
+  else if (codigo === 'RECIBIDO') { bg = '#198754'; fg = '#fff'; }
+  return `<span class="badge" style="background:${bg};color:${fg};">${esc(label)}</span>`;
 }
 
-function responsableLabel(row) {
-  // RC8.15.1F — Responsable: si no hay usuario asignado, se muestra la etiqueta "Área Usuaria".
-  if (row.responsable_usuario_id) return row.responsable || 'Pendiente';
-  return 'Área Usuaria';
+function plazoLabel(dias) {
+  const d = Number(dias || 0);
+  return d > 0 ? `${d} día${d === 1 ? '' : 's'}` : '—';
 }
 
-function renderRows() {
-  const tbody = document.getElementById(`${LIST_ID}Body`);
-  if (!tbody) return;
-  if (!rowsCache.length) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="14" class="text-center text-muted py-4">
-          <i class="bi bi-inbox d-block mb-2" style="font-size:1.8rem;"></i>
-          No hay entregables de servicios pendientes.
-        </td>
-      </tr>`;
-    return;
+function ordenMenuItems(row) {
+  return [
+    { act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' },
+  ];
+}
+
+function entregableMenuItems(row) {
+  const items = [
+    { act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' },
+  ];
+  const situacion = row.situacion_codigo || row.estado_ejecucion || 'PENDIENTE_RECEPCION';
+  if (situacion === 'PENDIENTE_RECEPCION' || situacion === 'RECIBIDO') {
+    items.push({ act: 'registrarRecepcion', label: 'Registrar recepción', icon: 'bi-box-arrow-in-down' });
   }
-
-  tbody.innerHTML = rowsCache.map((row) => {
-    const id = row.orden_entrega_id;
-    const req = row.requerimiento_codigo || `#${row.requerimiento_id || ''}`;
-    const recibido = row.numero_recepciones > 0;
-    return `
-      <tr data-id="${id}">
-        <td class="small fw-semibold text-nowrap">${esc(req || '—')}</td>
-        <td class="text-nowrap"><strong>${esc(ordenLabel(row))}</strong></td>
-        <td>
-          <div class="small fw-semibold text-truncate" style="max-width:180px" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</div>
-          <div class="text-muted small">${esc(row.proveedor_ruc || '')}</div>
-        </td>
-        <td class="small text-truncate" style="max-width:140px" title="${esc(row.area_usuaria || '')}">${esc(row.area_usuaria || '—')}</td>
-        <td class="text-center small">${esc(row.numero_entrega ?? '—')}</td>
-        <td class="small text-truncate" style="max-width:160px" title="${esc(row.etiqueta_entrega || '')}">${esc(row.etiqueta_entrega || '—')}</td>
-        <td class="small text-nowrap">${esc(fmtFecha(row.fecha_maxima))}</td>
-        <td class="text-end small">${esc(fmtMonto(row.importe))}</td>
-        <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
-        <td class="small">${esc(row.numero_expediente_sgd || '—')}</td>
-        <td>${estadoBadge(row)}</td>
-        <td>${situacionBadge(row)}</td>
-        <td class="small">${esc(responsableLabel(row))}</td>
-        <td class="text-nowrap">
-          <button type="button" class="btn btn-sm btn-outline-secondary pe-ver" data-id="${id}" title="Ver expediente"><i class="bi bi-folder2-open"></i></button>
-          <button type="button" class="btn btn-sm btn-outline-primary pe-registrar" data-id="${id}" title="Registrar recepción" ${recibido ? '' : ''}><i class="bi bi-box-arrow-in-down"></i></button>
-        </td>
-      </tr>`;
-  }).join('');
-}
-
-function filteredRows() {
-  let list = rowsCache.slice();
-  if (filtroEstado) list = list.filter((r) => (r.estado_ejecucion || '') === filtroEstado);
-  if (filtroArea) {
-    list = list.filter((r) => String(r.area_usuaria || '').toLowerCase().includes(filtroArea.toLowerCase()));
+  if (situacion === 'RECIBIDO' && row.puede_gestionar_conformidad) {
+    items.push({ act: 'generarActa', label: 'Generar Acta de Conformidad', icon: 'bi-file-earmark-check' });
   }
-  const q = filtroQ.trim().toLowerCase();
-  if (q) {
-    list = list.filter((r) => [
-      r.requerimiento_codigo, r.numero_orden, r.proveedor_razon_social, r.proveedor_ruc,
-      r.etiqueta_entrega, r.numero_expediente_sgd, r.responsable, r.area_usuaria,
-    ].join(' ').toLowerCase().includes(q));
-  }
-  return list;
-}
-
-function renderPagination() {
-  const total = filteredRows().length;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  if (page > pages) page = pages;
-  const start = (page - 1) * PAGE_SIZE;
-  const slice = filteredRows().slice(start, start + PAGE_SIZE);
-  const visible = slice;
-
-  const tbody = document.getElementById(`${LIST_ID}Body`);
-  if (tbody) {
-    if (!visible.length) {
-      tbody.innerHTML = `<tr><td colspan="14" class="text-center text-muted py-4">Sin resultados para los filtros.</td></tr>`;
-    } else {
-      tbody.innerHTML = visible.map(renderSingleRow).join('');
+  if (situacion === 'ACTA_GENERADA') {
+    items.push({ act: 'verActaGenerada', label: 'Ver Acta de Conformidad', icon: 'bi-eye' });
+    items.push({ act: 'descargarActaGenerada', label: 'Descargar Acta de Conformidad', icon: 'bi-download' });
+    if (row.puede_gestionar_conformidad) {
+      items.push({ act: 'adjuntarActaFirmada', label: 'Adjuntar Acta firmada', icon: 'bi-file-earmark-arrow-up' });
     }
   }
-
-  const info = document.getElementById(`${PREFIX}PaginationInfo`);
-  if (info) info.textContent = `${total} entregable(s) · página ${page} de ${pages}`;
-  const prev = document.getElementById(`${PREFIX}Prev`);
-  const next = document.getElementById(`${PREFIX}Next`);
-  if (prev) prev.disabled = page <= 1;
-  if (next) next.disabled = page >= pages;
+  if (situacion === 'CONFORME') {
+    items.push({ act: 'verActaFirmada', label: 'Ver Acta firmada', icon: 'bi-eye' });
+    items.push({ act: 'descargarActaFirmada', label: 'Descargar Acta firmada', icon: 'bi-download' });
+  }
+  return items;
 }
 
-function renderSingleRow(row) {
-  const id = row.orden_entrega_id;
-  const req = row.requerimiento_codigo || `#${row.requerimiento_id || ''}`;
+// ── Fila pestaña Órdenes ─────────────────────────────────────────────────────
+function renderOrdenRow(row) {
+  const id = row.orden_id;
   return `
     <tr data-id="${id}">
-      <td class="small fw-semibold text-nowrap">${esc(req || '—')}</td>
       <td class="text-nowrap"><strong>${esc(ordenLabel(row))}</strong></td>
-      <td>
-        <div class="small fw-semibold text-truncate" style="max-width:180px" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</div>
-        <div class="text-muted small">${esc(row.proveedor_ruc || '')}</div>
-      </td>
-      <td class="small text-truncate" style="max-width:140px" title="${esc(row.area_usuaria || '')}">${esc(row.area_usuaria || '—')}</td>
-      <td class="text-center small">${esc(row.numero_entrega ?? '—')}</td>
-      <td class="small text-truncate" style="max-width:160px" title="${esc(row.etiqueta_entrega || '')}">${esc(row.etiqueta_entrega || '—')}</td>
-      <td class="small text-nowrap">${esc(fmtFecha(row.fecha_maxima))}</td>
-      <td class="text-end small">${esc(fmtMonto(row.importe))}</td>
-      <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
-      <td class="small">${esc(row.numero_expediente_sgd || '—')}</td>
-      <td>${estadoBadge(row)}</td>
+      <td class="text-nowrap small">${esc(fmtFecha(row.fecha_orden))}</td>
+      <td class="small text-nowrap">${esc(row.requerimiento_codigo || '—')}</td>
+      <td class="small text-truncate" style="max-width:180px" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</td>
+      <td class="small text-nowrap">${esc(row.centro || '—')}</td>
+      <td class="text-end small">${esc(fmtMonto(row.monto_total))}</td>
+      <td class="small text-nowrap">${esc(plazoLabel(row.plazo_total_dias))}</td>
       <td>${situacionBadge(row)}</td>
-      <td class="small">${esc(responsableLabel(row))}</td>
-      <td class="text-nowrap">
-        <button type="button" class="btn btn-sm btn-outline-secondary pe-ver" data-id="${id}" title="Ver expediente"><i class="bi bi-folder2-open"></i></button>
-        <button type="button" class="btn btn-sm btn-outline-primary pe-registrar" data-id="${id}" title="Registrar recepción"><i class="bi bi-box-arrow-in-down"></i></button>
-      </td>
+      <td>${renderEstadoBadgeFromRow(row)}</td>
+      <td class="small">${renderResponsableCellHtml(row, esc)}</td>
+      ${renderActionMenuCell(id, ordenMenuItems(row))}
     </tr>`;
+}
+
+// ── Fila pestaña Entregables ─────────────────────────────────────────────────
+function renderEntregableRow(row) {
+  const id = row.orden_entrega_id;
+  return `
+    <tr data-id="${id}">
+      <td class="text-nowrap"><strong>${esc(ordenLabel(row))}</strong></td>
+      <td class="text-nowrap small">${esc(fmtFecha(row.fecha_orden))}</td>
+      <td class="small text-truncate" style="max-width:160px" title="${esc(row.proveedor_razon_social || '')}">${esc(row.proveedor_razon_social || '—')}</td>
+      <td class="text-center small">${esc(row.numero_entrega ?? '—')}</td>
+      <td class="small text-nowrap">${esc(plazoLabel(row.dias_plazo))}</td>
+      <td class="text-center small">${row.cantidad != null ? esc(String(row.cantidad)) : '—'}</td>
+      <td class="text-end small">${row.precio_unitario != null ? esc(fmtMonto(row.precio_unitario)) : '—'}</td>
+      <td class="text-end small">${row.precio_total != null ? esc(fmtMonto(row.precio_total)) : '—'}</td>
+      <td class="small text-nowrap">${esc(fmtFecha(row.fecha_maxima))}</td>
+      <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
+      <td>${renderEstadoBadgeFromRow(row)}</td>
+      <td class="small">${renderResponsableCellHtml(row, esc)}</td>
+      ${renderActionMenuCell(id, entregableMenuItems(row))}
+    </tr>`;
+}
+
+function renderTabs() {
+  return `
+    <ul class="nav nav-tabs mb-3" id="${PREFIX}Tabs" role="tablist">
+      <li class="nav-item"><button class="nav-link ${currentTab === TAB_ORDENES ? 'active' : ''}" data-tab="${TAB_ORDENES}" type="button">Órdenes</button></li>
+      <li class="nav-item"><button class="nav-link ${currentTab === TAB_ENTREGABLES ? 'active' : ''}" data-tab="${TAB_ENTREGABLES}" type="button">Entregables</button></li>
+    </ul>`;
+}
+
+function filteredEntregables() {
+  const q = filtroQ.trim().toLowerCase();
+  if (!q) return entregablesCache;
+  return entregablesCache.filter((r) => [
+    r.requerimiento_codigo, r.numero_orden, r.proveedor_razon_social, r.proveedor_ruc,
+    r.etiqueta_entrega, r.numero_expediente_sgd,
+  ].join(' ').toLowerCase().includes(q));
+}
+
+function renderCurrent() {
+  const panelOrdenes = document.getElementById(`${PREFIX}TabOrdenesPanel`);
+  const panelEntregables = document.getElementById(`${PREFIX}TabEntregablesPanel`);
+  if (panelOrdenes) panelOrdenes.classList.toggle('d-none', currentTab !== TAB_ORDENES);
+  if (panelEntregables) panelEntregables.classList.toggle('d-none', currentTab !== TAB_ENTREGABLES);
+  if (currentTab === TAB_ORDENES) {
+    const tbody = document.getElementById(`${LIST_ORD_ID}Body`);
+    if (tbody) {
+      tbody.innerHTML = ordenesCache.length
+        ? ordenesCache.map(renderOrdenRow).join('')
+        : `<tr><td colspan="11" class="text-center text-muted py-4">No hay órdenes de servicio/locación pendientes.</td></tr>`;
+      bindActionMenus(tbody, buildActMap());
+    }
+  } else {
+    const tbody = document.getElementById(`${LIST_ID}Body`);
+    if (tbody) {
+      const list = filteredEntregables();
+      tbody.innerHTML = list.length
+        ? list.map(renderEntregableRow).join('')
+        : `<tr><td colspan="13" class="text-center text-muted py-4">No hay entregables activos.</td></tr>`;
+      bindActionMenus(tbody, buildActMap());
+    }
+  }
+}
+
+async function load() {
+  try {
+    const [ordRes, entRes] = await Promise.all([
+      entregablesServiciosService.listarBandejaOrdenes(),
+      entregablesServiciosService.listarBandeja(),
+    ]);
+    ordenesCache = (ordRes?.data || ordRes || []);
+    entregablesCache = (entRes?.data || entRes || []);
+    renderCurrent();
+  } catch (err) {
+    const tbody = document.getElementById(`${LIST_ORD_ID}Body`);
+    if (tbody) tbody.innerHTML = `<tr><td colspan="11" class="text-center text-danger py-4">${esc(err.message || 'Error al cargar')}</td></tr>`;
+  }
+}
+
+function buildActMap() {
+  return {
+    verExpediente: (id) => openDetalle(id),
+    registrarRecepcion: (id) => openRegistrarRecepcion(id),
+    generarActa: (id) => openGenerarActa(id),
+    adjuntarActaFirmada: (id) => openAdjuntarActaFirmada(id),
+    verActaGenerada: (id) => verActaGenerada(id),
+    descargarActaGenerada: (id) => descargarActaGenerada(id),
+    verActaFirmada: (id) => verActaFirmada(id),
+    descargarActaFirmada: (id) => descargarActaFirmada(id),
+  };
 }
 
 function render() {
@@ -187,378 +209,475 @@ function render() {
         <h1 class="h3 mb-1"><i class="bi bi-file-earmark-check"></i> Presentación Entregables de Servicios</h1>
         <p class="text-muted mb-0 small">Recepción de entregables contractuales de órdenes de servicio y locación.</p>
       </div>
-      <button type="button" class="btn btn-sm btn-outline-secondary" id="${PREFIX}Reload" title="Actualizar">
-        <i class="bi bi-arrow-clockwise"></i> Actualizar
-      </button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="${PREFIX}Reload" title="Actualizar"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
     </div>
-
-    <div class="card">
-      <div class="card-body">
-        <div class="row g-2 align-items-end mb-3">
-          <div class="col-lg-3 col-md-4">
-            <label class="form-label small mb-0">Buscar</label>
-            <input type="text" class="form-control form-control-sm" id="${PREFIX}Buscar" placeholder="OS, requerimiento, proveedor, SGD…">
-          </div>
-          <div class="col-lg-2 col-md-3">
-            <label class="form-label small mb-0">Estado</label>
-            <select class="form-select form-select-sm" id="${PREFIX}Estado">
-              <option value="">Todos</option>
-              <option value="PENDIENTE_RECEPCION">Pendiente de recepción</option>
-              <option value="RECIBIDO">Recibido</option>
-            </select>
-          </div>
-          <div class="col-lg-2 col-md-3">
-            <label class="form-label small mb-0">Área usuaria</label>
-            <input type="text" class="form-control form-control-sm" id="${PREFIX}Area" placeholder="Área…">
-          </div>
-          <div class="col-lg-2 col-md-2 d-flex gap-2">
-            <button type="button" class="btn btn-sm btn-outline-dark" id="${PREFIX}FiltroBtn"><i class="bi bi-funnel"></i> Filtrar</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="${PREFIX}Limpiar">Limpiar</button>
-          </div>
-        </div>
-
-        <div class="table-responsive">
-          <table class="table table-sm table-hover align-middle mb-0">
-            <thead class="table-light">
-              <tr>
-                <th>Requerimiento</th>
-                <th>Orden</th>
-                <th>Proveedor</th>
-                <th>Área Usuaria</th>
-                <th class="text-center">N.°</th>
-                <th>Entregable</th>
-                <th>Fecha máxima</th>
-                <th class="text-end">Importe</th>
-                <th>Fecha recepción Mesa de Partes</th>
-                <th>Expediente SGD</th>
-                <th>Estado</th>
-                <th>Situación</th>
-                <th>Responsable</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="${LIST_ID}Body"></tbody>
-          </table>
-        </div>
-
-        <div class="d-flex align-items-center justify-content-between mt-3">
-          <small class="text-muted" id="${PREFIX}PaginationInfo"></small>
-          <div class="btn-group">
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="${PREFIX}Prev"><i class="bi bi-chevron-left"></i></button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="${PREFIX}Next"><i class="bi bi-chevron-right"></i></button>
-          </div>
-        </div>
+    ${renderTabs()}
+    <div class="mb-3 row g-2 align-items-end">
+      <div class="col-md-4"><label class="form-label small mb-0">Buscar</label>
+        <input type="text" class="form-control form-control-sm" id="${PREFIX}Buscar" placeholder="OS, requerimiento, proveedor…"></div>
+    </div>
+    <div class="card"><div class="card-body">
+      <div class="table-responsive" id="${PREFIX}TabOrdenesPanel">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light"><tr>
+            <th>N.° Orden</th><th>Fecha orden</th><th>Requerimiento</th><th>Proveedor</th>
+            <th>Centro</th><th class="text-end">Monto total</th><th>Plazo total</th>
+            <th>Situación</th><th>Estado</th><th>Responsable</th><th>Acciones</th>
+          </tr></thead>
+          <tbody id="${LIST_ORD_ID}Body"></tbody>
+        </table>
       </div>
-    </div>
+      <div class="table-responsive d-none" id="${PREFIX}TabEntregablesPanel">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light"><tr>
+            <th>N.° Orden</th><th>Fecha orden</th><th>Proveedor</th><th class="text-center">N.° entregable</th>
+            <th>Plazo entregable</th><th class="text-center">Cantidad</th><th class="text-end">Precio unitario</th>
+            <th class="text-end">Precio total</th><th>Fecha máxima</th><th>Fecha recepción</th>
+            <th>Estado</th><th>Responsable</th><th>Acciones</th>
+          </tr></thead>
+          <tbody id="${LIST_ID}Body"></tbody>
+        </table>
+      </div>
+    </div></div>
 
-    <!-- Modal registrar recepción -->
     <div class="modal fade" id="${PREFIX}Modal" tabindex="-1" aria-hidden="true">
-      <div class="modal-dialog modal-lg modal-dialog-scrollable">
-        <div class="modal-content">
-          <form id="${PREFIX}Form">
-            <div class="modal-header">
-              <h5 class="modal-title"><i class="bi bi-box-arrow-in-down"></i> Registrar recepción</h5>
-              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
-            </div>
-            <div class="modal-body">
-              <div class="row g-3">
-                <div class="col-6">
-                  <label class="form-label small">Orden</label>
-                  <input type="text" class="form-control form-control-sm" id="${PREFIX}Orden" readonly>
-                </div>
-                <div class="col-6">
-                  <label class="form-label small">Entregable</label>
-                  <input type="text" class="form-control form-control-sm" id="${PREFIX}Entregable" readonly>
-                </div>
-                <div class="col-6">
-                  <label class="form-label small">Fecha máxima</label>
-                  <input type="text" class="form-control form-control-sm" id="${PREFIX}FechaMax" readonly>
-                </div>
-                <div class="col-6">
-                  <label class="form-label small">Importe</label>
-                  <input type="text" class="form-control form-control-sm" id="${PREFIX}Importe" readonly>
-                </div>
-                <div class="col-6">
-                  <label class="form-label small">Fecha recepción Mesa de Partes <span class="text-danger">*</span></label>
-                  <input type="date" class="form-control form-control-sm" id="${PREFIX}FechaMesa" required>
-                </div>
-                <div class="col-6">
-                  <label class="form-label small">N.º Expediente SGD <span class="text-danger">*</span></label>
-                  <input type="text" class="form-control form-control-sm" id="${PREFIX}ExpSgd" required maxlength="120">
-                </div>
-                <div class="col-12">
-                  <label class="form-label small">Archivo del entregable <span class="text-danger">*</span></label>
-                  <input type="file" class="form-control form-control-sm" id="${PREFIX}Archivo" required>
-                  <div class="form-text">PDF, imagen, Word, Excel o ZIP (máx. 25 MB).</div>
-                </div>
-                <div class="col-12">
-                  <label class="form-label small">Observación</label>
-                  <textarea class="form-control form-control-sm" id="${PREFIX}Observacion" rows="2"></textarea>
-                </div>
-              </div>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-              <button type="submit" class="btn btn-sm btn-primary">Guardar recepción</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </div>
-
-    <!-- Modal expediente -->
-    <div class="modal fade" id="${PREFIX}DetalleModal" tabindex="-1" aria-hidden="true">
-      <div class="modal-dialog modal-xl modal-dialog-scrollable">
-        <div class="modal-content">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <form id="${PREFIX}Form">
           <div class="modal-header">
-            <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Expediente del entregable</h5>
+            <h5 class="modal-title"><i class="bi bi-box-arrow-in-down"></i> Registrar recepción</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
           </div>
-          <div class="modal-body" id="${PREFIX}DetalleBody"></div>
-        </div>
-      </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}EntregableId">
+            <div class="mb-2"><label class="form-label small mb-0">Fecha recepción Mesa de Partes <span class="text-danger">*</span></label>
+              <input type="date" class="form-control form-control-sm" id="${PREFIX}Fecha" required></div>
+            <div class="mb-2"><label class="form-label small mb-0">Expediente SGD <span class="text-danger">*</span></label>
+              <input type="text" class="form-control form-control-sm" id="${PREFIX}Sgd" required></div>
+            <div class="mb-2"><label class="form-label small mb-0">Observación</label>
+              <textarea class="form-control form-control-sm" id="${PREFIX}Obs" rows="2"></textarea></div>
+            <div class="mb-2"><label class="form-label small mb-0">Documento (PDF)</label>
+              <input type="file" class="form-control form-control-sm" id="${PREFIX}File" accept="application/pdf"></div>
+            <div id="${PREFIX}ModalErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-primary">Registrar</button>
+          </div>
+        </form>
+      </div></div>
     </div>
-  `;
 
-  bindEvents();
-  renderPagination();
+    <div class="modal fade" id="${PREFIX}DetalleModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Expediente del entregable</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body" id="${PREFIX}DetalleBody"></div>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}ActaModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-file-earmark-check"></i> Acta de Conformidad</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="${PREFIX}ActaEntregableId">
+          <div class="border rounded p-2 small mb-3" id="${PREFIX}ActaResumen"></div>
+          <div class="mb-2"><label class="form-label small mb-0">Conclusión</label>
+            <div class="form-control-plaintext small fw-semibold">CONFORME</div>
+          </div>
+          <div class="alert alert-warning small mb-0">Al generar el Acta de Conformidad se declara conforme el entregable seleccionado.</div>
+          <div id="${PREFIX}ActaErr" class="alert alert-danger d-none py-2 small mt-2"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-sm btn-primary" id="${PREFIX}ActaGenerarBtn">Generar Acta</button>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}FirmadaModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-file-earmark-arrow-up"></i> Adjuntar Acta firmada</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="${PREFIX}FirmadaEntregableId">
+          <div class="mb-2"><label class="form-label small mb-0">Acta firmada (PDF) <span class="text-danger">*</span></label>
+            <input type="file" class="form-control form-control-sm" id="${PREFIX}FirmadaFile" accept="application/pdf"></div>
+          <div id="${PREFIX}FirmadaErr" class="alert alert-danger d-none py-2 small"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-sm btn-primary" id="${PREFIX}FirmadaAdjBtn">Adjuntar</button>
+        </div>
+      </div></div>
+    </div>`;
 }
 
-function bindEvents() {
-  document.getElementById(`${PREFIX}Reload`)?.addEventListener('click', load);
-  document.getElementById(`${PREFIX}Buscar`)?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { filtroQ = e.target.value; page = 1; renderPagination(); } });
-  document.getElementById(`${PREFIX}Area`)?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { filtroArea = e.target.value; page = 1; renderPagination(); } });
-  document.getElementById(`${PREFIX}FiltroBtn`)?.addEventListener('click', () => {
-    filtroQ = document.getElementById(`${PREFIX}Buscar`)?.value || '';
-    filtroEstado = document.getElementById(`${PREFIX}Estado`)?.value || '';
-    filtroArea = document.getElementById(`${PREFIX}Area`)?.value || '';
-    page = 1;
-    renderPagination();
-  });
-  document.getElementById(`${PREFIX}Limpiar`)?.addEventListener('click', () => {
-    filtroQ = ''; filtroEstado = ''; filtroArea = ''; page = 1;
-    if (document.getElementById(`${PREFIX}Buscar`)) document.getElementById(`${PREFIX}Buscar`).value = '';
-    if (document.getElementById(`${PREFIX}Estado`)) document.getElementById(`${PREFIX}Estado`).value = '';
-    if (document.getElementById(`${PREFIX}Area`)) document.getElementById(`${PREFIX}Area`).value = '';
-    renderPagination();
-  });
-  document.getElementById(`${PREFIX}Prev`)?.addEventListener('click', () => { if (page > 1) { page -= 1; renderPagination(); } });
-  document.getElementById(`${PREFIX}Next`)?.addEventListener('click', () => { page += 1; renderPagination(); });
-
-  const tbody = document.getElementById(`${LIST_ID}Body`);
-  tbody?.addEventListener('click', (e) => {
-    const btnVer = e.target.closest('.pe-ver');
-    const btnReg = e.target.closest('.pe-registrar');
-    const rowEl = e.target.closest('tr[data-id]');
-    const id = rowEl?.dataset.id;
-    if (btnVer && id) { openDetalle(id); return; }
-    if (btnReg && id) { openRegistrar(id); }
-  });
-
-  document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', onSubmitRecepcion);
+async function openRegistrarRecepcion(id) {
+  document.getElementById(`${PREFIX}EntregableId`).value = id;
+  document.getElementById(`${PREFIX}Fecha`).value = '';
+  document.getElementById(`${PREFIX}Sgd`).value = '';
+  document.getElementById(`${PREFIX}Obs`).value = '';
+  document.getElementById(`${PREFIX}File`).value = '';
+  document.getElementById(`${PREFIX}ModalErr`)?.classList.add('d-none');
+  const modalEl = document.getElementById(`${PREFIX}Modal`);
+  window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
-async function load() {
-  try {
-    const res = await entregablesServiciosService.listarBandeja();
-    rowsCache = Array.isArray(res?.data) ? res.data : [];
-    renderPagination();
-  } catch (err) {
-    const tbody = document.getElementById(`${LIST_ID}Body`);
-    if (tbody) tbody.innerHTML = `<tr><td colspan="14" class="text-center text-danger py-4">${esc(err.message)}</td></tr>`;
-    console.error(err);
-  }
-}
-
-function getRow(id) {
-  return rowsCache.find((r) => String(r.orden_entrega_id) === String(id));
-}
-
-function openRegistrar(id) {
-  const row = getRow(id);
-  if (!row) return;
-  document.getElementById(`${PREFIX}Orden`).value = ordenLabel(row);
-  document.getElementById(`${PREFIX}Entregable`).value = row.etiqueta_entrega || '—';
-  document.getElementById(`${PREFIX}FechaMax`).value = fmtFecha(row.fecha_maxima);
-  document.getElementById(`${PREFIX}Importe`).value = fmtMonto(row.importe);
-  document.getElementById(`${PREFIX}FechaMesa`).value = '';
-  document.getElementById(`${PREFIX}ExpSgd`).value = '';
-  document.getElementById(`${PREFIX}Archivo`).value = '';
-  document.getElementById(`${PREFIX}Observacion`).value = '';
-  document.getElementById(`${PREFIX}Form`).dataset.ordenEntregaId = id;
-  const modal = new bootstrap.Modal(document.getElementById(`${PREFIX}Modal`));
-  modal.show();
-}
-
-async function onSubmitRecepcion(ev) {
-  ev.preventDefault();
-  const form = ev.currentTarget;
-  const ordenEntregaId = form.dataset.ordenEntregaId;
-  const fecha = document.getElementById(`${PREFIX}FechaMesa`)?.value;
-  const expediente = document.getElementById(`${PREFIX}ExpSgd`)?.value?.trim();
-  const archivoInput = document.getElementById(`${PREFIX}Archivo`);
-  const file = archivoInput?.files?.[0];
-  const observacion = document.getElementById(`${PREFIX}Observacion`)?.value?.trim();
-
-  if (!fecha || !expediente || !file) {
-    window.alert('Fecha de Mesa de Partes, N.º de Expediente SGD y Archivo son obligatorios.');
+async function submitRegistrarRecepcion(e) {
+  e.preventDefault();
+  const id = document.getElementById(`${PREFIX}EntregableId`).value;
+  const fecha = document.getElementById(`${PREFIX}Fecha`).value;
+  const sgd = document.getElementById(`${PREFIX}Sgd`).value.trim();
+  const obs = document.getElementById(`${PREFIX}Obs`).value.trim();
+  const fileInput = document.getElementById(`${PREFIX}File`);
+  const errBox = document.getElementById(`${PREFIX}ModalErr`);
+  if (!fecha || !sgd) {
+    if (errBox) { errBox.textContent = 'Fecha y Expediente SGD son obligatorios.'; errBox.classList.remove('d-none'); }
     return;
   }
-
-  const contenido_base64 = await readFileAsDataUrl(file);
-  const payload = {
-    fecha_recepcion_mesa_partes: fecha,
-    numero_expediente_sgd: expediente,
-    observacion: observacion || null,
-    documentos: [{
-      nombre_archivo: file.name,
-      mime_type: file.type || 'application/pdf',
-      contenido_base64,
-    }],
-  };
-
-  const btn = form.querySelector('button[type="submit"]');
-  btn.disabled = true;
+  let contenido = null; let nombre = null; let mime = null;
+  if (fileInput?.files?.length) {
+    const f = fileInput.files[0];
+    nombre = f.name; mime = f.type || 'application/pdf';
+    contenido = await new Promise((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.readAsDataURL(f);
+    });
+  }
   try {
-    await entregablesServiciosService.registrarRecepcion(ordenEntregaId, payload);
-    bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}Modal`))?.hide();
+    await entregablesServiciosService.registrarRecepcion(id, {
+      fecha_recepcion_mesa_partes: fecha,
+      numero_expediente_sgd: sgd,
+      observacion: obs,
+      archivos: contenido ? [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }] : [],
+    });
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}Modal`))?.hide();
     await load();
   } catch (err) {
-    window.alert(err.message || 'Error al registrar la recepción');
-  } finally {
-    btn.disabled = false;
+    if (errBox) { errBox.textContent = err.message || 'No se pudo registrar'; errBox.classList.remove('d-none'); }
   }
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
-    reader.readAsDataURL(file);
+// ── RC8.15.5B — Conformidad del entregable ──────────────────────────────────
+function resumenActa(id) {
+  return entregablesCache.find((r) => String(r.orden_entrega_id) === String(id)) || {};
+}
+
+async function confVigente(id) {
+  const res = await entregablesServiciosService.listarConformidad(id);
+  const c = res?.data || res || {};
+  return {
+    acta: c.acta_generada_vigente || (c.actas || [])[0] || null,
+    firmada: c.acta_firmada_vigente || (c.visados || [])[0] || null,
+  };
+}
+
+function triggerDownload(blob, nombre) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre || 'documento.pdf';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function openActaGenerada(entregaId, actaId) {
+  const d = await entregablesServiciosService.obtenerActaGenerada(entregaId, actaId);
+  const a = d?.data || d || {};
+  openBase64Document({
+    nombre: a.documento_nombre || a.numero_acta || 'acta.pdf',
+    mime_type: a.documento_mime || 'application/pdf',
+    contenido_base64: a.documento_base64 || '',
   });
+}
+
+async function openActaFirmada(entregaId, visadoId) {
+  const d = await entregablesServiciosService.obtenerActaFirmada(entregaId, visadoId);
+  const v = d?.data || d || {};
+  openBase64Document({
+    nombre: v.nombre || 'acta-firmada.pdf',
+    mime_type: v.mime_type || 'application/pdf',
+    contenido_base64: v.contenido_base64 || '',
+  });
+}
+
+async function openGenerarActa(id) {
+  const row = resumenActa(id);
+  document.getElementById(`${PREFIX}ActaEntregableId`).value = id;
+  document.getElementById(`${PREFIX}ActaResumen`).innerHTML = `
+    <div><strong>Orden:</strong> ${esc(ordenLabel(row))}</div>
+    <div><strong>Proveedor:</strong> ${esc(row.proveedor_razon_social || '—')}</div>
+    <div><strong>Entregable:</strong> N.° ${esc(row.numero_entrega ?? '—')}</div>
+    <div><strong>Fecha recepción:</strong> ${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</div>
+    <div><strong>Expediente SGD:</strong> ${esc(row.numero_expediente_sgd || '—')}</div>
+    <div><strong>Importe:</strong> ${esc(fmtMonto(row.importe))}</div>`;
+  document.getElementById(`${PREFIX}ActaErr`)?.classList.add('d-none');
+  window.bootstrap.Modal.getOrCreateInstance(document.getElementById(`${PREFIX}ActaModal`)).show();
+}
+
+async function generarActa(id) {
+  const errBox = document.getElementById(`${PREFIX}ActaErr`);
+  try {
+    await entregablesServiciosService.generarActaConformidad(id, { conclusion: 'CONFORME' });
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}ActaModal`))?.hide();
+    await load();
+  } catch (err) {
+    if (errBox) { errBox.textContent = err.message || 'No se pudo generar el acta'; errBox.classList.remove('d-none'); }
+  }
+}
+
+async function openAdjuntarActaFirmada(id) {
+  document.getElementById(`${PREFIX}FirmadaEntregableId`).value = id;
+  document.getElementById(`${PREFIX}FirmadaFile`).value = '';
+  document.getElementById(`${PREFIX}FirmadaErr`)?.classList.add('d-none');
+  window.bootstrap.Modal.getOrCreateInstance(document.getElementById(`${PREFIX}FirmadaModal`)).show();
+}
+
+async function adjuntarActaFirmada() {
+  const id = document.getElementById(`${PREFIX}FirmadaEntregableId`).value;
+  const fileInput = document.getElementById(`${PREFIX}FirmadaFile`);
+  const errBox = document.getElementById(`${PREFIX}FirmadaErr`);
+  if (!fileInput?.files?.length) {
+    if (errBox) { errBox.textContent = 'Debe seleccionar el PDF del acta firmada.'; errBox.classList.remove('d-none'); }
+    return;
+  }
+  const f = fileInput.files[0];
+  const contenido = await new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.readAsDataURL(f);
+  });
+  try {
+    await entregablesServiciosService.adjuntarActaConformidadFirmada(id, {
+      nombre: f.name,
+      mime_type: f.type || 'application/pdf',
+      contenido_base64: contenido,
+      idempotency_key: `firmada-${id}-${Date.now()}`,
+    });
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}FirmadaModal`))?.hide();
+    await load();
+  } catch (err) {
+    if (errBox) { errBox.textContent = err.message || 'No se pudo adjuntar el acta firmada'; errBox.classList.remove('d-none'); }
+  }
+}
+
+async function verActaGenerada(id) {
+  try {
+    const { acta } = await confVigente(id);
+    if (!acta) throw new Error('No hay acta generada');
+    await openActaGenerada(id, acta.id);
+  } catch (err) { window.alert(err.message || 'No se pudo abrir el acta'); }
+}
+
+async function descargarActaGenerada(id) {
+  try {
+    const { acta } = await confVigente(id);
+    if (!acta) throw new Error('No hay acta generada');
+    const blob = await entregablesServiciosService.downloadActaGeneradaBlob(id, acta.id);
+    triggerDownload(blob.blob, acta.documento_nombre || acta.numero_acta || 'acta.pdf');
+  } catch (err) { window.alert(err.message || 'No se pudo descargar el acta'); }
+}
+
+async function verActaFirmada(id) {
+  try {
+    const { firmada } = await confVigente(id);
+    if (!firmada) throw new Error('No hay acta firmada');
+    await openActaFirmada(id, firmada.id);
+  } catch (err) { window.alert(err.message || 'No se pudo abrir el acta firmada'); }
+}
+
+async function descargarActaFirmada(id) {
+  try {
+    const { firmada } = await confVigente(id);
+    if (!firmada) throw new Error('No hay acta firmada');
+    const blob = await entregablesServiciosService.downloadActaFirmadaBlob(id, firmada.id);
+    triggerDownload(blob.blob, firmada.nombre || 'acta-firmada.pdf');
+  } catch (err) { window.alert(err.message || 'No se pudo descargar el acta firmada'); }
+}
+
+function renderConformidadHtml(conf, entregaId) {
+  const actas = conf?.actas || [];
+  const visados = conf?.visados || [];
+  const actaRow = (a) => `
+    <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
+      <div>
+        <div class="fw-semibold">Acta generada <span class="badge bg-secondary">V${esc(a.version)}</span></div>
+        <div class="text-muted">${esc(a.estado_documental || '')} · ${esc(fmtFecha(a.generado_at))} · ${esc(a.generado_por || '')}</div>
+      </div>
+      <div class="text-nowrap">
+        <button type="button" class="btn btn-sm btn-outline-primary pe-acta-ver" data-entrega="${esc(entregaId)}" data-id="${esc(a.id)}"><i class="bi bi-eye"></i> Ver</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary pe-acta-dl" data-entrega="${esc(entregaId)}" data-id="${esc(a.id)}" data-name="${esc(a.documento_nombre || a.numero_acta || 'acta.pdf')}"><i class="bi bi-download"></i> Descargar</button>
+      </div>
+    </div>`;
+  const visadoRow = (v) => `
+    <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
+      <div>
+        <div class="fw-semibold">Acta firmada <span class="badge bg-secondary">V${esc(v.version)}</span> ${v.vigente ? '<span class="badge bg-success">Vigente</span>' : '<span class="badge bg-light text-muted">Histórica</span>'}</div>
+        <div class="text-muted">${esc(v.nombre || '')} · ${esc(fmtFecha(v.created_at))} · ${esc(v.created_by || '')}</div>
+      </div>
+      <div class="text-nowrap">
+        <button type="button" class="btn btn-sm btn-outline-primary pe-firmada-ver" data-entrega="${esc(entregaId)}" data-id="${esc(v.id)}"><i class="bi bi-eye"></i> Ver</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary pe-firmada-dl" data-entrega="${esc(entregaId)}" data-id="${esc(v.id)}" data-name="${esc(v.nombre || 'acta-firmada.pdf')}"><i class="bi bi-download"></i> Descargar</button>
+      </div>
+    </div>`;
+  return `
+    <div class="col-12"><div class="card"><div class="card-body">
+      <h6 class="text-muted text-uppercase small mb-2">Conformidad del entregable</h6>
+      ${actas.length ? '<div class="mb-1 mt-2"><strong class="small">ACTA GENERADA</strong></div>' + actas.map(actaRow).join('') : '<p class="text-muted small mb-0">Sin acta generada.</p>'}
+      ${visados.length ? '<div class="mb-1 mt-2"><strong class="small">ACTA FIRMADA</strong></div>' + visados.map(visadoRow).join('') : ''}
+    </div></div></div>`;
+}
+
+async function onConformidadVer(e) {
+  const btn = e.target.closest('.pe-acta-ver, .pe-firmada-ver, .pe-acta-dl, .pe-firmada-dl');
+  if (!btn) return;
+  const entregaId = btn.dataset.entrega;
+  const docId = btn.dataset.id;
+  const nombre = btn.dataset.name || 'documento.pdf';
+  try {
+    if (btn.classList.contains('pe-acta-ver')) await openActaGenerada(entregaId, docId);
+    else if (btn.classList.contains('pe-acta-dl')) {
+      const blob = await entregablesServiciosService.downloadActaGeneradaBlob(entregaId, docId);
+      triggerDownload(blob.blob, nombre);
+    } else if (btn.classList.contains('pe-firmada-ver')) await openActaFirmada(entregaId, docId);
+    else if (btn.classList.contains('pe-firmada-dl')) {
+      const blob = await entregablesServiciosService.downloadActaFirmadaBlob(entregaId, docId);
+      triggerDownload(blob.blob, nombre);
+    }
+  } catch (err) {
+    window.alert(err.message || 'No se pudo abrir el documento');
+  }
 }
 
 async function openDetalle(id) {
+  // RC8.15.4/8.15.5B — Expediente organizado en secciones: Datos de la orden ·
+  // Datos del entregable · Recepciones · Documentos del entregable · Documentos de la
+  // orden · Conformidad del entregable (Acta generada + Acta firmada).
   const body = document.getElementById(`${PREFIX}DetalleBody`);
-  if (body) body.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
-  const modal = new bootstrap.Modal(document.getElementById(`${PREFIX}DetalleModal`));
+  if (body) body.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span></div>';
+  const modal = window.bootstrap.Modal.getOrCreateInstance(document.getElementById(`${PREFIX}DetalleModal`));
   modal.show();
   try {
-    const res = await entregablesServiciosService.getDetalle(id);
-    const d = res?.data || {};
-    body.innerHTML = renderDetalle(d);
+    const resp = await entregablesServiciosService.getDetalle(id);
+    const data = resp?.data || resp || {};
+    const recepciones = data.recepciones || [];
+    const docsEntregable = data.documentos_entregable || [];
+    const docsOrden = data.expediente?.documentos || [];
+    let conformidad = { actas: [], visados: [] };
+    try {
+      const confResp = await entregablesServiciosService.listarConformidad(id);
+      conformidad = confResp?.data || confResp || { actas: [], visados: [] };
+    } catch (_) { conformidad = { actas: [], visados: [] }; }
+    body.innerHTML = `
+      <div class="row g-3">
+        <div class="col-12"><h6 class="text-muted text-uppercase small mb-2">Datos de la orden</h6>
+          <div class="border rounded p-2 small">
+            <strong>${esc(ordenLabel(data))}</strong>
+            <div class="text-muted">Proveedor: ${esc(data.proveedor_razon_social || '—')}</div>
+            <div class="text-muted">Área usuaria: ${esc(data.area_usuaria || '—')}</div>
+          </div>
+        </div>
+        <div class="col-12"><h6 class="text-muted text-uppercase small mb-2">Datos del entregable</h6>
+          <div class="border rounded p-2 small">
+            <div><strong>${esc(data.etiqueta_entrega || `Entregable ${data.numero_entrega || ''}`)}</strong> <span class="text-muted">(N.° ${esc(data.numero_entrega ?? '—')})</span></div>
+            <div class="text-muted">Plazo: ${esc(plazoLabel(data.dias_plazo))} · Fecha máxima: ${esc(fmtFecha(data.fecha_maxima))} · Importe: ${esc(fmtMonto(data.importe))}</div>
+          </div>
+        </div>
+        <div class="col-md-6"><div class="card h-100"><div class="card-body">
+          <h6 class="text-muted text-uppercase small mb-3">Recepciones registradas</h6>
+          ${recepciones.length ? recepciones.map((r) => `
+            <div class="border rounded p-2 mb-2 small">
+              <div class="d-flex justify-content-between"><strong>Recepción N.° ${esc(r.numero_recepcion)}</strong><span class="badge bg-secondary">${esc(r.tipo_recepcion || '—')}</span></div>
+              <div class="text-muted">Mesa de Partes: ${esc(fmtFecha(r.fecha_recepcion_mesa_partes))}</div>
+              <div class="text-muted">Expediente SGD: ${esc(r.numero_expediente_sgd || '—')}</div>
+            </div>`).join('') : '<p class="text-muted small mb-0">Sin recepciones registradas.</p>'}
+        </div></div></div>
+        <div class="col-md-6"><div class="card h-100"><div class="card-body">
+          <h6 class="text-muted text-uppercase small mb-2">Documentos del entregable</h6>
+          ${docsEntregable.length ? docsEntregable.map((doc) => `
+            <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
+              <div class="text-truncate" style="max-width:260px" title="${esc(doc.nombre_archivo)}">${esc(doc.nombre_archivo)}</div>
+              <button type="button" class="btn btn-sm btn-outline-secondary pe-doc-preview" data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}"><i class="bi bi-eye"></i></button>
+            </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos del entregable.</p>'}
+        </div></div></div>
+        <div class="col-12"><div class="card"><div class="card-body">
+          <h6 class="text-muted text-uppercase small mb-2">Documentos de la orden</h6>
+          ${docsOrden.length ? docsOrden.map((doc) => `
+            <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
+              <div>
+                <div class="fw-semibold text-truncate" style="max-width:320px" title="${esc(doc.nombre || doc.tipo || 'Documento')}">${esc(doc.nombre || doc.tipo || 'Documento')}</div>
+                <div class="text-muted">${esc(doc.tipo || doc.origen || '')}</div>
+              </div>
+              <button type="button" class="btn btn-sm btn-outline-primary pe-orden-doc" data-kind="${esc(doc.kind || 'orden')}" data-id="${esc(doc.id || doc.documentoId || '')}" data-name="${esc(doc.nombre || 'documento')}" data-orden="${esc(data.orden_id)}" ${doc.previewDisponible === false ? 'disabled' : ''}><i class="bi bi-eye"></i> Ver</button>
+            </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos de la orden.</p>'}
+        </div></div></div>
+        ${renderConformidadHtml(conformidad, id)}
+      </div>`;
   } catch (err) {
-    if (body) body.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
+    if (body) body.innerHTML = `<div class="alert alert-danger">${esc(err.message || 'No se pudo cargar el expediente')}</div>`;
   }
 }
 
-function renderDetalle(d) {
-  const expediente = d.expediente || {};
-  const resumen = expediente.resumen || {};
-  const recepciones = Array.isArray(d.recepciones) ? d.recepciones : [];
-  const docsEntregable = Array.isArray(d.documentos_entregable) ? d.documentos_entregable : [];
-  const cronograma = Array.isArray(expediente.cronograma) ? expediente.cronograma : [];
-  const docs = Array.isArray(expediente.documentos) ? expediente.documentos : [];
+/** Reutiliza el visor documental institucional (openBase64Document / previewAdjuntoById). */
+async function onOrdenDocVer(e) {
+  const btn = e.target.closest('.pe-orden-doc');
+  if (!btn) return;
+  const kind = btn.dataset.kind;
+  const id = btn.dataset.id;
+  const name = btn.dataset.name || 'documento';
+  try {
+    if (!id) throw new Error('Documento sin identificador válido');
+    if (kind === 'adjunto') {
+      await previewAdjuntoById(id, name);
+      return;
+    }
+    if (kind === 'orden') {
+      const ordenId = btn.dataset.orden;
+      const res = await ordenesContratacionService.getDocumento(ordenId, id, true);
+      const doc = res?.data || res;
+      if (!doc?.contenido_base64) throw new Error('Documento sin contenido');
+      openBase64Document({
+        nombre: doc.nombre_archivo || name,
+        mime_type: doc.mime_type || 'application/pdf',
+        contenido_base64: doc.contenido_base64,
+      });
+      return;
+    }
+    window.alert('Vista no disponible para este tipo de documento.');
+  } catch (err) {
+    window.alert(err.message || 'No se pudo abrir el documento');
+  }
+}
 
-  return `
-    <div class="row g-3">
-      <div class="col-md-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h6 class="text-muted text-uppercase small mb-3">Datos de la orden</h6>
-            <dl class="row mb-0 small">
-              <dt class="col-4">Orden</dt><dd class="col-8">${esc(ordenLabel(d))}</dd>
-              <dt class="col-4">Requerimiento</dt><dd class="col-8">${esc(d.requerimiento_codigo || resumen.requerimiento_codigo || '—')}</dd>
-              <dt class="col-4">Proveedor</dt><dd class="col-8">${esc(d.proveedor_razon_social || resumen.proveedor_razon_social || '—')}</dd>
-              <dt class="col-4">Área usuaria</dt><dd class="col-8">${esc(d.area_usuaria || resumen.area_usuaria || '—')}</dd>
-            </dl>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h6 class="text-muted text-uppercase small mb-3">Entregable</h6>
-            <dl class="row mb-0 small">
-              <dt class="col-4">N.º Entregable</dt><dd class="col-8">${esc(d.numero_entrega ?? '—')}</dd>
-              <dt class="col-4">Entregable</dt><dd class="col-8">${esc(d.etiqueta_entrega || d.descripcion || '—')}</dd>
-              <dt class="col-4">Plazo</dt><dd class="col-8">${esc(d.dias_plazo || 0)} días</dd>
-              <dt class="col-4">Fecha máxima</dt><dd class="col-8">${esc(fmtFecha(d.fecha_maxima))}</dd>
-              <dt class="col-4">Importe</dt><dd class="col-8">${esc(fmtMonto(d.importe))}</dd>
-            </dl>
-          </div>
-        </div>
-      </div>
+async function onDetalleDocPreview(e) {
+  const btn = e.target.closest('.pe-doc-preview');
+  if (!btn) return;
+  try {
+    const blob = await entregablesServiciosService.previewDocumentoBlob(btn.dataset.recepcion, btn.dataset.doc);
+    const url = URL.createObjectURL(blob.blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) {
+    window.alert(err.message || 'No se pudo abrir el documento');
+  }
+}
 
-      <div class="col-12">
-        <div class="card">
-          <div class="card-body">
-            <h6 class="text-muted text-uppercase small mb-3">Cronograma contractual</h6>
-            <div class="table-responsive">
-              <table class="table table-sm align-middle mb-0">
-                <thead class="table-light">
-                  <tr>
-                    <th>N.°</th><th>Entregable</th><th>Plazo</th><th>Fecha máxima</th><th>Importe</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${cronograma.length ? cronograma.map((c) => `
-                    <tr>
-                      <td>${esc(c.numero_entrega ?? '—')}</td>
-                      <td>${esc(c.etiqueta_entrega || c.descripcion || '—')}</td>
-                      <td>${esc(c.dias_plazo || 0)} días</td>
-                      <td>${esc(fmtFecha(c.fecha_maxima))}</td>
-                      <td class="text-end">${esc(fmtMonto(c.importe))}</td>
-                    </tr>`).join('') : '<tr><td colspan="5" class="text-muted text-center">Sin cronograma disponible</td></tr>'}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-md-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h6 class="text-muted text-uppercase small mb-3">Recepciones registradas</h6>
-            ${recepciones.length ? recepciones.map((r) => `
-              <div class="border rounded p-2 mb-2 small">
-                <div class="d-flex justify-content-between">
-                  <strong>Recepción N.° ${esc(r.numero_recepcion)}</strong>
-                  <span class="badge bg-secondary">${esc(r.tipo_recepcion || '—')}</span>
-                </div>
-                <div class="text-muted">Mesa de Partes: ${esc(fmtFecha(r.fecha_recepcion_mesa_partes))}</div>
-                <div class="text-muted">Expediente SGD: ${esc(r.numero_expediente_sgd || '—')}</div>
-                ${r.observacion ? `<div class="text-muted">Obs.: ${esc(r.observacion)}</div>` : ''}
-              </div>`).join('') : '<p class="text-muted small mb-0">Sin recepciones registradas.</p>'}
-          </div>
-        </div>
-      </div>
-
-      <div class="col-md-6">
-        <div class="card h-100">
-          <div class="card-body">
-            <h6 class="text-muted text-uppercase small mb-3">Documentos del entregable</h6>
-            ${docsEntregable.length ? docsEntregable.map((doc) => `
-              <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
-                <div>
-                  <div class="fw-semibold text-truncate" style="max-width:300px" title="${esc(doc.nombre_archivo)}">${esc(doc.nombre_archivo)}</div>
-                  <div class="text-muted">${esc(doc.mime_type || '')}</div>
-                </div>
-                <button type="button" class="btn btn-sm btn-outline-secondary pe-doc-preview" data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}" title="Ver"><i class="bi bi-eye"></i></button>
-              </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos del entregable.</p>'}
-            <hr class="my-3">
-            <h6 class="text-muted text-uppercase small mb-2">Documentos de la orden</h6>
-            ${docs.length ? docs.map((doc) => `
-              <div class="border rounded p-2 mb-2 small">
-                <div class="fw-semibold text-truncate" style="max-width:300px" title="${esc(doc.nombre || doc.tipo)}">${esc(doc.nombre || doc.tipo || 'Documento')}</div>
-                <div class="text-muted">${esc(doc.tipo || doc.origen || '')}</div>
-              </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos de la orden.</p>'}
-          </div>
-        </div>
-      </div>
-    </div>`;
+function renderTabsInto() {
+  const tabsEl = document.getElementById(`${PREFIX}Tabs`);
+  if (!tabsEl) return;
+  tabsEl.innerHTML = `
+    <li class="nav-item"><button class="nav-link ${currentTab === TAB_ORDENES ? 'active' : ''}" data-tab="${TAB_ORDENES}" type="button">Órdenes</button></li>
+    <li class="nav-item"><button class="nav-link ${currentTab === TAB_ENTREGABLES ? 'active' : ''}" data-tab="${TAB_ENTREGABLES}" type="button">Entregables</button></li>`;
 }
 
 export function renderPresentacionEntregableView() {
@@ -567,27 +686,27 @@ export function renderPresentacionEntregableView() {
 
 export function initPresentacionEntregableView() {
   const root = document.getElementById(VIEW_ID);
-  if (root) {
-    render();
-    load();
-  }
-  // Bind de preview de documento (delegado)
-  document.body.addEventListener('click', onDetalleDocPreview, { once: false });
-}
-
-async function onDetalleDocPreview(e) {
-  const btn = e.target.closest('.pe-doc-preview');
-  if (!btn) return;
-  const recepcion = btn.dataset.recepcion;
-  const docId = btn.dataset.doc;
-  try {
-    const blob = await entregablesServiciosService.previewDocumentoBlob(recepcion, docId);
-    const url = URL.createObjectURL(blob.blob);
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (err) {
-    window.alert(err.message || 'No se pudo abrir el documento');
-  }
+  if (!root) return;
+  render();
+  load();
+  document.getElementById(`${PREFIX}Tabs`)?.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-tab]');
+    if (!tab) return;
+    currentTab = tab.dataset.tab;
+    renderTabsInto();
+    renderCurrent();
+  });
+  document.getElementById(`${PREFIX}Reload`)?.addEventListener('click', load);
+  document.getElementById(`${PREFIX}Buscar`)?.addEventListener('change', (e) => {
+    filtroQ = e.target.value.trim();
+    renderCurrent();
+  });
+  document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', submitRegistrarRecepcion);
+  document.getElementById(`${PREFIX}ActaGenerarBtn`)?.addEventListener('click', () => generarActa(document.getElementById(`${PREFIX}ActaEntregableId`).value));
+  document.getElementById(`${PREFIX}FirmadaAdjBtn`)?.addEventListener('click', adjuntarActaFirmada);
+  document.body.addEventListener('click', onDetalleDocPreview);
+  document.body.addEventListener('click', onOrdenDocVer);
+  document.body.addEventListener('click', onConformidadVer);
 }
 
 export { renderPresentacionEntregableView as renderPresentacionEntregable, initPresentacionEntregableView as initPresentacionEntregable };

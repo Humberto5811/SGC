@@ -20,6 +20,7 @@ import {
   getDocumentoOrden,
   listarHistorialOrden,
   derivarAEjecucion,
+  listResponsablesPresentacionEntregables,
   getPayloadEjecucion,
   guardarInicioActividad,
   getInicioActividad,
@@ -388,11 +389,23 @@ router.get('/:id/envios', async (req, res, next) => {
   } catch (err) { sendLibError(res, err, next); }
 });
 
+router.get('/:id/derivar-ejecucion/responsables', async (req, res, next) => {
+  try {
+    await requireRo(req, 'VER');
+    const data = await listResponsablesPresentacionEntregables(req.params.id, {
+      search: req.query.search || req.query.q || '',
+    });
+    res.json({ data });
+  } catch (err) { sendLibError(res, err, next); }
+});
+
 router.post('/:id/derivar-ejecucion', async (req, res, next) => {
   try {
     await requireRo(req, 'VER');
     const { usuario, rol } = actorFromReq(req);
-    const data = await derivarAEjecucion(req.params.id, usuario, rol);
+    const data = await derivarAEjecucion(req.params.id, usuario, rol, {
+      responsableId: req.body?.responsable_id || null,
+    });
     res.json({ data });
   } catch (err) { sendLibError(res, err, next); }
 });

@@ -10,7 +10,7 @@ import {
 import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import {
   registroOrdenesMenuItems, splitMenuItemsPorBandeja, fmtMonto, fmtFecha, fmtFechaHora,
-  downloadPdfBase64,
+  downloadPdfBase64, esServicioTipo,
 } from '../../utils/ordenesUtils.js';
 import {
   openAdjuntarCcpFirmadoModal,
@@ -24,6 +24,7 @@ import {
 } from '../../utils/registroOrdenModal.js';
 import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
 import { openCcpCodigoModal } from '../../utils/ccpCodigoModal.js';
+import { showDerivarEjecucionModal } from '../../utils/derivarEjecucionModal.js';
 import {
   openChecklistModal,
   validarYMostrarChecklist,
@@ -634,6 +635,13 @@ function buildActMap() {
     verFechasMaximas: wrap((row) => openExpedienteOrdenModal(row)),
     verCronograma: wrap((row) => openExpedienteOrdenModal(row)),
     derivarEjecucion: wrap(async (row) => {
+      // RC8.15.2 — SERVICIO/LOCACION: modal con selección explícita de responsable.
+      const tipoRaw = String(row.tipo || row.tipo_contratacion || row.tipo_proceso || '');
+      if (esServicioTipo(tipoRaw)) {
+        await showDerivarEjecucionModal(row.orden_id, { onSuccess: reload });
+        return;
+      }
+      // BIEN → Recepción de Bienes (unidad Almacén): confirmación simple sin cambio.
       const ok = await new Promise((resolve) => {
         const w = document.createElement('div');
         w.innerHTML = `<div class="modal fade show d-block" style="background:rgba(0,0,0,.4)">

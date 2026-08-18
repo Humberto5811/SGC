@@ -68,7 +68,12 @@ export function buildEstadoLabels(etapaCodigo, estadoCodigo = null) {
   const meta = getEtapaMeta(etapaCodigo);
   const etapaLabel = meta?.label || getLabelEtapa(etapaCodigo) || etapaCodigo;
   const codigo = estadoCodigo || etapaCodigo;
-  const estadoLabel = getLabelEstado(codigo) || etapaLabel || codigo;
+  // RC8.15.2 — Si el código es la propia etapa (p. ej. PRESENTACION_ENTREGABLES),
+  // `getLabelEstado` devuelve el código técnico (no hay definición de ESTADO para una
+  // ETAPA). En ese caso el label humano es el de la etapa; nunca persistir el código.
+  const estadoLabel = codigo === etapaCodigo
+    ? etapaLabel
+    : (getLabelEstado(codigo) || etapaLabel || codigo);
   return { estadoCodigo: codigo, estadoLabel, etapaCodigo, etapaLabel };
 }
 

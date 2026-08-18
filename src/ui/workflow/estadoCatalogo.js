@@ -4,6 +4,7 @@
  * Sin colores hex/RGB ni estilos CSS aquí.
  */
 import { getLabelEstado, normalizeEstadoCode } from '../../../shared/estadoExpedienteCatalog.js';
+import { getLabelEtapa, esEtapaValida } from '../../../shared/workflow/etapas.js';
 
 export const CATEGORIAS_VISUALES = Object.freeze([
   'PENDIENTE',
@@ -81,6 +82,7 @@ const CATEGORIA_BY_CODE = Object.freeze({
   CUADRO_COMPARATIVO: 'EN_PROCESO',
   CCP: 'EN_PROCESO',
   EJECUCION: 'EN_PROCESO',
+  PRESENTACION_ENTREGABLES: 'EN_PROCESO',
   FINALIZADO: 'FINALIZADO',
   TESORERIA: 'DERIVADO',
   DERIVACION_PAGO: 'DERIVADO',
@@ -130,8 +132,14 @@ export function getEstadoCatalogEntry(codigoRaw, labelHint = '') {
     ? rawUpper
     : (normalizeEstadoCode(raw) || rawUpper))
     || 'DESCONOCIDO';
-  const fromCatalog = getLabelEstado(codigo === 'OBSERVADO' ? 'OBSERVADO' : codigo)
-    || (codigo === 'OBSERVADO' ? 'Observado' : '');
+  const rawEstadoLabel = getLabelEstado(codigo === 'OBSERVADO' ? 'OBSERVADO' : codigo);
+  let fromCatalog = rawEstadoLabel || (codigo === 'OBSERVADO' ? 'Observado' : '');
+  // RC8.15.2B — Si getLabelEstado devolvió el propio código (no hay definición de
+  // ESTADO) y el código es una ETAPA canónica, usar la etiqueta humana de la etapa
+  // (p. ej. PRESENTACION_ENTREGABLES → "Presentación de Entregables").
+  if (fromCatalog === codigo && codigo !== 'OBSERVADO' && esEtapaValida(codigo)) {
+    fromCatalog = getLabelEtapa(codigo) || '';
+  }
   const label = titleCaseLabel(fromCatalog || labelHint || (codigo !== 'DESCONOCIDO' ? codigo.replace(/_/g, ' ').toLowerCase() : ''))
     || 'Estado no catalogado';
   const categoria = CATEGORIA_BY_CODE[codigo]

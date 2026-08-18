@@ -5,10 +5,18 @@
 import { Router } from 'express';
 import {
   listarBandejaEntregablesServicios,
+  listarBandejaOrdenesEntregablesServicios,
   getDetalleEntregableServicio,
   registrarRecepcionEntregable,
   getDocumentoRecepcionEntregable,
   getDocumentoRecepcionEntregableBytes,
+  listarConformidadEntregable,
+  generarActaConformidadEntregable,
+  adjuntarActaConformidadFirmada,
+  getActaConformidadGenerada,
+  getActaConformidadGeneradaBytes,
+  getActaConformidadFirmada,
+  getActaConformidadFirmadaBytes,
 } from '../lib/entregablesServicios.js';
 
 const router = Router();
@@ -37,6 +45,13 @@ router.use(requireAuthContext);
 router.get('/bandeja', async (req, res, next) => {
   try {
     const data = await listarBandejaEntregablesServicios(req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/bandeja-ordenes', async (req, res, next) => {
+  try {
+    const data = await listarBandejaOrdenesEntregablesServicios(req.esUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
@@ -89,6 +104,69 @@ router.get('/recepciones/:recepcionId/documentos/:documentoId/preview', async (r
 router.get('/recepciones/:recepcionId/documentos/:documentoId/download', async (req, res, next) => {
   try {
     const file = await getDocumentoRecepcionEntregableBytes(req.params.recepcionId, req.params.documentoId);
+    return sendDocumentoBytes(res, file, 'attachment');
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad', async (req, res, next) => {
+  try {
+    const data = await listarConformidadEntregable(req.params.id);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/conformidad/generar', async (req, res, next) => {
+  try {
+    const data = await generarActaConformidadEntregable(req.params.id, req.body || {}, req.esUserCtx, req.esUsuario);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/conformidad/firmada', async (req, res, next) => {
+  try {
+    const data = await adjuntarActaConformidadFirmada(req.params.id, req.body || {}, req.esUserCtx, req.esUsuario);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad/actas/:actaId', async (req, res, next) => {
+  try {
+    const data = await getActaConformidadGenerada(req.params.id, req.params.actaId);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad/actas/:actaId/preview', async (req, res, next) => {
+  try {
+    const file = await getActaConformidadGeneradaBytes(req.params.id, req.params.actaId);
+    return sendDocumentoBytes(res, file, 'inline');
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad/actas/:actaId/download', async (req, res, next) => {
+  try {
+    const file = await getActaConformidadGeneradaBytes(req.params.id, req.params.actaId);
+    return sendDocumentoBytes(res, file, 'attachment');
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad/firmadas/:visadoId', async (req, res, next) => {
+  try {
+    const data = await getActaConformidadFirmada(req.params.id, req.params.visadoId);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad/firmadas/:visadoId/preview', async (req, res, next) => {
+  try {
+    const file = await getActaConformidadFirmadaBytes(req.params.id, req.params.visadoId);
+    return sendDocumentoBytes(res, file, 'inline');
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/conformidad/firmadas/:visadoId/download', async (req, res, next) => {
+  try {
+    const file = await getActaConformidadFirmadaBytes(req.params.id, req.params.visadoId);
     return sendDocumentoBytes(res, file, 'attachment');
   } catch (err) { next(err); }
 });

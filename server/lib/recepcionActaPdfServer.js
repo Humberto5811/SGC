@@ -46,7 +46,7 @@ export function loadActaLogoDataUrl(opts = {}) {
   return ACTA_LOGO_FALLBACK_DATA_URL || '';
 }
 
-class PdfFormBuilder {
+export class PdfFormBuilder {
   constructor() {
     this.ops = [];
     this.pageW = 595.28;
@@ -239,7 +239,7 @@ function buildInstitucionalStream(fields) {
   return b.buildStream();
 }
 
-function assemblePdf(stream) {
+export function assemblePdf(stream) {
   const streamLen = Buffer.byteLength(stream, 'latin1');
   const objects = [];
   objects.push('1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n');

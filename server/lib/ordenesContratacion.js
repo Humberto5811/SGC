@@ -13,6 +13,8 @@ import {
 } from '../../shared/estadoExpedienteVigente.js';
 import { calcularFechaMaxima, calcularFechaMaximaEntrega, normalizeTipoDias, toIsoDateString, addOneDay } from './diasPlazo.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
+import { resolverCentroDesdeRequerimiento, validarResponsableCentro } from './recepcionBienesAlcance.js';
+import { hasFunctionalProfile, PERFILES_FUNCIONALES } from '../utils/userRoleCatalog.js';
 
 export const REGLAS_INICIO_PLAZO = Object.freeze({
   INICIO_PLAZO_FECHA_ORDEN: 'INICIO_PLAZO_FECHA_ORDEN',
@@ -2754,7 +2756,94 @@ export async function listarHistorialOrden(ordenId) {
   return rows;
 }
 
-export async function derivarAEjecucion(ordenId, usuario, rol) {
+/** Submódulo destino canónico de la derivación a ejecución (SERVICIO/LOCACION). */
+const SUBMODULO_PRESENTACION_ENTREGABLES = Object.freeze({
+  codigo: 'PRESENTACION_ENTREGABLES',
+  label: 'Presentación Entregables de Servicios',
+});
+
+/**
+ * Resuelve el centro real del requerimiento vinculado a la orden.
+ * Reutiliza el resolvedor canónico de Recepción de Bienes (sin duplicar la regla).
+ */
+async function resolveCentroDesdeOrden(ordenId) {
+  const orden = await getOrdenById(ordenId);
+  const { rows } = await query(
+    'SELECT cmn, area, payload FROM requerimientos WHERE id = $1',
+    [orden.requerimiento_id],
+  );
+  if (!rows.length) throw httpError('Requerimiento no encontrado', 404, 'REQUERIMIENTO_NO_ENCONTRADO');
+  return resolverCentroDesdeRequerimiento({
+    cmn: rows[0].cmn,
+    area: rows[0].area,
+    payload: rows[0].payload,
+  });
+}
+
+/**
+ * RC8.15.2 — Usuarios activos que pueden recibir el expediente en
+ * PRESENTACION_ENTREGABLES (Área Usuaria) del centro real del expediente.
+ * Mismo patrón que `listDestinatariosAreaUsuaria` de Recepción de Bienes.
+ */
+export async function listResponsablesPresentacionEntregables(ordenId, { search = '' } = {}) {
+  await getOrdenById(ordenId); // valida existencia temprana
+  const centro = await resolveCentroDesdeOrden(ordenId);
+
+  const nombreUsuario = (u) => {
+    const full = [u.apellidos, u.nombres].filter(Boolean).join(' ').trim();
+    return full || u.nombre || u.username || u.dni || `Usuario ${u.id}`;
+  };
+
+  const params = ['admin', centro.centro_codigo];
+  let where = `WHERE u.activo = TRUE AND u.rol <> $1
+    AND (COALESCE(u.centro, '') = $2 OR COALESCE(u.codigo_centro_costo, '') = $2)`;
+  if (String(search || '').trim()) {
+    params.push(`%${String(search).trim()}%`);
+    where += ` AND (
+      COALESCE(u.nombre, '') ILIKE $${params.length}
+      OR COALESCE(u.apellidos, '') ILIKE $${params.length}
+      OR COALESCE(u.nombres, '') ILIKE $${params.length}
+      OR COALESCE(u.username, '') ILIKE $${params.length}
+      OR COALESCE(u.dni, '') ILIKE $${params.length}
+      OR COALESCE(u.cargo, '') ILIKE $${params.length}
+    )`;
+  }
+  const { rows } = await query(`
+    SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol, u.permisos
+    FROM usuarios u
+    ${where}
+    ORDER BY u.apellidos ASC NULLS LAST, u.nombres ASC NULLS LAST
+    LIMIT 200
+  `, params);
+
+  const usuarios = rows
+    // RC8.15.2A — criterio canónico: Perfil funcional Área Usuaria (userRoleCatalog),
+    // no el rol textual ni el permiso literal del submódulo. Un usuario ACTIVO del
+    // centro con perfil Área Usuaria debe poder recibir el expediente aunque no tenga
+    // el submódulo PRESENTACION_ENTREGABLES explícito en su JSON de permisos.
+    .filter((u) => hasFunctionalProfile(
+      { id: u.id, rol: u.rol, cargo: u.cargo, permisos: u.permisos },
+      PERFILES_FUNCIONALES.AREA_USUARIA,
+    ))
+    .map((u) => ({
+      id: u.id,
+      nombre: nombreUsuario(u),
+      cargo: u.cargo || '',
+      username: u.username || u.dni || '',
+      rol: u.rol,
+    }));
+
+  return {
+    submodulo: SUBMODULO_PRESENTACION_ENTREGABLES,
+    centro: {
+      codigo: centro.centro_codigo,
+      nombre: centro.centro_nombre || centro.centro_codigo,
+    },
+    usuarios,
+  };
+}
+
+export async function derivarAEjecucion(ordenId, usuario, rol, { responsableId = null } = {}) {
   const detalle = await getDetalleOrden(ordenId);
   const { orden, contexto, entregas, documentos } = detalle;
 
@@ -2778,6 +2867,20 @@ export async function derivarAEjecucion(ordenId, usuario, rol) {
   }
   const sinFecha = entregas.some((e) => !e.fecha_maxima);
   if (sinFecha) throw httpError('Hay entregas sin fecha máxima calculada', 409);
+
+  // RC8.15.2 — SERVICIO/LOCACION derivan a PRESENTACION_ENTREGABLES con responsable
+  // explícito (PERSONA). BIEN sigue a RECEPCION_BIENES (unidad Almacén), sin cambio.
+  const esBien = orden.tipo_orden === 'BIEN' || String(orden.tipo_orden || '').toUpperCase() === 'BIEN';
+  let usuarioDestinoId = null;
+  if (!esBien) {
+    const rid = parseInt(responsableId, 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      throw httpError('Seleccione el responsable que recibirá el expediente', 409, 'RESPONSABLE_REQUERIDO');
+    }
+    const centro = await resolveCentroDesdeOrden(ordenId);
+    await validarResponsableCentro(rid, centro, centro.area_id ?? null);
+    usuarioDestinoId = rid;
+  }
 
   const payload = {
     orden_id: orden.id,
@@ -2836,9 +2939,8 @@ export async function derivarAEjecucion(ordenId, usuario, rol) {
         requerimientoId: orden.requerimiento_id,
         evento: 'ORDEN_DERIVADA_EJECUCION',
         usuarioOrigenId: null,
-        unidadDestino: orden.tipo_orden === 'BIEN' || String(orden.tipo_orden || '').toUpperCase() === 'BIEN'
-          ? 'Almacén'
-          : 'Área Usuaria',
+        usuarioDestinoId,
+        unidadDestino: esBien ? 'Almacén' : 'Área Usuaria',
         motivo: `Orden ${orden.numero_orden || orden.id} derivada a ejecución`,
         metadata: {
           client_request_id: `orden-ejecucion:${orden.id}`,

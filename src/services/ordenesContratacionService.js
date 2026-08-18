@@ -86,8 +86,11 @@ export const ordenesContratacionService = {
   async listEnvios(id) {
     return api.get(`${BASE}/${id}/envios`);
   },
-  async derivarEjecucion(id) {
-    return api.post(`${BASE}/${id}/derivar-ejecucion`, {});
+  async listResponsablesDerivacion(id) {
+    return api.get(`${BASE}/${id}/derivar-ejecucion/responsables`);
+  },
+  async derivarEjecucion(id, responsableId = null) {
+    return api.post(`${BASE}/${id}/derivar-ejecucion`, { responsable_id: responsableId });
   },
   async historial(id) {
     return api.get(`${BASE}/${id}/historial`);
