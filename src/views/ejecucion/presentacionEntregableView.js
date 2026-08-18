@@ -357,7 +357,7 @@ async function submitRegistrarRecepcion(e) {
       fecha_recepcion_mesa_partes: fecha,
       numero_expediente_sgd: sgd,
       observacion: obs,
-      archivos: contenido ? [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }] : [],
+      documentos: contenido ? [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }] : [],
     });
     window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}Modal`))?.hide();
     await load();
