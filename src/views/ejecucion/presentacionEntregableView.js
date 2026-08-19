@@ -7,12 +7,13 @@
  */
 import { entregablesServiciosService } from '../../services/entregablesServiciosService.js';
 import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
-import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
+import { renderEstadoBadgeFromRow, renderEstadoBadgeHtml } from '../../ui/workflow/EstadoBadge.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
 import { openBase64Document, previewAdjuntoById } from '../../utils/documentViewer.js';
 import { fmtFecha, fmtMonto } from '../../utils/ordenesUtils.js';
+import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
 
 const VIEW_ID = 'presentacion-entregables-servicios';
 const LIST_ID = 'peList';
@@ -59,21 +60,64 @@ function plazoLabel(dias) {
   return d > 0 ? `${d} día${d === 1 ? '' : 's'}` : '—';
 }
 
-function ordenMenuItems(row) {
+export function ordenMenuItems(row) {
   return [
-    { act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' },
+    { act: 'verExpedienteOrden', label: 'Ver expediente', icon: 'bi-folder2-open' },
   ];
 }
 
-function entregableMenuItems(row) {
+export function entregableMenuItems(row) {
   const items = [
     { act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' },
   ];
-  const situacion = row.situacion_codigo || row.estado_ejecucion || 'PENDIENTE_RECEPCION';
-  if (situacion === 'PENDIENTE_RECEPCION' || situacion === 'RECIBIDO') {
-    items.push({ act: 'registrarRecepcion', label: 'Registrar recepción', icon: 'bi-box-arrow-in-down' });
+  const etapa = String(row.estado_etapa_codigo || '').toUpperCase();
+  if (etapa === 'REVISION_COORDINADOR_CM') {
+    if (row.puede_observar_coordinador_cm) {
+      items.push({ act: 'observarEntregable', label: 'Observar', icon: 'bi-exclamation-triangle' });
+    }
+    if (row.puede_derivar_analista_cm) {
+      items.push({ act: 'derivarAnalistaCM', label: 'Derivar a Analista CM', icon: 'bi-send' });
+    }
+    if (row.puede_ver_trazabilidad) {
+      items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
+    }
+    return items;
   }
-  if (situacion === 'RECIBIDO' && row.puede_gestionar_conformidad) {
+  if (etapa === 'REVISION_ANALISTA_CM') {
+    if (row.puede_observar_analista_cm) {
+      items.push({ act: 'observarEntregable', label: 'Observar', icon: 'bi-exclamation-triangle' });
+    }
+    if (row.puede_derivar_pago) {
+      items.push({ act: 'derivarPago', label: 'Derivar a Pago', icon: 'bi-credit-card' });
+    }
+    if (row.puede_ver_trazabilidad) {
+      items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
+    }
+    return items;
+  }
+  if (etapa === 'DERIVACION_PAGO') {
+    if (row.puede_ver_trazabilidad) {
+      items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
+    }
+    return items;
+  }
+  const situacion = row.situacion_codigo || row.estado_ejecucion || 'PENDIENTE_RECEPCION';
+  if (row.puede_registrar_recepcion !== false
+    && (situacion === 'PENDIENTE_RECEPCION' || situacion === 'RECIBIDO')) {
+    const yaRegistrado = Boolean(row.ultima_recepcion?.id);
+    items.push({
+      act: 'registrarRecepcion',
+      label: yaRegistrado ? 'Modificar entregable' : 'Registrar entregable',
+      icon: yaRegistrado ? 'bi-pencil-square' : 'bi-box-arrow-in-down',
+    });
+  }
+  if (row.puede_subsanar && situacion === 'OBSERVADO') {
+    items.push({ act: 'subsanarEntregable', label: 'Subsanar observación', icon: 'bi-arrow-repeat' });
+  }
+  if (row.puede_observar && situacion === 'RECIBIDO') {
+    items.push({ act: 'observarEntregable', label: 'Observar entregable', icon: 'bi-exclamation-triangle' });
+  }
+  if (['RECIBIDO', 'SUBSANADO'].includes(situacion) && row.puede_gestionar_conformidad) {
     items.push({ act: 'generarActa', label: 'Generar Acta de Conformidad', icon: 'bi-file-earmark-check' });
   }
   if (situacion === 'ACTA_GENERADA') {
@@ -84,10 +128,46 @@ function entregableMenuItems(row) {
     }
   }
   if (situacion === 'CONFORME') {
+    items.push({ act: 'verActaGenerada', label: 'Ver Acta de Conformidad', icon: 'bi-eye' });
+    items.push({ act: 'descargarActaGenerada', label: 'Descargar Acta de Conformidad', icon: 'bi-download' });
     items.push({ act: 'verActaFirmada', label: 'Ver Acta firmada', icon: 'bi-eye' });
     items.push({ act: 'descargarActaFirmada', label: 'Descargar Acta firmada', icon: 'bi-download' });
+    if (row.puede_derivar_coordinador_cm) {
+      items.push({
+        act: 'derivarCoordinadorCM',
+        label: 'Derivar a Coordinador CM',
+        icon: 'bi-send',
+      });
+    }
+  }
+  if (row.puede_ver_trazabilidad) {
+    items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
   }
   return items;
+}
+
+function renderEstadosOrden(row) {
+  const estados = row.estados_entregables || [];
+  if (!row.estado_agregado_heterogeneo || estados.length <= 1) {
+    return renderEstadoBadgeFromRow(row);
+  }
+  return estados.map((estado) => `
+    <div class="mb-1">${renderEstadoBadgeHtml({
+      estadoCodigo: estado.codigo,
+      estadoLabel: estado.label,
+    })} <span class="text-muted small">(${esc(estado.cantidad)})</span></div>
+  `).join('');
+}
+
+function renderResponsablesOrden(row) {
+  const responsables = row.responsables_entregables || [];
+  if (!row.estado_agregado_heterogeneo || responsables.length <= 1) {
+    return renderResponsableCellHtml(row, esc);
+  }
+  return responsables.map((responsable) => `
+    <div class="mb-1">${esc(responsable.nombre || 'Pendiente')}
+      <span class="text-muted">(${esc(responsable.cantidad)})</span></div>
+  `).join('');
 }
 
 // ── Fila pestaña Órdenes ─────────────────────────────────────────────────────
@@ -103,8 +183,8 @@ function renderOrdenRow(row) {
       <td class="text-end small">${esc(fmtMonto(row.monto_total))}</td>
       <td class="small text-nowrap">${esc(plazoLabel(row.plazo_total_dias))}</td>
       <td>${situacionBadge(row)}</td>
-      <td>${renderEstadoBadgeFromRow(row)}</td>
-      <td class="small">${renderResponsableCellHtml(row, esc)}</td>
+      <td>${renderEstadosOrden(row)}</td>
+      <td class="small">${renderResponsablesOrden(row)}</td>
       ${renderActionMenuCell(id, ordenMenuItems(row))}
     </tr>`;
 }
@@ -124,7 +204,11 @@ function renderEntregableRow(row) {
       <td class="text-end small">${row.precio_total != null ? esc(fmtMonto(row.precio_total)) : '—'}</td>
       <td class="small text-nowrap">${esc(fmtFecha(row.fecha_maxima))}</td>
       <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
-      <td>${renderEstadoBadgeFromRow(row)}</td>
+      <td>${row.situacion_codigo === 'OBSERVADO'
+        ? renderEstadoBadgeHtml({ estadoCodigo: 'OBSERVADO', estadoLabel: 'Observado' })
+        : (row.situacion_codigo === 'SUBSANADO'
+          ? renderEstadoBadgeHtml({ estadoCodigo: 'SUBSANADO', estadoLabel: 'Subsanado' })
+          : renderEstadoBadgeFromRow(row))}</td>
       <td class="small">${renderResponsableCellHtml(row, esc)}</td>
       ${renderActionMenuCell(id, entregableMenuItems(row))}
     </tr>`;
@@ -189,10 +273,21 @@ async function load() {
 
 function buildActMap() {
   return {
+    verExpedienteOrden: (id) => {
+      const row = ordenesCache.find((item) => String(item.orden_id) === String(id));
+      if (row) return openExpedienteOrdenModal(row);
+      return undefined;
+    },
     verExpediente: (id) => openDetalle(id),
     registrarRecepcion: (id) => openRegistrarRecepcion(id),
+    observarEntregable: (id) => openObservarEntregable(id),
+    subsanarEntregable: (id) => openSubsanarEntregable(id),
     generarActa: (id) => openGenerarActa(id),
     adjuntarActaFirmada: (id) => openAdjuntarActaFirmada(id),
+    derivarCoordinadorCM: (id) => openDerivarCoordinadorCM(id),
+    derivarAnalistaCM: (id) => openDerivarAnalistaCM(id),
+    derivarPago: (id) => openDerivarPago(id),
+    verTrazabilidad: (id) => openTrazabilidad(id),
     verActaGenerada: (id) => verActaGenerada(id),
     descargarActaGenerada: (id) => descargarActaGenerada(id),
     verActaFirmada: (id) => verActaFirmada(id),
@@ -244,7 +339,7 @@ function render() {
       <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
         <form id="${PREFIX}Form">
           <div class="modal-header">
-            <h5 class="modal-title"><i class="bi bi-box-arrow-in-down"></i> Registrar recepción</h5>
+            <h5 class="modal-title" id="${PREFIX}ModalTitle"><i class="bi bi-box-arrow-in-down"></i> Registrar entregable</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
           </div>
           <div class="modal-body">
@@ -255,13 +350,14 @@ function render() {
               <input type="text" class="form-control form-control-sm" id="${PREFIX}Sgd" required></div>
             <div class="mb-2"><label class="form-label small mb-0">Observación</label>
               <textarea class="form-control form-control-sm" id="${PREFIX}Obs" rows="2"></textarea></div>
-            <div class="mb-2"><label class="form-label small mb-0">Documento (PDF)</label>
+            <div class="mb-2 d-none" id="${PREFIX}CurrentDoc"></div>
+            <div class="mb-2"><label class="form-label small mb-0" id="${PREFIX}FileLabel">Documento (PDF) <span class="text-danger">*</span></label>
               <input type="file" class="form-control form-control-sm" id="${PREFIX}File" accept="application/pdf"></div>
             <div id="${PREFIX}ModalErr" class="alert alert-danger d-none py-2 small"></div>
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-            <button type="submit" class="btn btn-sm btn-primary">Registrar</button>
+            <button type="submit" class="btn btn-sm btn-primary" id="${PREFIX}SubmitBtn">Registrar</button>
           </div>
         </form>
       </div></div>
@@ -274,6 +370,68 @@ function render() {
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
         </div>
         <div class="modal-body" id="${PREFIX}DetalleBody"></div>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}ObservarModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog"><div class="modal-content">
+        <form id="${PREFIX}ObservarForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Observar entregable</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}ObservarEntregableId">
+            <input type="hidden" id="${PREFIX}ObservarRecepcionId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}ObservarResumen"></div>
+            <div class="mb-2">
+              <label class="form-label small mb-1" for="${PREFIX}ObservarMotivo">Motivo de observación <span class="text-danger">*</span></label>
+              <textarea class="form-control form-control-sm" id="${PREFIX}ObservarMotivo" rows="4" required></textarea>
+            </div>
+            <div id="${PREFIX}ObservarErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-warning" id="${PREFIX}ObservarBtn">Registrar observación</button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}SubsanarModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <form id="${PREFIX}SubsanarForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-arrow-repeat"></i> Subsanar observación</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}SubsanarEntregableId">
+            <input type="hidden" id="${PREFIX}SubsanarObservacionId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}SubsanarResumen"></div>
+            <div class="mb-2">
+              <label class="form-label small mb-1">Nueva fecha recepción Mesa de Partes <span class="text-danger">*</span></label>
+              <input type="date" class="form-control form-control-sm" id="${PREFIX}SubsanarFecha" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-1">Nuevo expediente SGD <span class="text-danger">*</span></label>
+              <input type="text" class="form-control form-control-sm" id="${PREFIX}SubsanarSgd" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-1">Comentario de subsanación <span class="text-muted">(opcional)</span></label>
+              <textarea class="form-control form-control-sm" id="${PREFIX}SubsanarComentario" rows="2"></textarea>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-1">Nuevo PDF del entregable <span class="text-danger">*</span></label>
+              <input type="file" class="form-control form-control-sm" id="${PREFIX}SubsanarFile" accept="application/pdf" required>
+            </div>
+            <div id="${PREFIX}SubsanarErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-primary" id="${PREFIX}SubsanarBtn">Registrar subsanación</button>
+          </div>
+        </form>
       </div></div>
     </div>
 
@@ -316,6 +474,106 @@ function render() {
           <button type="button" class="btn btn-sm btn-primary" id="${PREFIX}FirmadaAdjBtn">Adjuntar</button>
         </div>
       </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}DerivarModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog"><div class="modal-content">
+        <form id="${PREFIX}DerivarForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-send"></i> Derivar a Coordinador CM</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}DerivarEntregableId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}DerivarResumen"></div>
+            <div class="mb-2">
+              <label class="form-label small mb-1" for="${PREFIX}DerivarResponsable">
+                Coordinador CM destino <span class="text-danger">*</span>
+              </label>
+              <select class="form-select form-select-sm" id="${PREFIX}DerivarResponsable" required>
+                <option value="">Seleccione un coordinador</option>
+              </select>
+            </div>
+            <div id="${PREFIX}DerivarErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-primary" id="${PREFIX}DerivarBtn" disabled>
+              Derivar
+            </button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}AnalistaModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog"><div class="modal-content">
+        <form id="${PREFIX}AnalistaForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-send"></i> Derivar a Analista CM</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}AnalistaEntregableId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}AnalistaResumen"></div>
+            <div class="mb-2">
+              <label class="form-label small mb-1" for="${PREFIX}AnalistaResponsable">
+                Analista CM destino <span class="text-danger">*</span>
+              </label>
+              <select class="form-select form-select-sm" id="${PREFIX}AnalistaResponsable" required>
+                <option value="">Seleccione un analista</option>
+              </select>
+            </div>
+            <div id="${PREFIX}AnalistaErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-primary" id="${PREFIX}AnalistaBtn" disabled>
+              Derivar
+            </button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}PagoModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog"><div class="modal-content">
+        <form id="${PREFIX}PagoForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-credit-card"></i> Derivar a Pago</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}PagoEntregableId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}PagoResumen"></div>
+            <div class="mb-2">
+              <label class="form-label small mb-1" for="${PREFIX}PagoResponsable">
+                Analista de Pago <span class="text-danger">*</span>
+              </label>
+              <select class="form-select form-select-sm" id="${PREFIX}PagoResponsable" required>
+                <option value="">Seleccione un analista</option>
+              </select>
+            </div>
+            <div id="${PREFIX}PagoErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-primary" id="${PREFIX}PagoBtn" disabled>
+              Derivar
+            </button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}TrazabilidadModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-clock-history"></i> Trazabilidad del entregable</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body" id="${PREFIX}TrazabilidadBody"></div>
+      </div></div>
     </div>`;
 }
 
@@ -327,7 +585,49 @@ async function openRegistrarRecepcion(id) {
   document.getElementById(`${PREFIX}File`).value = '';
   document.getElementById(`${PREFIX}ModalErr`)?.classList.add('d-none');
   const modalEl = document.getElementById(`${PREFIX}Modal`);
+  modalEl.dataset.mode = 'create';
+  const currentDocEl = document.getElementById(`${PREFIX}CurrentDoc`);
+  currentDocEl?.classList.add('d-none');
+  if (currentDocEl) currentDocEl.innerHTML = '';
   window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  try {
+    const resp = await entregablesServiciosService.getDetalle(id);
+    const data = resp?.data || resp || {};
+    const recepcion = data.recepcion_vigente || null;
+    const documento = data.documento_vigente || null;
+    const editando = Boolean(recepcion?.id);
+    modalEl.dataset.mode = editando ? 'edit' : 'create';
+    document.getElementById(`${PREFIX}ModalTitle`).innerHTML = editando
+      ? '<i class="bi bi-pencil-square"></i> Modificar entregable'
+      : '<i class="bi bi-box-arrow-in-down"></i> Registrar entregable';
+    document.getElementById(`${PREFIX}SubmitBtn`).textContent = editando ? 'Guardar cambios' : 'Registrar';
+    document.getElementById(`${PREFIX}FileLabel`).innerHTML = editando
+      ? 'Reemplazar documento (PDF) <span class="text-muted">(opcional)</span>'
+      : 'Documento (PDF) <span class="text-danger">*</span>';
+    if (editando) {
+      document.getElementById(`${PREFIX}Fecha`).value = String(recepcion.fecha_recepcion_mesa_partes || '').slice(0, 10);
+      document.getElementById(`${PREFIX}Sgd`).value = recepcion.numero_expediente_sgd || '';
+      document.getElementById(`${PREFIX}Obs`).value = recepcion.observacion || '';
+    }
+    if (editando && documento) {
+      currentDocEl.classList.remove('d-none');
+      currentDocEl.innerHTML = `
+        <label class="form-label small mb-1">PDF vigente</label>
+        <div class="border rounded p-2 d-flex justify-content-between align-items-center gap-2">
+          <span class="small text-truncate" title="${esc(documento.nombre_archivo || '')}">${esc(documento.nombre_archivo || 'Documento vigente')}</span>
+          <button type="button" class="btn btn-sm btn-outline-primary pe-doc-preview"
+            data-recepcion="${esc(documento.recepcion_id)}" data-doc="${esc(documento.id)}">
+            <i class="bi bi-eye"></i> Ver
+          </button>
+        </div>`;
+    }
+  } catch (err) {
+    const errBox = document.getElementById(`${PREFIX}ModalErr`);
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo consultar el entregable';
+      errBox.classList.remove('d-none');
+    }
+  }
 }
 
 async function submitRegistrarRecepcion(e) {
@@ -352,17 +652,192 @@ async function submitRegistrarRecepcion(e) {
       r.readAsDataURL(f);
     });
   }
+  const modalEl = document.getElementById(`${PREFIX}Modal`);
+  const editando = modalEl?.dataset.mode === 'edit';
+  if (!editando && !contenido) {
+    if (errBox) {
+      errBox.textContent = 'El documento PDF es obligatorio para registrar el entregable.';
+      errBox.classList.remove('d-none');
+    }
+    return;
+  }
   try {
-    await entregablesServiciosService.registrarRecepcion(id, {
+    const payload = {
       fecha_recepcion_mesa_partes: fecha,
       numero_expediente_sgd: sgd,
       observacion: obs,
       documentos: contenido ? [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }] : [],
-    });
+    };
+    if (editando) await entregablesServiciosService.modificarRecepcion(id, payload);
+    else await entregablesServiciosService.registrarRecepcion(id, payload);
     window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}Modal`))?.hide();
     await load();
   } catch (err) {
-    if (errBox) { errBox.textContent = err.message || 'No se pudo registrar'; errBox.classList.remove('d-none'); }
+    if (errBox) { errBox.textContent = err.message || 'No se pudo guardar el entregable'; errBox.classList.remove('d-none'); }
+  }
+}
+
+async function openObservarEntregable(id) {
+  const errBox = document.getElementById(`${PREFIX}ObservarErr`);
+  errBox?.classList.add('d-none');
+  document.getElementById(`${PREFIX}ObservarMotivo`).value = '';
+  document.getElementById(`${PREFIX}ObservarEntregableId`).value = id;
+  document.getElementById(`${PREFIX}ObservarRecepcionId`).value = '';
+  const modalEl = document.getElementById(`${PREFIX}ObservarModal`);
+  window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  try {
+    const [resp, conformidad] = await Promise.all([
+      entregablesServiciosService.getDetalle(id),
+      confVigente(id).catch(() => ({ acta: null, firmada: null })),
+    ]);
+    const data = resp?.data || resp || {};
+    const recepcion = data.recepcion_vigente || null;
+    if (!recepcion?.id) throw new Error('El entregable no tiene una recepción vigente.');
+    if (data.observacion_abierta) throw new Error('La recepción ya tiene una observación formal abierta.');
+    document.getElementById(`${PREFIX}ObservarRecepcionId`).value = recepcion.id;
+    document.getElementById(`${PREFIX}ObservarResumen`).innerHTML = `
+      <div><strong>Orden:</strong> ${esc(ordenLabel(data))}</div>
+      <div><strong>Entregable:</strong> N.° ${esc(data.numero_entrega ?? '—')}</div>
+      <div><strong>Proveedor:</strong> ${esc(data.proveedor_razon_social || '—')}</div>
+      <div><strong>Fecha recepción:</strong> ${esc(fmtFecha(recepcion.fecha_recepcion_mesa_partes))}</div>
+      <div><strong>Expediente SGD:</strong> ${esc(recepcion.numero_expediente_sgd || '—')}</div>
+      <div><strong>Acta vigente:</strong> ${esc(conformidad.acta ? `V${conformidad.acta.version || 1}` : '—')}</div>`;
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo consultar el entregable';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+async function submitObservarEntregable(e) {
+  e.preventDefault();
+  const id = document.getElementById(`${PREFIX}ObservarEntregableId`).value;
+  const recepcionId = document.getElementById(`${PREFIX}ObservarRecepcionId`).value;
+  const motivo = document.getElementById(`${PREFIX}ObservarMotivo`).value.trim();
+  const errBox = document.getElementById(`${PREFIX}ObservarErr`);
+  if (!motivo) {
+    if (errBox) {
+      errBox.textContent = 'El motivo de observación es obligatorio.';
+      errBox.classList.remove('d-none');
+    }
+    return;
+  }
+  if (!recepcionId) {
+    if (errBox) {
+      errBox.textContent = 'No existe una recepción vigente para observar.';
+      errBox.classList.remove('d-none');
+    }
+    return;
+  }
+  const submitBtn = document.getElementById(`${PREFIX}ObservarBtn`);
+  try {
+    if (submitBtn) submitBtn.disabled = true;
+    const row = entregablesCache.find(
+      (item) => String(item.orden_entrega_id) === String(id),
+    ) || {};
+    if (String(row.estado_etapa_codigo || '').toUpperCase() === 'REVISION_ANALISTA_CM') {
+      await entregablesServiciosService.observarAnalistaCM(id, motivo);
+    } else {
+      await entregablesServiciosService.observarEntregable(id, {
+        recepcion_id: Number(recepcionId),
+        motivo,
+      });
+    }
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}ObservarModal`))?.hide();
+    await load();
+    await openDetalle(id);
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo registrar la observación';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+async function openSubsanarEntregable(id) {
+  const errBox = document.getElementById(`${PREFIX}SubsanarErr`);
+  errBox?.classList.add('d-none');
+  document.getElementById(`${PREFIX}SubsanarEntregableId`).value = id;
+  document.getElementById(`${PREFIX}SubsanarObservacionId`).value = '';
+  document.getElementById(`${PREFIX}SubsanarFecha`).value = '';
+  document.getElementById(`${PREFIX}SubsanarSgd`).value = '';
+  document.getElementById(`${PREFIX}SubsanarComentario`).value = '';
+  document.getElementById(`${PREFIX}SubsanarFile`).value = '';
+  const modalEl = document.getElementById(`${PREFIX}SubsanarModal`);
+  window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  try {
+    const resp = await entregablesServiciosService.getDetalle(id);
+    const data = resp?.data || resp || {};
+    const recepcion = data.recepcion_vigente || null;
+    const observacion = data.observacion_abierta || null;
+    if (!recepcion?.id || !observacion?.id) {
+      throw new Error('El entregable no tiene una observación formal abierta para subsanar.');
+    }
+    document.getElementById(`${PREFIX}SubsanarObservacionId`).value = observacion.id;
+    document.getElementById(`${PREFIX}SubsanarResumen`).innerHTML = `
+      <div><strong>Orden:</strong> ${esc(ordenLabel(data))}</div>
+      <div><strong>Entregable:</strong> N.° ${esc(data.numero_entrega ?? '—')}</div>
+      <div><strong>Proveedor:</strong> ${esc(data.proveedor_razon_social || '—')}</div>
+      <div><strong>Fecha de recepción anterior:</strong> ${esc(fmtFecha(recepcion.fecha_recepcion_mesa_partes))}</div>
+      <div><strong>Expediente SGD anterior:</strong> ${esc(recepcion.numero_expediente_sgd || '—')}</div>
+      <div class="mt-2"><strong>Motivo de observación:</strong><br>${esc(observacion.motivo || '—')}</div>`;
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo consultar la observación';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+async function submitSubsanarEntregable(e) {
+  e.preventDefault();
+  const id = document.getElementById(`${PREFIX}SubsanarEntregableId`).value;
+  const observacionId = document.getElementById(`${PREFIX}SubsanarObservacionId`).value;
+  const fecha = document.getElementById(`${PREFIX}SubsanarFecha`).value;
+  const sgd = document.getElementById(`${PREFIX}SubsanarSgd`).value.trim();
+  const comentario = document.getElementById(`${PREFIX}SubsanarComentario`).value.trim();
+  const fileInput = document.getElementById(`${PREFIX}SubsanarFile`);
+  const errBox = document.getElementById(`${PREFIX}SubsanarErr`);
+  if (!observacionId || !fecha || !sgd || !fileInput?.files?.length) {
+    if (errBox) {
+      errBox.textContent = 'Fecha, Expediente SGD y nuevo PDF son obligatorios.';
+      errBox.classList.remove('d-none');
+    }
+    return;
+  }
+  const file = fileInput.files[0];
+  const contenido = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.readAsDataURL(file);
+  });
+  const submitBtn = document.getElementById(`${PREFIX}SubsanarBtn`);
+  try {
+    if (submitBtn) submitBtn.disabled = true;
+    await entregablesServiciosService.subsanarEntregable(id, {
+      observacion_id: Number(observacionId),
+      fecha_recepcion_mesa_partes: fecha,
+      numero_expediente_sgd: sgd,
+      observacion: comentario,
+      documentos: [{
+        nombre_archivo: file.name,
+        mime_type: file.type || 'application/pdf',
+        contenido_base64: contenido,
+      }],
+    });
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}SubsanarModal`))?.hide();
+    await load();
+    await openDetalle(id);
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo registrar la subsanación';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
   }
 }
 
@@ -458,7 +933,10 @@ async function adjuntarActaFirmada() {
     r.readAsDataURL(f);
   });
   try {
+    const { acta } = await confVigente(id);
+    if (!acta?.id) throw new Error('No existe un Acta de Conformidad vigente para firmar');
     await entregablesServiciosService.adjuntarActaConformidadFirmada(id, {
+      acta_id: acta.id,
       nombre: f.name,
       mime_type: f.type || 'application/pdf',
       contenido_base64: contenido,
@@ -468,6 +946,251 @@ async function adjuntarActaFirmada() {
     await load();
   } catch (err) {
     if (errBox) { errBox.textContent = err.message || 'No se pudo adjuntar el acta firmada'; errBox.classList.remove('d-none'); }
+  }
+}
+
+async function openDerivarCoordinadorCM(id) {
+  const row = entregablesCache.find(
+    (item) => String(item.orden_entrega_id) === String(id),
+  ) || {};
+  const select = document.getElementById(`${PREFIX}DerivarResponsable`);
+  const submit = document.getElementById(`${PREFIX}DerivarBtn`);
+  const errBox = document.getElementById(`${PREFIX}DerivarErr`);
+  document.getElementById(`${PREFIX}DerivarEntregableId`).value = id;
+  document.getElementById(`${PREFIX}DerivarResumen`).innerHTML = `
+    <div><strong>Orden:</strong> ${esc(ordenLabel(row))}</div>
+    <div><strong>Entregable:</strong> N.° ${esc(row.numero_entrega ?? '—')}</div>
+    <div><strong>Proveedor:</strong> ${esc(row.proveedor_razon_social || '—')}</div>
+    <div><strong>Área usuaria / Centro:</strong> ${esc(row.area_usuaria || '—')}</div>
+    <div><strong>Responsable actual:</strong> ${esc(row.responsable || 'Pendiente')}</div>`;
+  if (select) select.innerHTML = '<option value="">Cargando coordinadores…</option>';
+  if (submit) submit.disabled = true;
+  errBox?.classList.add('d-none');
+  window.bootstrap.Modal.getOrCreateInstance(
+    document.getElementById(`${PREFIX}DerivarModal`),
+  ).show();
+  try {
+    const response = await entregablesServiciosService.listarCoordinadoresCM(id);
+    const coordinadores = response?.data || response || [];
+    if (select) {
+      select.innerHTML = [
+        '<option value="">Seleccione un coordinador</option>',
+        ...coordinadores.map((coordinador) => `
+          <option value="${esc(coordinador.id)}">
+            ${esc(coordinador.nombre || coordinador.username || `Usuario ${coordinador.id}`)}
+            ${coordinador.cargo ? ` — ${esc(coordinador.cargo)}` : ''}
+          </option>`),
+      ].join('');
+    }
+    if (!coordinadores.length) {
+      throw new Error('No existen Coordinadores CM activos disponibles.');
+    }
+  } catch (error) {
+    if (select) select.innerHTML = '<option value="">Sin coordinadores disponibles</option>';
+    if (errBox) {
+      errBox.textContent = error.message || 'No se pudieron cargar los Coordinadores CM';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+async function submitDerivarCoordinadorCM(event) {
+  event.preventDefault();
+  const id = document.getElementById(`${PREFIX}DerivarEntregableId`).value;
+  const responsableId = document.getElementById(`${PREFIX}DerivarResponsable`).value;
+  const submit = document.getElementById(`${PREFIX}DerivarBtn`);
+  const errBox = document.getElementById(`${PREFIX}DerivarErr`);
+  if (!responsableId) return;
+  try {
+    if (submit) submit.disabled = true;
+    await entregablesServiciosService.derivarCoordinadorCM(id, Number(responsableId));
+    window.bootstrap.Modal.getInstance(
+      document.getElementById(`${PREFIX}DerivarModal`),
+    )?.hide();
+    await load();
+  } catch (error) {
+    if (errBox) {
+      errBox.textContent = error.message || 'No se pudo derivar el entregable';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submit) submit.disabled = !document.getElementById(`${PREFIX}DerivarResponsable`).value;
+  }
+}
+
+async function openDerivarAnalistaCM(id) {
+  const row = entregablesCache.find(
+    (item) => String(item.orden_entrega_id) === String(id),
+  ) || {};
+  const select = document.getElementById(`${PREFIX}AnalistaResponsable`);
+  const submit = document.getElementById(`${PREFIX}AnalistaBtn`);
+  const errBox = document.getElementById(`${PREFIX}AnalistaErr`);
+  document.getElementById(`${PREFIX}AnalistaEntregableId`).value = id;
+  document.getElementById(`${PREFIX}AnalistaResumen`).innerHTML = `
+    <div><strong>Orden:</strong> ${esc(ordenLabel(row))}</div>
+    <div><strong>Entregable:</strong> N.° ${esc(row.numero_entrega ?? '—')}</div>
+    <div><strong>Proveedor:</strong> ${esc(row.proveedor_razon_social || '—')}</div>
+    <div><strong>Coordinador actual:</strong> ${esc(row.responsable || '—')}</div>`;
+  if (select) select.innerHTML = '<option value="">Cargando analistas…</option>';
+  if (submit) submit.disabled = true;
+  errBox?.classList.add('d-none');
+  window.bootstrap.Modal.getOrCreateInstance(
+    document.getElementById(`${PREFIX}AnalistaModal`),
+  ).show();
+  try {
+    const response = await entregablesServiciosService.listarAnalistasCM(id);
+    const analistas = response?.data || response || [];
+    if (select) {
+      select.innerHTML = [
+        '<option value="">Seleccione un analista</option>',
+        ...analistas.map((analista) => `
+          <option value="${esc(analista.id)}">
+            ${esc(analista.nombre || analista.username || `Usuario ${analista.id}`)}
+            ${analista.cargo ? ` — ${esc(analista.cargo)}` : ''}
+          </option>`),
+      ].join('');
+    }
+    if (!analistas.length) throw new Error('No existen Analistas CM activos disponibles.');
+  } catch (error) {
+    if (select) select.innerHTML = '<option value="">Sin analistas disponibles</option>';
+    if (errBox) {
+      errBox.textContent = error.message || 'No se pudieron cargar los Analistas CM';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+async function submitDerivarAnalistaCM(event) {
+  event.preventDefault();
+  const id = document.getElementById(`${PREFIX}AnalistaEntregableId`).value;
+  const responsableId = document.getElementById(`${PREFIX}AnalistaResponsable`).value;
+  const submit = document.getElementById(`${PREFIX}AnalistaBtn`);
+  const errBox = document.getElementById(`${PREFIX}AnalistaErr`);
+  if (!responsableId) return;
+  try {
+    if (submit) submit.disabled = true;
+    await entregablesServiciosService.derivarAnalistaCM(id, Number(responsableId));
+    window.bootstrap.Modal.getInstance(
+      document.getElementById(`${PREFIX}AnalistaModal`),
+    )?.hide();
+    await load();
+  } catch (error) {
+    if (errBox) {
+      errBox.textContent = error.message || 'No se pudo derivar el entregable al Analista CM';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submit) submit.disabled = !document.getElementById(`${PREFIX}AnalistaResponsable`).value;
+  }
+}
+
+async function openDerivarPago(id) {
+  const row = entregablesCache.find(
+    (item) => String(item.orden_entrega_id) === String(id),
+  ) || {};
+  const select = document.getElementById(`${PREFIX}PagoResponsable`);
+  const submit = document.getElementById(`${PREFIX}PagoBtn`);
+  const errBox = document.getElementById(`${PREFIX}PagoErr`);
+  document.getElementById(`${PREFIX}PagoEntregableId`).value = id;
+  if (select) select.innerHTML = '<option value="">Cargando analistas…</option>';
+  if (submit) submit.disabled = true;
+  errBox?.classList.add('d-none');
+  window.bootstrap.Modal.getOrCreateInstance(
+    document.getElementById(`${PREFIX}PagoModal`),
+  ).show();
+  try {
+    const [detalleResponse, conformidad, analistasResponse] = await Promise.all([
+      entregablesServiciosService.getDetalle(id),
+      confVigente(id),
+      entregablesServiciosService.listarAnalistasPago(id),
+    ]);
+    const detalle = detalleResponse?.data || detalleResponse || {};
+    const recepcion = detalle.recepcion_vigente || {};
+    const analistas = analistasResponse?.data || analistasResponse || [];
+    document.getElementById(`${PREFIX}PagoResumen`).innerHTML = `
+      <div><strong>Orden:</strong> ${esc(ordenLabel(row))}</div>
+      <div><strong>Entregable:</strong> N.° ${esc(row.numero_entrega ?? '—')}</div>
+      <div><strong>Proveedor:</strong> ${esc(row.proveedor_razon_social || '—')}</div>
+      <div><strong>Importe:</strong> ${esc(row.precio_total != null ? fmtMonto(row.precio_total) : '—')}</div>
+      <div><strong>Presentación vigente:</strong> ${esc(recepcion.id ? `Recepción N.° ${recepcion.numero_recepcion || '—'}` : '—')}</div>
+      <div><strong>Acta de Conformidad vigente:</strong> ${esc(conformidad.acta ? `V${conformidad.acta.version || 1}` : '—')}</div>
+      <div><strong>Acta firmada vigente:</strong> ${esc(conformidad.firmada ? `V${conformidad.firmada.version || 1}` : '—')}</div>`;
+    if (select) {
+      select.innerHTML = [
+        '<option value="">Seleccione un analista</option>',
+        ...analistas.map((analista) => `
+          <option value="${esc(analista.id)}">
+            ${esc(analista.nombre || analista.username || `Usuario ${analista.id}`)}
+            ${analista.cargo ? ` — ${esc(analista.cargo)}` : ''}
+          </option>`),
+      ].join('');
+    }
+    if (!analistas.length) throw new Error('No existen Analistas de Pago activos disponibles.');
+  } catch (error) {
+    if (select) select.innerHTML = '<option value="">Sin analistas disponibles</option>';
+    if (errBox) {
+      errBox.textContent = error.message || 'No se pudieron cargar los Analistas de Pago';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+async function submitDerivarPago(event) {
+  event.preventDefault();
+  const id = document.getElementById(`${PREFIX}PagoEntregableId`).value;
+  const usuarioDestinoId = document.getElementById(`${PREFIX}PagoResponsable`).value;
+  const submit = document.getElementById(`${PREFIX}PagoBtn`);
+  const errBox = document.getElementById(`${PREFIX}PagoErr`);
+  if (!usuarioDestinoId) return;
+  try {
+    if (submit) submit.disabled = true;
+    await entregablesServiciosService.derivarPago(id, Number(usuarioDestinoId));
+    window.bootstrap.Modal.getInstance(
+      document.getElementById(`${PREFIX}PagoModal`),
+    )?.hide();
+    await load();
+  } catch (error) {
+    if (errBox) {
+      errBox.textContent = error.message || 'No se pudo derivar el entregable a Pago';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submit) submit.disabled = !document.getElementById(`${PREFIX}PagoResponsable`).value;
+  }
+}
+
+async function openTrazabilidad(id) {
+  const body = document.getElementById(`${PREFIX}TrazabilidadBody`);
+  if (body) body.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span></div>';
+  window.bootstrap.Modal.getOrCreateInstance(
+    document.getElementById(`${PREFIX}TrazabilidadModal`),
+  ).show();
+  try {
+    const response = await entregablesServiciosService.listarTrazabilidad(id);
+    const eventos = response?.data || response || [];
+    if (body) {
+      body.innerHTML = eventos.length ? eventos.map((evento) => `
+        <div class="border rounded p-3 mb-2 small">
+          <div class="d-flex justify-content-between gap-2">
+            <strong>${esc(evento.evento_codigo || 'Evento')}</strong>
+            <span class="text-muted">${esc(fmtFecha(evento.ocurrido_at))}</span>
+          </div>
+          <div class="mt-1">
+            ${esc(evento.etapa_anterior_codigo || '—')}
+            <i class="bi bi-arrow-right"></i>
+            ${esc(evento.etapa_nueva_codigo || '—')}
+          </div>
+          <div class="text-muted">
+            ${esc(evento.responsable_anterior_nombre || evento.responsable_anterior_unidad || '—')}
+            → ${esc(evento.responsable_nuevo_nombre || evento.responsable_nuevo_unidad || '—')}
+          </div>
+          <div class="text-muted">Ejecutado por: ${esc(evento.ejecutado_usuario_nombre || evento.ejecutado_por || '—')}</div>
+          ${evento.motivo ? `<div class="mt-2">${esc(evento.motivo)}</div>` : ''}
+        </div>
+      `).join('') : '<p class="text-muted mb-0">Sin eventos registrados.</p>';
+    }
+  } catch (error) {
+    if (body) body.innerHTML = `<div class="alert alert-danger mb-0">${esc(error.message || 'No se pudo cargar la trazabilidad')}</div>`;
   }
 }
 
@@ -508,10 +1231,13 @@ async function descargarActaFirmada(id) {
 function renderConformidadHtml(conf, entregaId) {
   const actas = conf?.actas || [];
   const visados = conf?.visados || [];
+  const vigenciaBadge = (item) => item.vigente_operativa
+    ? '<span class="badge bg-success">Vigente</span>'
+    : '<span class="badge bg-light text-muted">Histórica</span>';
   const actaRow = (a) => `
     <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
       <div>
-        <div class="fw-semibold">Acta generada <span class="badge bg-secondary">V${esc(a.version)}</span></div>
+        <div class="fw-semibold">Acta de Conformidad <span class="badge bg-secondary">V${esc(a.version)}</span> ${vigenciaBadge(a)}</div>
         <div class="text-muted">${esc(a.estado_documental || '')} · ${esc(fmtFecha(a.generado_at))} · ${esc(a.generado_por || '')}</div>
       </div>
       <div class="text-nowrap">
@@ -522,7 +1248,7 @@ function renderConformidadHtml(conf, entregaId) {
   const visadoRow = (v) => `
     <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
       <div>
-        <div class="fw-semibold">Acta firmada <span class="badge bg-secondary">V${esc(v.version)}</span> ${v.vigente ? '<span class="badge bg-success">Vigente</span>' : '<span class="badge bg-light text-muted">Histórica</span>'}</div>
+        <div class="fw-semibold">Acta firmada <span class="badge bg-secondary">V${esc(v.acta_version || v.version)}</span> ${vigenciaBadge(v)}</div>
         <div class="text-muted">${esc(v.nombre || '')} · ${esc(fmtFecha(v.created_at))} · ${esc(v.created_by || '')}</div>
       </div>
       <div class="text-nowrap">
@@ -530,11 +1256,58 @@ function renderConformidadHtml(conf, entregaId) {
         <button type="button" class="btn btn-sm btn-outline-secondary pe-firmada-dl" data-entrega="${esc(entregaId)}" data-id="${esc(v.id)}" data-name="${esc(v.nombre || 'acta-firmada.pdf')}"><i class="bi bi-download"></i> Descargar</button>
       </div>
     </div>`;
+  const grupos = new Map();
+  const agregar = (item, tipo) => {
+    const key = item.recepcion_id == null ? 'legacy' : String(item.recepcion_id);
+    if (!grupos.has(key)) {
+      grupos.set(key, {
+        recepcion_id: item.recepcion_id,
+        numero_recepcion: item.numero_recepcion,
+        tipo_recepcion: item.tipo_recepcion,
+        fecha_recepcion_mesa_partes: item.fecha_recepcion_mesa_partes,
+        numero_expediente_sgd: item.numero_expediente_sgd,
+        actas: [],
+        visados: [],
+      });
+    }
+    grupos.get(key)[tipo].push(item);
+  };
+  actas.forEach((acta) => agregar(acta, 'actas'));
+  visados.forEach((visado) => agregar(visado, 'visados'));
+  const gruposOrdenados = [...grupos.values()].sort((a, b) => {
+    if (a.recepcion_id == null) return 1;
+    if (b.recepcion_id == null) return -1;
+    return Number(a.numero_recepcion || 0) - Number(b.numero_recepcion || 0);
+  });
+  const renderGrupo = (grupo) => {
+    const esLegacy = grupo.recepcion_id == null;
+    const esInicial = String(grupo.tipo_recepcion || '').toUpperCase() === 'INICIAL';
+    const titulo = esLegacy
+      ? 'ACTAS LEGACY SIN PRESENTACIÓN VINCULADA'
+      : (esInicial
+        ? 'PRESENTACIÓN INICIAL'
+        : `SUBSANACIÓN ${Math.max(1, Number(grupo.numero_recepcion || 1) - 1)}`);
+    return `
+      <div class="border rounded p-3 mb-3">
+        <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+          <div>
+            <div class="fw-semibold small">${esc(titulo)}</div>
+            <div class="text-muted small">${esLegacy
+              ? 'Documento histórico'
+              : `Recepción ${esc(grupo.recepcion_id)} · Presentación N.° ${esc(grupo.numero_recepcion || '—')}`}</div>
+          </div>
+          ${esLegacy ? '' : `<div class="text-muted small text-end">${esc(fmtFecha(grupo.fecha_recepcion_mesa_partes))}<br>SGD: ${esc(grupo.numero_expediente_sgd || '—')}</div>`}
+        </div>
+        ${grupo.actas.map(actaRow).join('')}
+        ${grupo.visados.map(visadoRow).join('')}
+      </div>`;
+  };
   return `
     <div class="col-12"><div class="card"><div class="card-body">
       <h6 class="text-muted text-uppercase small mb-2">Conformidad del entregable</h6>
-      ${actas.length ? '<div class="mb-1 mt-2"><strong class="small">ACTA GENERADA</strong></div>' + actas.map(actaRow).join('') : '<p class="text-muted small mb-0">Sin acta generada.</p>'}
-      ${visados.length ? '<div class="mb-1 mt-2"><strong class="small">ACTA FIRMADA</strong></div>' + visados.map(visadoRow).join('') : ''}
+      ${gruposOrdenados.length
+        ? gruposOrdenados.map(renderGrupo).join('')
+        : '<p class="text-muted small mb-0">Sin actas de conformidad.</p>'}
     </div></div></div>`;
 }
 
@@ -573,6 +1346,13 @@ async function openDetalle(id) {
     const recepciones = data.recepciones || [];
     const docsEntregable = data.documentos_entregable || [];
     const docsOrden = data.expediente?.documentos || [];
+    const observaciones = data.observaciones || [];
+    const subsanaciones = recepciones
+      .filter((r) => r.tipo_recepcion === 'SUBSANACION')
+      .sort((a, b) => Number(a.numero_recepcion) - Number(b.numero_recepcion));
+    const numeroSubsanacion = new Map(
+      subsanaciones.map((r, index) => [Number(r.id), index + 1]),
+    );
     let conformidad = { actas: [], visados: [] };
     try {
       const confResp = await entregablesServiciosService.listarConformidad(id);
@@ -594,10 +1374,15 @@ async function openDetalle(id) {
           </div>
         </div>
         <div class="col-md-6"><div class="card h-100"><div class="card-body">
-          <h6 class="text-muted text-uppercase small mb-3">Recepciones registradas</h6>
+          <h6 class="text-muted text-uppercase small mb-3">Presentaciones / Recepciones</h6>
           ${recepciones.length ? recepciones.map((r) => `
             <div class="border rounded p-2 mb-2 small">
-              <div class="d-flex justify-content-between"><strong>Recepción N.° ${esc(r.numero_recepcion)}</strong><span class="badge bg-secondary">${esc(r.tipo_recepcion || '—')}</span></div>
+              <div class="d-flex justify-content-between">
+                <strong>Presentación N.° ${esc(r.numero_recepcion)}</strong>
+                <span class="badge bg-secondary">${r.tipo_recepcion === 'SUBSANACION'
+                  ? `SUBSANACIÓN ${esc(numeroSubsanacion.get(Number(r.id)) || '')}`
+                  : 'INICIAL'}</span>
+              </div>
               <div class="text-muted">Mesa de Partes: ${esc(fmtFecha(r.fecha_recepcion_mesa_partes))}</div>
               <div class="text-muted">Expediente SGD: ${esc(r.numero_expediente_sgd || '—')}</div>
             </div>`).join('') : '<p class="text-muted small mb-0">Sin recepciones registradas.</p>'}
@@ -620,6 +1405,27 @@ async function openDetalle(id) {
               </div>
               <button type="button" class="btn btn-sm btn-outline-primary pe-orden-doc" data-kind="${esc(doc.kind || 'orden')}" data-id="${esc(doc.id || doc.documentoId || '')}" data-name="${esc(doc.nombre || 'documento')}" data-orden="${esc(data.orden_id)}" ${doc.previewDisponible === false ? 'disabled' : ''}><i class="bi bi-eye"></i> Ver</button>
             </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos de la orden.</p>'}
+        </div></div></div>
+        <div class="col-12"><div class="card"><div class="card-body">
+          <h6 class="text-muted text-uppercase small mb-2">Observaciones</h6>
+          ${observaciones.length ? observaciones.map((obs) => {
+            const recepcionObservada = recepciones.find(
+              (r) => Number(r.id) === Number(obs.recepcion_id),
+            );
+            const recepcionSubsanacion = recepciones.find(
+              (r) => Number(r.id) === Number(obs.recepcion_subsanacion_id),
+            );
+            return `
+              <div class="border rounded p-2 mb-2 small">
+                <div class="d-flex justify-content-between gap-2">
+                  <strong>${esc(fmtFecha(obs.observado_at))}</strong>
+                  <span class="badge bg-secondary">${esc(obs.estado || '—')}</span>
+                </div>
+                <div class="mt-1">${esc(obs.motivo || '—')}</div>
+                <div class="text-muted">Usuario observador: ${esc(obs.observado_por || '—')} · Recepción observada: N.° ${esc(recepcionObservada?.numero_recepcion ?? obs.recepcion_id ?? '—')}</div>
+                ${recepcionSubsanacion ? `<div class="text-muted">→ Subsanación vinculada: Presentación N.° ${esc(recepcionSubsanacion.numero_recepcion)} · ${esc(fmtFecha(obs.subsanado_at))} · ${esc(obs.subsanado_por || '—')}</div>` : ''}
+              </div>`;
+          }).join('') : '<p class="text-muted small mb-0">Sin observaciones formales.</p>'}
         </div></div></div>
         ${renderConformidadHtml(conformidad, id)}
       </div>`;
@@ -702,6 +1508,23 @@ export function initPresentacionEntregableView() {
     renderCurrent();
   });
   document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', submitRegistrarRecepcion);
+  document.getElementById(`${PREFIX}ObservarForm`)?.addEventListener('submit', submitObservarEntregable);
+  document.getElementById(`${PREFIX}SubsanarForm`)?.addEventListener('submit', submitSubsanarEntregable);
+  document.getElementById(`${PREFIX}DerivarForm`)?.addEventListener('submit', submitDerivarCoordinadorCM);
+  document.getElementById(`${PREFIX}DerivarResponsable`)?.addEventListener('change', (event) => {
+    const submit = document.getElementById(`${PREFIX}DerivarBtn`);
+    if (submit) submit.disabled = !event.target.value;
+  });
+  document.getElementById(`${PREFIX}AnalistaForm`)?.addEventListener('submit', submitDerivarAnalistaCM);
+  document.getElementById(`${PREFIX}AnalistaResponsable`)?.addEventListener('change', (event) => {
+    const submit = document.getElementById(`${PREFIX}AnalistaBtn`);
+    if (submit) submit.disabled = !event.target.value;
+  });
+  document.getElementById(`${PREFIX}PagoForm`)?.addEventListener('submit', submitDerivarPago);
+  document.getElementById(`${PREFIX}PagoResponsable`)?.addEventListener('change', (event) => {
+    const submit = document.getElementById(`${PREFIX}PagoBtn`);
+    if (submit) submit.disabled = !event.target.value;
+  });
   document.getElementById(`${PREFIX}ActaGenerarBtn`)?.addEventListener('click', () => generarActa(document.getElementById(`${PREFIX}ActaEntregableId`).value));
   document.getElementById(`${PREFIX}FirmadaAdjBtn`)?.addEventListener('click', adjuntarActaFirmada);
   document.body.addEventListener('click', onDetalleDocPreview);

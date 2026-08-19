@@ -18,6 +18,43 @@ export const entregablesServiciosService = {
   registrarRecepcion(id, body) {
     return api.post(`${BASE}/${id}/registrar-recepcion`, body);
   },
+  modificarRecepcion(id, body) {
+    return api.put(`${BASE}/${id}/recepcion`, body);
+  },
+  observarEntregable(id, body) {
+    return api.post(`${BASE}/${id}/observaciones`, body);
+  },
+  subsanarEntregable(id, body) {
+    return api.post(`${BASE}/${id}/subsanaciones`, body);
+  },
+  listarCoordinadoresCM(id) {
+    return api.get(`${BASE}/${id}/coordinadores-cm`);
+  },
+  derivarCoordinadorCM(id, responsableId) {
+    return api.post(`${BASE}/${id}/derivar-coordinador-cm`, {
+      responsable_id: responsableId,
+    });
+  },
+  listarAnalistasCM(id) {
+    return api.get(`${BASE}/${id}/analistas-cm`);
+  },
+  derivarAnalistaCM(id, responsableId) {
+    return api.post(`${BASE}/${id}/derivar-analista-cm`, {
+      responsable_id: responsableId,
+    });
+  },
+  observarAnalistaCM(id, motivo) {
+    return api.post(`${BASE}/${id}/observaciones-analista-cm`, { motivo });
+  },
+  listarAnalistasPago(id) {
+    return api.get(`${BASE}/${id}/analistas-pago`);
+  },
+  derivarPago(id, usuarioDestinoId) {
+    return api.post(`${BASE}/${id}/derivar-pago`, { usuarioDestinoId });
+  },
+  listarTrazabilidad(id) {
+    return api.get(`${BASE}/${id}/trazabilidad`);
+  },
   getDocumento(recepcionId, documentoId) {
     return api.get(`${BASE}/recepciones/${recepcionId}/documentos/${documentoId}`);
   },

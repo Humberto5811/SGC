@@ -8,6 +8,17 @@ import {
   listarBandejaOrdenesEntregablesServicios,
   getDetalleEntregableServicio,
   registrarRecepcionEntregable,
+  modificarRecepcionEntregable,
+  observarEntregable,
+  subsanarEntregable,
+  listarCoordinadoresCMEntregable,
+  derivarEntregableCoordinadorCM,
+  listarAnalistasCMEntregable,
+  derivarEntregableAnalistaCM,
+  listarAnalistasPagoEntregable,
+  observarEntregableAnalistaCM,
+  derivarEntregablePago,
+  listarTrazabilidadEntregable,
   getDocumentoRecepcionEntregable,
   getDocumentoRecepcionEntregableBytes,
   listarConformidadEntregable,
@@ -36,6 +47,9 @@ function requireAuthContext(req, res, next) {
     alcance_datos: u.alcance_datos,
     area_id: u.area_id,
     permisos: u.permisos,
+    cargo: u.cargo,
+    username: u.username,
+    nombre: u.nombre,
   };
   return next();
 }
@@ -63,6 +77,82 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.get('/:id/coordinadores-cm', async (req, res, next) => {
+  try {
+    const data = await listarCoordinadoresCMEntregable(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/derivar-coordinador-cm', async (req, res, next) => {
+  try {
+    const data = await derivarEntregableCoordinadorCM(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/analistas-cm', async (req, res, next) => {
+  try {
+    const data = await listarAnalistasCMEntregable(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/derivar-analista-cm', async (req, res, next) => {
+  try {
+    const data = await derivarEntregableAnalistaCM(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/analistas-pago', async (req, res, next) => {
+  try {
+    const data = await listarAnalistasPagoEntregable(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/observaciones-analista-cm', async (req, res, next) => {
+  try {
+    const data = await observarEntregableAnalistaCM(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/derivar-pago', async (req, res, next) => {
+  try {
+    const data = await derivarEntregablePago(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/trazabilidad', async (req, res, next) => {
+  try {
+    const data = await listarTrazabilidadEntregable(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
 router.post('/:id/registrar-recepcion', async (req, res, next) => {
   try {
     const data = await registrarRecepcionEntregable(
@@ -72,6 +162,42 @@ router.post('/:id/registrar-recepcion', async (req, res, next) => {
       req.esRol,
     );
     res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id/recepcion', async (req, res, next) => {
+  try {
+    const data = await modificarRecepcionEntregable(
+      req.params.id,
+      req.body || {},
+      req.esUsuario,
+      req.esRol,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/observaciones', async (req, res, next) => {
+  try {
+    const data = await observarEntregable(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/subsanaciones', async (req, res, next) => {
+  try {
+    const data = await subsanarEntregable(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
   } catch (err) { next(err); }
 });
 

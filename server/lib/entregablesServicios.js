@@ -5,8 +5,8 @@
  * Aplica solo a SERVICIO / LOCACIÓN (OS). BIEN (OC) sigue en Recepción de Bienes.
  *
  * La bandeja NO persiste filas "pendientes": deriva entregables ACTIVOS de órdenes
- * notificadas (o estados posteriores compatibles). La recepción real se registra en
- * entregable_recepciones (1 entrega → N recepciones) sin sobrescribir historial.
+ * notificadas (o estados posteriores compatibles). Mientras no exista observación
+ * formal, cada entregable conserva una sola recepción INICIAL editable.
  */
 import { getClient, query } from '../db.js';
 import { buildEntregaContract } from '../../shared/entregaContractual.js';
@@ -15,9 +15,25 @@ import {
   resolveOrdenFechaNotificacion,
 } from '../../shared/ordenCronogramaContractual.js';
 import { toIsoDateString } from './diasPlazo.js';
-import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 import { resolverCentroDesdeRequerimiento } from './recepcionBienesAlcance.js';
 import { generateActaConformidadServiciosPdfServer } from './entregableConformidadPdfServer.js';
+import {
+  listarEstadosResponsablesEntregables,
+  obtenerEstadoResponsableEntregable,
+  transicionarEntregable,
+} from './entregableEstadoPersistido.js';
+import { EVENTOS } from '../../shared/workflow/eventos.js';
+import {
+  PERFILES_FUNCIONALES,
+  resolveFunctionalProfiles,
+} from '../utils/userRoleCatalog.js';
+
+export {
+  inicializarEstadoResponsableEntregable,
+  listarEstadosResponsablesEntregables,
+  obtenerEstadoResponsableEntregable,
+  transicionarEntregable,
+} from './entregableEstadoPersistido.js';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MIME_ALOWED = new Set([
@@ -96,12 +112,17 @@ export function mapEntregableBandejaRow(row) {
   // RC8.15.5B — situación DERIVADA del entregable (desde tablas reales, sin duplicar estado workflow).
   const actaGeneradaVersion = row.acta_generada_version != null ? Number(row.acta_generada_version) : 0;
   const firmadaVigenteCount = row.firmada_vigente_count != null ? Number(row.firmada_vigente_count) : 0;
+  const observacionAbierta = row.observacion_abierta || null;
   let estadoEjecucion = recepcionesCount > 0 ? 'RECIBIDO' : 'PENDIENTE_RECEPCION';
-  if (actaGeneradaVersion > 0) estadoEjecucion = 'ACTA_GENERADA';
-  if (firmadaVigenteCount > 0) estadoEjecucion = 'CONFORME';
+  if (observacionAbierta) estadoEjecucion = 'OBSERVADO';
+  else if (actaGeneradaVersion > 0) estadoEjecucion = 'ACTA_GENERADA';
+  else if (ultimaRecepcion?.tipo_recepcion === 'SUBSANACION') estadoEjecucion = 'SUBSANADO';
+  if (!observacionAbierta && firmadaVigenteCount > 0) estadoEjecucion = 'CONFORME';
   const situacionLabel = {
     PENDIENTE_RECEPCION: 'Pendiente de recepción',
     RECIBIDO: 'Recibido',
+    OBSERVADO: 'Observado',
+    SUBSANADO: 'Subsanado',
     ACTA_GENERADA: 'Acta generada',
     CONFORME: 'Conforme',
   }[estadoEjecucion] || 'Recibido';
@@ -139,6 +160,7 @@ export function mapEntregableBandejaRow(row) {
     fecha_recepcion_mesa_partes: ultimaRecepcion?.fecha_recepcion_mesa_partes || null,
     numero_expediente_sgd: ultimaRecepcion?.numero_expediente_sgd || null,
     ultima_recepcion: ultimaRecepcion,
+    observacion_abierta: observacionAbierta,
     estado_ejecucion: estadoEjecucion,
     estado_ejecucion_label: situacionLabel,
     // RC8.15.3 — datos de orden y de ítem contractual por entregable.
@@ -214,16 +236,49 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
         SELECT COUNT(*)::int FROM orden_entregas oe2
         WHERE oe2.orden_id = oc.id AND oe2.estado = 'ACTIVO'
       ) AS total_entregas,
+      (
+        SELECT json_build_object(
+          'id', eo.id,
+          'recepcion_id', eo.recepcion_id,
+          'motivo', eo.motivo,
+          'estado', eo.estado,
+          'observado_por', eo.observado_por,
+          'observado_at', eo.observado_at
+        )
+        FROM entregable_observaciones eo
+        WHERE eo.orden_entrega_id = oe.id
+          AND eo.estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+        ORDER BY eo.observado_at DESC, eo.id DESC
+        LIMIT 1
+      ) AS observacion_abierta,
       oei.cantidad,
       oei.precio_unitario,
       oei.precio_total,
       (
         SELECT MAX(eca.version)::int FROM entregable_conformidad_actas eca
         WHERE eca.orden_entrega_id = oe.id
+          AND eca.recepcion_id = (
+            SELECT er.id FROM entregable_recepciones er
+            WHERE er.orden_entrega_id = oe.id
+              AND UPPER(COALESCE(er.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+            ORDER BY er.numero_recepcion DESC, er.id DESC
+            LIMIT 1
+          )
       ) AS acta_generada_version,
       (
-        SELECT COUNT(*)::int FROM entregable_conformidad_acta_visados ecav
-        WHERE ecav.orden_entrega_id = oe.id AND ecav.vigente = TRUE AND ecav.deleted_at IS NULL
+        SELECT COUNT(*)::int
+        FROM entregable_conformidad_acta_visados ecav
+        JOIN entregable_conformidad_actas eca ON eca.id = ecav.acta_id
+        WHERE ecav.orden_entrega_id = oe.id
+          AND ecav.vigente = TRUE
+          AND ecav.deleted_at IS NULL
+          AND eca.recepcion_id = (
+            SELECT er.id FROM entregable_recepciones er
+            WHERE er.orden_entrega_id = oe.id
+              AND UPPER(COALESCE(er.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+            ORDER BY er.numero_recepcion DESC, er.id DESC
+            LIMIT 1
+          )
       ) AS firmada_vigente_count
     FROM orden_entregas oe
     JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
@@ -273,9 +328,12 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
     });
   });
 
-  await enrichEstadoResponsableForBandeja(list, 'requerimiento_id');
+  const estadosPorEntregable = await listarEstadosResponsablesEntregables(
+    list.map((item) => item.orden_entrega_id),
+  );
   for (const item of list) {
-    const erv = item.estado_responsable_vigente;
+    const erv = estadosPorEntregable.get(Number(item.orden_entrega_id)) || null;
+    item.estado_responsable_vigente = erv;
     item.responsable = erv?.responsableNombre
       || erv?.responsableUsername
       || erv?.responsableUnidad
@@ -283,11 +341,61 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
     item.responsable_tipo = erv?.responsableTipo || 'PENDIENTE';
     item.responsable_usuario_id = erv?.responsableUsuarioId ?? null;
     const responsableId = Number(item.responsable_usuario_id);
-    item.puede_gestionar_conformidad = esAdmin(userCtx)
+    const autorizado = esAdmin(userCtx)
       || (Number.isFinite(responsableId) && responsableId > 0 && Number(userCtx?.id) === responsableId);
-    // RC8.15.1F — etapa del expediente desde ERV (humano), separada de la situación.
-    if (erv && !item.estado_etapa_label) {
-      item.estado_etapa_codigo = erv.estadoCodigo || 'PRESENTACION_ENTREGABLES';
+    const responsablePersonaActual = Number.isFinite(responsableId)
+      && responsableId > 0
+      && Number(userCtx?.id) === responsableId;
+    const perfilesUsuario = resolveFunctionalProfiles(userCtx);
+    const etapaCodigo = String(erv?.etapaCodigo || erv?.estadoCodigo || '').toUpperCase();
+    const enPresentacion = etapaCodigo === 'PRESENTACION_ENTREGABLES';
+    const enRevisionCoordinador = etapaCodigo === 'REVISION_COORDINADOR_CM';
+    const enRevisionAnalista = etapaCodigo === 'REVISION_ANALISTA_CM';
+    const enDerivacionPago = etapaCodigo === 'DERIVACION_PAGO';
+    const analistaCMResponsable = esAdmin(userCtx)
+      || (responsablePersonaActual
+        && perfilesUsuario.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES));
+    item.puede_registrar_recepcion = autorizado && enPresentacion;
+    item.puede_gestionar_conformidad = autorizado && enPresentacion && !item.observacion_abierta;
+    item.puede_observar = autorizado
+      && enPresentacion
+      && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo)
+      && Boolean(item.ultima_recepcion?.id)
+      && !item.observacion_abierta;
+    item.puede_subsanar = autorizado
+      && enPresentacion
+      && item.situacion_codigo === 'OBSERVADO'
+      && Boolean(item.observacion_abierta?.id);
+    item.puede_derivar_coordinador_cm = autorizado
+      && enPresentacion
+      && item.situacion_codigo === 'CONFORME'
+      && item.acta_generada_version > 0
+      && item.firmada_vigente
+      && !item.observacion_abierta;
+    item.puede_observar_coordinador_cm = responsablePersonaActual
+      && perfilesUsuario.includes(PERFILES_FUNCIONALES.COORDINADOR_CM)
+      && enRevisionCoordinador
+      && !item.observacion_abierta;
+    item.puede_derivar_analista_cm = responsablePersonaActual
+      && perfilesUsuario.includes(PERFILES_FUNCIONALES.COORDINADOR_CM)
+      && enRevisionCoordinador
+      && item.situacion_codigo === 'CONFORME'
+      && !item.observacion_abierta;
+    item.puede_observar_analista_cm = analistaCMResponsable
+      && enRevisionAnalista
+      && item.situacion_codigo === 'CONFORME'
+      && !item.observacion_abierta;
+    item.puede_derivar_pago = analistaCMResponsable
+      && enRevisionAnalista
+      && item.situacion_codigo === 'CONFORME'
+      && item.acta_generada_version > 0
+      && item.firmada_vigente
+      && !item.observacion_abierta;
+    item.puede_ver_trazabilidad = Boolean(erv)
+      && (enPresentacion || enRevisionCoordinador || enRevisionAnalista || enDerivacionPago);
+    // Etapa canónica del entregable (específica o fallback histórico).
+    if (erv) {
+      item.estado_etapa_codigo = erv.etapaCodigo || erv.estadoCodigo || 'PRESENTACION_ENTREGABLES';
       item.estado_etapa_label = (erv.etapaLabel || erv.etapa_label || 'Presentación de Entregables');
       item.etapa_label = item.estado_etapa_label;
     }
@@ -408,17 +516,72 @@ export async function listarBandejaOrdenesEntregablesServicios(userCtx = null) {
     };
   });
 
-  await enrichEstadoResponsableForBandeja(list, 'requerimiento_id');
+  const ordenIds = list.map((item) => Number(item.orden_id));
+  const entregasPorOrden = new Map(ordenIds.map((id) => [id, []]));
+  if (ordenIds.length) {
+    const { rows: entregas } = await query(`
+      SELECT id, orden_id
+      FROM orden_entregas
+      WHERE orden_id = ANY($1::int[]) AND estado='ACTIVO'
+      ORDER BY orden_id, numero_entrega, id
+    `, [ordenIds]);
+    for (const entrega of entregas) {
+      entregasPorOrden.get(Number(entrega.orden_id))?.push(Number(entrega.id));
+    }
+  }
+  const todosLosEntregables = [...new Set([...entregasPorOrden.values()].flat())];
+  const estadosPorEntregable = await listarEstadosResponsablesEntregables(todosLosEntregables);
   for (const item of list) {
-    const erv = item.estado_responsable_vigente;
-    item.responsable = erv?.responsableNombre
-      || erv?.responsableUsername
-      || erv?.responsableUnidad
-      || (erv?.responsableTipo === 'PENDIENTE' ? 'Pendiente' : '');
-    item.responsable_tipo = erv?.responsableTipo || 'PENDIENTE';
-    item.responsable_usuario_id = erv?.responsableUsuarioId ?? null;
-    item.estado_etapa_codigo = erv?.estadoCodigo || 'PRESENTACION_ENTREGABLES';
-    item.estado_etapa_label = erv?.etapaLabel || erv?.etapa_label || 'Presentación de Entregables';
+    const contratos = (entregasPorOrden.get(Number(item.orden_id)) || [])
+      .map((id) => estadosPorEntregable.get(id))
+      .filter(Boolean);
+    const estados = new Map();
+    const responsables = new Map();
+    for (const contrato of contratos) {
+      const etapaCodigo = contrato.etapaCodigo || contrato.estadoCodigo || '';
+      const etapaLabel = contrato.etapaLabel || contrato.estadoLabel || etapaCodigo;
+      const estadoKey = `${etapaCodigo}|${etapaLabel}`;
+      const estado = estados.get(estadoKey) || {
+        codigo: etapaCodigo,
+        label: etapaLabel,
+        cantidad: 0,
+      };
+      estado.cantidad += 1;
+      estados.set(estadoKey, estado);
+
+      const nombre = contrato.responsableNombre
+        || contrato.responsableUsername
+        || contrato.responsableUnidad
+        || (contrato.responsableTipo === 'PENDIENTE' ? 'Pendiente' : '');
+      const responsableKey = `${contrato.responsableTipo}|${contrato.responsableUsuarioId || ''}|${contrato.responsableUnidad || ''}|${nombre}`;
+      const responsable = responsables.get(responsableKey) || {
+        tipo: contrato.responsableTipo,
+        usuario_id: contrato.responsableUsuarioId,
+        unidad: contrato.responsableUnidad,
+        nombre,
+        cantidad: 0,
+      };
+      responsable.cantidad += 1;
+      responsables.set(responsableKey, responsable);
+    }
+    item.estados_entregables = [...estados.values()];
+    item.responsables_entregables = [...responsables.values()];
+    item.estado_agregado_heterogeneo = estados.size > 1 || responsables.size > 1;
+    if (estados.size === 1 && responsables.size === 1) {
+      const estado = item.estados_entregables[0];
+      const responsable = item.responsables_entregables[0];
+      item.estado_etapa_codigo = estado.codigo;
+      item.estado_etapa_label = estado.label;
+      item.responsable = responsable.nombre;
+      item.responsable_tipo = responsable.tipo;
+      item.responsable_usuario_id = responsable.usuario_id ?? null;
+    } else {
+      item.estado_etapa_codigo = '';
+      item.estado_etapa_label = '';
+      item.responsable = '';
+      item.responsable_tipo = 'PENDIENTE';
+      item.responsable_usuario_id = null;
+    }
   }
   return list;
 }
@@ -427,52 +590,92 @@ export async function listarBandejaOrdenesEntregablesServicios(userCtx = null) {
 export async function listarConformidadEntregable(ordenEntregaId) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   const eid = Number(ordenEntregaId);
-  const [actasRes, visadosRes] = await Promise.all([
+  const [recepcionVigente, actasRes, visadosRes] = await Promise.all([
+    obtenerRecepcionVigenteEntregable(eid),
     query(
-      `SELECT id, orden_id, orden_entrega_id, numero_acta, version, estado_documental,
-              documento_nombre, documento_mime, generado_at, generado_por, created_at, updated_at
-       FROM entregable_conformidad_actas
-       WHERE orden_entrega_id = $1
-       ORDER BY version DESC, id DESC`,
+      `SELECT a.id, a.orden_id, a.orden_entrega_id, a.recepcion_id, a.numero_acta,
+              a.version, a.estado_documental, a.documento_nombre, a.documento_mime,
+              a.generado_at, a.generado_por, a.created_at, a.updated_at,
+              r.numero_recepcion, r.tipo_recepcion, r.fecha_recepcion_mesa_partes,
+              r.numero_expediente_sgd
+       FROM entregable_conformidad_actas a
+       LEFT JOIN entregable_recepciones r ON r.id = a.recepcion_id
+       WHERE a.orden_entrega_id = $1
+       ORDER BY a.version DESC, a.id DESC`,
       [eid],
     ),
     query(
-      `SELECT id, orden_id, orden_entrega_id, acta_id, version, nombre, mime_type,
-              tamano_bytes, estado_documental, vigente, reemplaza_id, created_by, created_at
-       FROM entregable_conformidad_acta_visados
-       WHERE orden_entrega_id = $1 AND deleted_at IS NULL
-       ORDER BY version DESC, id DESC`,
+      `SELECT v.id, v.orden_id, v.orden_entrega_id, v.acta_id, v.version, v.nombre, v.mime_type,
+              v.tamano_bytes, v.estado_documental, v.vigente, v.reemplaza_id, v.created_by, v.created_at,
+              a.recepcion_id, a.version AS acta_version, r.numero_recepcion, r.tipo_recepcion,
+              r.fecha_recepcion_mesa_partes, r.numero_expediente_sgd
+       FROM entregable_conformidad_acta_visados v
+       JOIN entregable_conformidad_actas a ON a.id = v.acta_id
+       LEFT JOIN entregable_recepciones r ON r.id = a.recepcion_id
+       WHERE v.orden_entrega_id = $1 AND v.deleted_at IS NULL
+       ORDER BY a.version DESC, v.version DESC, v.id DESC`,
       [eid],
     ),
   ]);
+  const metadataVigencia = (recepcionId) => {
+    if (recepcionId == null) {
+      return { vigente_operativa: false, vigencia_razon: 'LEGACY_SIN_RECEPCION' };
+    }
+    const vigente = Number(recepcionId) === Number(recepcionVigente?.id);
+    return {
+      vigente_operativa: vigente,
+      vigencia_razon: vigente ? 'PRESENTACION_VIGENTE' : 'PRESENTACION_ANTERIOR',
+    };
+  };
+  const actas = actasRes.rows.map((acta) => ({ ...acta, ...metadataVigencia(acta.recepcion_id) }));
+  const visados = visadosRes.rows.map((visado) => {
+    const metadata = metadataVigencia(visado.recepcion_id);
+    return {
+      ...visado,
+      vigente_operativa: Boolean(visado.vigente) && metadata.vigente_operativa,
+      vigencia_razon: metadata.vigencia_razon,
+    };
+  });
   return {
     orden_id: entrega.orden_id,
     orden_entrega_id: eid,
-    actas: actasRes.rows,
-    visados: visadosRes.rows,
-    acta_generada_vigente: actasRes.rows[0] || null,
-    acta_firmada_vigente: visadosRes.rows.find((v) => v.vigente) || visadosRes.rows[0] || null,
+    recepcion_vigente_id: recepcionVigente?.id || null,
+    actas,
+    visados,
+    acta_generada_vigente: actas.find((acta) => acta.vigente_operativa) || null,
+    acta_firmada_vigente: visados.find((visado) => visado.vigente_operativa) || null,
   };
 }
 
-export async function obtenerActaGeneradaVigente(ordenEntregaId) {
-  await getEntregableOrThrow(ordenEntregaId);
-  const { rows } = await query(
+export async function obtenerActaGeneradaVigente(ordenEntregaId, { client = null } = {}) {
+  if (!client) await getEntregableOrThrow(ordenEntregaId);
+  const recepcion = await obtenerRecepcionVigenteEntregable(ordenEntregaId, { client });
+  if (!recepcion) return null;
+  const runQuery = client ? client.query.bind(client) : query;
+  const { rows } = await runQuery(
     `SELECT * FROM entregable_conformidad_actas
-     WHERE orden_entrega_id = $1
+     WHERE orden_entrega_id = $1 AND recepcion_id = $2
      ORDER BY version DESC, id DESC LIMIT 1`,
-    [Number(ordenEntregaId)],
+    [Number(ordenEntregaId), Number(recepcion.id)],
   );
   return rows[0] || null;
 }
 
-export async function obtenerActaFirmadaVigente(ordenEntregaId) {
-  await getEntregableOrThrow(ordenEntregaId);
-  const { rows } = await query(
-    `SELECT * FROM entregable_conformidad_acta_visados
-     WHERE orden_entrega_id = $1 AND vigente = TRUE AND deleted_at IS NULL
-     ORDER BY version DESC, id DESC LIMIT 1`,
-    [Number(ordenEntregaId)],
+export async function obtenerActaFirmadaVigente(ordenEntregaId, { client = null } = {}) {
+  if (!client) await getEntregableOrThrow(ordenEntregaId);
+  const recepcion = await obtenerRecepcionVigenteEntregable(ordenEntregaId, { client });
+  if (!recepcion) return null;
+  const runQuery = client ? client.query.bind(client) : query;
+  const { rows } = await runQuery(
+    `SELECT v.*, a.recepcion_id
+     FROM entregable_conformidad_acta_visados v
+     JOIN entregable_conformidad_actas a ON a.id = v.acta_id
+     WHERE v.orden_entrega_id = $1
+       AND v.vigente = TRUE
+       AND v.deleted_at IS NULL
+       AND a.recepcion_id = $2
+     ORDER BY v.version DESC, v.id DESC LIMIT 1`,
+    [Number(ordenEntregaId), Number(recepcion.id)],
   );
   return rows[0] || null;
 }
@@ -509,17 +712,20 @@ async function getEntregableOrThrow(ordenEntregaId) {
 export async function getDetalleEntregableServicio(ordenEntregaId) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
 
-  const [recepcionesRes, documentosRes] = await Promise.all([
+  const [recepcionesRes, documentosRes, observacionesRes, recepcionCanonica] = await Promise.all([
     query(`
       SELECT er.*,
         COALESCE((
           SELECT json_agg(json_build_object(
             'id', d.id,
+            'recepcion_id', d.recepcion_id,
             'nombre_archivo', d.nombre_archivo,
             'mime_type', d.mime_type,
             'tamanio_bytes', d.tamanio_bytes,
+            'vigente', d.vigente,
+            'reemplaza_id', d.reemplaza_id,
             'created_at', d.created_at
-          ) ORDER BY d.id)
+          ) ORDER BY d.id DESC)
           FROM entregable_recepcion_documentos d WHERE d.recepcion_id = er.id
         ), '[]'::json) AS documentos
       FROM entregable_recepciones er
@@ -527,12 +733,20 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
       ORDER BY er.numero_recepcion DESC, er.id DESC
     `, [ordenEntregaId]),
     query(`
-      SELECT d.id, d.recepcion_id, d.nombre_archivo, d.mime_type, d.tamanio_bytes, d.created_at
+      SELECT d.id, d.recepcion_id, d.nombre_archivo, d.mime_type, d.tamanio_bytes,
+        d.vigente, d.reemplaza_id, d.created_at
       FROM entregable_recepcion_documentos d
       JOIN entregable_recepciones er ON er.id = d.recepcion_id
       WHERE er.orden_entrega_id = $1
       ORDER BY d.id DESC
     `, [ordenEntregaId]),
+    query(`
+      SELECT eo.*
+      FROM entregable_observaciones eo
+      WHERE eo.orden_entrega_id = $1
+      ORDER BY eo.observado_at DESC, eo.id DESC
+    `, [ordenEntregaId]),
+    obtenerRecepcionVigenteEntregable(ordenEntregaId),
   ]);
 
   // Expediente de la orden (Anexo 11 / cotización adjudicada, orden firmada, CCP, etc.).
@@ -546,6 +760,16 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
 
   const notif = resolveOrdenFechaNotificacion({ enviado_proveedor_at: entrega.enviado_proveedor_at }, []);
   const contract = buildEntregaContract(entrega, { totalEntregas: 1 });
+
+  const recepciones = recepcionesRes.rows || [];
+  const recepcionVigente = recepciones.find(
+    (recepcion) => Number(recepcion.id) === Number(recepcionCanonica?.id),
+  ) || null;
+  const documentoVigente = recepcionVigente?.documentos?.find((d) => d.vigente) || null;
+  const observaciones = observacionesRes.rows || [];
+  const observacionAbierta = observaciones.find(
+    (o) => o.estado === 'OBS_EMITIDA' || o.estado === 'OBS_EN_ATENCION',
+  ) || null;
 
   return {
     orden_id: entrega.orden_id,
@@ -566,20 +790,1186 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
     fecha_maxima: toIsoDateString(entrega.fecha_maxima) || entrega.fecha_maxima,
     importe: money(entrega.importe),
     fecha_notificacion: notif.fechaNotificacion,
-    recepciones: recepcionesRes.rows || [],
+    recepciones,
+    recepcion_vigente: recepcionVigente,
+    documento_vigente: documentoVigente,
     documentos_entregable: documentosRes.rows || [],
+    observaciones,
+    observacion_abierta: observacionAbierta,
     expediente: expediente,
   };
 }
 
+function permisosUsuario(row) {
+  if (row?.permisos && typeof row.permisos === 'object') return row.permisos;
+  try { return JSON.parse(row?.permisos || '{}'); } catch (_) { return {}; }
+}
+
+function esCoordinadorCMActivo(row) {
+  return row?.activo === true && resolveFunctionalProfiles({
+    ...row,
+    permisos: permisosUsuario(row),
+  }).includes(PERFILES_FUNCIONALES.COORDINADOR_CM);
+}
+
+function esAnalistaCMActivo(row) {
+  return row?.activo === true && resolveFunctionalProfiles({
+    ...row,
+    permisos: permisosUsuario(row),
+  }).includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES);
+}
+
+function esAnalistaPagoActivo(row) {
+  return row?.activo === true && resolveFunctionalProfiles({
+    ...row,
+    permisos: permisosUsuario(row),
+  }).includes(PERFILES_FUNCIONALES.ANALISTA_PAGO);
+}
+
+function mapCoordinadorCM(row) {
+  return {
+    id: Number(row.id),
+    nombre: String(row.nombre || [row.nombres, row.apellidos].filter(Boolean).join(' ') || '').trim(),
+    username: row.username || row.dni || '',
+    cargo: row.cargo || '',
+    centro: row.centro || row.descripcion_area || '',
+    unidad: row.codigo_centro_costo || '',
+  };
+}
+
+function assertCoordinadorCMResponsable(userCtx, estado) {
+  const perfiles = resolveFunctionalProfiles(userCtx);
+  if (Number(userCtx?.id) !== Number(estado?.responsableUsuarioId)
+    || estado?.responsableTipo !== 'PERSONA'
+    || !perfiles.includes(PERFILES_FUNCIONALES.COORDINADOR_CM)) {
+    throw httpError(
+      'Solo el Coordinador CM responsable del entregable puede realizar esta acción',
+      403,
+      'COORDINADOR_CM_NO_AUTORIZADO',
+    );
+  }
+}
+
+function assertAnalistaCMResponsable(userCtx, estado) {
+  if (esAdmin(userCtx)) return;
+  const perfiles = resolveFunctionalProfiles(userCtx);
+  if (Number(userCtx?.id) !== Number(estado?.responsableUsuarioId)
+    || estado?.responsableTipo !== 'PERSONA'
+    || !perfiles.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES)) {
+    throw httpError(
+      'Solo el Analista CM responsable del entregable puede realizar esta acción',
+      403,
+      'ANALISTA_CM_NO_AUTORIZADO',
+    );
+  }
+}
+
+async function obtenerResponsableAreaUsuariaAnterior(client, ordenEntregaId) {
+  const { rows } = await client.query(`
+    SELECT a.*, u.activo AS usuario_activo
+    FROM entregable_asignaciones a
+    JOIN usuarios u ON u.id=a.usuario_id
+    WHERE a.orden_entrega_id=$1
+      AND a.etapa_codigo='PRESENTACION_ENTREGABLES'
+      AND a.tipo_responsable='PERSONA'
+      AND a.usuario_id IS NOT NULL
+      AND a.activo=FALSE
+      AND a.cerrado_at IS NOT NULL
+    ORDER BY a.cerrado_at DESC, a.id DESC
+    LIMIT 1
+    FOR UPDATE OF a
+  `, [Number(ordenEntregaId)]);
+  const anterior = rows[0] || null;
+  if (!anterior || anterior.usuario_activo !== true) {
+    throw httpError(
+      'No se pudo resolver de forma confiable al responsable anterior del Área Usuaria',
+      409,
+      'RESPONSABLE_AU_ANTERIOR_NO_DISPONIBLE',
+    );
+  }
+  return anterior;
+}
+
+function assertAccesoDerivacion(userCtx, estado, entrega) {
+  if (esAdmin(userCtx)) return;
+  const uid = Number(userCtx?.id);
+  if (estado?.responsableTipo === 'PERSONA'
+    && uid > 0
+    && uid === Number(estado.responsableUsuarioId)) return;
+
+  const perfiles = resolveFunctionalProfiles(userCtx);
+  if (estado?.responsableTipo === 'UNIDAD'
+    && perfiles.includes(PERFILES_FUNCIONALES.AREA_USUARIA)) {
+    let centroEntrega = '';
+    try {
+      const centro = resolverCentroDesdeRequerimiento({
+        cmn: entrega.requerimiento_cmn,
+        area: entrega.req_area,
+        payload: entrega.requerimiento_payload,
+      });
+      centroEntrega = String(centro.centro_codigo || centro.centro_nombre || '').trim().toUpperCase();
+    } catch (_) { centroEntrega = ''; }
+    const centrosUsuario = [
+      userCtx?.centro,
+      userCtx?.codigo_centro_costo,
+    ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+    if (centroEntrega && centrosUsuario.includes(centroEntrega)) return;
+  }
+  throw httpError(
+    'Solo el responsable actual del entregable puede derivarlo',
+    403,
+    'DERIVACION_NO_AUTORIZADA',
+  );
+}
+
+function assertEtapaPresentacion(estado) {
+  if (String(estado?.etapaCodigo || estado?.estadoCodigo || '').toUpperCase()
+    !== 'PRESENTACION_ENTREGABLES') {
+    throw httpError(
+      'El entregable ya no está en Presentación de Entregables',
+      409,
+      'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+    );
+  }
+}
+
+function assertEtapaGestionOperativa(estado) {
+  if (estado?.fuenteEstado !== 'ENTREGABLE') return;
+  assertEtapaPresentacion(estado);
+}
+
+async function listarUsuariosCoordinadorCM(client = { query }) {
+  const { rows } = await client.query(`
+    SELECT id, dni, username, nombre, nombres, apellidos, cargo, centro,
+      codigo_centro_costo, descripcion_area, rol, permisos, alcance_datos, activo
+    FROM usuarios
+    WHERE activo=TRUE
+    ORDER BY COALESCE(NULLIF(TRIM(nombre),''), NULLIF(TRIM(username),''), dni), id
+  `);
+  return rows.filter(esCoordinadorCMActivo);
+}
+
+async function listarUsuariosAnalistaCM(client = { query }) {
+  const { rows } = await client.query(`
+    SELECT id, dni, username, nombre, nombres, apellidos, cargo, centro,
+      codigo_centro_costo, descripcion_area, rol, permisos, alcance_datos, activo
+    FROM usuarios
+    WHERE activo=TRUE
+    ORDER BY COALESCE(NULLIF(TRIM(nombre),''), NULLIF(TRIM(username),''), dni), id
+  `);
+  return rows.filter(esAnalistaCMActivo);
+}
+
+async function listarUsuariosAnalistaPago(client = { query }) {
+  const { rows } = await client.query(`
+    SELECT id, dni, username, nombre, nombres, apellidos, cargo, centro,
+      codigo_centro_costo, descripcion_area, rol, permisos, alcance_datos, activo
+    FROM usuarios
+    WHERE activo=TRUE
+    ORDER BY COALESCE(NULLIF(TRIM(nombre),''), NULLIF(TRIM(username),''), dni), id
+  `);
+  return rows.filter(esAnalistaPagoActivo);
+}
+
+async function obtenerCoordinadorCMRetorno(client, ordenEntregaId) {
+  const { rows } = await client.query(`
+    SELECT a.*, u.dni, u.username, u.nombre, u.nombres, u.apellidos, u.cargo,
+      u.centro, u.codigo_centro_costo, u.descripcion_area, u.rol, u.permisos,
+      u.alcance_datos, u.activo AS usuario_activo
+    FROM entregable_asignaciones a
+    JOIN usuarios u ON u.id=a.usuario_id
+    WHERE a.orden_entrega_id=$1
+      AND a.etapa_codigo='REVISION_COORDINADOR_CM'
+      AND a.tipo_responsable='PERSONA'
+      AND a.usuario_id IS NOT NULL
+      AND a.activo=FALSE
+      AND a.cerrado_at IS NOT NULL
+    ORDER BY a.cerrado_at DESC, a.id DESC
+    LIMIT 1
+    FOR UPDATE OF a
+  `, [Number(ordenEntregaId)]);
+  const anterior = rows[0] || null;
+  const usuario = anterior ? { ...anterior, id: anterior.usuario_id, activo: anterior.usuario_activo } : null;
+  if (!anterior || !esCoordinadorCMActivo(usuario)) {
+    throw httpError(
+      'No se pudo resolver de forma confiable al Coordinador CM anterior',
+      409,
+      'COORDINADOR_CM_RETORNO_NO_RESUELTO',
+    );
+  }
+  return { asignacion: anterior, usuario };
+}
+
+/** Destinatarios PERSONA activos con perfil funcional COORDINADOR_CM. */
+export async function listarCoordinadoresCMEntregable(ordenEntregaId, userCtx = null) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+    throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  assertEtapaPresentacion(estado);
+  assertAccesoDerivacion(userCtx, estado, entrega);
+  const coordinadores = await listarUsuariosCoordinadorCM();
+  return coordinadores.map(mapCoordinadorCM);
+}
+
+async function validarPrecondicionesDerivacion(client, entrega) {
+  if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+    throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+    throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+  }
+  if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+    throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
+  }
+
+  const recepcion = await obtenerRecepcionVigenteEntregable(entrega.id, { client, lock: true });
+  if (!recepcion) {
+    throw httpError('El entregable no tiene una recepción vigente', 409, 'SIN_RECEPCION_VIGENTE');
+  }
+
+  const observaciones = (await client.query(`
+    SELECT *
+    FROM entregable_observaciones
+    WHERE orden_entrega_id=$1
+    ORDER BY observado_at DESC, id DESC
+    FOR UPDATE
+  `, [Number(entrega.id)])).rows;
+  if (observaciones.some((obs) => ['OBS_EMITIDA', 'OBS_EN_ATENCION'].includes(obs.estado))) {
+    throw httpError(
+      'El entregable tiene una observación formal abierta',
+      409,
+      'ENTREGABLE_OBSERVADO',
+    );
+  }
+  const ultimaObservacion = observaciones[0] || null;
+  if (ultimaObservacion
+    && (!['OBS_SUBSANADA', 'OBS_CERRADA'].includes(ultimaObservacion.estado)
+      || (ultimaObservacion.estado === 'OBS_SUBSANADA'
+        && Number(ultimaObservacion.recepcion_subsanacion_id) !== Number(recepcion.id)))) {
+    throw httpError(
+      'La última observación del entregable no está subsanada',
+      409,
+      'OBSERVACION_NO_SUBSANADA',
+    );
+  }
+
+  const acta = (await client.query(`
+    SELECT *
+    FROM entregable_conformidad_actas
+    WHERE orden_entrega_id=$1
+      AND recepcion_id=$2
+      AND estado_documental='ACTA_CONFORMIDAD_GENERADA'
+    ORDER BY version DESC, id DESC
+    LIMIT 1
+    FOR UPDATE
+  `, [Number(entrega.id), Number(recepcion.id)])).rows[0];
+  if (!acta) {
+    throw httpError(
+      'Debe existir un Acta de Conformidad generada',
+      409,
+      'SIN_ACTA_GENERADA',
+    );
+  }
+  const firmada = (await client.query(`
+    SELECT v.*
+    FROM entregable_conformidad_acta_visados v
+    JOIN entregable_conformidad_actas a ON a.id = v.acta_id
+    WHERE v.orden_entrega_id=$1
+      AND a.recepcion_id=$2
+      AND v.acta_id=$3
+      AND v.estado_documental='ACTA_CONFORMIDAD_FIRMADA'
+      AND v.vigente=TRUE
+      AND v.deleted_at IS NULL
+    ORDER BY v.version DESC, v.id DESC
+    LIMIT 1
+    FOR UPDATE OF v
+  `, [Number(entrega.id), Number(recepcion.id), Number(acta.id)])).rows[0];
+  if (!firmada) {
+    throw httpError(
+      'Debe existir un Acta de Conformidad firmada vigente',
+      409,
+      'SIN_ACTA_FIRMADA_VIGENTE',
+    );
+  }
+  return { recepcion, ultimaObservacion, acta, firmada };
+}
+
+/** Derivación real y transaccional de un único orden_entrega_id. */
+export async function derivarEntregableCoordinadorCM(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const responsableId = parseInt(body?.responsable_id, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  if (!Number.isFinite(responsableId)) {
+    throw httpError(
+      'Debe seleccionar un Coordinador CM',
+      422,
+      'RESPONSABLE_DESTINO_REQUERIDO',
+    );
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.tipo_orden, oc.numero_orden, oc.anio_orden,
+        oc.tipo_contratacion, oc.estado AS orden_estado,
+        r.tipo AS req_tipo, r.area AS req_area, r.cmn AS requerimiento_cmn,
+        r.payload AS requerimiento_payload
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id=oe.orden_id
+      LEFT JOIN requerimientos r ON r.id=oc.requerimiento_id
+      WHERE oe.id=$1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+
+    const estadoAnterior = await obtenerEstadoResponsableEntregable(eid, { client });
+    assertEtapaPresentacion(estadoAnterior);
+    assertAccesoDerivacion(userCtx, estadoAnterior, entrega);
+    const precondiciones = await validarPrecondicionesDerivacion(client, entrega);
+
+    const coordinador = (await listarUsuariosCoordinadorCM(client))
+      .find((item) => Number(item.id) === responsableId);
+    if (!coordinador) {
+      throw httpError(
+        'El destinatario no es un Coordinador CM activo',
+        422,
+        'COORDINADOR_CM_INVALIDO',
+      );
+    }
+
+    const transicion = await transicionarEntregable({
+      ordenEntregaId: eid,
+      evento: EVENTOS.ENTREGABLE_DERIVADO_COORDINADOR_CM,
+      usuarioOrigenId: Number(userCtx?.id),
+      ejecutadoPor: usuario || userCtx?.username || userCtx?.id,
+      usuarioDestinoId: responsableId,
+      unidadDestino: 'COORDINADOR_CM',
+      motivo: 'Derivación del entregable a Coordinador CM',
+      metadata: {
+        acta_id: Number(precondiciones.acta.id),
+        acta_firmada_id: Number(precondiciones.firmada.id),
+        recepcion_id: Number(precondiciones.recepcion.id),
+      },
+      client,
+    });
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    await client.query('COMMIT');
+    return {
+      estado,
+      asignacion: transicion.asignacion,
+      evento: transicion.evento,
+      coordinador: mapCoordinadorCM(coordinador),
+      expediente_global_actualizado: false,
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Destinatarios PERSONA activos con perfil ANALISTA_CONTRATACIONES. */
+export async function listarAnalistasCMEntregable(ordenEntregaId, userCtx = null) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  if (String(estado?.etapaCodigo || '').toUpperCase() !== 'REVISION_COORDINADOR_CM') {
+    throw httpError(
+      'El entregable no está en Revisión Coordinador CM',
+      409,
+      'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+    );
+  }
+  assertCoordinadorCMResponsable(userCtx, estado);
+  if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+    throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  return (await listarUsuariosAnalistaCM()).map(mapCoordinadorCM);
+}
+
+/** Deriva un único entregable desde Coordinador CM hacia Analista CM. */
+export async function derivarEntregableAnalistaCM(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const responsableId = parseInt(body?.responsable_id, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  if (!Number.isFinite(responsableId)) {
+    throw httpError('Debe seleccionar un Analista CM', 422, 'RESPONSABLE_DESTINO_REQUERIDO');
+  }
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.tipo_orden, oc.tipo_contratacion,
+        oc.estado AS orden_estado, r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id=oe.orden_id
+      LEFT JOIN requerimientos r ON r.id=oc.requerimiento_id
+      WHERE oe.id=$1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estadoAnterior = await obtenerEstadoResponsableEntregable(eid, { client });
+    if (String(estadoAnterior?.etapaCodigo || '').toUpperCase() !== 'REVISION_COORDINADOR_CM') {
+      throw httpError(
+        'El entregable no está en Revisión Coordinador CM',
+        409,
+        'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+      );
+    }
+    assertCoordinadorCMResponsable(userCtx, estadoAnterior);
+    const precondiciones = await validarPrecondicionesDerivacion(client, entrega);
+    const analista = (await listarUsuariosAnalistaCM(client))
+      .find((item) => Number(item.id) === responsableId);
+    if (!analista) {
+      throw httpError(
+        'El destinatario no es un Analista CM activo',
+        422,
+        'ANALISTA_CM_INVALIDO',
+      );
+    }
+    const transicion = await transicionarEntregable({
+      ordenEntregaId: eid,
+      evento: EVENTOS.ENTREGABLE_DERIVADO_ANALISTA_CM,
+      usuarioOrigenId: Number(userCtx?.id),
+      ejecutadoPor: usuario || userCtx?.username || userCtx?.id,
+      usuarioDestinoId: responsableId,
+      unidadDestino: 'ANALISTA_CONTRATACIONES',
+      motivo: 'Derivación del entregable a Analista CM',
+      metadata: {
+        origen: 'COORDINADOR_CM',
+        acta_id: Number(precondiciones.acta.id),
+        acta_firmada_id: Number(precondiciones.firmada.id),
+        recepcion_id: Number(precondiciones.recepcion.id),
+      },
+      client,
+    });
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    await client.query('COMMIT');
+    return {
+      estado,
+      asignacion: transicion.asignacion,
+      evento: transicion.evento,
+      analista: mapCoordinadorCM(analista),
+      expediente_global_actualizado: false,
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Destinatarios PERSONA activos con perfil funcional ANALISTA_PAGO. */
+export async function listarAnalistasPagoEntregable(ordenEntregaId, userCtx = null) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  if (estado?.fuenteEstado !== 'ENTREGABLE'
+    || String(estado?.etapaCodigo || '').toUpperCase() !== 'REVISION_ANALISTA_CM') {
+    throw httpError(
+      'El entregable no está en Revisión Analista CM',
+      409,
+      'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+    );
+  }
+  assertAnalistaCMResponsable(userCtx, estado);
+  if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+    throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  return (await listarUsuariosAnalistaPago()).map(mapCoordinadorCM);
+}
+
+/** Observación atómica del Analista CM con retorno al último Coordinador confiable. */
+export async function observarEntregableAnalistaCM(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const motivo = String(body?.motivo || '').trim();
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  if (!motivo) {
+    throw httpError(
+      'El motivo de observación es obligatorio',
+      400,
+      'MOTIVO_OBSERVACION_REQUERIDO',
+    );
+  }
+  const observadoPor = String(usuario || userCtx?.username || userCtx?.id || '').trim();
+  if (!observadoPor) {
+    throw httpError('No se pudo identificar al usuario observador', 400, 'USUARIO_OBSERVADOR_REQUERIDO');
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.tipo_orden, oc.tipo_contratacion,
+        oc.estado AS orden_estado, r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id=oe.orden_id
+      LEFT JOIN requerimientos r ON r.id=oc.requerimiento_id
+      WHERE oe.id=$1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estadoAnterior = await obtenerEstadoResponsableEntregable(eid, { client });
+    if (estadoAnterior?.fuenteEstado !== 'ENTREGABLE'
+      || String(estadoAnterior?.etapaCodigo || '').toUpperCase() !== 'REVISION_ANALISTA_CM') {
+      throw httpError(
+        'El entregable no está en Revisión Analista CM',
+        409,
+        'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+      );
+    }
+    assertAnalistaCMResponsable(userCtx, estadoAnterior);
+    const precondiciones = await validarPrecondicionesDerivacion(client, entrega);
+    const coordinadorRetorno = await obtenerCoordinadorCMRetorno(client, eid);
+
+    const { rows: observaciones } = await client.query(`
+      INSERT INTO entregable_observaciones (
+        orden_id, orden_entrega_id, recepcion_id, motivo, estado,
+        observado_por, observado_at
+      ) VALUES ($1,$2,$3,$4,'OBS_EMITIDA',$5,NOW())
+      RETURNING *
+    `, [
+      Number(entrega.orden_id),
+      eid,
+      Number(precondiciones.recepcion.id),
+      motivo,
+      observadoPor.slice(0, 150),
+    ]);
+    const transicion = await transicionarEntregable({
+      ordenEntregaId: eid,
+      evento: EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM,
+      usuarioOrigenId: Number(userCtx?.id),
+      ejecutadoPor: observadoPor,
+      usuarioDestinoId: Number(coordinadorRetorno.asignacion.usuario_id),
+      unidadDestino: 'COORDINADOR_CM',
+      motivo,
+      metadata: {
+        origen: 'ANALISTA_CM',
+        observacion_id: Number(observaciones[0].id),
+        recepcion_id: Number(precondiciones.recepcion.id),
+        asignacion_coordinador_anterior_id: Number(coordinadorRetorno.asignacion.id),
+        acta_id: Number(precondiciones.acta.id),
+        acta_firmada_id: Number(precondiciones.firmada.id),
+      },
+      client,
+    });
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    await client.query('COMMIT');
+    return {
+      observacion: observaciones[0],
+      estado,
+      asignacion: transicion.asignacion,
+      evento: transicion.evento,
+      coordinador: mapCoordinadorCM(coordinadorRetorno.usuario),
+      expediente_global_actualizado: false,
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Derivación atómica de un entregable conforme hacia un Analista de Pago. */
+export async function derivarEntregablePago(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const usuarioDestinoId = parseInt(body?.usuarioDestinoId, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  if (!Number.isFinite(usuarioDestinoId)) {
+    throw httpError(
+      'Debe seleccionar un Analista de Pago',
+      422,
+      'RESPONSABLE_DESTINO_REQUERIDO',
+    );
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.tipo_orden, oc.tipo_contratacion,
+        oc.estado AS orden_estado, r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id=oe.orden_id
+      LEFT JOIN requerimientos r ON r.id=oc.requerimiento_id
+      WHERE oe.id=$1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estadoAnterior = await obtenerEstadoResponsableEntregable(eid, { client });
+    if (estadoAnterior?.fuenteEstado !== 'ENTREGABLE'
+      || String(estadoAnterior?.etapaCodigo || '').toUpperCase() !== 'REVISION_ANALISTA_CM') {
+      throw httpError(
+        'El entregable no está en Revisión Analista CM',
+        409,
+        'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+      );
+    }
+    assertAnalistaCMResponsable(userCtx, estadoAnterior);
+    const precondiciones = await validarPrecondicionesDerivacion(client, entrega);
+    const analistaPago = (await listarUsuariosAnalistaPago(client))
+      .find((item) => Number(item.id) === usuarioDestinoId);
+    if (!analistaPago) {
+      throw httpError(
+        'El destinatario no es un Analista de Pago activo',
+        422,
+        'ANALISTA_PAGO_INVALIDO',
+      );
+    }
+    const transicion = await transicionarEntregable({
+      ordenEntregaId: eid,
+      evento: EVENTOS.ENTREGABLE_DERIVADO_PAGO,
+      usuarioOrigenId: Number(userCtx?.id),
+      ejecutadoPor: usuario || userCtx?.username || userCtx?.id,
+      usuarioDestinoId,
+      unidadDestino: 'ANALISTA_PAGO',
+      motivo: 'Derivación del entregable conforme a Pago',
+      metadata: {
+        origen: 'ANALISTA_CM',
+        recepcion_id: Number(precondiciones.recepcion.id),
+        acta_id: Number(precondiciones.acta.id),
+        acta_firmada_id: Number(precondiciones.firmada.id),
+      },
+      client,
+    });
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    await client.query('COMMIT');
+    return {
+      estado,
+      asignacion: transicion.asignacion,
+      evento: transicion.evento,
+      analista_pago: mapCoordinadorCM(analistaPago),
+      expediente_global_actualizado: false,
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Timeline canónico del entregable, sin mezclar eventos del requerimiento. */
+export async function listarTrazabilidadEntregable(ordenEntregaId, userCtx = null) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  if (!esAdmin(userCtx) && Number(userCtx?.id) !== Number(estado?.responsableUsuarioId)) {
+    throw httpError(
+      'Solo el responsable actual puede consultar la trazabilidad del entregable',
+      403,
+      'TRAZABILIDAD_ENTREGABLE_NO_AUTORIZADA',
+    );
+  }
+  const { rows } = await query(`
+    SELECT ev.*,
+      ua.nombre AS responsable_anterior_nombre,
+      un.nombre AS responsable_nuevo_nombre,
+      ue.nombre AS ejecutado_usuario_nombre
+    FROM entregable_eventos ev
+    LEFT JOIN usuarios ua ON ua.id=ev.responsable_anterior_usuario
+    LEFT JOIN usuarios un ON un.id=ev.responsable_nuevo_usuario
+    LEFT JOIN usuarios ue ON ue.id=ev.ejecutado_usuario_id
+    WHERE ev.orden_entrega_id=$1 AND ev.orden_id=$2
+    ORDER BY ev.ocurrido_at DESC, ev.id DESC
+  `, [Number(entrega.id), Number(entrega.orden_id)]);
+  return rows;
+}
+
+/** Historial formal de observaciones de todas las presentaciones del entregable. */
+export async function listarObservacionesEntregable(ordenEntregaId) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const { rows } = await query(`
+    SELECT eo.*
+    FROM entregable_observaciones eo
+    WHERE eo.orden_entrega_id = $1
+      AND eo.orden_id = $2
+    ORDER BY eo.observado_at DESC, eo.id DESC
+  `, [Number(entrega.id), Number(entrega.orden_id)]);
+  return rows;
+}
+
+/** Única observación formal abierta del entregable, si existe. */
+export async function obtenerObservacionAbierta(ordenEntregaId) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const { rows } = await query(`
+    SELECT eo.*
+    FROM entregable_observaciones eo
+    WHERE eo.orden_entrega_id = $1
+      AND eo.orden_id = $2
+      AND eo.estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+    ORDER BY eo.observado_at DESC, eo.id DESC
+    LIMIT 1
+  `, [Number(entrega.id), Number(entrega.orden_id)]);
+  return rows[0] || null;
+}
+
+/** Historial formal asociado a una recepción concreta. */
+export async function obtenerObservacionesRecepcion(recepcionId) {
+  const rid = parseInt(recepcionId, 10);
+  if (!Number.isFinite(rid)) throw httpError('recepcion_id inválido');
+  const { rows } = await query(`
+    SELECT eo.*
+    FROM entregable_observaciones eo
+    JOIN entregable_recepciones er
+      ON er.id = eo.recepcion_id
+     AND er.orden_entrega_id = eo.orden_entrega_id
+     AND er.orden_id = eo.orden_id
+    WHERE eo.recepcion_id = $1
+    ORDER BY eo.observado_at DESC, eo.id DESC
+  `, [rid]);
+  return rows;
+}
+
 /**
- * Registra recepción de un entregable (transaccional: recepción + documento).
- * La primera recepción es INICIAL; las siguientes son SUBSANACION (no sobrescribir).
+ * Registra una observación formal sobre la presentación vigente sin alterar
+ * la recepción, sus documentos ni la etapa global del expediente.
+ */
+export async function observarEntregable(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  const motivo = String(body.motivo || '').trim();
+  if (!motivo) {
+    throw httpError('El motivo de observación es obligatorio', 400, 'MOTIVO_OBSERVACION_REQUERIDO');
+  }
+  const observadoPor = String(usuario || '').trim();
+  if (!observadoPor) {
+    throw httpError('No se pudo identificar al usuario observador', 400, 'USUARIO_OBSERVADOR_REQUERIDO');
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows: entregaRows } = await client.query(`
+      SELECT oe.id, oe.orden_id, oe.estado, oc.requerimiento_id,
+        oc.tipo_orden, oc.tipo_contratacion, oc.estado AS orden_estado,
+        r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      LEFT JOIN requerimientos r ON r.id = oc.requerimiento_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = entregaRows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404);
+    if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+      throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+    }
+    if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+      throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
+    }
+
+    const estadoEntregable = await obtenerEstadoResponsableEntregable(eid, { client });
+    if (String(estadoEntregable?.etapaCodigo || '').toUpperCase() === 'REVISION_COORDINADOR_CM') {
+      assertCoordinadorCMResponsable(userCtx, estadoEntregable);
+      const responsableAnterior = await obtenerResponsableAreaUsuariaAnterior(client, eid);
+      const { rows: recepcionRows } = await client.query(`
+        SELECT *
+        FROM entregable_recepciones
+        WHERE orden_entrega_id=$1 AND orden_id=$2
+          AND estado IN ('RECIBIDO','SUBSANADO','CONFORME')
+        ORDER BY numero_recepcion DESC, id DESC
+        LIMIT 1
+        FOR UPDATE
+      `, [eid, Number(entrega.orden_id)]);
+      const recepcion = recepcionRows[0];
+      if (!recepcion) {
+        throw httpError(
+          'El entregable no tiene una recepción vigente para observar',
+          409,
+          'SIN_RECEPCION_VIGENTE',
+        );
+      }
+      if (body.recepcion_id != null && Number(body.recepcion_id) !== Number(recepcion.id)) {
+        throw httpError(
+          'La recepción indicada no es la presentación vigente del entregable',
+          409,
+          'RECEPCION_NO_PERTENECE',
+        );
+      }
+      const { rows: abiertas } = await client.query(`
+        SELECT id
+        FROM entregable_observaciones
+        WHERE orden_entrega_id=$1
+          AND estado IN ('OBS_EMITIDA','OBS_EN_ATENCION')
+        LIMIT 1
+        FOR UPDATE
+      `, [eid]);
+      if (abiertas.length) {
+        throw httpError(
+          'El entregable ya tiene una observación formal abierta',
+          409,
+          'OBSERVACION_ABIERTA_EXISTE',
+        );
+      }
+      const { rows: observaciones } = await client.query(`
+        INSERT INTO entregable_observaciones (
+          orden_id, orden_entrega_id, recepcion_id, motivo, estado,
+          observado_por, observado_at
+        ) VALUES ($1,$2,$3,$4,'OBS_EMITIDA',$5,NOW())
+        RETURNING *
+      `, [
+        Number(entrega.orden_id),
+        eid,
+        Number(recepcion.id),
+        motivo,
+        observadoPor.slice(0, 150),
+      ]);
+      const transicion = await transicionarEntregable({
+        ordenEntregaId: eid,
+        evento: EVENTOS.ENTREGABLE_OBSERVADO_COORDINADOR_CM,
+        usuarioOrigenId: Number(userCtx?.id),
+        ejecutadoPor: observadoPor,
+        usuarioDestinoId: Number(responsableAnterior.usuario_id),
+        unidadDestino: responsableAnterior.unidad_codigo || 'AREA_USUARIA',
+        motivo,
+        metadata: {
+          origen: 'COORDINADOR_CM',
+          observacion_id: Number(observaciones[0].id),
+          recepcion_id: Number(recepcion.id),
+          asignacion_area_usuaria_anterior_id: Number(responsableAnterior.id),
+        },
+        client,
+      });
+      await client.query('COMMIT');
+      return {
+        ...observaciones[0],
+        origen: 'COORDINADOR_CM',
+        transicion,
+      };
+    }
+    assertEtapaGestionOperativa(estadoEntregable);
+    const responsable = {
+      responsable_usuario_id: estadoEntregable?.responsableUsuarioId,
+    };
+    assertPuedeObservarEntregable(userCtx, responsable);
+
+    const { rows: actaRows } = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM entregable_conformidad_actas
+        WHERE orden_entrega_id = $1
+      ) AS tiene_acta
+    `, [eid]);
+    if (actaRows[0]?.tiene_acta) {
+      throw httpError(
+        'El entregable ya tiene un Acta de Conformidad',
+        409,
+        'ENTREGABLE_NO_OBSERVABLE',
+      );
+    }
+
+    const { rows: recepcionRows } = await client.query(`
+      SELECT * FROM entregable_recepciones
+      WHERE orden_entrega_id = $1
+        AND orden_id = $2
+        AND estado = 'RECIBIDO'
+      ORDER BY numero_recepcion DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
+    `, [eid, Number(entrega.orden_id)]);
+    const recepcion = recepcionRows[0];
+    if (!recepcion) {
+      throw httpError(
+        'El entregable no tiene una recepción vigente para observar',
+        409,
+        'SIN_RECEPCION_VIGENTE',
+      );
+    }
+    if (body.recepcion_id != null
+      && Number(body.recepcion_id) !== Number(recepcion.id)) {
+      throw httpError(
+        'La recepción indicada no es la presentación vigente del entregable',
+        409,
+        'RECEPCION_NO_PERTENECE',
+      );
+    }
+
+    const { rows: abiertas } = await client.query(`
+      SELECT id FROM entregable_observaciones
+      WHERE recepcion_id = $1
+        AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+      ORDER BY id DESC
+      LIMIT 1
+      FOR UPDATE
+    `, [recepcion.id]);
+    if (abiertas.length) {
+      throw httpError(
+        'La recepción ya tiene una observación formal abierta',
+        409,
+        'OBSERVACION_ABIERTA_EXISTE',
+      );
+    }
+
+    const { rows: observaciones } = await client.query(`
+      INSERT INTO entregable_observaciones (
+        orden_id, orden_entrega_id, recepcion_id, motivo, estado,
+        observado_por, observado_at
+      ) VALUES ($1,$2,$3,$4,'OBS_EMITIDA',$5,NOW())
+      RETURNING *
+    `, [
+      Number(entrega.orden_id),
+      eid,
+      Number(recepcion.id),
+      motivo,
+      observadoPor.slice(0, 150),
+    ]);
+
+    await client.query('COMMIT');
+    return observaciones[0];
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Registra una nueva presentación SUBSANACION para atender exactamente una
+ * observación formal abierta. No edita ni versiona la presentación observada.
+ */
+export async function subsanarEntregable(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  const fechaRecepcion = toIsoDateString(body.fecha_recepcion_mesa_partes);
+  const expedienteSgd = String(body.numero_expediente_sgd || '').trim();
+  const comentario = String(body.observacion || body.comentario || '').trim();
+  const archivos = Array.isArray(body.documentos) && body.documentos.length
+    ? body.documentos.filter((a) => String(a?.contenido_base64 || '').trim())
+    : (String(body.contenido_base64 || '').trim() ? [{
+        nombre_archivo: body.nombre_archivo,
+        mime_type: body.mime_type,
+        contenido_base64: body.contenido_base64,
+      }] : []);
+  if (!fechaRecepcion) {
+    throw httpError('fecha_recepcion_mesa_partes es obligatoria y debe ser válida');
+  }
+  if (!expedienteSgd) throw httpError('numero_expediente_sgd es obligatorio');
+  if (archivos.length !== 1) {
+    throw httpError(
+      archivos.length ? 'Solo se permite un PDF por subsanación' : 'El PDF de subsanación es obligatorio',
+      400,
+      archivos.length ? 'DOCUMENTO_VIGENTE_MULTIPLE' : 'PDF_SUBSANACION_REQUERIDO',
+    );
+  }
+  const archivo = archivos[0];
+  const documentoValidado = validateArchivo({
+    contenido_base64: archivo.contenido_base64,
+    nombre_archivo: archivo.nombre_archivo || archivo.nombre,
+    mime_type: archivo.mime_type || 'application/pdf',
+  });
+  const subsanadoPor = String(usuario || '').trim();
+  if (!subsanadoPor) {
+    throw httpError('No se pudo identificar al usuario que subsana', 400, 'USUARIO_SUBSANACION_REQUERIDO');
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows: entregaRows } = await client.query(`
+      SELECT oe.id, oe.orden_id, oe.estado, oc.requerimiento_id,
+        oc.tipo_orden, oc.tipo_contratacion, oc.estado AS orden_estado,
+        r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      LEFT JOIN requerimientos r ON r.id = oc.requerimiento_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = entregaRows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404);
+    if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+      throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+    }
+    if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+      throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
+    }
+
+    const estadoEntregable = await obtenerEstadoResponsableEntregable(eid, { client });
+    assertEtapaGestionOperativa(estadoEntregable);
+    const responsable = {
+      responsable_usuario_id: estadoEntregable?.responsableUsuarioId,
+    };
+    assertPuedeSubsanarEntregable(userCtx, responsable);
+
+    const { rows: observaciones } = await client.query(`
+      SELECT eo.*, er.numero_recepcion AS numero_recepcion_observada
+      FROM entregable_observaciones eo
+      JOIN entregable_recepciones er
+        ON er.id = eo.recepcion_id
+       AND er.orden_entrega_id = eo.orden_entrega_id
+       AND er.orden_id = eo.orden_id
+      WHERE eo.orden_entrega_id = $1
+        AND eo.orden_id = $2
+        AND eo.estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+      ORDER BY eo.observado_at DESC, eo.id DESC
+      LIMIT 1
+      FOR UPDATE OF eo, er
+    `, [eid, Number(entrega.orden_id)]);
+    const observacion = observaciones[0];
+    if (!observacion) {
+      throw httpError(
+        'El entregable no tiene una observación formal abierta',
+        409,
+        'SIN_OBSERVACION_ABIERTA',
+      );
+    }
+    if (body.observacion_id != null
+      && Number(body.observacion_id) !== Number(observacion.id)) {
+      throw httpError(
+        'La observación indicada no pertenece al entregable o ya no está abierta',
+        409,
+        'OBSERVACION_NO_PERTENECE',
+      );
+    }
+    if (observacion.recepcion_subsanacion_id != null) {
+      throw httpError(
+        'La observación ya tiene una subsanación registrada',
+        409,
+        'OBSERVACION_YA_SUBSANADA',
+      );
+    }
+
+    const { rows: ultimaRows } = await client.query(`
+      SELECT id, numero_recepcion
+      FROM entregable_recepciones
+      WHERE orden_entrega_id = $1 AND orden_id = $2
+      ORDER BY numero_recepcion DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
+    `, [eid, Number(entrega.orden_id)]);
+    const ultimaRecepcion = ultimaRows[0];
+    if (!ultimaRecepcion
+      || Number(ultimaRecepcion.id) !== Number(observacion.recepcion_id)) {
+      throw httpError(
+        'La recepción observada ya no es la presentación vigente',
+        409,
+        'RECEPCION_OBSERVADA_NO_VIGENTE',
+      );
+    }
+    const numeroRecepcion = Number(ultimaRecepcion.numero_recepcion) + 1;
+
+    const { rows: nuevasRecepciones } = await client.query(`
+      INSERT INTO entregable_recepciones (
+        orden_entrega_id, orden_id, numero_recepcion, tipo_recepcion,
+        fecha_recepcion_mesa_partes, numero_expediente_sgd, observacion,
+        estado, registrado_por
+      ) VALUES ($1,$2,$3,'SUBSANACION',$4,$5,$6,'RECIBIDO',$7)
+      RETURNING *
+    `, [
+      eid,
+      Number(entrega.orden_id),
+      numeroRecepcion,
+      fechaRecepcion,
+      expedienteSgd.slice(0, 120),
+      comentario || null,
+      subsanadoPor.slice(0, 150),
+    ]);
+    const nuevaRecepcion = nuevasRecepciones[0];
+
+    const { rows: nuevosDocumentos } = await client.query(`
+      INSERT INTO entregable_recepcion_documentos (
+        recepcion_id, nombre_archivo, mime_type, contenido_base64,
+        tamanio_bytes, vigente, reemplaza_id
+      ) VALUES ($1,$2,$3,$4,$5,TRUE,NULL)
+      RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
+        vigente, reemplaza_id, created_at
+    `, [
+      nuevaRecepcion.id,
+      String(archivo.nombre_archivo || archivo.nombre || 'subsanacion.pdf').slice(0, 300),
+      String(archivo.mime_type || 'application/pdf').slice(0, 120),
+      documentoValidado.raw,
+      documentoValidado.bytes,
+    ]);
+
+    const { rows: observacionesActualizadas } = await client.query(`
+      UPDATE entregable_observaciones
+      SET estado = 'OBS_SUBSANADA',
+          subsanado_por = $2,
+          subsanado_at = NOW(),
+          recepcion_subsanacion_id = $3,
+          updated_at = NOW()
+      WHERE id = $1
+        AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+        AND recepcion_subsanacion_id IS NULL
+      RETURNING *
+    `, [observacion.id, subsanadoPor.slice(0, 150), nuevaRecepcion.id]);
+    if (!observacionesActualizadas.length) {
+      throw httpError(
+        'La observación ya fue atendida',
+        409,
+        'OBSERVACION_YA_SUBSANADA',
+      );
+    }
+
+    await client.query('COMMIT');
+    return {
+      recepcion: nuevaRecepcion,
+      documento: nuevosDocumentos[0],
+      observacion: observacionesActualizadas[0],
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Registra la recepción INICIAL de un entregable (transaccional: recepción + documento).
+ * Una recepción ya existente se modifica mediante modificarRecepcionEntregable.
  */
 export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, usuario = '', rol = '') {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   if (entrega.estado !== 'ACTIVO') {
     throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+    throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
   }
   if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
     throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
@@ -602,6 +1992,9 @@ export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, us
   if (!archivos.length || !archivos.some((a) => String(a?.contenido_base64 || '').trim())) {
     throw httpError('Archivo del entregable es obligatorio');
   }
+  if (archivos.filter((a) => String(a?.contenido_base64 || '').trim()).length > 1) {
+    throw httpError('Solo se permite un PDF vigente por recepción', 400, 'DOCUMENTO_VIGENTE_MULTIPLE');
+  }
   const docsValidados = archivos.map((a) => validateArchivo({
     contenido_base64: a?.contenido_base64,
     nombre_archivo: a?.nombre_archivo || a?.nombre,
@@ -611,16 +2004,42 @@ export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, us
   const client = await getClient();
   try {
     await client.query('BEGIN');
-    // Serializa para evitar duplicados concurrentes del mismo número de recepción.
-    await client.query('SELECT id FROM orden_entregas WHERE id = $1 FOR UPDATE', [ordenEntregaId]);
+    // Serializa el alta/edición del entregable para impedir recepciones duplicadas.
+    const { rows: entregaRows } = await client.query(`
+      SELECT oe.estado, oc.estado AS orden_estado
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [ordenEntregaId]);
+    if (!entregaRows.length) throw httpError('Entregable no encontrado', 404);
+    if (String(entregaRows[0].estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    if (String(entregaRows[0].orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+      throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+    }
+    assertEtapaGestionOperativa(
+      await obtenerEstadoResponsableEntregable(ordenEntregaId, { client }),
+    );
 
-    const { rows: countRows } = await client.query(
-      `SELECT COALESCE(MAX(numero_recepcion), 0)::int AS n
-       FROM entregable_recepciones WHERE orden_entrega_id = $1`,
+    const { rows: existentes } = await client.query(
+      `SELECT id FROM entregable_recepciones
+       WHERE orden_entrega_id = $1
+       ORDER BY id
+       LIMIT 1
+       FOR UPDATE`,
       [ordenEntregaId],
     );
-    const numeroRecepcion = countRows[0].n + 1;
-    const tipoRecepcion = numeroRecepcion === 1 ? 'INICIAL' : 'SUBSANACION';
+    if (existentes.length) {
+      throw httpError(
+        'El entregable ya tiene una recepción INICIAL; use la modificación',
+        409,
+        'RECEPCION_YA_EXISTE',
+      );
+    }
+    const numeroRecepcion = 1;
+    const tipoRecepcion = 'INICIAL';
 
     const { rows: recepcionRows } = await client.query(`
       INSERT INTO entregable_recepciones (
@@ -645,8 +2064,8 @@ export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, us
       const v = docsValidados[i];
       await client.query(`
         INSERT INTO entregable_recepcion_documentos (
-          recepcion_id, nombre_archivo, mime_type, contenido_base64, tamanio_bytes
-        ) VALUES ($1,$2,$3,$4,$5)
+          recepcion_id, nombre_archivo, mime_type, contenido_base64, tamanio_bytes, vigente
+        ) VALUES ($1,$2,$3,$4,$5,TRUE)
       `, [
         recepcionRows[0].id,
         String(a?.nombre_archivo || a?.nombre || `entregable-${i + 1}.pdf`).slice(0, 300),
@@ -667,6 +2086,178 @@ export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, us
       numero_expediente_sgd: expedienteSgd,
       estado: 'RECIBIDO',
       registrado_por: String(usuario || '').slice(0, 150),
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Modifica la misma recepción INICIAL. Un PDF nuevo crea una versión documental
+ * y deja el anterior como histórico; sin PDF, conserva el documento vigente.
+ */
+export async function modificarRecepcionEntregable(ordenEntregaId, body = {}, usuario = '', rol = '') {
+  const eid = parseInt(ordenEntregaId, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+
+  const fechaRecepcion = toIsoDateString(body.fecha_recepcion_mesa_partes)
+    || body.fecha_recepcion_mesa_partes;
+  const expedienteSgd = String(body.numero_expediente_sgd || '').trim();
+  const observacion = String(body.observacion || '').trim();
+  const archivos = Array.isArray(body.documentos)
+    ? body.documentos.filter((a) => String(a?.contenido_base64 || '').trim())
+    : (String(body.contenido_base64 || '').trim() ? [{
+        nombre_archivo: body.nombre_archivo,
+        mime_type: body.mime_type,
+        contenido_base64: body.contenido_base64,
+      }] : []);
+
+  if (!fechaRecepcion) throw httpError('fecha_recepcion_mesa_partes es obligatoria');
+  if (!expedienteSgd) throw httpError('numero_expediente_sgd es obligatorio');
+  if (archivos.length > 1) {
+    throw httpError('Solo se permite un PDF vigente por recepción', 400, 'DOCUMENTO_VIGENTE_MULTIPLE');
+  }
+  const archivo = archivos[0] || null;
+  const docValidado = archivo ? validateArchivo({
+    contenido_base64: archivo.contenido_base64,
+    nombre_archivo: archivo.nombre_archivo || archivo.nombre,
+    mime_type: archivo.mime_type || 'application/pdf',
+  }) : null;
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows: entregaRows } = await client.query(`
+      SELECT oe.id, oe.estado, oc.tipo_orden, oc.tipo_contratacion,
+        oc.estado AS orden_estado, r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      LEFT JOIN requerimientos r ON r.id = oc.requerimiento_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = entregaRows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404);
+    if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+      throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+    }
+    if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+      throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
+    }
+    assertEtapaGestionOperativa(
+      await obtenerEstadoResponsableEntregable(eid, { client }),
+    );
+
+    const { rows: recepcionRows } = await client.query(`
+      SELECT * FROM entregable_recepciones
+      WHERE orden_entrega_id = $1 AND tipo_recepcion = 'INICIAL'
+      ORDER BY numero_recepcion, id
+      LIMIT 1
+      FOR UPDATE
+    `, [eid]);
+    const recepcion = recepcionRows[0];
+    if (!recepcion) {
+      throw httpError('El entregable no tiene recepción INICIAL para modificar', 404, 'RECEPCION_NO_EXISTE');
+    }
+    if (String(recepcion.estado || '').toUpperCase() !== 'RECIBIDO') {
+      throw httpError(
+        'La recepción ya no es editable',
+        409,
+        'RECEPCION_NO_EDITABLE',
+      );
+    }
+    const { rows: vigentes } = await client.query(`
+      SELECT id FROM entregable_recepciones
+      WHERE orden_entrega_id = $1
+      ORDER BY numero_recepcion DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
+    `, [eid]);
+    if (Number(vigentes[0]?.id) !== Number(recepcion.id)) {
+      throw httpError(
+        'La recepción INICIAL ya es histórica y no puede modificarse',
+        409,
+        'RECEPCION_NO_EDITABLE',
+      );
+    }
+    const { rows: observacionesAbiertas } = await client.query(`
+      SELECT id FROM entregable_observaciones
+      WHERE recepcion_id = $1
+        AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+      LIMIT 1
+      FOR UPDATE
+    `, [recepcion.id]);
+    if (observacionesAbiertas.length) {
+      throw httpError(
+        'La recepción tiene una observación formal abierta; debe registrar una subsanación',
+        409,
+        'ENTREGABLE_OBSERVADO',
+      );
+    }
+
+    const { rows: actualizadas } = await client.query(`
+      UPDATE entregable_recepciones
+      SET fecha_recepcion_mesa_partes = $2,
+          numero_expediente_sgd = $3,
+          observacion = $4,
+          actualizado_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [
+      recepcion.id,
+      fechaRecepcion,
+      expedienteSgd.slice(0, 120),
+      observacion || null,
+    ]);
+
+    let documentoVigente = null;
+    const { rows: docsVigentes } = await client.query(`
+      SELECT * FROM entregable_recepcion_documentos
+      WHERE recepcion_id = $1 AND vigente = TRUE
+      ORDER BY id DESC
+      FOR UPDATE
+    `, [recepcion.id]);
+
+    if (archivo) {
+      const anterior = docsVigentes[0] || null;
+      if (docsVigentes.length) {
+        await client.query(`
+          UPDATE entregable_recepcion_documentos
+          SET vigente = FALSE
+          WHERE recepcion_id = $1 AND vigente = TRUE
+        `, [recepcion.id]);
+      }
+      const { rows: nuevosDocs } = await client.query(`
+        INSERT INTO entregable_recepcion_documentos (
+          recepcion_id, nombre_archivo, mime_type, contenido_base64,
+          tamanio_bytes, vigente, reemplaza_id
+        ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)
+        RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
+          vigente, reemplaza_id, created_at
+      `, [
+        recepcion.id,
+        String(archivo.nombre_archivo || archivo.nombre || 'entregable.pdf').slice(0, 300),
+        String(archivo.mime_type || 'application/pdf').slice(0, 120),
+        docValidado.raw,
+        docValidado.bytes,
+        anterior?.id || null,
+      ]);
+      documentoVigente = nuevosDocs[0];
+    } else {
+      documentoVigente = docsVigentes[0] || null;
+    }
+
+    await client.query('COMMIT');
+    return {
+      ...actualizadas[0],
+      documento_vigente: documentoVigente,
+      modificado_por: String(usuario || '').slice(0, 150),
     };
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
@@ -728,17 +2319,49 @@ function esAdmin(userCtx) {
   return alcance.includes('GLOBAL') || alcance.includes('INSTITUCIONAL');
 }
 
-/** Responsable canónico desde expediente_estado_vigente + JOIN usuarios. */
-async function getResponsableConformidad(requerimientoId) {
-  const { rows } = await query(
-    `SELECT e.responsable_usuario_id, e.etapa_codigo, e.estado_codigo,
-            u.nombre AS responsable_nombre, u.username AS responsable_username
-     FROM expediente_estado_vigente e
-     LEFT JOIN usuarios u ON u.id = e.responsable_usuario_id
-     WHERE e.requerimiento_id = $1`,
-    [Number(requerimientoId)],
-  );
-  return rows[0] || null;
+/** Responsable canónico actual (o admin); una responsabilidad UNIDAD no inventa usuario. */
+function assertPuedeObservarEntregable(userCtx, responsable) {
+  if (esAdmin(userCtx)) return;
+  const uid = Number(userCtx?.id);
+  const responsableId = responsable ? Number(responsable.responsable_usuario_id) : null;
+  if (!uid || !responsableId || uid !== responsableId) {
+    throw httpError(
+      'Solo el responsable actual del expediente puede observar el entregable',
+      403,
+      'OBSERVACION_NO_AUTORIZADA',
+    );
+  }
+}
+
+/** Responsable canónico actual (o admin); UNIDAD sin persona no habilita subsanar. */
+function assertPuedeSubsanarEntregable(userCtx, responsable) {
+  if (esAdmin(userCtx)) return;
+  const uid = Number(userCtx?.id);
+  const responsableId = responsable ? Number(responsable.responsable_usuario_id) : null;
+  if (!uid || !responsableId || uid !== responsableId) {
+    throw httpError(
+      'Solo el responsable actual del expediente puede subsanar el entregable',
+      403,
+      'SUBSANACION_NO_AUTORIZADA',
+    );
+  }
+}
+
+/**
+ * Responsable canónico específico del entregable. El helper conserva para
+ * históricos el fallback expediente_estado_vigente + JOIN usuarios.
+ */
+async function getResponsableConformidad(ordenEntregaId) {
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  if (!estado) return null;
+  return {
+    responsable_usuario_id: estado.responsableUsuarioId,
+    responsable_nombre: estado.responsableNombre,
+    responsable_username: estado.responsableUsername,
+    etapa_codigo: estado.etapaCodigo,
+    estado_codigo: estado.estadoCodigo,
+    fuente_estado: estado.fuenteEstado,
+  };
 }
 
 /** Solo el responsable actual del expediente (o admin) puede gestionar la conformidad. */
@@ -754,27 +2377,38 @@ function assertPuedeGestionarConformidad(userCtx, entrega, responsable) {
   }
 }
 
-/** Recepción válida/vigente del entregable (RECIBIDO/CONFORME). */
-async function getRecepcionVigenteEntregable(ordenEntregaId) {
-  const { rows } = await query(
+/**
+ * Presentación canónica vigente: inicial o última subsanación válida según su
+ * secuencia funcional. No infiere vigencia por MAX(id).
+ */
+export async function obtenerRecepcionVigenteEntregable(
+  ordenEntregaId,
+  { client = null, lock = false } = {},
+) {
+  const runQuery = client ? client.query.bind(client) : query;
+  const { rows } = await runQuery(
     `SELECT * FROM entregable_recepciones
      WHERE orden_entrega_id = $1
-       AND UPPER(COALESCE(estado,'')) IN ('RECIBIDO','CONFORME')
+       AND UPPER(COALESCE(estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
      ORDER BY numero_recepcion DESC, id DESC
-     LIMIT 1`,
+     LIMIT 1
+     ${client && lock ? 'FOR UPDATE' : ''}`,
     [Number(ordenEntregaId)],
   );
   return rows[0] || null;
 }
 
 /** Documento de presentación/recepción del entregable. */
-async function getDocumentoRecepcionPresentacion(ordenEntregaId) {
-  const { rows } = await query(
+async function getDocumentoRecepcionPresentacion(ordenEntregaId, recepcionId = null, { client = null } = {}) {
+  const runQuery = client ? client.query.bind(client) : query;
+  const { rows } = await runQuery(
     `SELECT d.* FROM entregable_recepcion_documentos d
      JOIN entregable_recepciones er ON er.id = d.recepcion_id
      WHERE er.orden_entrega_id = $1
-     ORDER BY d.id ASC LIMIT 1`,
-    [Number(ordenEntregaId)],
+       AND ($2::int IS NULL OR er.id = $2)
+       AND d.vigente = TRUE
+     ORDER BY er.numero_recepcion DESC, er.id DESC, d.id DESC LIMIT 1`,
+    [Number(ordenEntregaId), recepcionId == null ? null : Number(recepcionId)],
   );
   return rows[0] || null;
 }
@@ -787,11 +2421,19 @@ async function validarPrecondicionesConformidad(entrega) {
   if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
     throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
   }
-  const recepcion = await getRecepcionVigenteEntregable(entrega.id);
+  const recepcion = await obtenerRecepcionVigenteEntregable(entrega.id);
   if (!recepcion) {
     throw httpError('El entregable no tiene una recepción válida', 409, 'SIN_RECEPCION_VALIDA');
   }
-  const documento = await getDocumentoRecepcionPresentacion(entrega.id);
+  const observacionAbierta = await obtenerObservacionAbierta(entrega.id);
+  if (observacionAbierta) {
+    throw httpError(
+      'El entregable tiene una observación formal abierta',
+      409,
+      'ENTREGABLE_OBSERVADO',
+    );
+  }
+  const documento = await getDocumentoRecepcionPresentacion(entrega.id, recepcion.id);
   if (!documento) {
     throw httpError('Falta el documento de presentación/recepción del entregable', 409, 'SIN_DOCUMENTO_RECEPCION');
   }
@@ -806,8 +2448,10 @@ async function validarPrecondicionesConformidad(entrega) {
 export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {}) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   const [recepcion, responsable] = await Promise.all([
-    getRecepcionVigenteEntregable(ordenEntregaId),
-    getResponsableConformidad(entrega.requerimiento_id),
+    opts.recepcion
+      ? Promise.resolve(opts.recepcion)
+      : obtenerRecepcionVigenteEntregable(ordenEntregaId),
+    getResponsableConformidad(ordenEntregaId),
   ]);
 
   let centro = '';
@@ -860,7 +2504,12 @@ export async function generarActaConformidadEntregable(ordenEntregaId, body = {}
 
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   await validarPrecondicionesConformidad(entrega);
-  const responsable = await getResponsableConformidad(entrega.requerimiento_id);
+  const responsable = await getResponsableConformidad(ordenEntregaId);
+  assertEtapaGestionOperativa({
+    etapaCodigo: responsable?.etapa_codigo,
+    estadoCodigo: responsable?.estado_codigo,
+    fuenteEstado: responsable?.fuente_estado,
+  });
   assertPuedeGestionarConformidad(userCtx, entrega, responsable);
 
   const eid = Number(ordenEntregaId);
@@ -870,22 +2519,67 @@ export async function generarActaConformidadEntregable(ordenEntregaId, body = {}
     await client.query('BEGIN');
     // Serializa la generación por entregable (evita versiones duplicadas).
     await client.query('SELECT id FROM orden_entregas WHERE id = $1 FOR UPDATE', [eid]);
+    const observacionEnTransaccion = await client.query(`
+      SELECT id FROM entregable_observaciones
+      WHERE orden_entrega_id = $1
+        AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+      LIMIT 1
+      FOR UPDATE
+    `, [eid]);
+    if (observacionEnTransaccion.rows.length) {
+      throw httpError(
+        'El entregable tiene una observación formal abierta',
+        409,
+        'ENTREGABLE_OBSERVADO',
+      );
+    }
+    const recepcionVigente = await obtenerRecepcionVigenteEntregable(eid, { client, lock: true });
+    if (!recepcionVigente) {
+      throw httpError('El entregable no tiene una recepción válida', 409, 'SIN_RECEPCION_VALIDA');
+    }
+    const documentoVigente = await getDocumentoRecepcionPresentacion(
+      eid,
+      recepcionVigente.id,
+      { client },
+    );
+    if (!documentoVigente) {
+      throw httpError(
+        'Falta el documento de la presentación vigente del entregable',
+        409,
+        'SIN_DOCUMENTO_RECEPCION',
+      );
+    }
     const vres = await client.query(
       'SELECT COALESCE(MAX(version),0)::int AS v FROM entregable_conformidad_actas WHERE orden_entrega_id = $1',
       [eid],
     );
     const nextVersion = Number(vres.rows[0].v) + 1;
 
-    const data = await buildDatosActaConformidadServicio(eid, { version: nextVersion, conclusion });
+    const data = await buildDatosActaConformidadServicio(eid, {
+      version: nextVersion,
+      conclusion,
+      recepcion: recepcionVigente,
+    });
     const pdf = generateActaConformidadServiciosPdfServer(data);
 
     const ins = await client.query(
       `INSERT INTO entregable_conformidad_actas
-         (orden_id, orden_entrega_id, numero_acta, version, estado_documental, contenido_html,
+         (orden_id, orden_entrega_id, recepcion_id, numero_acta, version, estado_documental, contenido_html,
           documento_nombre, documento_mime, documento_base64, generado_at, generado_por)
-       VALUES ($1,$2,$3,$4,'ACTA_CONFORMIDAD_GENERADA',$5,$6,'application/pdf',$7,NOW(),$8)
-       RETURNING id, orden_id, orden_entrega_id, numero_acta, version, estado_documental, generado_at, generado_por`,
-      [entrega.orden_id, eid, pdf.nombre, nextVersion, pdf.html, pdf.nombre, pdf.base64, generadoPor],
+       VALUES ($1,$2,$3,$4,$5,'ACTA_CONFORMIDAD_GENERADA',$6,$7,'application/pdf',$8,NOW(),$9)
+       RETURNING id, orden_id, orden_entrega_id, recepcion_id, numero_acta, version,
+                 estado_documental, generado_at, generado_por`,
+      [
+        entrega.orden_id,
+        eid,
+        recepcionVigente.id,
+        pdf.nombre,
+        nextVersion,
+        pdf.html,
+        pdf.nombre,
+        pdf.base64,
+        generadoPor,
+      ],
     );
     await client.query('COMMIT');
     return { ok: true, data: ins.rows[0] };
@@ -900,7 +2594,12 @@ export async function generarActaConformidadEntregable(ordenEntregaId, body = {}
 /** PASO 7–10 — Adjunta Acta firmada (PDF, versionada, idempotente). */
 export async function adjuntarActaConformidadFirmada(ordenEntregaId, body = {}, userCtx = null, usuario = '') {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
-  const responsable = await getResponsableConformidad(entrega.requerimiento_id);
+  const responsable = await getResponsableConformidad(ordenEntregaId);
+  assertEtapaGestionOperativa({
+    etapaCodigo: responsable?.etapa_codigo,
+    estadoCodigo: responsable?.estado_codigo,
+    fuenteEstado: responsable?.fuente_estado,
+  });
   assertPuedeGestionarConformidad(userCtx, entrega, responsable);
 
   const raw = stripDataUrl(body?.contenido_base64 || '');
@@ -916,19 +2615,52 @@ export async function adjuntarActaConformidadFirmada(ordenEntregaId, body = {}, 
     throw httpError('El acta firmada supera el tamaño máximo permitido (10 MB)', 422, 'ACTA_FIRMADA_TAMANO');
   }
 
-  const acta = await obtenerActaGeneradaVigente(ordenEntregaId);
-  if (!acta) {
+  const actaPrevia = await obtenerActaGeneradaVigente(ordenEntregaId);
+  if (!actaPrevia) {
+    if (body?.acta_id != null) {
+      throw httpError(
+        'El acta seleccionada no corresponde a la presentación vigente',
+        409,
+        'ACTA_GENERADA_HISTORICA',
+      );
+    }
     throw httpError('Debe existir un Acta de Conformidad generada antes de adjuntar la firmada', 409, 'SIN_ACTA_GENERADA');
+  }
+  const actaSolicitadaId = body?.acta_id == null ? null : Number(body.acta_id);
+  if (actaSolicitadaId != null
+    && (!Number.isInteger(actaSolicitadaId) || actaSolicitadaId !== Number(actaPrevia.id))) {
+    throw httpError(
+      'El acta seleccionada no corresponde a la presentación vigente',
+      409,
+      'ACTA_GENERADA_HISTORICA',
+    );
   }
 
   const eid = Number(ordenEntregaId);
   const idem = String(body?.idempotency_key || '').trim().slice(0, 120) || null;
-  const nombre = String(body?.nombre || acta.numero_acta || `ACTA-CS-${entrega.numero_orden}-E${entrega.numero_entrega}-firmada.pdf`).slice(0, 255);
+  const nombre = String(body?.nombre || actaPrevia.numero_acta || `ACTA-CS-${entrega.numero_orden}-E${entrega.numero_entrega}-firmada.pdf`).slice(0, 255);
   const createdBy = String(usuario || userCtx?.id || '').slice(0, 150);
 
   const client = await getClient();
   try {
     await client.query('BEGIN');
+    // Serializa contra observación/subsanación y revalida el acta seleccionable.
+    await client.query('SELECT id FROM orden_entregas WHERE id = $1 FOR UPDATE', [eid]);
+    const acta = await obtenerActaGeneradaVigente(eid, { client });
+    if (!acta) {
+      throw httpError(
+        'El Acta de Conformidad generada no corresponde a la presentación vigente',
+        409,
+        'ACTA_GENERADA_HISTORICA',
+      );
+    }
+    if (actaSolicitadaId != null && actaSolicitadaId !== Number(acta.id)) {
+      throw httpError(
+        'El acta seleccionada no corresponde a la presentación vigente',
+        409,
+        'ACTA_GENERADA_HISTORICA',
+      );
+    }
 
     if (idem) {
       const existente = await client.query(
@@ -939,6 +2671,13 @@ export async function adjuntarActaConformidadFirmada(ordenEntregaId, body = {}, 
         [eid, idem],
       );
       if (existente.rows.length) {
+        if (Number(existente.rows[0].acta_id) !== Number(acta.id)) {
+          throw httpError(
+            'La carga idempotente pertenece a un acta histórica',
+            409,
+            'ACTA_FIRMADA_HISTORICA',
+          );
+        }
         await client.query('COMMIT');
         return { ok: true, data: existente.rows[0], idempotente: true };
       }

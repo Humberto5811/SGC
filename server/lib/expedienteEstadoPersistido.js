@@ -27,7 +27,10 @@ export const FUENTE_RESPONSABLE = Object.freeze({
 export function mapEtapaDestinoBD(destino) {
   if (destino === 'COORDINACION_CM') return 'ACTOS_PREPARATORIOS';
   if (destino === 'VALIDACIONES') return 'VALIDACION_USUARIO';
-  if (destino === 'RECEPCION_BIENES' || destino === 'PRESENTACION_ENTREGABLES') return 'EN_EJECUCION';
+  if (destino === 'RECEPCION_BIENES'
+    || destino === 'PRESENTACION_ENTREGABLES'
+    || destino === 'REVISION_COORDINADOR_CM'
+    || destino === 'REVISION_ANALISTA_CM') return 'EN_EJECUCION';
   return destino;
 }
 

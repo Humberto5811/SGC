@@ -24,6 +24,8 @@ export const ETAPAS = Object.freeze({
   REGISTRO_ORDEN: 'REGISTRO_ORDEN',
   RECEPCION_BIENES: 'RECEPCION_BIENES',
   PRESENTACION_ENTREGABLES: 'PRESENTACION_ENTREGABLES',
+  REVISION_COORDINADOR_CM: 'REVISION_COORDINADOR_CM',
+  REVISION_ANALISTA_CM: 'REVISION_ANALISTA_CM',
   DERIVACION_PAGO: 'DERIVACION_PAGO',
   FINALIZADO: 'FINALIZADO',
 });
@@ -112,10 +114,22 @@ const ETAPA_META_DEF = Object.freeze({
     responsableCodigo: 'AREA_USUARIA', responsableLabel: 'Área Usuaria',
     tipos: Object.freeze(['SERVICIO', 'LOCACION']), terminal: false,
   }),
+  REVISION_COORDINADOR_CM: Object.freeze({
+    codigo: 'REVISION_COORDINADOR_CM', label: 'Revisión Coordinador CM',
+    submoduloCodigo: 'PRESENTACION_ENTREGABLES', submoduloLabel: 'Presentación de Entregables',
+    responsableCodigo: 'COORDINADOR_CM', responsableLabel: 'Coordinación CM',
+    tipos: Object.freeze(['SERVICIO', 'LOCACION']), terminal: false,
+  }),
+  REVISION_ANALISTA_CM: Object.freeze({
+    codigo: 'REVISION_ANALISTA_CM', label: 'Revisión Analista CM',
+    submoduloCodigo: 'PRESENTACION_ENTREGABLES', submoduloLabel: 'Presentación de Entregables',
+    responsableCodigo: 'ANALISTA_CONTRATACIONES', responsableLabel: 'Analista de Contrataciones',
+    tipos: Object.freeze(['SERVICIO', 'LOCACION']), terminal: false,
+  }),
   DERIVACION_PAGO: Object.freeze({
     codigo: 'DERIVACION_PAGO', label: 'Derivación a Pago',
     submoduloCodigo: 'DERIVACION_PAGO', submoduloLabel: 'Pago',
-    responsableCodigo: 'ANALISTA_PAGOS', responsableLabel: 'Analista de Pagos',
+    responsableCodigo: 'ANALISTA_PAGO', responsableLabel: 'Analista de Pago',
     tipos: Object.freeze(['BIEN', 'SERVICIO', 'LOCACION']), terminal: false,
   }),
   FINALIZADO: Object.freeze({

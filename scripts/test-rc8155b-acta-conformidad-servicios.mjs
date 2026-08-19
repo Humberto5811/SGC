@@ -213,9 +213,9 @@ console.log('\n=== RC8.15.5B — Acta de Conformidad de Servicios (FASE 2) ===\n
       }
 
       // limpieza (camino normal)
-      await query('DELETE FROM entregable_recepciones WHERE orden_id=$1', [ordId]);
       await query('DELETE FROM entregable_conformidad_acta_visados WHERE orden_id=$1', [ordId]);
       await query('DELETE FROM entregable_conformidad_actas WHERE orden_id=$1', [ordId]);
+      await query('DELETE FROM entregable_recepciones WHERE orden_id=$1', [ordId]);
       await query('DELETE FROM ordenes_contratacion WHERE id=$1', [ordId]);
       ordId = null;
       console.log('  ✓ fixture limpiado');
@@ -223,9 +223,9 @@ console.log('\n=== RC8.15.5B — Acta de Conformidad de Servicios (FASE 2) ===\n
       console.log(`  ⚠ integración no pudo ejecutarse (${err?.message || err}). No es fallo.`);
       try {
         if (ordId) {
-          await query('DELETE FROM entregable_recepciones WHERE orden_id=$1', [ordId]);
           await query('DELETE FROM entregable_conformidad_acta_visados WHERE orden_id=$1', [ordId]);
           await query('DELETE FROM entregable_conformidad_actas WHERE orden_id=$1', [ordId]);
+          await query('DELETE FROM entregable_recepciones WHERE orden_id=$1', [ordId]);
           await query('DELETE FROM ordenes_contratacion WHERE id=$1', [ordId]);
         }
       } catch (_) { /* limpieza best-effort */ }

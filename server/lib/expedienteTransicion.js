@@ -91,7 +91,7 @@ export async function transicionarExpediente({
       throw err;
     }
     const row = lockRows[0];
-    await getEstadoVigenteForUpdate(tx, rid);
+    const estadoVigente = await getEstadoVigenteForUpdate(tx, rid);
 
     const previo = await getExistingEventByIdempotencyKey(idemKey, tx);
     if (previo) {
@@ -111,7 +111,11 @@ export async function transicionarExpediente({
     }
 
     const tipo = tipoDeRequerimiento(row) || normalizarTipo(metadata.tipo_contratacion) || '';
-    const etapaOrigen = etapaDeRequerimiento(row) || 'REGISTRO';
+    // La etapa canónica prevalece sobre su proyección legacy (p. ej. varias
+    // etapas de ejecución se proyectan como EN_EJECUCION).
+    const etapaOrigen = String(
+      estadoVigente?.etapa_codigo || etapaDeRequerimiento(row) || 'REGISTRO',
+    ).toUpperCase();
     let transicion = getTransition({
       tipoContratacion: tipo,
       etapaOrigen,
