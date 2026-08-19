@@ -519,12 +519,47 @@ export function renderActionMenuCell(id, menuItems = [], hiddenActionsHtml = '')
     </td>`;
 }
 
+let activeBandejaActionToggle = null;
+let bandejaActionGlobalListenersBound = false;
+
+function hideBandejaActionToggle(btn) {
+  if (!btn) return;
+  try { window.bootstrap?.Dropdown?.getInstance(btn)?.hide(); } catch (_) { /* ignore */ }
+  if (activeBandejaActionToggle === btn) activeBandejaActionToggle = null;
+}
+
+function ensureBandejaActionGlobalListeners() {
+  if (bandejaActionGlobalListenersBound || typeof document === 'undefined') return;
+  bandejaActionGlobalListenersBound = true;
+  // Captura garantiza el cierre aunque una celda detenga la propagación.
+  document.addEventListener('click', (event) => {
+    const toggle = event.target?.closest?.('.bandeja-actions-btn');
+    if (toggle) {
+      if (activeBandejaActionToggle && activeBandejaActionToggle !== toggle) {
+        hideBandejaActionToggle(activeBandejaActionToggle);
+      }
+      return;
+    }
+    if (!event.target?.closest?.('.req-col-acc .dropdown')) {
+      hideBandejaActionToggle(activeBandejaActionToggle);
+    }
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') hideBandejaActionToggle(activeBandejaActionToggle);
+  });
+}
+
 /** Cierra menús de acciones abiertos (bandeja principal). */
-export function closeBandejaActionMenus(container = document) {
+export function closeBandejaActionMenus(container = document, exceptToggle = null) {
   const root = container || document;
   root.querySelectorAll?.('.req-col-acc .dropdown-toggle, .bandeja-actions-btn')?.forEach?.((btn) => {
-    try { window.bootstrap?.Dropdown?.getInstance(btn)?.hide(); } catch (_) { /* ignore */ }
+    if (btn !== exceptToggle) hideBandejaActionToggle(btn);
   });
+  if (activeBandejaActionToggle
+    && activeBandejaActionToggle !== exceptToggle
+    && (root === document || root.contains?.(activeBandejaActionToggle))) {
+    hideBandejaActionToggle(activeBandejaActionToggle);
+  }
 }
 
 /**
@@ -582,8 +617,31 @@ export function fixBandejaDropdownMenus(container) {
 
 export function bindActionMenus(container, actMap = {}) {
   if (!container) return;
+  ensureBandejaActionGlobalListeners();
   closeBandejaActionMenus(container);
   fixBandejaDropdownMenus(container);
+  if (container._bandejaMenuShowHandler) {
+    container.removeEventListener('show.bs.dropdown', container._bandejaMenuShowHandler);
+  }
+  if (container._bandejaMenuHiddenHandler) {
+    container.removeEventListener('hidden.bs.dropdown', container._bandejaMenuHiddenHandler);
+  }
+  container._bandejaMenuShowHandler = (event) => {
+    const toggle = event.target?.matches?.('.bandeja-actions-btn')
+      ? event.target
+      : event.target?.querySelector?.('.bandeja-actions-btn');
+    if (!toggle) return;
+    closeBandejaActionMenus(document, toggle);
+    activeBandejaActionToggle = toggle;
+  };
+  container._bandejaMenuHiddenHandler = (event) => {
+    const toggle = event.target?.matches?.('.bandeja-actions-btn')
+      ? event.target
+      : event.target?.querySelector?.('.bandeja-actions-btn');
+    if (activeBandejaActionToggle === toggle) activeBandejaActionToggle = null;
+  };
+  container.addEventListener('show.bs.dropdown', container._bandejaMenuShowHandler);
+  container.addEventListener('hidden.bs.dropdown', container._bandejaMenuHiddenHandler);
   container.querySelectorAll('.bandeja-menu-act').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();

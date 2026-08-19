@@ -3,6 +3,7 @@
  * Ruta: dec/registro-ordenes · permiso REGISTRO_ORDENES_CONTRATACION
  */
 import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
+import { entregablesServiciosService } from '../../services/entregablesServiciosService.js';
 import { bandejaTableStyles, getResponsableVigenteLabel, getEstadoVigenteLabel } from '../../utils/trazabilidad.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
@@ -57,6 +58,7 @@ const loadGuard = createRequestSequenceGuard();
  */
 const TAB_CCP = 'ccp';
 const TAB_ORDEN = 'orden';
+const TAB_OBSERVACIONES = 'observaciones';
 let currentTab = TAB_CCP;
 
 /**
@@ -89,7 +91,19 @@ const ORDEN_COLS = [
   { th: 'Acciones', w: '75px' },
 ];
 
+const OBSERVACIONES_COLS = [
+  { th: 'Fecha', w: '125px' },
+  { th: 'Requerimiento', w: '140px' },
+  { th: 'Orden', w: '115px' },
+  { th: 'Entregable', w: '90px' },
+  { th: 'Origen', w: '190px' },
+  { th: 'Motivo', w: '330px' },
+  { th: 'Estado', w: '130px' },
+  { th: 'Acciones', w: '75px' },
+];
+
 function currentColsDef() {
+  if (currentTab === TAB_OBSERVACIONES) return OBSERVACIONES_COLS;
   return currentTab === TAB_ORDEN ? ORDEN_COLS : CCP_COLS;
 }
 
@@ -100,6 +114,7 @@ function currentColsCount() {
 let lifecycle = null;
 let refreshIndicator = null;
 let rowsCache = [];
+let observacionesCache = [];
 let filtroEstado = '';
 let filtroQ = '';
 let page = 1;
@@ -195,6 +210,7 @@ export function renderRegistroOrdenesView() {
       <ul class="nav nav-tabs mb-3" id="roTabs">
         <li class="nav-item"><a class="nav-link active" href="#" data-tab="${TAB_CCP}">📄 Registro de CCP</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-tab="${TAB_ORDEN}">🧾 Registro de Orden</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-tab="${TAB_OBSERVACIONES}">⚠ Observaciones recibidas</a></li>
       </ul>
       <div class="card border-0 shadow-sm">
         <div class="card-body py-2">
@@ -346,7 +362,39 @@ function renderRowOrden(row) {
   </tr>`;
 }
 
+function renderRowObservacion(row) {
+  const estadoLabel = {
+    OBS_EMITIDA: 'Pendiente',
+    OBS_EN_ATENCION: 'En atención',
+    OBS_SUBSANADA: 'Subsanada',
+    OBS_CERRADA: 'Cerrada',
+  }[row.estado_observacion] || row.estado_observacion || '—';
+  const badge = {
+    OBS_EMITIDA: 'bg-warning text-dark',
+    OBS_EN_ATENCION: 'bg-primary',
+    OBS_SUBSANADA: 'bg-success',
+    OBS_CERRADA: 'bg-secondary',
+  }[row.estado_observacion] || 'bg-secondary';
+  const menu = renderActionMenuCell(row.workflow_observacion_id, [
+    { act: 'verExpedienteObservacion', label: 'Ver expediente', icon: 'bi-folder2-open' },
+    { act: 'verObservacionDirigida', label: 'Ver observación', icon: 'bi-exclamation-triangle' },
+    { act: 'verTrazabilidadObservacion', label: 'Ver trazabilidad', icon: 'bi-clock-history' },
+  ]);
+  return `<tr data-workflow-observacion-id="${row.workflow_observacion_id}"
+    data-oid="${row.orden_id}" data-eid="${row.orden_entrega_id}">
+    <td>${fmtFechaHora(row.fecha_emision)}</td>
+    <td>${esc(row.requerimiento_codigo || '—')}</td>
+    <td>${esc(row.orden_numero || '—')}</td>
+    <td>N.° ${esc(row.numero_entregable ?? '—')}</td>
+    <td class="ro-wrap">${esc(row.origen_submodulo_label || row.origen_submodulo_codigo || '—')}</td>
+    <td class="ro-wrap" title="${esc(row.motivo || '')}">${esc(row.motivo || '—')}</td>
+    <td><span class="badge ${badge}">${esc(estadoLabel)}</span></td>
+    ${menu}
+  </tr>`;
+}
+
 function renderRow(row) {
+  if (currentTab === TAB_OBSERVACIONES) return renderRowObservacion(row);
   return currentTab === TAB_ORDEN ? renderRowOrden(row) : renderRowCcp(row);
 }
 
@@ -430,10 +478,55 @@ async function loadBandeja(opts = {}) {
   }
 }
 
+async function loadObservacionesDirigidas(opts = {}) {
+  const request = loadGuard.begin();
+  captureScroll(VIEW_ID, SCROLL_SEL);
+  renderTableChrome();
+  const tbody = document.getElementById(LIST_ID);
+  if (!opts.silent && tbody) {
+    tbody.innerHTML = `<tr><td colspan="${currentColsCount()}" class="text-center text-muted py-4">Cargando…</td></tr>`;
+  }
+  refreshIndicator?.show?.('Actualizando…');
+  try {
+    const resp = await entregablesServiciosService.listarMisObservacionesDirigidas({
+      q: filtroQ,
+      estado: filtroEstado || 'ABIERTAS',
+      page,
+      pageSize,
+    });
+    if (!request.isCurrent()) return;
+    observacionesCache = resp?.data || [];
+    metaTotal = resp?.meta?.total ?? observacionesCache.length;
+    metaPages = resp?.meta?.pages || Math.max(1, Math.ceil(metaTotal / pageSize) || 1);
+    if (page > metaPages) page = metaPages;
+    updatePagerUi();
+    if (!observacionesCache.length) {
+      tbody.innerHTML = `<tr><td colspan="${currentColsCount()}" class="text-center text-muted py-4">No tiene observaciones dirigidas</td></tr>`;
+    } else {
+      tbody.innerHTML = observacionesCache.map(renderRowObservacion).join('');
+      bindActionMenus(tbody, buildObservacionesActMap());
+    }
+    restoreScroll(VIEW_ID, SCROLL_SEL);
+  } catch (err) {
+    if (isAbortError(err) || !request.isCurrent()) return;
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="${currentColsCount()}" class="text-danger text-center py-4">${esc(err.message || 'Error')}</td></tr>`;
+    }
+  } finally {
+    refreshIndicator?.hide?.();
+  }
+}
+
 function findRow(key) {
   return rowsCache.find((r) => String(r.orden_id || `r${r.requerimiento_id}`) === String(key)
     || String(r.requerimiento_id) === String(key)
     || String(r.orden_id) === String(key));
+}
+
+function findObservacionRow(key) {
+  return observacionesCache.find(
+    (row) => String(row.workflow_observacion_id) === String(key),
+  );
 }
 
 async function openCcpFirmadoViewer(row) {
@@ -447,6 +540,82 @@ async function openCcpFirmadoViewer(row) {
     mime_type: data.mime_type || 'application/pdf',
     contenido_base64: data.contenido_base64,
   });
+}
+
+function showObservacionReadOnlyModal(title, content) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="modal fade" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">${esc(title)}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body">${content}</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div></div>
+  </div>`;
+  document.body.appendChild(wrap);
+  const modalEl = wrap.firstElementChild;
+  const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+  modalEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+  modal.show();
+}
+
+function openObservacionDirigida(row) {
+  showObservacionReadOnlyModal('Observación dirigida', `
+    <div class="row g-2 small">
+      <div class="col-md-6"><strong>Orden:</strong> ${esc(row.orden_numero || '—')}</div>
+      <div class="col-md-6"><strong>Entregable:</strong> N.° ${esc(row.numero_entregable ?? '—')}</div>
+      <div class="col-md-6"><strong>Origen:</strong> ${esc(row.origen_submodulo_label || row.origen_submodulo_codigo || '—')}</div>
+      <div class="col-md-6"><strong>Destino:</strong> ${esc(row.destino_submodulo_label || row.destino_submodulo_codigo || '—')}</div>
+      <div class="col-md-6"><strong>Persona origen:</strong> ${esc(row.usuario_origen_nombre || '—')}</div>
+      <div class="col-md-6"><strong>Persona destino:</strong> ${esc(row.usuario_destino_nombre || '—')}</div>
+      <div class="col-md-6"><strong>Fecha:</strong> ${fmtFechaHora(row.fecha_emision)}</div>
+      <div class="col-md-6"><strong>Estado:</strong> ${esc(row.estado_observacion || '—')}</div>
+      <div class="col-12 mt-3"><strong>Motivo:</strong>
+        <div class="border rounded bg-light p-2 mt-1" style="white-space:pre-wrap">${esc(row.motivo || '—')}</div>
+      </div>
+    </div>`);
+}
+
+async function openTrazabilidadObservacion(row) {
+  const resp = await entregablesServiciosService.listarTrazabilidad(row.orden_entrega_id);
+  const eventos = resp?.data || resp || [];
+  const html = eventos.length ? eventos.map((evento) => `
+    <div class="border rounded p-3 mb-2 small">
+      <div class="d-flex justify-content-between gap-2">
+        <strong>${esc(evento.evento_codigo || 'Evento')}</strong>
+        <span class="text-muted">${fmtFechaHora(evento.ocurrido_at)}</span>
+      </div>
+      <div>${esc(evento.etapa_anterior_codigo || '—')} → ${esc(evento.etapa_nueva_codigo || '—')}</div>
+      <div class="text-muted">${esc(evento.responsable_anterior_nombre || evento.responsable_anterior_unidad || '—')}
+        → ${esc(evento.responsable_nuevo_nombre || evento.responsable_nuevo_unidad || '—')}</div>
+      ${evento.motivo ? `<div class="mt-2">${esc(evento.motivo)}</div>` : ''}
+    </div>`).join('') : '<p class="text-muted mb-0">Sin eventos registrados.</p>';
+  showObservacionReadOnlyModal('Trazabilidad del entregable', html);
+}
+
+function buildObservacionesActMap() {
+  const wrap = (fn) => async (id) => {
+    closeBandejaActionMenus();
+    const row = findObservacionRow(id);
+    if (!row) return;
+    try {
+      await fn(row);
+    } catch (error) {
+      window.alert(error.message || 'No se pudo completar la consulta');
+    }
+  };
+  return {
+    verExpedienteObservacion: wrap((row) => openExpedienteOrdenModal({
+      ...row,
+      numero_orden: row.orden_numero,
+    })),
+    verObservacionDirigida: wrap((row) => openObservacionDirigida(row)),
+    verTrazabilidadObservacion: wrap((row) => openTrazabilidadObservacion(row)),
+  };
 }
 
 function buildActMap() {
@@ -663,6 +832,35 @@ function buildActMap() {
   };
 }
 
+function updateEstadoFilterOptions() {
+  const select = document.getElementById(`${PREFIX}Estado`);
+  if (!select) return;
+  if (currentTab === TAB_OBSERVACIONES) {
+    select.innerHTML = `
+      <option value="ABIERTAS">Abiertas</option>
+      <option value="TODAS">Todas</option>
+      <option value="OBS_EMITIDA">Pendientes</option>
+      <option value="OBS_EN_ATENCION">En atención</option>
+      <option value="OBS_SUBSANADA">Subsanadas</option>
+      <option value="OBS_CERRADA">Cerradas</option>`;
+    select.value = filtroEstado || 'ABIERTAS';
+    return;
+  }
+  select.innerHTML = `
+    <option value="">Todos</option>
+    <option value="REGISTRO_ORDENES">Registro de órdenes</option>
+    <option value="ORDEN_REGISTRADA">Orden registrada</option>
+    <option value="ORDEN_LISTA_NOTIFICACION">Orden lista para notificación</option>
+    <option value="ORDEN_NOTIFICADA">Orden notificada</option>
+    <option value="RECEPCION_BIENES_PENDIENTE">OC pendiente de recepción</option>
+    <option value="BIEN_RECIBIDO_ALMACEN">Recibido por almacén</option>
+    <option value="CONFORMIDAD_PENDIENTE_AU">Conformidad pendiente AU</option>
+    <option value="CONFORMIDAD_RECIBIDA_AU">Conformidad recibida del AU</option>
+    <option value="ORDEN_RECEPCION_CONFIRMADA">Recepción de orden confirmada</option>
+    <option value="EN_EJECUCION">En ejecución</option>`;
+  select.value = filtroEstado;
+}
+
 export function initRegistroOrdenesView() {
   lifecycle?.destroy?.();
   lifecycle = createViewLifecycle(VIEW_ID);
@@ -677,48 +875,59 @@ export function initRegistroOrdenesView() {
       e.preventDefault();
       document.querySelectorAll('#roTabs .nav-link').forEach((l) => l.classList.remove('active'));
       link.classList.add('active');
+      closeBandejaActionMenus();
       currentTab = link.dataset.tab || TAB_CCP;
-      // RC8.13.1 Obs.49 — cambiar de tab solo re-proyecta rowsCache ya cargado
-      // (misma fuente /bandeja); no dispara una segunda carga de red.
-      renderTableChrome();
-      const tbody = document.getElementById(LIST_ID);
-      if (tbody) {
-        tbody.innerHTML = rowsCache.length
-          ? rowsCache.map(renderRow).join('')
-          : `<tr><td colspan="${currentColsCount()}" class="text-center text-muted py-4">No hay expedientes en Registro de Órdenes</td></tr>`;
-        bindActionMenus(tbody, buildActMap());
-      }
+      filtroEstado = currentTab === TAB_OBSERVACIONES ? 'ABIERTAS' : '';
+      page = 1;
+      updateEstadoFilterOptions();
+      if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+      else loadBandeja();
     });
   });
 
-  document.getElementById(`${PREFIX}Refresh`)?.addEventListener('click', () => loadBandeja());
+  document.getElementById(`${PREFIX}Refresh`)?.addEventListener('click', () => {
+    if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+    else loadBandeja();
+  });
   document.getElementById(`${PREFIX}Search`)?.addEventListener('change', (e) => {
     filtroQ = e.target.value.trim();
     page = 1;
-    loadBandeja();
+    if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+    else loadBandeja();
   });
   document.getElementById(`${PREFIX}Search`)?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       filtroQ = e.target.value.trim();
       page = 1;
-      loadBandeja();
+      if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+      else loadBandeja();
     }
   });
   document.getElementById(`${PREFIX}Estado`)?.addEventListener('change', (e) => {
     filtroEstado = e.target.value;
     page = 1;
-    loadBandeja();
+    if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+    else loadBandeja();
   });
   document.getElementById(`${PREFIX}PageSize`)?.addEventListener('change', (e) => {
     pageSize = Number(e.target.value) || 25;
     page = 1;
-    loadBandeja();
+    if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+    else loadBandeja();
   });
   document.getElementById(`${PREFIX}Prev`)?.addEventListener('click', () => {
-    if (page > 1) { page -= 1; loadBandeja(); }
+    if (page > 1) {
+      page -= 1;
+      if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+      else loadBandeja();
+    }
   });
   document.getElementById(`${PREFIX}Next`)?.addEventListener('click', () => {
-    if (page < metaPages) { page += 1; loadBandeja(); }
+    if (page < metaPages) {
+      page += 1;
+      if (currentTab === TAB_OBSERVACIONES) loadObservacionesDirigidas();
+      else loadBandeja();
+    }
   });
 
   loadBandeja();

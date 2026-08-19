@@ -12,6 +12,20 @@ export const entregablesServiciosService = {
   listarBandejaOrdenes() {
     return api.get(`${BASE}/bandeja-ordenes`);
   },
+  listarMisObservacionesDirigidas(params = {}) {
+    const query = new URLSearchParams(params).toString();
+    return api.get(`${BASE}/observaciones-dirigidas/mias${query ? `?${query}` : ''}`);
+  },
+  listarDestinosObservacionDirigida() {
+    return api.get(`${BASE}/observaciones-dirigidas/destinos`);
+  },
+  listarDestinatariosObservacionDirigida(submoduloDestino) {
+    const query = new URLSearchParams({ submoduloDestino }).toString();
+    return api.get(`${BASE}/observaciones-dirigidas/destinatarios?${query}`);
+  },
+  observarEntregableDirigido(id, body) {
+    return api.post(`${BASE}/${id}/observaciones-dirigidas`, body);
+  },
   getDetalle(id) {
     return api.get(`${BASE}/${id}`);
   },

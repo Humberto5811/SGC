@@ -20,8 +20,15 @@ import { generateActaConformidadServiciosPdfServer } from './entregableConformid
 import {
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
+  reasignarResponsableEntregableMismaEtapa,
   transicionarEntregable,
 } from './entregableEstadoPersistido.js';
+import {
+  CATALOGO_DESTINOS_OBSERVACION,
+  listarDestinatariosObservacion,
+  obtenerDestinoObservacion,
+  registrarRoutingObservacionEntregable,
+} from './observacionesEntregableRouting.js';
 import { EVENTOS } from '../../shared/workflow/eventos.js';
 import {
   PERFILES_FUNCIONALES,
@@ -32,8 +39,13 @@ export {
   inicializarEstadoResponsableEntregable,
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
+  reasignarResponsableEntregableMismaEtapa,
   transicionarEntregable,
 } from './entregableEstadoPersistido.js';
+export {
+  CATALOGO_DESTINOS_OBSERVACION,
+  listarDestinatariosObservacion,
+} from './observacionesEntregableRouting.js';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MIME_ALOWED = new Set([
@@ -243,9 +255,15 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
           'motivo', eo.motivo,
           'estado', eo.estado,
           'observado_por', eo.observado_por,
-          'observado_at', eo.observado_at
+          'observado_at', eo.observado_at,
+          'workflow_observacion_id', eo.workflow_observacion_id,
+          'usuario_origen_id', wo.usuario_origen_id,
+          'usuario_destino_id', wo.usuario_destino_id,
+          'destino_submodulo_codigo', wo.destino_submodulo_codigo,
+          'origen_submodulo_codigo', wo.origen_submodulo_codigo
         )
         FROM entregable_observaciones eo
+        LEFT JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
         WHERE eo.orden_entrega_id = oe.id
           AND eo.estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
         ORDER BY eo.observado_at DESC, eo.id DESC
@@ -355,23 +373,62 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
     const analistaCMResponsable = esAdmin(userCtx)
       || (responsablePersonaActual
         && perfilesUsuario.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES));
-    item.puede_registrar_recepcion = autorizado && enPresentacion;
-    item.puede_gestionar_conformidad = autorizado && enPresentacion && !item.observacion_abierta;
+    const obs = item.observacion_abierta || null;
+    const routingActivo = Boolean(obs?.workflow_observacion_id);
+    const esOrigenDirigida = routingActivo
+      && Number(obs?.usuario_origen_id) === Number(userCtx?.id);
+    item.routing_observacion_activo = routingActivo;
+    item.solo_lectura_routing_origen = esOrigenDirigida && !responsablePersonaActual;
+    const tieneRecepcion = Boolean(item.ultima_recepcion?.id);
+    const sinObservacionAbierta = !obs;
+    item.puede_registrar_recepcion = autorizado
+      && enPresentacion
+      && !item.solo_lectura_routing_origen
+      && !tieneRecepcion;
+    item.puede_modificar_entregable = autorizado
+      && enPresentacion
+      && !item.solo_lectura_routing_origen
+      && tieneRecepcion
+      && sinObservacionAbierta
+      && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo);
+    item.puede_gestionar_conformidad = autorizado
+      && enPresentacion
+      && !item.solo_lectura_routing_origen
+      && sinObservacionAbierta
+      && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo);
     item.puede_observar = autorizado
       && enPresentacion
-      && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo)
-      && Boolean(item.ultima_recepcion?.id)
-      && !item.observacion_abierta;
+      && !item.solo_lectura_routing_origen
+      && tieneRecepcion
+      && sinObservacionAbierta
+      && ['RECIBIDO', 'SUBSANADO', 'ACTA_GENERADA', 'CONFORME'].includes(item.situacion_codigo);
     item.puede_subsanar = autorizado
       && enPresentacion
+      && !item.solo_lectura_routing_origen
       && item.situacion_codigo === 'OBSERVADO'
-      && Boolean(item.observacion_abierta?.id);
+      && Boolean(obs?.id);
     item.puede_derivar_coordinador_cm = autorizado
       && enPresentacion
+      && !item.solo_lectura_routing_origen
       && item.situacion_codigo === 'CONFORME'
       && item.acta_generada_version > 0
       && item.firmada_vigente
-      && !item.observacion_abierta;
+      && sinObservacionAbierta;
+    item.puede_ver_observacion_dirigida = item.solo_lectura_routing_origen && routingActivo;
+    item.puede_adjuntar_acta_firmada = autorizado
+      && enPresentacion
+      && !item.solo_lectura_routing_origen
+      && sinObservacionAbierta
+      && item.acta_generada_version > 0
+      && !item.firmada_vigente;
+    item.puede_ver_acta_generada = autorizado
+      && enPresentacion
+      && !item.solo_lectura_routing_origen
+      && item.acta_generada_version > 0;
+    item.puede_ver_acta_firmada = autorizado
+      && enPresentacion
+      && !item.solo_lectura_routing_origen
+      && item.firmada_vigente;
     item.puede_observar_coordinador_cm = responsablePersonaActual
       && perfilesUsuario.includes(PERFILES_FUNCIONALES.COORDINADOR_CM)
       && enRevisionCoordinador
@@ -401,6 +458,59 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
     }
   }
   return list;
+}
+
+/** Resumen conservador de workflow para una orden con uno o más entregables. */
+export function agregarEstadoResponsableOrden(contratos = []) {
+  const vigentes = contratos.filter(Boolean);
+  const estados = new Map();
+  const responsables = new Map();
+  for (const contrato of vigentes) {
+    const etapaCodigo = contrato.etapaCodigo || contrato.estadoCodigo || '';
+    const etapaLabel = contrato.etapaLabel || contrato.estadoLabel || etapaCodigo;
+    const estadoKey = `${etapaCodigo}|${etapaLabel}`;
+    const estado = estados.get(estadoKey) || {
+      codigo: etapaCodigo,
+      label: etapaLabel,
+      cantidad: 0,
+    };
+    estado.cantidad += 1;
+    estados.set(estadoKey, estado);
+
+    const nombre = contrato.responsableNombre
+      || contrato.responsableUsername
+      || contrato.responsableUnidad
+      || (contrato.responsableTipo === 'PENDIENTE' ? 'Pendiente' : '');
+    const responsableKey = `${contrato.responsableTipo}|${contrato.responsableUsuarioId || ''}|${contrato.responsableUnidad || ''}|${nombre}`;
+    const responsable = responsables.get(responsableKey) || {
+      tipo: contrato.responsableTipo,
+      usuario_id: contrato.responsableUsuarioId,
+      unidad: contrato.responsableUnidad,
+      nombre,
+      cantidad: 0,
+    };
+    responsable.cantidad += 1;
+    responsables.set(responsableKey, responsable);
+  }
+
+  const estadosEntregables = [...estados.values()];
+  const responsablesEntregables = [...responsables.values()];
+  const uniforme = estados.size === 1 && responsables.size === 1;
+  const estado = uniforme ? estadosEntregables[0] : null;
+  const responsable = uniforme ? responsablesEntregables[0] : null;
+  return {
+    estados_entregables: estadosEntregables,
+    responsables_entregables: responsablesEntregables,
+    estado_agregado_heterogeneo: estados.size > 1 || responsables.size > 1,
+    // Los componentes visuales centrales solo leen este contrato anidado.
+    // Es seguro exponerlo únicamente cuando no mezcla entregables distintos.
+    estado_responsable_vigente: uniforme ? vigentes[0] : null,
+    estado_etapa_codigo: estado?.codigo || '',
+    estado_etapa_label: estado?.label || '',
+    responsable: responsable?.nombre || '',
+    responsable_tipo: responsable?.tipo || 'PENDIENTE',
+    responsable_usuario_id: responsable?.usuario_id ?? null,
+  };
 }
 
 /** RC8.15.3 — Bandeja pestaña Órdenes: una fila por orden (SERVICIO/LOCACIÓN). */
@@ -535,53 +645,7 @@ export async function listarBandejaOrdenesEntregablesServicios(userCtx = null) {
     const contratos = (entregasPorOrden.get(Number(item.orden_id)) || [])
       .map((id) => estadosPorEntregable.get(id))
       .filter(Boolean);
-    const estados = new Map();
-    const responsables = new Map();
-    for (const contrato of contratos) {
-      const etapaCodigo = contrato.etapaCodigo || contrato.estadoCodigo || '';
-      const etapaLabel = contrato.etapaLabel || contrato.estadoLabel || etapaCodigo;
-      const estadoKey = `${etapaCodigo}|${etapaLabel}`;
-      const estado = estados.get(estadoKey) || {
-        codigo: etapaCodigo,
-        label: etapaLabel,
-        cantidad: 0,
-      };
-      estado.cantidad += 1;
-      estados.set(estadoKey, estado);
-
-      const nombre = contrato.responsableNombre
-        || contrato.responsableUsername
-        || contrato.responsableUnidad
-        || (contrato.responsableTipo === 'PENDIENTE' ? 'Pendiente' : '');
-      const responsableKey = `${contrato.responsableTipo}|${contrato.responsableUsuarioId || ''}|${contrato.responsableUnidad || ''}|${nombre}`;
-      const responsable = responsables.get(responsableKey) || {
-        tipo: contrato.responsableTipo,
-        usuario_id: contrato.responsableUsuarioId,
-        unidad: contrato.responsableUnidad,
-        nombre,
-        cantidad: 0,
-      };
-      responsable.cantidad += 1;
-      responsables.set(responsableKey, responsable);
-    }
-    item.estados_entregables = [...estados.values()];
-    item.responsables_entregables = [...responsables.values()];
-    item.estado_agregado_heterogeneo = estados.size > 1 || responsables.size > 1;
-    if (estados.size === 1 && responsables.size === 1) {
-      const estado = item.estados_entregables[0];
-      const responsable = item.responsables_entregables[0];
-      item.estado_etapa_codigo = estado.codigo;
-      item.estado_etapa_label = estado.label;
-      item.responsable = responsable.nombre;
-      item.responsable_tipo = responsable.tipo;
-      item.responsable_usuario_id = responsable.usuario_id ?? null;
-    } else {
-      item.estado_etapa_codigo = '';
-      item.estado_etapa_label = '';
-      item.responsable = '';
-      item.responsable_tipo = 'PENDIENTE';
-      item.responsable_usuario_id = null;
-    }
+    Object.assign(item, agregarEstadoResponsableOrden(contratos));
   }
   return list;
 }
@@ -1481,9 +1545,21 @@ export async function derivarEntregablePago(
 export async function listarTrazabilidadEntregable(ordenEntregaId, userCtx = null) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
-  if (!esAdmin(userCtx) && Number(userCtx?.id) !== Number(estado?.responsableUsuarioId)) {
+  const userId = Number(userCtx?.id);
+  const accesoRouting = Number.isInteger(userId) && userId > 0
+    ? Number((await query(`
+        SELECT COUNT(*)::int AS n
+        FROM entregable_observaciones eo
+        JOIN workflow_observaciones wo ON wo.id=eo.workflow_observacion_id
+        WHERE eo.orden_entrega_id=$1 AND eo.orden_id=$2
+          AND wo.usuario_destino_id=$3
+      `, [Number(entrega.id), Number(entrega.orden_id), userId])).rows[0]?.n || 0) > 0
+    : false;
+  if (!esAdmin(userCtx)
+    && userId !== Number(estado?.responsableUsuarioId)
+    && !accesoRouting) {
     throw httpError(
-      'Solo el responsable actual puede consultar la trazabilidad del entregable',
+      'Solo el responsable actual o destinatario de una observación puede consultar la trazabilidad',
       403,
       'TRAZABILIDAD_ENTREGABLE_NO_AUTORIZADA',
     );
@@ -1500,7 +1576,29 @@ export async function listarTrazabilidadEntregable(ordenEntregaId, userCtx = nul
     WHERE ev.orden_entrega_id=$1 AND ev.orden_id=$2
     ORDER BY ev.ocurrido_at DESC, ev.id DESC
   `, [Number(entrega.id), Number(entrega.orden_id)]);
-  return rows;
+  const { rows: routings } = await query(`
+    SELECT
+      ('routing-' || wo.id::text) AS id,
+      'ENTREGABLE_OBSERVACION_DIRIGIDA' AS evento_codigo,
+      wo.origen_submodulo_codigo AS etapa_anterior_codigo,
+      wo.destino_submodulo_codigo AS etapa_nueva_codigo,
+      uo.nombre AS responsable_anterior_nombre,
+      ud.nombre AS responsable_nuevo_nombre,
+      uo.nombre AS ejecutado_usuario_nombre,
+      wo.emitida_por AS ejecutado_por,
+      wo.motivo,
+      wo.emitida_at AS ocurrido_at,
+      wo.id AS workflow_observacion_id,
+      wo.estado AS estado_observacion
+    FROM entregable_observaciones eo
+    JOIN workflow_observaciones wo ON wo.id=eo.workflow_observacion_id
+    LEFT JOIN usuarios uo ON uo.id=wo.usuario_origen_id
+    LEFT JOIN usuarios ud ON ud.id=wo.usuario_destino_id
+    WHERE eo.orden_entrega_id=$1 AND eo.orden_id=$2
+  `, [Number(entrega.id), Number(entrega.orden_id)]);
+  return [...rows, ...routings].sort(
+    (a, b) => new Date(b.ocurrido_at || 0).getTime() - new Date(a.ocurrido_at || 0).getTime(),
+  );
 }
 
 /** Historial formal de observaciones de todas las presentaciones del entregable. */
@@ -1546,6 +1644,170 @@ export async function obtenerObservacionesRecepcion(recepcionId) {
     ORDER BY eo.observado_at DESC, eo.id DESC
   `, [rid]);
   return rows;
+}
+
+/**
+ * RC8.15.6F-2 — Observación dirigida productiva con routing F-1 y cambio de responsable.
+ */
+export async function observarEntregableDirigido(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+  externalClient = null,
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  const origenUid = Number(userCtx?.id);
+  if (!Number.isInteger(origenUid) || origenUid <= 0) {
+    throw httpError('Autenticación requerida', 401, 'AUTH_REQUIRED');
+  }
+  const destinoSubmodulo = String(body.destino_submodulo_codigo || '').trim();
+  const destinoUid = Number(body.usuario_destino_id);
+  const motivo = String(body.motivo || '').trim();
+  if (!destinoSubmodulo) {
+    throw httpError('El submódulo destino es obligatorio', 400, 'SUBMODULO_DESTINO_REQUERIDO');
+  }
+  if (!Number.isInteger(destinoUid) || destinoUid <= 0) {
+    throw httpError('usuario_destino_id debe ser un ID real', 400, 'USUARIO_DESTINO_ID_INVALIDO');
+  }
+  if (!motivo) {
+    throw httpError('El motivo de observación es obligatorio', 400, 'MOTIVO_OBSERVACION_REQUERIDO');
+  }
+  const ejecutadoPor = String(usuario || userCtx?.nombre || userCtx?.username || '').trim()
+    || String(origenUid);
+
+  const work = async (tx) => {
+    const { rows: entregaRows } = await tx.query(`
+      SELECT oe.id, oe.orden_id, oe.estado, oc.requerimiento_id,
+        oc.tipo_orden, oc.tipo_contratacion, oc.estado AS orden_estado,
+        r.tipo AS req_tipo
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      LEFT JOIN requerimientos r ON r.id = oc.requerimiento_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = entregaRows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404);
+    if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+      throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+    }
+    if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+      throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
+    }
+
+    const estadoEntregable = await obtenerEstadoResponsableEntregable(eid, { client: tx });
+    assertEtapaGestionOperativa(estadoEntregable);
+    const etapaCodigo = String(estadoEntregable?.etapaCodigo || '').toUpperCase();
+    if (etapaCodigo !== 'PRESENTACION_ENTREGABLES') {
+      throw httpError(
+        'La observación dirigida solo aplica en Presentación de Entregables',
+        409,
+        'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+      );
+    }
+    assertPuedeObservarEntregable(userCtx, {
+      responsable_usuario_id: estadoEntregable?.responsableUsuarioId,
+    });
+
+    const { rows: recepcionRows } = await tx.query(`
+      SELECT *
+      FROM entregable_recepciones
+      WHERE orden_entrega_id = $1
+        AND orden_id = $2
+        AND UPPER(COALESCE(estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+      ORDER BY numero_recepcion DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
+    `, [eid, Number(entrega.orden_id)]);
+    const recepcion = recepcionRows[0];
+    if (!recepcion) {
+      throw httpError(
+        'El entregable no tiene una recepción vigente para observar',
+        409,
+        'SIN_RECEPCION_VIGENTE',
+      );
+    }
+
+    const { rows: abiertas } = await tx.query(`
+      SELECT id
+      FROM entregable_observaciones
+      WHERE orden_entrega_id=$1
+        AND estado IN ('OBS_EMITIDA','OBS_EN_ATENCION')
+      LIMIT 1
+      FOR UPDATE
+    `, [eid]);
+    if (abiertas.length) {
+      throw httpError(
+        'El entregable ya tiene una observación formal abierta',
+        409,
+        'OBSERVACION_ABIERTA_EXISTE',
+      );
+    }
+
+    const destino = obtenerDestinoObservacion(destinoSubmodulo);
+    const routing = await registrarRoutingObservacionEntregable({
+      requerimientoId: Number(entrega.requerimiento_id),
+      ordenId: Number(entrega.orden_id),
+      ordenEntregaId: eid,
+      recepcionId: Number(recepcion.id),
+      destinoSubmoduloCodigo: destino.submodulo_codigo,
+      usuarioOrigenId: origenUid,
+      usuarioDestinoId: destinoUid,
+      motivo,
+      client: tx,
+    });
+    const reasignacion = await reasignarResponsableEntregableMismaEtapa({
+      ordenEntregaId: eid,
+      usuarioDestinoId: destinoUid,
+      etapaLabelOverride: destino.label,
+      usuarioOrigenId: origenUid,
+      ejecutadoPor,
+      motivo,
+      metadata: {
+        origen: 'OBSERVACION_DIRIGIDA',
+        workflow_observacion_id: Number(routing.workflow_observacion.id),
+        entregable_observacion_id: Number(routing.entregable_observacion.id),
+        destino_submodulo_codigo: destino.submodulo_codigo,
+        destino_submodulo_label: destino.label,
+        recepcion_id: Number(recepcion.id),
+      },
+      client: tx,
+    });
+
+    return {
+      workflow_observacion: routing.workflow_observacion,
+      entregable_observacion: routing.entregable_observacion,
+      destinatario: routing.destinatario,
+      reasignacion,
+      cambio_responsable: {
+        preparado: true,
+        ejecutado: true,
+        usuario_origen_id: origenUid,
+        usuario_destino_id: destinoUid,
+        submodulo_destino_codigo: destino.submodulo_codigo,
+        etapa_conservada: reasignacion.etapa_conservada,
+      },
+    };
+  };
+
+  if (externalClient) return work(externalClient);
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**

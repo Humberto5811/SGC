@@ -101,44 +101,75 @@ export function entregableMenuItems(row) {
     }
     return items;
   }
-  const situacion = row.situacion_codigo || row.estado_ejecucion || 'PENDIENTE_RECEPCION';
-  if (row.puede_registrar_recepcion !== false
-    && (situacion === 'PENDIENTE_RECEPCION' || situacion === 'RECIBIDO')) {
-    const yaRegistrado = Boolean(row.ultima_recepcion?.id);
-    items.push({
-      act: 'registrarRecepcion',
-      label: yaRegistrado ? 'Modificar entregable' : 'Registrar entregable',
-      icon: yaRegistrado ? 'bi-pencil-square' : 'bi-box-arrow-in-down',
-    });
-  }
-  if (row.puede_subsanar && situacion === 'OBSERVADO') {
-    items.push({ act: 'subsanarEntregable', label: 'Subsanar observación', icon: 'bi-arrow-repeat' });
-  }
-  if (row.puede_observar && situacion === 'RECIBIDO') {
-    items.push({ act: 'observarEntregable', label: 'Observar entregable', icon: 'bi-exclamation-triangle' });
-  }
-  if (['RECIBIDO', 'SUBSANADO'].includes(situacion) && row.puede_gestionar_conformidad) {
-    items.push({ act: 'generarActa', label: 'Generar Acta de Conformidad', icon: 'bi-file-earmark-check' });
-  }
-  if (situacion === 'ACTA_GENERADA') {
-    items.push({ act: 'verActaGenerada', label: 'Ver Acta de Conformidad', icon: 'bi-eye' });
-    items.push({ act: 'descargarActaGenerada', label: 'Descargar Acta de Conformidad', icon: 'bi-download' });
-    if (row.puede_gestionar_conformidad) {
-      items.push({ act: 'adjuntarActaFirmada', label: 'Adjuntar Acta firmada', icon: 'bi-file-earmark-arrow-up' });
-    }
-  }
-  if (situacion === 'CONFORME') {
-    items.push({ act: 'verActaGenerada', label: 'Ver Acta de Conformidad', icon: 'bi-eye' });
-    items.push({ act: 'descargarActaGenerada', label: 'Descargar Acta de Conformidad', icon: 'bi-download' });
-    items.push({ act: 'verActaFirmada', label: 'Ver Acta firmada', icon: 'bi-eye' });
-    items.push({ act: 'descargarActaFirmada', label: 'Descargar Acta firmada', icon: 'bi-download' });
-    if (row.puede_derivar_coordinador_cm) {
+  if (row.solo_lectura_routing_origen) {
+    if (row.puede_ver_observacion_dirigida) {
       items.push({
-        act: 'derivarCoordinadorCM',
-        label: 'Derivar a Coordinador CM',
-        icon: 'bi-send',
+        act: 'verObservacionDirigida',
+        label: 'Ver observación',
+        icon: 'bi-exclamation-triangle',
       });
     }
+    if (row.puede_ver_trazabilidad) {
+      items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
+    }
+    return items;
+  }
+  if (row.puede_registrar_recepcion) {
+    items.push({
+      act: 'registrarRecepcion',
+      label: 'Registrar entregable',
+      icon: 'bi-box-arrow-in-down',
+    });
+  }
+  if (row.puede_modificar_entregable) {
+    items.push({
+      act: 'registrarRecepcion',
+      label: 'Modificar entregable',
+      icon: 'bi-pencil-square',
+    });
+  }
+  if (row.puede_observar) {
+    items.push({ act: 'observarEntregable', label: 'Observar', icon: 'bi-exclamation-triangle' });
+  }
+  if (row.puede_subsanar) {
+    items.push({ act: 'subsanarEntregable', label: 'Subsanar observación', icon: 'bi-arrow-repeat' });
+  }
+  if (row.puede_gestionar_conformidad) {
+    items.push({
+      act: 'generarActa',
+      label: 'Generar Acta de Conformidad',
+      icon: 'bi-file-earmark-check',
+    });
+  }
+  if (row.puede_ver_acta_generada) {
+    items.push({ act: 'verActaGenerada', label: 'Ver Acta de Conformidad', icon: 'bi-eye' });
+    items.push({
+      act: 'descargarActaGenerada',
+      label: 'Descargar Acta de Conformidad',
+      icon: 'bi-download',
+    });
+  }
+  if (row.puede_adjuntar_acta_firmada) {
+    items.push({
+      act: 'adjuntarActaFirmada',
+      label: 'Adjuntar Acta firmada',
+      icon: 'bi-file-earmark-arrow-up',
+    });
+  }
+  if (row.puede_ver_acta_firmada) {
+    items.push({ act: 'verActaFirmada', label: 'Ver Acta firmada', icon: 'bi-eye' });
+    items.push({
+      act: 'descargarActaFirmada',
+      label: 'Descargar Acta firmada',
+      icon: 'bi-download',
+    });
+  }
+  if (row.puede_derivar_coordinador_cm) {
+    items.push({
+      act: 'derivarCoordinadorCM',
+      label: 'Derivar a Coordinador CM',
+      icon: 'bi-send',
+    });
   }
   if (row.puede_ver_trazabilidad) {
     items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
@@ -148,9 +179,10 @@ export function entregableMenuItems(row) {
 
 function renderEstadosOrden(row) {
   const estados = row.estados_entregables || [];
-  if (!row.estado_agregado_heterogeneo || estados.length <= 1) {
+  if (!row.estado_agregado_heterogeneo && row.estado_responsable_vigente) {
     return renderEstadoBadgeFromRow(row);
   }
+  if (!estados.length) return renderEstadoBadgeFromRow(row);
   return estados.map((estado) => `
     <div class="mb-1">${renderEstadoBadgeHtml({
       estadoCodigo: estado.codigo,
@@ -161,9 +193,10 @@ function renderEstadosOrden(row) {
 
 function renderResponsablesOrden(row) {
   const responsables = row.responsables_entregables || [];
-  if (!row.estado_agregado_heterogeneo || responsables.length <= 1) {
+  if (!row.estado_agregado_heterogeneo && row.estado_responsable_vigente) {
     return renderResponsableCellHtml(row, esc);
   }
+  if (!responsables.length) return renderResponsableCellHtml(row, esc);
   return responsables.map((responsable) => `
     <div class="mb-1">${esc(responsable.nombre || 'Pendiente')}
       <span class="text-muted">(${esc(responsable.cantidad)})</span></div>
@@ -232,6 +265,8 @@ function filteredEntregables() {
 }
 
 function renderCurrent() {
+  // Cierra la instancia activa antes de cambiar pestaña o reemplazar filas.
+  closeBandejaActionMenus();
   const panelOrdenes = document.getElementById(`${PREFIX}TabOrdenesPanel`);
   const panelEntregables = document.getElementById(`${PREFIX}TabEntregablesPanel`);
   if (panelOrdenes) panelOrdenes.classList.toggle('d-none', currentTab !== TAB_ORDENES);
@@ -281,6 +316,7 @@ function buildActMap() {
     verExpediente: (id) => openDetalle(id),
     registrarRecepcion: (id) => openRegistrarRecepcion(id),
     observarEntregable: (id) => openObservarEntregable(id),
+    verObservacionDirigida: (id) => openVerObservacionDirigida(id),
     subsanarEntregable: (id) => openSubsanarEntregable(id),
     generarActa: (id) => openGenerarActa(id),
     adjuntarActaFirmada: (id) => openAdjuntarActaFirmada(id),
@@ -383,7 +419,24 @@ function render() {
           <div class="modal-body">
             <input type="hidden" id="${PREFIX}ObservarEntregableId">
             <input type="hidden" id="${PREFIX}ObservarRecepcionId">
+            <input type="hidden" id="${PREFIX}ObservarModo" value="dirigida">
             <div class="border rounded p-2 small mb-3" id="${PREFIX}ObservarResumen"></div>
+            <div id="${PREFIX}ObservarRoutingFields">
+              <div class="mb-2">
+                <label class="form-label small mb-1">Origen</label>
+                <input type="text" class="form-control form-control-sm" value="Presentación Entregables de Servicios" readonly>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1" for="${PREFIX}ObservarDestinoSubmodulo">Submódulo destino <span class="text-danger">*</span></label>
+                <select class="form-select form-select-sm" id="${PREFIX}ObservarDestinoSubmodulo" required></select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1" for="${PREFIX}ObservarDestinoUsuario">Persona destino <span class="text-danger">*</span></label>
+                <select class="form-select form-select-sm" id="${PREFIX}ObservarDestinoUsuario" required disabled>
+                  <option value="">Seleccione submódulo destino…</option>
+                </select>
+              </div>
+            </div>
             <div class="mb-2">
               <label class="form-label small mb-1" for="${PREFIX}ObservarMotivo">Motivo de observación <span class="text-danger">*</span></label>
               <textarea class="form-control form-control-sm" id="${PREFIX}ObservarMotivo" rows="4" required></textarea>
@@ -677,12 +730,79 @@ async function submitRegistrarRecepcion(e) {
   }
 }
 
+async function loadDestinatariosObservacion(submoduloCodigo) {
+  const select = document.getElementById(`${PREFIX}ObservarDestinoUsuario`);
+  if (!select) return;
+  select.innerHTML = '<option value="">Cargando destinatarios…</option>';
+  select.disabled = true;
+  if (!submoduloCodigo) {
+    select.innerHTML = '<option value="">Seleccione submódulo destino…</option>';
+    return;
+  }
+  const resp = await entregablesServiciosService.listarDestinatariosObservacionDirigida(submoduloCodigo);
+  const destinatarios = resp?.data || resp || [];
+  if (!destinatarios.length) {
+    select.innerHTML = '<option value="">Sin destinatarios habilitados</option>';
+    return;
+  }
+  select.innerHTML = [
+    '<option value="">Seleccione persona destino…</option>',
+    ...destinatarios.map((item) => `<option value="${esc(item.id)}">${esc(item.nombre || item.username)}</option>`),
+  ].join('');
+  select.disabled = false;
+}
+
+function openVerObservacionDirigida(id) {
+  const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(id));
+  const obs = row?.observacion_abierta;
+  if (!obs?.id) {
+    window.alert('No hay observación dirigida vigente para este entregable.');
+    return;
+  }
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="modal fade" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Observación dirigida</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body small">
+        <div class="row g-2">
+          <div class="col-md-6"><strong>Orden:</strong> ${esc(ordenLabel(row || {}))}</div>
+          <div class="col-md-6"><strong>Entregable:</strong> N.° ${esc(row?.numero_entrega ?? '—')}</div>
+          <div class="col-md-6"><strong>Estado:</strong> ${esc(obs.estado || '—')}</div>
+          <div class="col-12 mt-2"><strong>Motivo:</strong>
+            <div class="border rounded bg-light p-2 mt-1" style="white-space:pre-wrap">${esc(obs.motivo || '—')}</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div></div></div>`;
+  document.body.appendChild(wrap);
+  const modalEl = wrap.firstElementChild;
+  const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+  modalEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
+  modal.show();
+}
+
 async function openObservarEntregable(id) {
   const errBox = document.getElementById(`${PREFIX}ObservarErr`);
   errBox?.classList.add('d-none');
   document.getElementById(`${PREFIX}ObservarMotivo`).value = '';
   document.getElementById(`${PREFIX}ObservarEntregableId`).value = id;
   document.getElementById(`${PREFIX}ObservarRecepcionId`).value = '';
+  const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(id)) || {};
+  const etapa = String(row.estado_etapa_codigo || '').toUpperCase();
+  const routingFields = document.getElementById(`${PREFIX}ObservarRoutingFields`);
+  const destinoSelect = document.getElementById(`${PREFIX}ObservarDestinoSubmodulo`);
+  const destinoUsuario = document.getElementById(`${PREFIX}ObservarDestinoUsuario`);
+  const esDirigida = etapa === 'PRESENTACION_ENTREGABLES';
+  document.getElementById(`${PREFIX}ObservarModo`).value = esDirigida ? 'dirigida' : 'legacy';
+  routingFields?.classList.toggle('d-none', !esDirigida);
+  if (destinoSelect) destinoSelect.required = esDirigida;
+  if (destinoUsuario) destinoUsuario.required = esDirigida;
   const modalEl = document.getElementById(`${PREFIX}ObservarModal`);
   window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
   try {
@@ -702,6 +822,17 @@ async function openObservarEntregable(id) {
       <div><strong>Fecha recepción:</strong> ${esc(fmtFecha(recepcion.fecha_recepcion_mesa_partes))}</div>
       <div><strong>Expediente SGD:</strong> ${esc(recepcion.numero_expediente_sgd || '—')}</div>
       <div><strong>Acta vigente:</strong> ${esc(conformidad.acta ? `V${conformidad.acta.version || 1}` : '—')}</div>`;
+    if (esDirigida && destinoSelect) {
+      const destinosResp = await entregablesServiciosService.listarDestinosObservacionDirigida();
+      const destinos = destinosResp?.data || destinosResp || [];
+      destinoSelect.innerHTML = destinos.length
+        ? ['<option value="">Seleccione submódulo destino…</option>',
+          ...destinos.map((item) => `<option value="${esc(item.submodulo_codigo)}">${esc(item.label)}</option>`),
+        ].join('')
+        : '<option value="">Sin destinos habilitados</option>';
+      destinoUsuario.innerHTML = '<option value="">Seleccione submódulo destino…</option>';
+      destinoUsuario.disabled = true;
+    }
   } catch (err) {
     if (errBox) {
       errBox.textContent = err.message || 'No se pudo consultar el entregable';
@@ -715,10 +846,20 @@ async function submitObservarEntregable(e) {
   const id = document.getElementById(`${PREFIX}ObservarEntregableId`).value;
   const recepcionId = document.getElementById(`${PREFIX}ObservarRecepcionId`).value;
   const motivo = document.getElementById(`${PREFIX}ObservarMotivo`).value.trim();
+  const modo = document.getElementById(`${PREFIX}ObservarModo`)?.value || 'dirigida';
+  const destinoSubmodulo = document.getElementById(`${PREFIX}ObservarDestinoSubmodulo`)?.value || '';
+  const destinoUsuario = document.getElementById(`${PREFIX}ObservarDestinoUsuario`)?.value || '';
   const errBox = document.getElementById(`${PREFIX}ObservarErr`);
   if (!motivo) {
     if (errBox) {
       errBox.textContent = 'El motivo de observación es obligatorio.';
+      errBox.classList.remove('d-none');
+    }
+    return;
+  }
+  if (modo === 'dirigida' && (!destinoSubmodulo || !destinoUsuario)) {
+    if (errBox) {
+      errBox.textContent = 'Debe seleccionar submódulo y persona destino.';
       errBox.classList.remove('d-none');
     }
     return;
@@ -738,6 +879,12 @@ async function submitObservarEntregable(e) {
     ) || {};
     if (String(row.estado_etapa_codigo || '').toUpperCase() === 'REVISION_ANALISTA_CM') {
       await entregablesServiciosService.observarAnalistaCM(id, motivo);
+    } else if (modo === 'dirigida') {
+      await entregablesServiciosService.observarEntregableDirigido(id, {
+        destino_submodulo_codigo: destinoSubmodulo,
+        usuario_destino_id: Number(destinoUsuario),
+        motivo,
+      });
     } else {
       await entregablesServiciosService.observarEntregable(id, {
         recepcion_id: Number(recepcionId),
@@ -1509,6 +1656,15 @@ export function initPresentacionEntregableView() {
   });
   document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', submitRegistrarRecepcion);
   document.getElementById(`${PREFIX}ObservarForm`)?.addEventListener('submit', submitObservarEntregable);
+  document.getElementById(`${PREFIX}ObservarDestinoSubmodulo`)?.addEventListener('change', (event) => {
+    loadDestinatariosObservacion(event.target.value).catch((err) => {
+      const errBox = document.getElementById(`${PREFIX}ObservarErr`);
+      if (errBox) {
+        errBox.textContent = err.message || 'No se pudieron cargar destinatarios';
+        errBox.classList.remove('d-none');
+      }
+    });
+  });
   document.getElementById(`${PREFIX}SubsanarForm`)?.addEventListener('submit', submitSubsanarEntregable);
   document.getElementById(`${PREFIX}DerivarForm`)?.addEventListener('submit', submitDerivarCoordinadorCM);
   document.getElementById(`${PREFIX}DerivarResponsable`)?.addEventListener('change', (event) => {

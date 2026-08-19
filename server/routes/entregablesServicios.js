@@ -10,6 +10,7 @@ import {
   registrarRecepcionEntregable,
   modificarRecepcionEntregable,
   observarEntregable,
+  observarEntregableDirigido,
   subsanarEntregable,
   listarCoordinadoresCMEntregable,
   derivarEntregableCoordinadorCM,
@@ -29,6 +30,11 @@ import {
   getActaConformidadFirmada,
   getActaConformidadFirmadaBytes,
 } from '../lib/entregablesServicios.js';
+import {
+  CATALOGO_DESTINOS_OBSERVACION,
+  listarDestinatariosObservacion,
+  listarMisObservacionesDirigidas,
+} from '../lib/observacionesEntregableRouting.js';
 
 const router = Router();
 
@@ -66,6 +72,34 @@ router.get('/bandeja', async (req, res, next) => {
 router.get('/bandeja-ordenes', async (req, res, next) => {
   try {
     const data = await listarBandejaOrdenesEntregablesServicios(req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/observaciones-dirigidas/mias', async (req, res, next) => {
+  try {
+    const result = await listarMisObservacionesDirigidas({
+      userCtx: req.esUserCtx,
+      estado: req.query.estado || 'ABIERTAS',
+      q: req.query.q || '',
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
+router.get('/observaciones-dirigidas/destinos', async (req, res, next) => {
+  try {
+    res.json({ ok: true, data: CATALOGO_DESTINOS_OBSERVACION });
+  } catch (err) { next(err); }
+});
+
+router.get('/observaciones-dirigidas/destinatarios', async (req, res, next) => {
+  try {
+    const data = await listarDestinatariosObservacion({
+      submoduloDestino: req.query.submoduloDestino || req.query.destino_submodulo_codigo,
+    });
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
@@ -174,6 +208,18 @@ router.put('/:id/recepcion', async (req, res, next) => {
       req.esRol,
     );
     res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/observaciones-dirigidas', async (req, res, next) => {
+  try {
+    const data = await observarEntregableDirigido(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
   } catch (err) { next(err); }
 });
 
