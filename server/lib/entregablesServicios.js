@@ -360,6 +360,10 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
   const estadosPorEntregable = await listarEstadosResponsablesEntregables(
     list.map((item) => item.orden_entrega_id),
   );
+  const routingTrazabilidadIds = await obtenerEntregablesConAccesoRoutingTrazabilidad(
+    list.map((item) => item.orden_entrega_id),
+    userCtx?.id,
+  );
   for (const item of list) {
     const erv = estadosPorEntregable.get(Number(item.orden_entrega_id)) || null;
     item.estado_responsable_vigente = erv;
@@ -472,8 +476,10 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
       && item.acta_generada_version > 0
       && item.firmada_vigente
       && !item.observacion_abierta;
-    item.puede_ver_trazabilidad = Boolean(erv)
-      && (enPresentacion || enRevisionCoordinador || enRevisionAnalista || enDerivacionPago);
+    item.puede_ver_trazabilidad = etapaVisibleTrazabilidadEntregable(etapaCodigo)
+      && puedeAccederTrazabilidadEntregable(userCtx, erv, item, {
+        accesoRoutingObservacion: routingTrazabilidadIds.has(Number(item.orden_entrega_id)),
+      });
     // Etapa canónica del entregable (específica o fallback histórico).
     if (erv) {
       const etapaCodigoCanon = erv.etapaCodigo || erv.estadoCodigo || 'PRESENTACION_ENTREGABLES';
@@ -1035,6 +1041,69 @@ function esAutorizadoGestionEntregable(userCtx, estado, entrega) {
   }
 }
 
+function etapaVisibleTrazabilidadEntregable(etapaCodigo) {
+  const etapa = String(etapaCodigo || '').toUpperCase();
+  return etapa === ETAPAS.PRESENTACION_ENTREGABLES
+    || etapa === ETAPAS.REVISION_COORDINADOR_CM
+    || etapa === ETAPAS.REVISION_ANALISTA_CM
+    || etapa === ETAPAS.DERIVACION_PAGO;
+}
+
+/** Política única: admin, responsable canónico o emisor/destinatario de obs. dirigida. */
+export function puedeAccederTrazabilidadEntregable(
+  userCtx,
+  estado,
+  entrega,
+  { accesoRoutingObservacion = false } = {},
+) {
+  if (esAdmin(userCtx)) return true;
+  if (esAutorizadoGestionEntregable(userCtx, estado, entrega)) return true;
+  return Boolean(accesoRoutingObservacion);
+}
+
+async function obtenerEntregablesConAccesoRoutingTrazabilidad(
+  ordenEntregaIds = [],
+  userId,
+  client = null,
+) {
+  const ids = [...new Set(
+    ordenEntregaIds.map((id) => parseInt(id, 10)).filter(Number.isFinite),
+  )];
+  const uid = Number(userId);
+  if (!ids.length || !Number.isInteger(uid) || uid <= 0) return new Set();
+  const run = client || { query };
+  const { rows } = await run.query(`
+    SELECT DISTINCT eo.orden_entrega_id
+    FROM entregable_observaciones eo
+    JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
+    WHERE eo.orden_entrega_id = ANY($1::int[])
+      AND wo.usuario_origen_id IS NOT NULL
+      AND wo.usuario_destino_id IS NOT NULL
+      AND (wo.usuario_origen_id = $2 OR wo.usuario_destino_id = $2)
+  `, [ids, uid]);
+  return new Set(rows.map((row) => Number(row.orden_entrega_id)));
+}
+
+async function assertAccesoTrazabilidadEntregable(ordenEntregaId, userCtx = null, client = null) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId, { client });
+  const routingIds = await obtenerEntregablesConAccesoRoutingTrazabilidad(
+    [ordenEntregaId],
+    userCtx?.id,
+    client,
+  );
+  if (!puedeAccederTrazabilidadEntregable(userCtx, estado, entrega, {
+    accesoRoutingObservacion: routingIds.has(Number(entrega.id)),
+  })) {
+    throw httpError(
+      'Solo el responsable actual o participante de una observación dirigida puede consultar la trazabilidad',
+      403,
+      'TRAZABILIDAD_ENTREGABLE_NO_AUTORIZADA',
+    );
+  }
+  return { entrega, estado };
+}
+
 function assertEtapaPresentacion(estado) {
   if (String(estado?.etapaCodigo || estado?.estadoCodigo || '').toUpperCase()
     !== 'PRESENTACION_ENTREGABLES') {
@@ -1592,27 +1661,7 @@ export async function derivarEntregablePago(
 
 /** Timeline canónico del entregable, sin mezclar eventos del requerimiento. */
 export async function listarTrazabilidadEntregable(ordenEntregaId, userCtx = null) {
-  const entrega = await getEntregableOrThrow(ordenEntregaId);
-  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
-  const userId = Number(userCtx?.id);
-  const accesoRouting = Number.isInteger(userId) && userId > 0
-    ? Number((await query(`
-        SELECT COUNT(*)::int AS n
-        FROM entregable_observaciones eo
-        JOIN workflow_observaciones wo ON wo.id=eo.workflow_observacion_id
-        WHERE eo.orden_entrega_id=$1 AND eo.orden_id=$2
-          AND wo.usuario_destino_id=$3
-      `, [Number(entrega.id), Number(entrega.orden_id), userId])).rows[0]?.n || 0) > 0
-    : false;
-  if (!esAdmin(userCtx)
-    && userId !== Number(estado?.responsableUsuarioId)
-    && !accesoRouting) {
-    throw httpError(
-      'Solo el responsable actual o destinatario de una observación puede consultar la trazabilidad',
-      403,
-      'TRAZABILIDAD_ENTREGABLE_NO_AUTORIZADA',
-    );
-  }
+  const { entrega } = await assertAccesoTrazabilidadEntregable(ordenEntregaId, userCtx);
   const { rows } = await query(`
     SELECT ev.*,
       ua.nombre AS responsable_anterior_nombre,
@@ -1859,6 +1908,51 @@ export async function observarEntregableDirigido(
 }
 
 /**
+ * Restaura al emisor AU el responsable tras cerrar una observación dirigida en
+ * PRESENTACION_ENTREGABLES, reutilizando reasignarResponsableEntregableMismaEtapa.
+ */
+async function restaurarResponsableEmisorObservacionDirigida({
+  ordenEntregaId,
+  observacion,
+  userCtx = null,
+  ejecutadoPor,
+  motivo,
+  eventoCodigo,
+  metadataOrigen,
+  client,
+}) {
+  const clasificacion = clasificarObservacionEntregable(observacion);
+  if (clasificacion !== 'DIRIGIDA_CANONICA') return null;
+  const origenId = Number(observacion.usuario_origen_id);
+  const destinoId = Number(observacion.usuario_destino_id);
+  if (!(origenId > 0 && destinoId > 0)) return null;
+
+  const estadoActual = await obtenerEstadoResponsableEntregable(ordenEntregaId, { client });
+  const etapaCodigo = String(estadoActual?.etapaCodigo || estadoActual?.estadoCodigo || '').toUpperCase();
+  if (etapaCodigo !== ETAPAS.PRESENTACION_ENTREGABLES) return null;
+  if (Number(estadoActual?.responsableUsuarioId) !== destinoId) return null;
+
+  const uid = Number(userCtx?.id);
+  return reasignarResponsableEntregableMismaEtapa({
+    ordenEntregaId,
+    usuarioDestinoId: origenId,
+    eventoCodigo,
+    usuarioOrigenId: Number.isInteger(uid) && uid > 0 ? uid : null,
+    ejecutadoPor,
+    motivo,
+    metadata: {
+      origen: metadataOrigen,
+      observacion_id: Number(observacion.id),
+      workflow_observacion_id: observacion.workflow_observacion_id
+        ? Number(observacion.workflow_observacion_id)
+        : null,
+      clasificacion,
+    },
+    client,
+  });
+}
+
+/**
  * RC8.15.6F-2A — Retiro seguro de observación emitida por el emisor.
  * Usa OBS_CERRADA institucional; no DELETE. Restaura responsable solo si F-2 lo cambió.
  */
@@ -1943,29 +2037,22 @@ export async function retirarObservacionEntregable(
       `, [Number(observacion.workflow_id)]);
     }
 
-    let reasignacion = null;
-    if (clasificacion === 'DIRIGIDA_CANONICA'
-      && Number(observacion.usuario_origen_id) > 0
-      && Number(observacion.usuario_destino_id) > 0) {
-      const estadoActual = await obtenerEstadoResponsableEntregable(eid, { client: tx });
-      if (Number(estadoActual?.responsableUsuarioId) === Number(observacion.usuario_destino_id)) {
-        reasignacion = await reasignarResponsableEntregableMismaEtapa({
-          ordenEntregaId: eid,
-          usuarioDestinoId: Number(observacion.usuario_origen_id),
-          eventoCodigo: 'ENTREGABLE_OBSERVACION_RETIRADA',
-          usuarioOrigenId: uid,
-          ejecutadoPor,
-          motivo: motivoRetiro,
-          metadata: {
-            origen: 'RETIRO_EMISOR',
-            observacion_id: oid,
-            workflow_observacion_id: observacion.workflow_id ? Number(observacion.workflow_id) : null,
-            clasificacion,
-          },
-          client: tx,
-        });
-      }
-    }
+    const reasignacion = await restaurarResponsableEmisorObservacionDirigida({
+      ordenEntregaId: eid,
+      observacion: {
+        ...obsCtx,
+        id: oid,
+        workflow_observacion_id: observacion.workflow_id
+          ? Number(observacion.workflow_id)
+          : observacion.workflow_observacion_id,
+      },
+      userCtx,
+      ejecutadoPor,
+      motivo: motivoRetiro,
+      eventoCodigo: 'ENTREGABLE_OBSERVACION_RETIRADA',
+      metadataOrigen: 'RETIRO_EMISOR',
+      client: tx,
+    });
 
     let eventoRetiro = reasignacion?.evento || null;
     if (!eventoRetiro) {
@@ -2266,6 +2353,7 @@ export async function subsanarEntregable(
   body = {},
   userCtx = null,
   usuario = '',
+  externalClient = null,
 ) {
   const eid = parseInt(ordenEntregaId, 10);
   if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
@@ -2301,9 +2389,7 @@ export async function subsanarEntregable(
     throw httpError('No se pudo identificar al usuario que subsana', 400, 'USUARIO_SUBSANACION_REQUERIDO');
   }
 
-  const client = await getClient();
-  try {
-    await client.query('BEGIN');
+  const work = async (client) => {
     const { rows: entregaRows } = await client.query(`
       SELECT oe.id, oe.orden_id, oe.estado, oc.requerimiento_id,
         oc.tipo_orden, oc.tipo_contratacion, oc.estado AS orden_estado,
@@ -2334,12 +2420,14 @@ export async function subsanarEntregable(
     assertPuedeSubsanarEntregable(userCtx, responsable);
 
     const { rows: observaciones } = await client.query(`
-      SELECT eo.*, er.numero_recepcion AS numero_recepcion_observada
+      SELECT eo.*, er.numero_recepcion AS numero_recepcion_observada,
+        wo.usuario_origen_id, wo.usuario_destino_id
       FROM entregable_observaciones eo
       JOIN entregable_recepciones er
         ON er.id = eo.recepcion_id
        AND er.orden_entrega_id = eo.orden_entrega_id
        AND er.orden_id = eo.orden_id
+      LEFT JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
       WHERE eo.orden_entrega_id = $1
         AND eo.orden_id = $2
         AND eo.estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
@@ -2443,29 +2531,58 @@ export async function subsanarEntregable(
       );
     }
 
-    const operadorId = Number(userCtx?.id);
-    if (Number.isInteger(operadorId) && operadorId > 0) {
-      await ensureResponsablePersonaEntregable({
-        ordenEntregaId: eid,
-        usuarioDestinoId: operadorId,
-        usuarioOrigenId: operadorId,
-        ejecutadoPor: subsanadoPor.slice(0, 150),
-        motivo: 'Subsanación de entregable',
-        metadata: {
-          via: 'subsanarEntregable',
-          recepcion_id: nuevaRecepcion.id,
-          observacion_id: observacion.id,
-        },
-        client,
-      });
+    const obsSubsanada = observacionesActualizadas[0];
+    const reasignacion = await restaurarResponsableEmisorObservacionDirigida({
+      ordenEntregaId: eid,
+      observacion: {
+        ...observacion,
+        id: obsSubsanada.id,
+        workflow_observacion_id: observacion.workflow_observacion_id,
+        usuario_origen_id: observacion.usuario_origen_id,
+        usuario_destino_id: observacion.usuario_destino_id,
+      },
+      userCtx,
+      ejecutadoPor: subsanadoPor.slice(0, 150),
+      motivo: 'Subsanación de observación dirigida',
+      eventoCodigo: 'ENTREGABLE_OBSERVACION_SUBSANADA',
+      metadataOrigen: 'SUBSANACION_DIRIGIDA',
+      client,
+    });
+
+    if (!reasignacion) {
+      const operadorId = Number(userCtx?.id);
+      if (Number.isInteger(operadorId) && operadorId > 0) {
+        await ensureResponsablePersonaEntregable({
+          ordenEntregaId: eid,
+          usuarioDestinoId: operadorId,
+          usuarioOrigenId: operadorId,
+          ejecutadoPor: subsanadoPor.slice(0, 150),
+          motivo: 'Subsanación de entregable',
+          metadata: {
+            via: 'subsanarEntregable',
+            recepcion_id: nuevaRecepcion.id,
+            observacion_id: observacion.id,
+          },
+          client,
+        });
+      }
     }
 
-    await client.query('COMMIT');
     return {
       recepcion: nuevaRecepcion,
       documento: nuevosDocumentos[0],
-      observacion: observacionesActualizadas[0],
+      observacion: obsSubsanada,
+      reasignacion_responsable: reasignacion,
     };
+  };
+
+  if (externalClient) return work(externalClient);
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
     throw error;
