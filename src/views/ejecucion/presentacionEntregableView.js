@@ -244,11 +244,7 @@ function renderEntregableRow(row) {
       <td class="text-end small">${row.precio_total != null ? esc(fmtMonto(row.precio_total)) : '—'}</td>
       <td class="small text-nowrap">${esc(fmtFecha(row.fecha_maxima))}</td>
       <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
-      <td>${row.situacion_codigo === 'OBSERVADO'
-        ? renderEstadoBadgeHtml({ estadoCodigo: 'OBSERVADO', estadoLabel: 'Observado' })
-        : (row.situacion_codigo === 'SUBSANADO'
-          ? renderEstadoBadgeHtml({ estadoCodigo: 'SUBSANADO', estadoLabel: 'Subsanado' })
-          : renderEstadoBadgeFromRow(row))}</td>
+      <td>${renderEstadoBadgeFromRow(row)}</td>
       <td class="small">${renderResponsableCellHtml(row, esc)}</td>
       ${renderActionMenuCell(id, entregableMenuItems(row))}
     </tr>`;

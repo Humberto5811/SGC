@@ -471,9 +471,18 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
       && (enPresentacion || enRevisionCoordinador || enRevisionAnalista || enDerivacionPago);
     // Etapa canónica del entregable (específica o fallback histórico).
     if (erv) {
-      item.estado_etapa_codigo = erv.etapaCodigo || erv.estadoCodigo || 'PRESENTACION_ENTREGABLES';
-      item.estado_etapa_label = (erv.etapaLabel || erv.etapa_label || 'Presentación de Entregables');
-      item.etapa_label = item.estado_etapa_label;
+      const etapaCodigoCanon = erv.etapaCodigo || erv.estadoCodigo || 'PRESENTACION_ENTREGABLES';
+      const labelsCanon = buildEstadoLabels(etapaCodigoCanon, erv.estadoCodigo || etapaCodigoCanon);
+      item.estado_etapa_codigo = etapaCodigoCanon;
+      item.estado_etapa_label = labelsCanon.etapaLabel;
+      item.etapa_label = labelsCanon.etapaLabel;
+      item.estado_responsable_vigente = {
+        ...erv,
+        etapaCodigo: etapaCodigoCanon,
+        etapaLabel: labelsCanon.etapaLabel,
+        estadoCodigo: labelsCanon.estadoCodigo,
+        estadoLabel: labelsCanon.estadoLabel,
+      };
     }
   }
   return list;
@@ -1783,7 +1792,6 @@ export async function observarEntregableDirigido(
     const reasignacion = await reasignarResponsableEntregableMismaEtapa({
       ordenEntregaId: eid,
       usuarioDestinoId: destinoUid,
-      etapaLabelOverride: destino.label,
       usuarioOrigenId: origenUid,
       ejecutadoPor,
       motivo,
@@ -1920,11 +1928,9 @@ export async function retirarObservacionEntregable(
       && Number(observacion.usuario_destino_id) > 0) {
       const estadoActual = await obtenerEstadoResponsableEntregable(eid, { client: tx });
       if (Number(estadoActual?.responsableUsuarioId) === Number(observacion.usuario_destino_id)) {
-        const labels = buildEstadoLabels(ETAPAS.PRESENTACION_ENTREGABLES);
         reasignacion = await reasignarResponsableEntregableMismaEtapa({
           ordenEntregaId: eid,
           usuarioDestinoId: Number(observacion.usuario_origen_id),
-          etapaLabelOverride: labels.etapaLabel,
           eventoCodigo: 'ENTREGABLE_OBSERVACION_RETIRADA',
           usuarioOrigenId: uid,
           ejecutadoPor,

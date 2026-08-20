@@ -171,7 +171,8 @@ try {
   ok(Number(estadoDespues.responsable_usuario_id) === Number(destinatario.id),
     '4. responsable cambia al destino');
   ok(estadoDespues.etapa_codigo === etapaAntes.etapa_codigo, '5. etapa se conserva');
-  ok(estadoDespues.etapa_label === 'Registro de Órdenes', '5b. subtexto destino en etapa_label');
+  ok(estadoDespues.etapa_label === 'Presentación de Entregables',
+    '5b. etapa_label permanece canónico (routing separado)');
 
   const asignaciones = (await client.query(`
     SELECT activo, usuario_id, origen_asignacion

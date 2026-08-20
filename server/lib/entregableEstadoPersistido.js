@@ -359,7 +359,6 @@ export async function transicionarEntregable({
 export async function reasignarResponsableEntregableMismaEtapa({
   ordenEntregaId,
   usuarioDestinoId,
-  etapaLabelOverride = null,
   eventoCodigo = 'ENTREGABLE_OBSERVACION_DIRIGIDA',
   usuarioOrigenId = null,
   ejecutadoPor = null,
@@ -392,8 +391,9 @@ export async function reasignarResponsableEntregableMismaEtapa({
     });
     const actor = String(ejecutadoPor || usuarioOrigenId || '').slice(0, 150) || null;
     const etapaCodigo = previo.estado.etapa_codigo;
-    const etapaLabel = String(etapaLabelOverride || previo.estado.etapa_label || '').trim()
-      || previo.estado.etapa_label;
+    const labels = buildEstadoLabels(etapaCodigo, previo.estado.estado_codigo || etapaCodigo);
+    const etapaLabel = labels.etapaLabel;
+    const estadoLabel = labels.estadoLabel;
 
     await tx.query(`
       UPDATE entregable_asignaciones
@@ -405,8 +405,9 @@ export async function reasignarResponsableEntregableMismaEtapa({
       UPDATE entregable_estado_vigente
       SET responsable_tipo=$2, responsable_usuario_id=$3,
           responsable_unidad=$4, responsable_fuente=$5,
-          etapa_label=$6, version=version+1, actualizado_por=$7, actualizado_at=NOW(),
-          metadata_json=$8::jsonb
+          estado_label=$6, etapa_label=$7, version=version+1,
+          actualizado_por=$8, actualizado_at=NOW(),
+          metadata_json=$9::jsonb
       WHERE orden_entrega_id=$1
       RETURNING *
     `, [
@@ -415,6 +416,7 @@ export async function reasignarResponsableEntregableMismaEtapa({
       responsable.responsableUsuarioId,
       responsable.responsableUnidad,
       responsable.responsableFuente,
+      estadoLabel,
       etapaLabel,
       actor,
       metadata ? JSON.stringify(metadata) : null,
