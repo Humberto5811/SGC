@@ -868,7 +868,15 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
   const recepcionVigente = recepciones.find(
     (recepcion) => Number(recepcion.id) === Number(recepcionCanonica?.id),
   ) || null;
-  const documentoVigente = recepcionVigente?.documentos?.find((d) => d.vigente) || null;
+  const recepcionInicial = recepciones.find(
+    (recepcion) => String(recepcion.tipo_recepcion || '').toUpperCase() === 'INICIAL',
+  ) || null;
+  const documentosVigentesPresentacion = (recepcionVigente?.documentos || [])
+    .filter((d) => d.vigente);
+  const documentosEntregableGestionables = (recepcionInicial?.documentos || [])
+    .filter((d) => d.vigente)
+    .map((d) => ({ ...d, recepcion_id: recepcionInicial.id }));
+  const documentoVigente = documentosVigentesPresentacion[0] || null;
   const observaciones = observacionesRes.rows || [];
   const observacionAbierta = observaciones.find(
     (o) => o.estado === 'OBS_EMITIDA' || o.estado === 'OBS_EN_ATENCION',
@@ -895,7 +903,10 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
     fecha_notificacion: notif.fechaNotificacion,
     recepciones,
     recepcion_vigente: recepcionVigente,
+    recepcion_inicial: recepcionInicial,
     documento_vigente: documentoVigente,
+    documentos_vigentes_presentacion: documentosVigentesPresentacion,
+    documentos_entregable_gestionables: documentosEntregableGestionables,
     documentos_entregable: documentosRes.rows || [],
     observaciones,
     observacion_abierta: observacionAbierta,
@@ -2630,9 +2641,6 @@ export async function registrarRecepcionEntregable(
   if (!archivos.length || !archivos.some((a) => String(a?.contenido_base64 || '').trim())) {
     throw httpError('Archivo del entregable es obligatorio');
   }
-  if (archivos.filter((a) => String(a?.contenido_base64 || '').trim()).length > 1) {
-    throw httpError('Solo se permite un PDF vigente por recepción', 400, 'DOCUMENTO_VIGENTE_MULTIPLE');
-  }
   const docsValidados = archivos.map((a) => validateArchivo({
     contenido_base64: a?.contenido_base64,
     nombre_archivo: a?.nombre_archivo || a?.nombre,
@@ -2747,8 +2755,8 @@ export async function registrarRecepcionEntregable(
 }
 
 /**
- * Modifica la misma recepción INICIAL. Un PDF nuevo crea una versión documental
- * y deja el anterior como histórico; sin PDF, conserva el documento vigente.
+ * Modifica la recepción INICIAL del entregable (documento presentado).
+ * Las subsanaciones conservan sus propios adjuntos fuera de este flujo.
  */
 export async function modificarRecepcionEntregable(
   ordenEntregaId,
@@ -2774,89 +2782,12 @@ export async function modificarRecepcionEntregable(
 
   if (!fechaRecepcion) throw httpError('fecha_recepcion_mesa_partes es obligatoria');
   if (!expedienteSgd) throw httpError('numero_expediente_sgd es obligatorio');
-  if (archivos.length > 1) {
-    throw httpError('Solo se permite un PDF vigente por recepción', 400, 'DOCUMENTO_VIGENTE_MULTIPLE');
-  }
-  const archivo = archivos[0] || null;
-  const docValidado = archivo ? validateArchivo({
-    contenido_base64: archivo.contenido_base64,
-    nombre_archivo: archivo.nombre_archivo || archivo.nombre,
-    mime_type: archivo.mime_type || 'application/pdf',
-  }) : null;
 
   const client = await getClient();
   try {
     await client.query('BEGIN');
-    const { rows: entregaRows } = await client.query(`
-      SELECT oe.id, oe.estado, oc.tipo_orden, oc.tipo_contratacion,
-        oc.estado AS orden_estado, r.tipo AS req_tipo
-      FROM orden_entregas oe
-      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
-      LEFT JOIN requerimientos r ON r.id = oc.requerimiento_id
-      WHERE oe.id = $1
-      FOR UPDATE OF oe
-    `, [eid]);
-    const entrega = entregaRows[0];
-    if (!entrega) throw httpError('Entregable no encontrado', 404);
-    if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
-      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
-    }
-    if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
-      throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
-    }
-    if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
-      throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
-    }
-    assertEtapaGestionOperativa(
-      await obtenerEstadoResponsableEntregable(eid, { client }),
-    );
-
-    const { rows: recepcionRows } = await client.query(`
-      SELECT * FROM entregable_recepciones
-      WHERE orden_entrega_id = $1 AND tipo_recepcion = 'INICIAL'
-      ORDER BY numero_recepcion, id
-      LIMIT 1
-      FOR UPDATE
-    `, [eid]);
-    const recepcion = recepcionRows[0];
-    if (!recepcion) {
-      throw httpError('El entregable no tiene recepción INICIAL para modificar', 404, 'RECEPCION_NO_EXISTE');
-    }
-    if (String(recepcion.estado || '').toUpperCase() !== 'RECIBIDO') {
-      throw httpError(
-        'La recepción ya no es editable',
-        409,
-        'RECEPCION_NO_EDITABLE',
-      );
-    }
-    const { rows: vigentes } = await client.query(`
-      SELECT id FROM entregable_recepciones
-      WHERE orden_entrega_id = $1
-      ORDER BY numero_recepcion DESC, id DESC
-      LIMIT 1
-      FOR UPDATE
-    `, [eid]);
-    if (Number(vigentes[0]?.id) !== Number(recepcion.id)) {
-      throw httpError(
-        'La recepción INICIAL ya es histórica y no puede modificarse',
-        409,
-        'RECEPCION_NO_EDITABLE',
-      );
-    }
-    const { rows: observacionesAbiertas } = await client.query(`
-      SELECT id FROM entregable_observaciones
-      WHERE recepcion_id = $1
-        AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
-      LIMIT 1
-      FOR UPDATE
-    `, [recepcion.id]);
-    if (observacionesAbiertas.length) {
-      throw httpError(
-        'La recepción tiene una observación formal abierta; debe registrar una subsanación',
-        409,
-        'ENTREGABLE_OBSERVADO',
-      );
-    }
+    const ctx = await validarContextoGestionDocumentosEntregable(eid, userCtx, client);
+    const { recepcion, entrega, estado } = ctx;
 
     const { rows: actualizadas } = await client.query(`
       UPDATE entregable_recepciones
@@ -2874,39 +2805,57 @@ export async function modificarRecepcionEntregable(
     ]);
 
     let documentoVigente = null;
-    const { rows: docsVigentes } = await client.query(`
-      SELECT * FROM entregable_recepcion_documentos
-      WHERE recepcion_id = $1 AND vigente = TRUE
-      ORDER BY id DESC
-      FOR UPDATE
-    `, [recepcion.id]);
-
-    if (archivo) {
-      const anterior = docsVigentes[0] || null;
+    if (archivos.length === 1) {
+      const { rows: docsVigentes } = await client.query(`
+        SELECT id FROM entregable_recepcion_documentos
+        WHERE recepcion_id = $1 AND vigente = TRUE
+        ORDER BY id ASC
+        LIMIT 1
+        FOR UPDATE
+      `, [recepcion.id]);
       if (docsVigentes.length) {
-        await client.query(`
-          UPDATE entregable_recepcion_documentos
-          SET vigente = FALSE
-          WHERE recepcion_id = $1 AND vigente = TRUE
-        `, [recepcion.id]);
+        documentoVigente = await persistirDocumentoReemplazo({
+          client,
+          entrega,
+          estado,
+          recepcionId: recepcion.id,
+          documentoAnteriorId: docsVigentes[0].id,
+          archivo: archivos[0],
+          userCtx,
+          ejecutadoPor: String(usuario || userCtx?.username || '').slice(0, 150),
+        });
+      } else {
+        const adjuntos = await persistirDocumentosAdjuntos({
+          client,
+          entrega,
+          estado,
+          recepcionId: recepcion.id,
+          archivos,
+          userCtx,
+          ejecutadoPor: String(usuario || userCtx?.username || '').slice(0, 150),
+        });
+        documentoVigente = adjuntos[0] || null;
       }
-      const { rows: nuevosDocs } = await client.query(`
-        INSERT INTO entregable_recepcion_documentos (
-          recepcion_id, nombre_archivo, mime_type, contenido_base64,
-          tamanio_bytes, vigente, reemplaza_id
-        ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)
-        RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
-          vigente, reemplaza_id, created_at
-      `, [
-        recepcion.id,
-        String(archivo.nombre_archivo || archivo.nombre || 'entregable.pdf').slice(0, 300),
-        String(archivo.mime_type || 'application/pdf').slice(0, 120),
-        docValidado.raw,
-        docValidado.bytes,
-        anterior?.id || null,
-      ]);
-      documentoVigente = nuevosDocs[0];
+    } else if (archivos.length > 1) {
+      const adjuntos = await persistirDocumentosAdjuntos({
+        client,
+        entrega,
+        estado,
+        recepcionId: recepcion.id,
+        archivos,
+        userCtx,
+        ejecutadoPor: String(usuario || userCtx?.username || '').slice(0, 150),
+      });
+      documentoVigente = adjuntos[0] || null;
     } else {
+      const { rows: docsVigentes } = await client.query(`
+        SELECT id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
+          vigente, reemplaza_id, created_at
+        FROM entregable_recepcion_documentos
+        WHERE recepcion_id = $1 AND vigente = TRUE
+        ORDER BY id ASC
+        LIMIT 1
+      `, [recepcion.id]);
       documentoVigente = docsVigentes[0] || null;
     }
 
@@ -2917,7 +2866,7 @@ export async function modificarRecepcionEntregable(
         usuarioDestinoId: operadorId,
         usuarioOrigenId: operadorId,
         ejecutadoPor: String(usuario || userCtx?.username || operadorId).slice(0, 150),
-        motivo: 'Modificación de recepción inicial',
+        motivo: 'Modificación de presentación vigente',
         metadata: { via: 'modificarRecepcionEntregable', recepcion_id: recepcion.id },
         client,
       });
@@ -2929,6 +2878,379 @@ export async function modificarRecepcionEntregable(
       documento_vigente: documentoVigente,
       modificado_por: String(usuario || '').slice(0, 150),
     };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function obtenerRecepcionInicialEntregable(
+  ordenEntregaId,
+  { client = null, lock = false } = {},
+) {
+  const runQuery = client ? client.query.bind(client) : query;
+  const { rows } = await runQuery(
+    `SELECT * FROM entregable_recepciones
+     WHERE orden_entrega_id = $1
+       AND UPPER(COALESCE(tipo_recepcion, '')) = 'INICIAL'
+     ORDER BY numero_recepcion, id
+     LIMIT 1
+     ${client && lock ? 'FOR UPDATE' : ''}`,
+    [Number(ordenEntregaId)],
+  );
+  return rows[0] || null;
+}
+
+async function validarContextoGestionDocumentosEntregable(ordenEntregaId, userCtx, client) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const { rows: entregaRows } = await client.query(`
+    SELECT oe.id, oe.estado, oe.orden_id, oc.tipo_orden, oc.tipo_contratacion,
+      oc.estado AS orden_estado, oc.requerimiento_id, r.tipo AS req_tipo
+    FROM orden_entregas oe
+    JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+    LEFT JOIN requerimientos r ON r.id = oc.requerimiento_id
+    WHERE oe.id = $1
+    FOR UPDATE OF oe
+  `, [eid]);
+  const entrega = entregaRows[0];
+  if (!entrega) throw httpError('Entregable no encontrado', 404);
+  if (String(entrega.estado || '').toUpperCase() !== 'ACTIVO') {
+    throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  if (String(entrega.orden_estado || '').toUpperCase() === 'ORDEN_ANULADA') {
+    throw httpError('La orden asociada está anulada', 409, 'ORDEN_ANULADA');
+  }
+  if (!isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+    throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
+  }
+  const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+  assertEtapaGestionOperativa(estado);
+  if (!esAutorizadoGestionEntregable(userCtx, estado, entrega)) {
+    throw httpError(
+      'Solo el responsable operativo del entregable puede gestionar documentos',
+      403,
+      'ENTREGABLE_DOCUMENTO_NO_AUTORIZADO',
+    );
+  }
+  const recepcion = await obtenerRecepcionInicialEntregable(eid, { client, lock: true });
+  if (!recepcion) {
+    throw httpError('El entregable no tiene recepción INICIAL', 404, 'RECEPCION_NO_EXISTE');
+  }
+  if (String(recepcion.estado || '').toUpperCase() !== 'RECIBIDO') {
+    throw httpError('La recepción inicial ya no es editable', 409, 'RECEPCION_NO_EDITABLE');
+  }
+  const { rows: observacionesAbiertas } = await client.query(`
+    SELECT id FROM entregable_observaciones
+    WHERE orden_entrega_id = $1
+      AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+    LIMIT 1
+    FOR UPDATE
+  `, [eid]);
+  if (observacionesAbiertas.length) {
+    throw httpError(
+      'El entregable tiene una observación formal abierta; debe registrar una subsanación',
+      409,
+      'ENTREGABLE_OBSERVADO',
+    );
+  }
+  return { entrega, estado, recepcion };
+}
+
+async function registrarEventoDocumentoEntregable(client, {
+  entrega,
+  estado,
+  eventoCodigo,
+  recepcionId,
+  documentoId = null,
+  reemplazaId = null,
+  reemplazadoId = null,
+  ejecutadoPor = '',
+  userCtx = null,
+  motivo = '',
+}) {
+  const metadata = JSON.stringify({
+    recepcion_id: Number(recepcionId),
+    documento_id: documentoId != null ? Number(documentoId) : null,
+    reemplaza_id: reemplazaId != null ? Number(reemplazaId) : null,
+    reemplazado_id: reemplazadoId != null ? Number(reemplazadoId) : null,
+  });
+  const estadoCodigo = estado?.estadoCodigo || estado?.estado_codigo || 'RECIBIDO';
+  const estadoLabel = estado?.estadoLabel || estado?.estado_label || 'Recibido';
+  const etapaCodigo = estado?.etapaCodigo || estado?.etapa_codigo || ETAPAS.PRESENTACION_ENTREGABLES;
+  const respTipo = estado?.responsableTipo || estado?.responsable_tipo || 'PERSONA';
+  const respUsuario = estado?.responsableUsuarioId || estado?.responsable_usuario_id || null;
+  const respUnidad = estado?.responsableUnidad || estado?.responsable_unidad || null;
+  await client.query(`
+    INSERT INTO entregable_eventos (
+      orden_id, orden_entrega_id, requerimiento_id, evento_codigo,
+      estado_anterior_codigo, estado_anterior_label,
+      estado_nuevo_codigo, estado_nuevo_label,
+      etapa_anterior_codigo, etapa_nueva_codigo,
+      responsable_anterior_tipo, responsable_anterior_usuario, responsable_anterior_unidad,
+      responsable_nuevo_tipo, responsable_nuevo_usuario, responsable_nuevo_unidad,
+      ejecutado_usuario_id, ejecutado_por, motivo, metadata_json
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$5,$6,$7,$7,$8,$9,$10,$8,$9,$10,$11,$12,$13,$14::jsonb
+    )
+  `, [
+    Number(entrega.orden_id),
+    Number(entrega.id || entrega.orden_entrega_id),
+    Number(entrega.requerimiento_id),
+    eventoCodigo,
+    estadoCodigo,
+    estadoLabel,
+    etapaCodigo,
+    respTipo,
+    respUsuario,
+    respUnidad,
+    Number(userCtx?.id) > 0 ? Number(userCtx.id) : null,
+    ejecutadoPor,
+    motivo,
+    metadata,
+  ]);
+}
+
+async function persistirDocumentosAdjuntos({
+  client,
+  entrega,
+  estado,
+  recepcionId,
+  archivos,
+  userCtx,
+  ejecutadoPor,
+}) {
+  const insertados = [];
+  for (const archivo of archivos) {
+    const docValidado = validateArchivo({
+      contenido_base64: archivo.contenido_base64,
+      nombre_archivo: archivo.nombre_archivo || archivo.nombre,
+      mime_type: archivo.mime_type || 'application/pdf',
+    });
+    const { rows } = await client.query(`
+      INSERT INTO entregable_recepcion_documentos (
+        recepcion_id, nombre_archivo, mime_type, contenido_base64,
+        tamanio_bytes, vigente, reemplaza_id
+      ) VALUES ($1,$2,$3,$4,$5,TRUE,NULL)
+      RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
+        vigente, reemplaza_id, created_at
+    `, [
+      recepcionId,
+      String(archivo.nombre_archivo || archivo.nombre || 'entregable.pdf').slice(0, 300),
+      String(archivo.mime_type || 'application/pdf').slice(0, 120),
+      docValidado.raw,
+      docValidado.bytes,
+    ]);
+    insertados.push(rows[0]);
+    await registrarEventoDocumentoEntregable(client, {
+      entrega,
+      estado,
+      eventoCodigo: 'ENTREGABLE_DOCUMENTO_ADJUNTADO',
+      recepcionId,
+      documentoId: rows[0].id,
+      ejecutadoPor,
+      userCtx,
+      motivo: 'Documento adjuntado al entregable',
+    });
+  }
+  return insertados;
+}
+
+async function persistirDocumentoReemplazo({
+  client,
+  entrega,
+  estado,
+  recepcionId,
+  documentoAnteriorId,
+  archivo,
+  userCtx,
+  ejecutadoPor,
+}) {
+  const docValidado = validateArchivo({
+    contenido_base64: archivo.contenido_base64,
+    nombre_archivo: archivo.nombre_archivo || archivo.nombre,
+    mime_type: archivo.mime_type || 'application/pdf',
+  });
+  const { rows: anteriores } = await client.query(`
+    SELECT d.* FROM entregable_recepcion_documentos d
+    JOIN entregable_recepciones er ON er.id = d.recepcion_id
+    WHERE d.id = $1 AND d.recepcion_id = $2 AND d.vigente = TRUE
+      AND UPPER(COALESCE(er.tipo_recepcion, '')) = 'INICIAL'
+    FOR UPDATE OF d
+  `, [documentoAnteriorId, recepcionId]);
+  if (!anteriores.length) {
+    throw httpError('Documento vigente del entregable no encontrado', 404, 'DOCUMENTO_NO_ENCONTRADO');
+  }
+  await client.query(`
+    UPDATE entregable_recepcion_documentos
+    SET vigente = FALSE
+    WHERE id = $1
+  `, [documentoAnteriorId]);
+  const { rows: nuevosDocs } = await client.query(`
+    INSERT INTO entregable_recepcion_documentos (
+      recepcion_id, nombre_archivo, mime_type, contenido_base64,
+      tamanio_bytes, vigente, reemplaza_id
+    ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)
+    RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
+      vigente, reemplaza_id, created_at
+  `, [
+    recepcionId,
+    String(archivo.nombre_archivo || archivo.nombre || 'entregable.pdf').slice(0, 300),
+    String(archivo.mime_type || 'application/pdf').slice(0, 120),
+    docValidado.raw,
+    docValidado.bytes,
+    documentoAnteriorId,
+  ]);
+  await registrarEventoDocumentoEntregable(client, {
+    entrega,
+    estado,
+    eventoCodigo: 'ENTREGABLE_DOCUMENTO_REEMPLAZADO',
+    recepcionId,
+    documentoId: nuevosDocs[0].id,
+    reemplazaId: documentoAnteriorId,
+    reemplazadoId: documentoAnteriorId,
+    ejecutadoPor,
+    userCtx,
+    motivo: 'Documento reemplazado en el entregable',
+  });
+  return nuevosDocs[0];
+}
+
+async function persistirDocumentoRetiro({
+  client,
+  entrega,
+  estado,
+  recepcionId,
+  documentoId,
+  userCtx,
+  ejecutadoPor,
+}) {
+  const { rows } = await client.query(`
+    SELECT d.* FROM entregable_recepcion_documentos d
+    JOIN entregable_recepciones er ON er.id = d.recepcion_id
+    WHERE d.id = $1 AND d.recepcion_id = $2 AND d.vigente = TRUE
+      AND UPPER(COALESCE(er.tipo_recepcion, '')) = 'INICIAL'
+    FOR UPDATE OF d
+  `, [documentoId, recepcionId]);
+  if (!rows.length) {
+    throw httpError('Documento vigente del entregable no encontrado', 404, 'DOCUMENTO_NO_ENCONTRADO');
+  }
+  await client.query(`
+    UPDATE entregable_recepcion_documentos
+    SET vigente = FALSE
+    WHERE id = $1
+  `, [documentoId]);
+  await registrarEventoDocumentoEntregable(client, {
+    entrega,
+    estado,
+    eventoCodigo: 'ENTREGABLE_DOCUMENTO_RETIRADO',
+    recepcionId,
+    documentoId,
+    reemplazadoId: documentoId,
+    ejecutadoPor,
+    userCtx,
+    motivo: 'Documento retirado lógicamente del entregable',
+  });
+  return { ...rows[0], vigente: false };
+}
+
+/** Adjunta uno o más PDFs a la presentación vigente. */
+export async function adjuntarDocumentosRecepcionEntregable(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const archivos = Array.isArray(body.documentos)
+    ? body.documentos.filter((a) => String(a?.contenido_base64 || '').trim())
+    : [];
+  if (!archivos.length) throw httpError('Debe adjuntar al menos un PDF', 400, 'DOCUMENTO_REQUERIDO');
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const ctx = await validarContextoGestionDocumentosEntregable(ordenEntregaId, userCtx, client);
+    const documentos = await persistirDocumentosAdjuntos({
+      client,
+      entrega: ctx.entrega,
+      estado: ctx.estado,
+      recepcionId: ctx.recepcion.id,
+      archivos,
+      userCtx,
+      ejecutadoPor: String(usuario || userCtx?.username || '').slice(0, 150),
+    });
+    await client.query('COMMIT');
+    return { recepcion_id: ctx.recepcion.id, documentos };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Reemplaza un documento vigente de la presentación vigente (versionado). */
+export async function reemplazarDocumentoRecepcionEntregable(
+  ordenEntregaId,
+  documentoId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+) {
+  const archivo = Array.isArray(body.documentos) && body.documentos.length
+    ? body.documentos[0]
+    : body;
+  if (!String(archivo?.contenido_base64 || '').trim()) {
+    throw httpError('Debe adjuntar el PDF de reemplazo', 400, 'DOCUMENTO_REQUERIDO');
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const ctx = await validarContextoGestionDocumentosEntregable(ordenEntregaId, userCtx, client);
+    const documento = await persistirDocumentoReemplazo({
+      client,
+      entrega: ctx.entrega,
+      estado: ctx.estado,
+      recepcionId: ctx.recepcion.id,
+      documentoAnteriorId: parseInt(documentoId, 10),
+      archivo,
+      userCtx,
+      ejecutadoPor: String(usuario || userCtx?.username || '').slice(0, 150),
+    });
+    await client.query('COMMIT');
+    return { recepcion_id: ctx.recepcion.id, documento };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Retiro lógico de un documento vigente (conserva contenido e historial). */
+export async function retirarDocumentoRecepcionEntregable(
+  ordenEntregaId,
+  documentoId,
+  userCtx = null,
+  usuario = '',
+) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const ctx = await validarContextoGestionDocumentosEntregable(ordenEntregaId, userCtx, client);
+    const documento = await persistirDocumentoRetiro({
+      client,
+      entrega: ctx.entrega,
+      estado: ctx.estado,
+      recepcionId: ctx.recepcion.id,
+      documentoId: parseInt(documentoId, 10),
+      userCtx,
+      ejecutadoPor: String(usuario || userCtx?.username || '').slice(0, 150),
+    });
+    await client.query('COMMIT');
+    return { recepcion_id: ctx.recepcion.id, documento };
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
     throw error;

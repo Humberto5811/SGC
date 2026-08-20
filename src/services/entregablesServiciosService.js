@@ -38,6 +38,15 @@ export const entregablesServiciosService = {
   modificarRecepcion(id, body) {
     return api.put(`${BASE}/${id}/recepcion`, body);
   },
+  adjuntarDocumentosRecepcion(id, body) {
+    return api.post(`${BASE}/${id}/recepcion/documentos`, body);
+  },
+  reemplazarDocumentoRecepcion(id, documentoId, body) {
+    return api.put(`${BASE}/${id}/recepcion/documentos/${documentoId}/reemplazar`, body);
+  },
+  retirarDocumentoRecepcion(id, documentoId) {
+    return api.del(`${BASE}/${id}/recepcion/documentos/${documentoId}`);
+  },
   observarEntregable(id, body) {
     return api.post(`${BASE}/${id}/observaciones`, body);
   },

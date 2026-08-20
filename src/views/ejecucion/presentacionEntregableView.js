@@ -384,15 +384,20 @@ function render() {
           </div>
           <div class="modal-body">
             <input type="hidden" id="${PREFIX}EntregableId">
-            <div class="mb-2"><label class="form-label small mb-0">Fecha recepción Mesa de Partes <span class="text-danger">*</span></label>
-              <input type="date" class="form-control form-control-sm" id="${PREFIX}Fecha" required></div>
-            <div class="mb-2"><label class="form-label small mb-0">Expediente SGD <span class="text-danger">*</span></label>
-              <input type="text" class="form-control form-control-sm" id="${PREFIX}Sgd" required></div>
-            <div class="mb-2"><label class="form-label small mb-0">Observación</label>
-              <textarea class="form-control form-control-sm" id="${PREFIX}Obs" rows="2"></textarea></div>
-            <div class="mb-2 d-none" id="${PREFIX}CurrentDoc"></div>
-            <div class="mb-2"><label class="form-label small mb-0" id="${PREFIX}FileLabel">Documento (PDF) <span class="text-danger">*</span></label>
-              <input type="file" class="form-control form-control-sm" id="${PREFIX}File" accept="application/pdf"></div>
+            <div id="${PREFIX}MetaWrap">
+              <div class="mb-2"><label class="form-label small mb-0">Fecha recepción Mesa de Partes <span class="text-danger">*</span></label>
+                <input type="date" class="form-control form-control-sm" id="${PREFIX}Fecha" required></div>
+              <div class="mb-2"><label class="form-label small mb-0">Expediente SGD <span class="text-danger">*</span></label>
+                <input type="text" class="form-control form-control-sm" id="${PREFIX}Sgd" required></div>
+              <div class="mb-2"><label class="form-label small mb-0">Observación</label>
+                <textarea class="form-control form-control-sm" id="${PREFIX}Obs" rows="2"></textarea></div>
+            </div>
+            <div class="mb-2 d-none" id="${PREFIX}DocsSection"></div>
+            <div class="mb-2" id="${PREFIX}FileWrap">
+              <label class="form-label small mb-0" id="${PREFIX}FileLabel">Documento (PDF) <span class="text-danger">*</span></label>
+              <input type="file" class="form-control form-control-sm" id="${PREFIX}File" accept="application/pdf">
+            </div>
+            <input type="file" class="d-none" id="${PREFIX}DocAttachInput" accept="application/pdf" multiple>
             <div id="${PREFIX}ModalErr" class="alert alert-danger d-none py-2 small"></div>
           </div>
           <div class="modal-footer">
@@ -668,45 +673,140 @@ async function openRegistrarRecepcion(id) {
   document.getElementById(`${PREFIX}ModalErr`)?.classList.add('d-none');
   const modalEl = document.getElementById(`${PREFIX}Modal`);
   modalEl.dataset.mode = 'create';
-  const currentDocEl = document.getElementById(`${PREFIX}CurrentDoc`);
-  currentDocEl?.classList.add('d-none');
-  if (currentDocEl) currentDocEl.innerHTML = '';
+  modalEl.dataset.entregaId = id;
+  modalEl.dataset.puedeGestionar = '0';
+  const docsSection = document.getElementById(`${PREFIX}DocsSection`);
+  const fileWrap = document.getElementById(`${PREFIX}FileWrap`);
+  const metaWrap = document.getElementById(`${PREFIX}MetaWrap`);
+  docsSection?.classList.add('d-none');
+  if (docsSection) docsSection.innerHTML = '';
+  metaWrap?.classList.remove('d-none');
+  fileWrap?.classList.remove('d-none');
   window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
   try {
     const resp = await entregablesServiciosService.getDetalle(id);
     const data = resp?.data || resp || {};
-    const recepcion = data.recepcion_vigente || null;
-    const documento = data.documento_vigente || null;
-    const editando = Boolean(recepcion?.id);
+    const recepcionInicial = data.recepcion_inicial || null;
+    const editando = Boolean(recepcionInicial?.id);
+    const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(id));
+    const puedeGestionar = Boolean(row?.puede_modificar_entregable);
     modalEl.dataset.mode = editando ? 'edit' : 'create';
+    modalEl.dataset.puedeGestionar = puedeGestionar ? '1' : '0';
     document.getElementById(`${PREFIX}ModalTitle`).innerHTML = editando
       ? '<i class="bi bi-pencil-square"></i> Modificar entregable'
       : '<i class="bi bi-box-arrow-in-down"></i> Registrar entregable';
     document.getElementById(`${PREFIX}SubmitBtn`).textContent = editando ? 'Guardar cambios' : 'Registrar';
-    document.getElementById(`${PREFIX}FileLabel`).innerHTML = editando
-      ? 'Reemplazar documento (PDF) <span class="text-muted">(opcional)</span>'
-      : 'Documento (PDF) <span class="text-danger">*</span>';
+    document.getElementById(`${PREFIX}FileLabel`).innerHTML = 'Documento (PDF) <span class="text-danger">*</span>';
     if (editando) {
-      document.getElementById(`${PREFIX}Fecha`).value = String(recepcion.fecha_recepcion_mesa_partes || '').slice(0, 10);
-      document.getElementById(`${PREFIX}Sgd`).value = recepcion.numero_expediente_sgd || '';
-      document.getElementById(`${PREFIX}Obs`).value = recepcion.observacion || '';
-    }
-    if (editando && documento) {
-      currentDocEl.classList.remove('d-none');
-      currentDocEl.innerHTML = `
-        <label class="form-label small mb-1">PDF vigente</label>
-        <div class="border rounded p-2 d-flex justify-content-between align-items-center gap-2">
-          <span class="small text-truncate" title="${esc(documento.nombre_archivo || '')}">${esc(documento.nombre_archivo || 'Documento vigente')}</span>
-          <button type="button" class="btn btn-sm btn-outline-primary pe-doc-preview"
-            data-recepcion="${esc(documento.recepcion_id)}" data-doc="${esc(documento.id)}">
-            <i class="bi bi-eye"></i> Ver
-          </button>
-        </div>`;
+      metaWrap?.classList.add('d-none');
+      fileWrap?.classList.add('d-none');
+      renderModificarDocumentosSection(data, puedeGestionar);
     }
   } catch (err) {
     const errBox = document.getElementById(`${PREFIX}ModalErr`);
     if (errBox) {
       errBox.textContent = err.message || 'No se pudo consultar el entregable';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+function renderModificarDocumentosSection(data, puedeGestionar) {
+  const section = document.getElementById(`${PREFIX}DocsSection`);
+  if (!section) return;
+  const docs = data.documentos_entregable_gestionables || [];
+  const numeroEntrega = data.numero_entrega ?? '—';
+  section.classList.remove('d-none');
+  section.innerHTML = `
+    <div class="mb-3 small fw-semibold">Entregable N.° ${esc(numeroEntrega)}</div>
+    ${docs.length ? docs.map((doc) => `
+      <div class="border rounded p-2 mb-2 small d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="text-truncate" style="max-width:260px" title="${esc(doc.nombre_archivo || '')}">
+          ${esc(doc.nombre_archivo || 'Documento')}
+        </div>
+        <div class="d-flex flex-wrap gap-1">
+          <button type="button" class="btn btn-sm btn-outline-primary pe-doc-preview"
+            data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}">
+            Ver
+          </button>
+          ${puedeGestionar ? `
+            <button type="button" class="btn btn-sm btn-outline-danger pe-doc-retire"
+              data-doc="${esc(doc.id)}">
+              Eliminar
+            </button>` : ''}
+        </div>
+      </div>`).join('') : '<p class="text-muted small mb-2">Sin documentos vigentes del entregable.</p>'}
+    ${puedeGestionar ? `
+      <button type="button" class="btn btn-sm btn-outline-success pe-doc-attach">
+        <i class="bi bi-paperclip"></i> Adjuntar PDF
+      </button>` : ''}`;
+}
+
+async function refreshModificarDocumentos(entregaId) {
+  const resp = await entregablesServiciosService.getDetalle(entregaId);
+  const data = resp?.data || resp || {};
+  const modalEl = document.getElementById(`${PREFIX}Modal`);
+  const puedeGestionar = modalEl?.dataset.puedeGestionar === '1';
+  renderModificarDocumentosSection(data, puedeGestionar);
+}
+
+async function fileToDocumentoPayload(file) {
+  const contenido_base64 = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.readAsDataURL(file);
+  });
+  return {
+    nombre_archivo: file.name,
+    mime_type: file.type || 'application/pdf',
+    contenido_base64,
+  };
+}
+
+async function onModificarDocumentoAction(e) {
+  const modalEl = document.getElementById(`${PREFIX}Modal`);
+  if (!modalEl || modalEl.dataset.mode !== 'edit') return;
+  const entregaId = modalEl.dataset.entregaId || document.getElementById(`${PREFIX}EntregableId`)?.value;
+  if (!entregaId) return;
+  const errBox = document.getElementById(`${PREFIX}ModalErr`);
+
+  const retireBtn = e.target.closest('.pe-doc-retire');
+  if (retireBtn) {
+    if (!window.confirm('¿Eliminar este documento del entregable?')) return;
+    try {
+      await entregablesServiciosService.retirarDocumentoRecepcion(entregaId, retireBtn.dataset.doc);
+      await refreshModificarDocumentos(entregaId);
+    } catch (err) {
+      if (errBox) {
+        errBox.textContent = err.message || 'No se pudo eliminar el documento';
+        errBox.classList.remove('d-none');
+      }
+    }
+    return;
+  }
+
+  const attachBtn = e.target.closest('.pe-doc-attach');
+  if (attachBtn) {
+    document.getElementById(`${PREFIX}DocAttachInput`)?.click();
+  }
+}
+
+async function onDocAttachSelected(e) {
+  const input = e.target;
+  const files = [...(input.files || [])];
+  input.value = '';
+  if (!files.length) return;
+  const modalEl = document.getElementById(`${PREFIX}Modal`);
+  const entregaId = modalEl?.dataset.entregaId || document.getElementById(`${PREFIX}EntregableId`)?.value;
+  const errBox = document.getElementById(`${PREFIX}ModalErr`);
+  if (!entregaId) return;
+  try {
+    const documentos = await Promise.all(files.map((file) => fileToDocumentoPayload(file)));
+    await entregablesServiciosService.adjuntarDocumentosRecepcion(entregaId, { documentos });
+    await refreshModificarDocumentos(entregaId);
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudieron adjuntar documentos';
       errBox.classList.remove('d-none');
     }
   }
@@ -744,11 +844,16 @@ async function submitRegistrarRecepcion(e) {
     return;
   }
   try {
+    if (editando) {
+      window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}Modal`))?.hide();
+      await load();
+      return;
+    }
     const payload = {
       fecha_recepcion_mesa_partes: fecha,
       numero_expediente_sgd: sgd,
       observacion: obs,
-      documentos: contenido ? [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }] : [],
+      documentos: (!editando && contenido) ? [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }] : [],
     };
     if (editando) await entregablesServiciosService.modificarRecepcion(id, payload);
     else await entregablesServiciosService.registrarRecepcion(id, payload);
@@ -1733,6 +1838,8 @@ export function initPresentacionEntregableView() {
     renderCurrent();
   });
   document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', submitRegistrarRecepcion);
+  document.getElementById(`${PREFIX}DocsSection`)?.addEventListener('click', onModificarDocumentoAction);
+  document.getElementById(`${PREFIX}DocAttachInput`)?.addEventListener('change', onDocAttachSelected);
   document.getElementById(`${PREFIX}ObservarForm`)?.addEventListener('submit', submitObservarEntregable);
   document.getElementById(`${PREFIX}ObservarDestinoSubmodulo`)?.addEventListener('change', (event) => {
     loadDestinatariosObservacion(event.target.value).catch((err) => {

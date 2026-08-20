@@ -9,6 +9,9 @@ import {
   getDetalleEntregableServicio,
   registrarRecepcionEntregable,
   modificarRecepcionEntregable,
+  adjuntarDocumentosRecepcionEntregable,
+  reemplazarDocumentoRecepcionEntregable,
+  retirarDocumentoRecepcionEntregable,
   observarEntregable,
   observarEntregableDirigido,
   retirarObservacionEntregable,
@@ -209,6 +212,43 @@ router.put('/:id/recepcion', async (req, res, next) => {
       req.esUserCtx,
       req.esUsuario,
       req.esRol,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/recepcion/documentos', async (req, res, next) => {
+  try {
+    const data = await adjuntarDocumentosRecepcionEntregable(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id/recepcion/documentos/:documentoId/reemplazar', async (req, res, next) => {
+  try {
+    const data = await reemplazarDocumentoRecepcionEntregable(
+      req.params.id,
+      req.params.documentoId,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id/recepcion/documentos/:documentoId', async (req, res, next) => {
+  try {
+    const data = await retirarDocumentoRecepcionEntregable(
+      req.params.id,
+      req.params.documentoId,
+      req.esUserCtx,
+      req.esUsuario,
     );
     res.json({ ok: true, data });
   } catch (err) { next(err); }

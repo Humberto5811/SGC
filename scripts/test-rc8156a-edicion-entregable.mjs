@@ -45,7 +45,7 @@ console.log('\n=== RC8.15.6A — Edición correcta del entregable ===\n');
   ok(/Registrar entregable/.test(view) && /Modificar entregable/.test(view)
     && !/label: 'Registrar recepción'/.test(view),
   'labels funcionales registrar/modificar actualizados');
-  ok(/documentos: contenido \? \[/.test(view) && !/archivos: contenido \? \[/.test(view),
+  ok(/documentos:/.test(view) && !/archivos: contenido \? \[/.test(view),
     'se conserva payload documentos de RC8.15.5C');
   ok(/BEGIN/.test(lib) && /FOR UPDATE/.test(lib) && /ROLLBACK/.test(lib),
     'edición implementada con transacción y bloqueo');
@@ -89,6 +89,54 @@ async function snapshotOs1105(query) {
   return JSON.stringify(rows);
 }
 
+async function limpiarFixture6A(query, { ordenId }) {
+  if (!ordenId) return;
+  const woIds = (await query(`
+    SELECT DISTINCT workflow_observacion_id AS id
+    FROM entregable_observaciones
+    WHERE orden_id=$1 AND workflow_observacion_id IS NOT NULL
+  `, [ordenId])).rows.map((r) => r.id);
+
+  await query('DELETE FROM entregable_eventos WHERE orden_id=$1', [ordenId]);
+  await query('DELETE FROM entregable_asignaciones WHERE orden_id=$1', [ordenId]);
+  await query('DELETE FROM entregable_estado_vigente WHERE orden_id=$1', [ordenId]);
+  await query('DELETE FROM entregable_observaciones WHERE orden_id=$1', [ordenId]);
+  if (woIds.length) {
+    await query('DELETE FROM workflow_observaciones WHERE id = ANY($1::int[])', [woIds]);
+  }
+  await query(`
+    DELETE FROM entregable_recepcion_documentos
+    WHERE recepcion_id IN (SELECT id FROM entregable_recepciones WHERE orden_id=$1)
+  `, [ordenId]);
+  await query('DELETE FROM entregable_recepciones WHERE orden_id=$1', [ordenId]);
+  await query('DELETE FROM orden_entregas WHERE orden_id=$1', [ordenId]);
+  await query('DELETE FROM ordenes_contratacion WHERE id=$1', [ordenId]);
+}
+
+async function contarResiduales6A(query, { ordenId, numeroOrden }) {
+  const ordenPorId = ordenId
+    ? Number((await query('SELECT COUNT(*)::int AS n FROM ordenes_contratacion WHERE id=$1', [ordenId])).rows[0].n)
+    : 0;
+  const ordenPorNumero = numeroOrden
+    ? Number((await query(
+      'SELECT COUNT(*)::int AS n FROM ordenes_contratacion WHERE numero_orden=$1',
+      [numeroOrden],
+    )).rows[0].n)
+    : 0;
+  const hijos = ordenId
+    ? Number((await query(`
+      SELECT (
+        (SELECT COUNT(*)::int FROM orden_entregas WHERE orden_id=$1) +
+        (SELECT COUNT(*)::int FROM entregable_recepciones WHERE orden_id=$1) +
+        (SELECT COUNT(*)::int FROM entregable_estado_vigente WHERE orden_id=$1) +
+        (SELECT COUNT(*)::int FROM entregable_asignaciones WHERE orden_id=$1) +
+        (SELECT COUNT(*)::int FROM entregable_eventos WHERE orden_id=$1)
+      ) AS n
+    `, [ordenId])).rows[0].n)
+    : 0;
+  return { ordenPorId, ordenPorNumero, hijos };
+}
+
 async function runIntegration({
   query,
   registrarRecepcionEntregable,
@@ -106,7 +154,7 @@ async function runIntegration({
   }
 
   const os1105Antes = await snapshotOs1105(query);
-  const unique = `RC8156A${Date.now()}`;
+  const numeroOrden = `RC8156A${Date.now()}`;
   let ordenId = null;
 
   try {
@@ -124,7 +172,7 @@ async function runIntegration({
         fecha_orden, monto_total, estado, tipo_contratacion
       ) VALUES ($1,$2,'OS',$3,2099,CURRENT_DATE,100,'EN_EJECUCION','SERVICIO')
       RETURNING id
-    `, [requerimiento.id, proveedor.proveedor_id, unique])).rows[0].id;
+    `, [requerimiento.id, proveedor.proveedor_id, numeroOrden])).rows[0].id;
 
     const activaId = (await query(`
       INSERT INTO orden_entregas (
@@ -141,6 +189,7 @@ async function runIntegration({
       RETURNING id
     `, [ordenId])).rows[0].id;
 
+    const adminCtx = { id: 1, rol: 'admin', username: 'admin' };
     const inicial = await registrarRecepcionEntregable(activaId, {
       fecha_recepcion_mesa_partes: '2026-08-18',
       numero_expediente_sgd: 'SGD-INICIAL',
@@ -150,7 +199,7 @@ async function runIntegration({
         mime_type: 'application/pdf',
         contenido_base64: pdfBase64('INICIAL'),
       }],
-    }, 'test-rc8156a', 'admin');
+    }, adminCtx, 'admin');
     ok(inicial.tipo_recepcion === 'INICIAL' && Number(inicial.numero_recepcion) === 1,
       'registro inicial crea recepción INICIAL N.° 1');
 
@@ -162,7 +211,7 @@ async function runIntegration({
         mime_type: 'application/pdf',
         contenido_base64: pdfBase64('NO DEBE'),
       }],
-    }, 'test-rc8156a', 'admin'));
+    }, adminCtx, 'admin'));
     ok(segundoPost?.code === 'RECEPCION_YA_EXISTE',
       'un segundo POST se rechaza y no crea SUBSANACION');
 
@@ -176,7 +225,7 @@ async function runIntegration({
       numero_expediente_sgd: 'SGD-EDITADO',
       observacion: 'Dato corregido',
       documentos: [],
-    }, 'test-rc8156a', 'admin');
+    }, adminCtx, 'admin');
     ok(Number(sinPdf.id) === Number(inicial.id), 'edición conserva el id de recepción');
     const datosEditados = (await query(`
       SELECT TO_CHAR(fecha_recepcion_mesa_partes, 'YYYY-MM-DD') AS fecha,
@@ -199,7 +248,7 @@ async function runIntegration({
         mime_type: 'application/pdf',
         contenido_base64: pdfBase64('REEMPLAZO'),
       }],
-    }, 'test-rc8156a', 'admin');
+    }, adminCtx, 'admin');
 
     const recepciones = (await query(
       `SELECT * FROM entregable_recepciones WHERE orden_entrega_id=$1 ORDER BY id`,
@@ -236,7 +285,7 @@ async function runIntegration({
         mime_type: 'application/x-msdownload',
         contenido_base64: pdfBase64('INVALIDO'),
       }],
-    }, 'test-rc8156a', 'admin'));
+    }, adminCtx, 'admin'));
     const despuesError = (await query(
       `SELECT * FROM entregable_recepciones WHERE id=$1`,
       [inicial.id],
@@ -249,20 +298,23 @@ async function runIntegration({
       fecha_recepcion_mesa_partes: '2026-08-20',
       numero_expediente_sgd: 'SGD-ANULADO',
       documentos: [],
-    }, 'test-rc8156a', 'admin'));
+    }, adminCtx, 'admin'));
     ok(anuladaError?.code === 'ENTREGABLE_NO_ACTIVO',
       'entregables ANULADOS son rechazados');
   } catch (error) {
     ok(false, `integración completada sin error inesperado (${error.message})`);
   } finally {
-    if (ordenId) {
-      await query(`
-        DELETE FROM entregable_recepcion_documentos
-        WHERE recepcion_id IN (SELECT id FROM entregable_recepciones WHERE orden_id=$1)
-      `, [ordenId]);
-      await query(`DELETE FROM entregable_recepciones WHERE orden_id=$1`, [ordenId]);
-      await query(`DELETE FROM orden_entregas WHERE orden_id=$1`, [ordenId]);
-      await query(`DELETE FROM ordenes_contratacion WHERE id=$1`, [ordenId]);
+    try {
+      await limpiarFixture6A(query, { ordenId });
+      const residuales = await contarResiduales6A(query, { ordenId, numeroOrden });
+      ok(
+        residuales.ordenPorId === 0
+        && residuales.ordenPorNumero === 0
+        && residuales.hijos === 0,
+        'fixture RC8156A sin registros residuales tras cleanup',
+      );
+    } catch (cleanupError) {
+      ok(false, `cleanup fixture (${cleanupError.message})`);
     }
   }
 

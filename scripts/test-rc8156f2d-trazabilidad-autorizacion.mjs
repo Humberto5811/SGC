@@ -19,12 +19,68 @@ function coincideBandejaEndpoint(fila, endpointOk) {
   return Boolean(fila?.puede_ver_trazabilidad) === Boolean(endpointOk);
 }
 
+async function snapshotOs1105() {
+  return JSON.stringify((await query(`
+    SELECT oc.id, oe.id AS entrega_id, ev.responsable_usuario_id, ev.etapa_codigo,
+      (SELECT COUNT(*)::int FROM entregable_observaciones eo WHERE eo.orden_id=oc.id) AS obs,
+      (SELECT COUNT(*)::int FROM entregable_eventos ee WHERE ee.orden_id=oc.id) AS eventos
+    FROM ordenes_contratacion oc
+    LEFT JOIN orden_entregas oe ON oe.orden_id=oc.id AND oe.numero_entrega=1 AND oe.estado='ACTIVO'
+    LEFT JOIN entregable_estado_vigente ev ON ev.orden_entrega_id=oe.id
+    WHERE oc.tipo_orden='OS' AND oc.numero_orden='1105'
+    ORDER BY oc.id
+  `)).rows);
+}
+
+async function limpiarFixtureF2d({ ordenId, usuarioIds = [] }) {
+  if (ordenId) {
+    const woIds = (await query(`
+      SELECT DISTINCT workflow_observacion_id AS id
+      FROM entregable_observaciones
+      WHERE orden_id=$1 AND workflow_observacion_id IS NOT NULL
+    `, [ordenId])).rows.map((r) => r.id);
+
+    await query('DELETE FROM entregable_eventos WHERE orden_id=$1', [ordenId]);
+    await query('DELETE FROM entregable_asignaciones WHERE orden_id=$1', [ordenId]);
+    await query('DELETE FROM entregable_estado_vigente WHERE orden_id=$1', [ordenId]);
+    await query('DELETE FROM entregable_observaciones WHERE orden_id=$1', [ordenId]);
+    if (woIds.length) {
+      await query('DELETE FROM workflow_observaciones WHERE id = ANY($1::int[])', [woIds]);
+    }
+    await query(`
+      DELETE FROM entregable_recepcion_documentos
+      WHERE recepcion_id IN (SELECT id FROM entregable_recepciones WHERE orden_id=$1)
+    `, [ordenId]);
+    await query('DELETE FROM entregable_recepciones WHERE orden_id=$1', [ordenId]);
+    await query('DELETE FROM orden_entregas WHERE orden_id=$1', [ordenId]);
+    await query('DELETE FROM ordenes_contratacion WHERE id=$1', [ordenId]);
+  }
+  const ids = usuarioIds.filter(Boolean);
+  if (ids.length) {
+    await query('DELETE FROM usuarios WHERE id = ANY($1::int[])', [ids]);
+  }
+}
+
+async function contarResidualesF2d(ordenId, usuarioIds) {
+  const orden = ordenId
+    ? (await query('SELECT id FROM ordenes_contratacion WHERE id=$1', [ordenId])).rows.length
+    : 0;
+  const usuarios = usuarioIds.length
+    ? (await query('SELECT id FROM usuarios WHERE id = ANY($1::int[])', [usuarioIds])).rows.length
+    : 0;
+  return { orden, usuarios };
+}
+
 console.log('\n=== RC8.15.6F-2D — Trazabilidad autorización ===\n');
 
 ok(typeof puedeAccederTrazabilidadEntregable === 'function', '5. helper común exportado');
 
+const os1105Before = await snapshotOs1105();
 const client = await pool.connect();
 let ordenId = null;
+let e1 = null;
+const usuarioIds = [];
+
 try {
   await client.query('BEGIN');
   const nonce = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
@@ -51,6 +107,8 @@ try {
   const origen = await crearUsuario('origen', permPe);
   const destino = await crearUsuario('destino', permReg);
   const ajeno = await crearUsuario('ajeno', permPe);
+  usuarioIds.push(origen.id, destino.id, ajeno.id);
+
   const origenCtx = { id: Number(origen.id), rol: 'usuario', username: origen.username, permisos: JSON.parse(permPe) };
   const destCtx = { id: Number(destino.id), rol: 'usuario', username: destino.username, permisos: JSON.parse(permReg) };
   const ajenoCtx = { id: Number(ajeno.id), rol: 'usuario', username: ajeno.username, permisos: JSON.parse(permPe) };
@@ -66,7 +124,7 @@ try {
     ) VALUES ($1,$2,'OS',$3,2099,CURRENT_DATE,700,'EN_EJECUCION','SERVICIO') RETURNING id
   `, [base.requerimiento_id, base.proveedor_id, `RC8156F2D${nonce}`])).rows[0].id);
 
-  const e1 = Number((await client.query(`
+  e1 = Number((await client.query(`
     INSERT INTO orden_entregas (orden_id, numero_entrega, tipo_entrega, descripcion, dias_plazo, fecha_maxima, importe, estado)
     VALUES ($1,1,'ENTREGABLE','F2D E1',10,CURRENT_DATE+10,100,'ACTIVO') RETURNING id
   `, [ordenId])).rows[0].id);
@@ -151,10 +209,17 @@ try {
 } finally {
   try { await client.query('ROLLBACK'); } catch (_) { /* commit previo */ }
   client.release();
-  if (ordenId) {
-    try { await query('DELETE FROM ordenes_contratacion WHERE id=$1', [ordenId]); } catch (_) { /* noop */ }
+  try {
+    await limpiarFixtureF2d({ ordenId, usuarioIds });
+    const residuales = await contarResidualesF2d(ordenId, usuarioIds);
+    ok(residuales.orden === 0 && residuales.usuarios === 0,
+      '6. fixture F-2D sin registros residuales tras cleanup');
+  } catch (cleanupError) {
+    ok(false, `cleanup fixture (${cleanupError.message})`);
   }
 }
+
+ok(await snapshotOs1105() === os1105Before, '7. OS 1105 permanece intacta');
 
 await pool.end();
 console.log(`\n=== Resultado F-2D: ${passed} OK, ${failed} FAIL ===\n`);
