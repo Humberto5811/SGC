@@ -193,6 +193,7 @@ router.post('/:id/registrar-recepcion', async (req, res, next) => {
     const data = await registrarRecepcionEntregable(
       req.params.id,
       req.body || {},
+      req.esUserCtx,
       req.esUsuario,
       req.esRol,
     );
@@ -205,6 +206,7 @@ router.put('/:id/recepcion', async (req, res, next) => {
     const data = await modificarRecepcionEntregable(
       req.params.id,
       req.body || {},
+      req.esUserCtx,
       req.esUsuario,
       req.esRol,
     );

@@ -2951,6 +2951,26 @@ export async function derivarAEjecucion(ordenId, usuario, rol, { responsableId =
         client: tx,
       });
     }
+
+    if (!esBien && usuarioDestinoId) {
+      const { ensureResponsablePersonaEntregable } = await import('./entregableEstadoPersistido.js');
+      const entregasActivas = await tx.query(`
+        SELECT id FROM orden_entregas
+        WHERE orden_id = $1 AND UPPER(COALESCE(estado, '')) = 'ACTIVO'
+      `, [orden.id]);
+      const actor = String(usuario || '').slice(0, 150);
+      for (const row of entregasActivas.rows) {
+        await ensureResponsablePersonaEntregable({
+          ordenEntregaId: row.id,
+          usuarioDestinoId,
+          ejecutadoPor: actor,
+          motivo: `Derivación orden ${orden.numero_orden || orden.id} a ejecución`,
+          metadata: { orden_id: orden.id, via: 'derivarAEjecucion' },
+          client: tx,
+        });
+      }
+    }
+
     return ins;
   });
 

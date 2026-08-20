@@ -18,6 +18,7 @@ import { toIsoDateString } from './diasPlazo.js';
 import { resolverCentroDesdeRequerimiento } from './recepcionBienesAlcance.js';
 import { generateActaConformidadServiciosPdfServer } from './entregableConformidadPdfServer.js';
 import {
+  ensureResponsablePersonaEntregable,
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
   reasignarResponsableEntregableMismaEtapa,
@@ -40,6 +41,7 @@ import {
 } from '../utils/userRoleCatalog.js';
 
 export {
+  ensureResponsablePersonaEntregable,
   inicializarEstadoResponsableEntregable,
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
@@ -364,8 +366,7 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
     item.responsable_tipo = erv?.responsableTipo || 'PENDIENTE';
     item.responsable_usuario_id = erv?.responsableUsuarioId ?? null;
     const responsableId = Number(item.responsable_usuario_id);
-    const autorizado = esAdmin(userCtx)
-      || (Number.isFinite(responsableId) && responsableId > 0 && Number(userCtx?.id) === responsableId);
+    const autorizado = esAutorizadoGestionEntregable(userCtx, erv, item);
     const responsablePersonaActual = Number.isFinite(responsableId)
       && responsableId > 0
       && Number(userCtx?.id) === responsableId;
@@ -1012,6 +1013,22 @@ function assertAccesoDerivacion(userCtx, estado, entrega) {
     403,
     'DERIVACION_NO_AUTORIZADA',
   );
+}
+
+function esAutorizadoGestionEntregable(userCtx, estado, entrega) {
+  if (esAdmin(userCtx)) return true;
+  const uid = Number(userCtx?.id);
+  if (estado?.responsableTipo === 'PERSONA'
+    && uid > 0
+    && uid === Number(estado.responsableUsuarioId)) {
+    return true;
+  }
+  try {
+    assertAccesoDerivacion(userCtx, estado, entrega);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function assertEtapaPresentacion(estado) {
@@ -2422,6 +2439,23 @@ export async function subsanarEntregable(
       );
     }
 
+    const operadorId = Number(userCtx?.id);
+    if (Number.isInteger(operadorId) && operadorId > 0) {
+      await ensureResponsablePersonaEntregable({
+        ordenEntregaId: eid,
+        usuarioDestinoId: operadorId,
+        usuarioOrigenId: operadorId,
+        ejecutadoPor: subsanadoPor.slice(0, 150),
+        motivo: 'Subsanación de entregable',
+        metadata: {
+          via: 'subsanarEntregable',
+          recepcion_id: nuevaRecepcion.id,
+          observacion_id: observacion.id,
+        },
+        client,
+      });
+    }
+
     await client.query('COMMIT');
     return {
       recepcion: nuevaRecepcion,
@@ -2440,7 +2474,13 @@ export async function subsanarEntregable(
  * Registra la recepción INICIAL de un entregable (transaccional: recepción + documento).
  * Una recepción ya existente se modifica mediante modificarRecepcionEntregable.
  */
-export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, usuario = '', rol = '') {
+export async function registrarRecepcionEntregable(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+  rol = '',
+) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   if (entrega.estado !== 'ACTIVO') {
     throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
@@ -2552,6 +2592,19 @@ export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, us
       ]);
     }
 
+    const operadorId = Number(userCtx?.id);
+    if (Number.isInteger(operadorId) && operadorId > 0) {
+      await ensureResponsablePersonaEntregable({
+        ordenEntregaId,
+        usuarioDestinoId: operadorId,
+        usuarioOrigenId: operadorId,
+        ejecutadoPor: String(usuario || userCtx?.username || operadorId).slice(0, 150),
+        motivo: 'Registro de recepción inicial',
+        metadata: { via: 'registrarRecepcionEntregable', recepcion_id: recepcionRows[0].id },
+        client,
+      });
+    }
+
     await client.query('COMMIT');
     return {
       id: recepcionRows[0].id,
@@ -2576,7 +2629,13 @@ export async function registrarRecepcionEntregable(ordenEntregaId, body = {}, us
  * Modifica la misma recepción INICIAL. Un PDF nuevo crea una versión documental
  * y deja el anterior como histórico; sin PDF, conserva el documento vigente.
  */
-export async function modificarRecepcionEntregable(ordenEntregaId, body = {}, usuario = '', rol = '') {
+export async function modificarRecepcionEntregable(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+  rol = '',
+) {
   const eid = parseInt(ordenEntregaId, 10);
   if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
 
@@ -2728,6 +2787,19 @@ export async function modificarRecepcionEntregable(ordenEntregaId, body = {}, us
       documentoVigente = nuevosDocs[0];
     } else {
       documentoVigente = docsVigentes[0] || null;
+    }
+
+    const operadorId = Number(userCtx?.id);
+    if (Number.isInteger(operadorId) && operadorId > 0) {
+      await ensureResponsablePersonaEntregable({
+        ordenEntregaId: eid,
+        usuarioDestinoId: operadorId,
+        usuarioOrigenId: operadorId,
+        ejecutadoPor: String(usuario || userCtx?.username || operadorId).slice(0, 150),
+        motivo: 'Modificación de recepción inicial',
+        metadata: { via: 'modificarRecepcionEntregable', recepcion_id: recepcion.id },
+        client,
+      });
     }
 
     await client.query('COMMIT');
@@ -3058,6 +3130,20 @@ export async function generarActaConformidadEntregable(ordenEntregaId, body = {}
         generadoPor,
       ],
     );
+
+    const operadorId = Number(userCtx?.id);
+    if (Number.isInteger(operadorId) && operadorId > 0) {
+      await ensureResponsablePersonaEntregable({
+        ordenEntregaId: eid,
+        usuarioDestinoId: operadorId,
+        usuarioOrigenId: operadorId,
+        ejecutadoPor: generadoPor,
+        motivo: 'Generación de acta de conformidad',
+        metadata: { via: 'generarActaConformidadEntregable', acta_id: ins.rows[0].id },
+        client,
+      });
+    }
+
     await client.query('COMMIT');
     return { ok: true, data: ins.rows[0] };
   } catch (err) {
@@ -3183,6 +3269,20 @@ export async function adjuntarActaConformidadFirmada(ordenEntregaId, body = {}, 
       [entrega.orden_id, eid, acta.id, nextVersion, nombre, ACTA_MIME_PDF, raw, approxBytes,
         prev ? prev.id : null, idem, createdBy],
     );
+
+    const operadorId = Number(userCtx?.id);
+    if (Number.isInteger(operadorId) && operadorId > 0) {
+      await ensureResponsablePersonaEntregable({
+        ordenEntregaId: eid,
+        usuarioDestinoId: operadorId,
+        usuarioOrigenId: operadorId,
+        ejecutadoPor: createdBy,
+        motivo: 'Adjuntar acta de conformidad firmada',
+        metadata: { via: 'adjuntarActaConformidadFirmada', visado_id: ins.rows[0].id },
+        client,
+      });
+    }
+
     await client.query('COMMIT');
     return { ok: true, data: ins.rows[0] };
   } catch (err) {

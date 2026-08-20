@@ -353,6 +353,54 @@ export async function transicionarEntregable({
 }
 
 /**
+ * Garantiza que el entregable tenga una PERSONA responsable concreta.
+ * Idempotente: no reasigna si ya coincide. Usado en derivaciones, recepciones
+ * y otras acciones operativas que deben reflejarse en la columna Responsable.
+ */
+export async function ensureResponsablePersonaEntregable({
+  ordenEntregaId,
+  usuarioDestinoId,
+  eventoCodigo = 'ENTREGABLE_RESPONSABLE_ASIGNADO',
+  usuarioOrigenId = null,
+  ejecutadoPor = null,
+  motivo = null,
+  metadata = null,
+  client = null,
+} = {}) {
+  const destinoId = Number(usuarioDestinoId);
+  if (!Number.isInteger(destinoId) || destinoId <= 0) {
+    throw httpError('usuarioDestinoId inválido', 400, 'USUARIO_DESTINO_ID_INVALIDO');
+  }
+  return runInTransaction(client, async (tx) => {
+    const context = await getEntregableContext(tx, ordenEntregaId, { lock: true });
+    if (String(context.entrega_estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    await inicializarEstadoResponsableEntregable(context.orden_entrega_id, {
+      actualizadoPor: ejecutadoPor,
+      metadata: { origen: 'ensure_responsable_persona' },
+      client: tx,
+    });
+    const actual = await getEstadoEspecifico(tx, context.orden_entrega_id, { lock: true });
+    const contrato = buildContratoCanonico(actual.estado, actual.asignacion);
+    if (contrato.responsableTipo === 'PERSONA'
+      && Number(contrato.responsableUsuarioId) === destinoId) {
+      return buildEntregableContract(context, actual, 'ENTREGABLE');
+    }
+    return reasignarResponsableEntregableMismaEtapa({
+      ordenEntregaId: context.orden_entrega_id,
+      usuarioDestinoId: destinoId,
+      eventoCodigo,
+      usuarioOrigenId,
+      ejecutadoPor,
+      motivo: motivo || 'Asignación automática de responsable',
+      metadata,
+      client: tx,
+    });
+  });
+}
+
+/**
  * Reasigna la PERSONA responsable conservando la etapa workflow vigente.
  * Usado por observaciones dirigidas sin transicionarExpediente ni forzar etapa nueva.
  */
@@ -493,6 +541,7 @@ export default {
   obtenerEstadoResponsableEntregable,
   listarEstadosResponsablesEntregables,
   inicializarEstadoResponsableEntregable,
+  ensureResponsablePersonaEntregable,
   transicionarEntregable,
   reasignarResponsableEntregableMismaEtapa,
 };
