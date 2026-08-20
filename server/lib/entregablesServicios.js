@@ -25,10 +25,14 @@ import {
 } from './entregableEstadoPersistido.js';
 import {
   CATALOGO_DESTINOS_OBSERVACION,
+  clasificarObservacionEntregable,
+  esEmisorObservacionEntregable,
   listarDestinatariosObservacion,
   obtenerDestinoObservacion,
   registrarRoutingObservacionEntregable,
 } from './observacionesEntregableRouting.js';
+import { buildEstadoLabels } from './expedienteEstadoPersistido.js';
+import { ETAPAS } from '../../shared/workflow/etapas.js';
 import { EVENTOS } from '../../shared/workflow/eventos.js';
 import {
   PERFILES_FUNCIONALES,
@@ -260,7 +264,8 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
           'usuario_origen_id', wo.usuario_origen_id,
           'usuario_destino_id', wo.usuario_destino_id,
           'destino_submodulo_codigo', wo.destino_submodulo_codigo,
-          'origen_submodulo_codigo', wo.origen_submodulo_codigo
+          'origen_submodulo_codigo', wo.origen_submodulo_codigo,
+          'recepcion_subsanacion_id', eo.recepcion_subsanacion_id
         )
         FROM entregable_observaciones eo
         LEFT JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
@@ -374,60 +379,74 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
       || (responsablePersonaActual
         && perfilesUsuario.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES));
     const obs = item.observacion_abierta || null;
-    const routingActivo = Boolean(obs?.workflow_observacion_id);
-    const esOrigenDirigida = routingActivo
-      && Number(obs?.usuario_origen_id) === Number(userCtx?.id);
+    const clasificacion = clasificarObservacionEntregable(obs);
+    item.observacion_clase = clasificacion;
+    const routingActivo = clasificacion === 'DIRIGIDA_CANONICA';
+    const esEmisor = esEmisorObservacionEntregable(obs, userCtx);
+    const esOrigenDirigida = routingActivo && esEmisor;
     item.routing_observacion_activo = routingActivo;
     item.solo_lectura_routing_origen = esOrigenDirigida && !responsablePersonaActual;
+    item.solo_lectura_legacy_emisor = clasificacion === 'LEGACY_SIN_ROUTING'
+      && Boolean(obs?.id)
+      && esEmisor;
+    const soloLecturaEmisor = item.solo_lectura_routing_origen || item.solo_lectura_legacy_emisor;
     const tieneRecepcion = Boolean(item.ultima_recepcion?.id);
     const sinObservacionAbierta = !obs;
     item.puede_registrar_recepcion = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && !tieneRecepcion;
     item.puede_modificar_entregable = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && tieneRecepcion
       && sinObservacionAbierta
       && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo);
     item.puede_gestionar_conformidad = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && sinObservacionAbierta
       && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo);
     item.puede_observar = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && tieneRecepcion
       && sinObservacionAbierta
       && ['RECIBIDO', 'SUBSANADO', 'ACTA_GENERADA', 'CONFORME'].includes(item.situacion_codigo);
     item.puede_subsanar = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
-      && item.situacion_codigo === 'OBSERVADO'
-      && Boolean(obs?.id);
+      && routingActivo
+      && Number(obs?.usuario_destino_id) === Number(userCtx?.id)
+      && responsablePersonaActual
+      && item.situacion_codigo === 'OBSERVADO';
     item.puede_derivar_coordinador_cm = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && item.situacion_codigo === 'CONFORME'
       && item.acta_generada_version > 0
       && item.firmada_vigente
       && sinObservacionAbierta;
-    item.puede_ver_observacion_dirigida = item.solo_lectura_routing_origen && routingActivo;
+    item.puede_ver_observacion_abierta = Boolean(obs?.id)
+      && (soloLecturaEmisor
+        || (routingActivo && Number(obs?.usuario_destino_id) === Number(userCtx?.id)));
+    item.puede_ver_observacion_dirigida = item.puede_ver_observacion_abierta && routingActivo;
+    item.puede_retirar_observacion = Boolean(obs?.id)
+      && obs.estado === 'OBS_EMITIDA'
+      && esEmisor
+      && !obs.recepcion_subsanacion_id;
     item.puede_adjuntar_acta_firmada = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && sinObservacionAbierta
       && item.acta_generada_version > 0
       && !item.firmada_vigente;
     item.puede_ver_acta_generada = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && item.acta_generada_version > 0;
     item.puede_ver_acta_firmada = autorizado
       && enPresentacion
-      && !item.solo_lectura_routing_origen
+      && !soloLecturaEmisor
       && item.firmada_vigente;
     item.puede_observar_coordinador_cm = responsablePersonaActual
       && perfilesUsuario.includes(PERFILES_FUNCIONALES.COORDINADOR_CM)
@@ -1792,6 +1811,196 @@ export async function observarEntregableDirigido(
         submodulo_destino_codigo: destino.submodulo_codigo,
         etapa_conservada: reasignacion.etapa_conservada,
       },
+    };
+  };
+
+  if (externalClient) return work(externalClient);
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * RC8.15.6F-2A — Retiro seguro de observación emitida por el emisor.
+ * Usa OBS_CERRADA institucional; no DELETE. Restaura responsable solo si F-2 lo cambió.
+ */
+export async function retirarObservacionEntregable(
+  ordenEntregaId,
+  observacionId,
+  body = {},
+  userCtx = null,
+  usuario = '',
+  externalClient = null,
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const oid = parseInt(observacionId, 10);
+  if (!Number.isFinite(eid) || !Number.isFinite(oid)) {
+    throw httpError('Identificadores inválidos', 400, 'IDENTIFICADORES_INVALIDOS');
+  }
+  const uid = Number(userCtx?.id);
+  if (!Number.isInteger(uid) || uid <= 0) {
+    throw httpError('Autenticación requerida', 401, 'AUTH_REQUIRED');
+  }
+  const motivoRetiro = String(body.motivo || '').trim();
+  if (!motivoRetiro) {
+    throw httpError('El motivo de retiro es obligatorio', 400, 'MOTIVO_RETIRO_REQUERIDO');
+  }
+  const ejecutadoPor = String(usuario || userCtx?.nombre || userCtx?.username || '').trim()
+    || String(uid);
+
+  const work = async (tx) => {
+    const { rows: obsRows } = await tx.query(`
+      SELECT eo.*,
+        wo.id AS workflow_id,
+        wo.estado AS workflow_estado,
+        wo.usuario_origen_id,
+        wo.usuario_destino_id,
+        wo.destino_submodulo_codigo
+      FROM entregable_observaciones eo
+      LEFT JOIN workflow_observaciones wo ON wo.id=eo.workflow_observacion_id
+      WHERE eo.id=$1 AND eo.orden_entrega_id=$2
+      FOR UPDATE OF eo
+    `, [oid, eid]);
+    const observacion = obsRows[0];
+    if (!observacion) {
+      throw httpError('Observación no encontrada para el entregable', 404, 'OBSERVACION_NO_ENCONTRADA');
+    }
+    if (observacion.estado !== 'OBS_EMITIDA') {
+      throw httpError(
+        'Solo se puede retirar una observación aún emitida y sin atención',
+        409,
+        'OBSERVACION_NO_RETIRABLE',
+      );
+    }
+    if (observacion.recepcion_subsanacion_id) {
+      throw httpError('La observación ya tiene subsanación vinculada', 409, 'OBSERVACION_CON_RESPUESTA');
+    }
+    const obsCtx = {
+      ...observacion,
+      workflow_observacion_id: observacion.workflow_observacion_id,
+      usuario_origen_id: observacion.usuario_origen_id,
+      usuario_destino_id: observacion.usuario_destino_id,
+      observado_por: observacion.observado_por,
+    };
+    if (!esEmisorObservacionEntregable(obsCtx, userCtx)) {
+      throw httpError('Solo el emisor puede retirar la observación', 403, 'RETIRO_OBSERVACION_NO_AUTORIZADO');
+    }
+
+    const clasificacion = clasificarObservacionEntregable(obsCtx);
+    const { rows: cerradas } = await tx.query(`
+      UPDATE entregable_observaciones
+      SET estado='OBS_CERRADA', updated_at=NOW()
+      WHERE id=$1 AND estado='OBS_EMITIDA'
+      RETURNING *
+    `, [oid]);
+    if (!cerradas.length) {
+      throw httpError('La observación ya no está disponible para retiro', 409, 'OBSERVACION_NO_RETIRABLE');
+    }
+
+    if (observacion.workflow_id) {
+      await tx.query(`
+        UPDATE workflow_observaciones
+        SET estado='OBS_CERRADA', cerrada_at=NOW()
+        WHERE id=$1 AND estado='OBS_EMITIDA'
+      `, [Number(observacion.workflow_id)]);
+    }
+
+    let reasignacion = null;
+    if (clasificacion === 'DIRIGIDA_CANONICA'
+      && Number(observacion.usuario_origen_id) > 0
+      && Number(observacion.usuario_destino_id) > 0) {
+      const estadoActual = await obtenerEstadoResponsableEntregable(eid, { client: tx });
+      if (Number(estadoActual?.responsableUsuarioId) === Number(observacion.usuario_destino_id)) {
+        const labels = buildEstadoLabels(ETAPAS.PRESENTACION_ENTREGABLES);
+        reasignacion = await reasignarResponsableEntregableMismaEtapa({
+          ordenEntregaId: eid,
+          usuarioDestinoId: Number(observacion.usuario_origen_id),
+          etapaLabelOverride: labels.etapaLabel,
+          eventoCodigo: 'ENTREGABLE_OBSERVACION_RETIRADA',
+          usuarioOrigenId: uid,
+          ejecutadoPor,
+          motivo: motivoRetiro,
+          metadata: {
+            origen: 'RETIRO_EMISOR',
+            observacion_id: oid,
+            workflow_observacion_id: observacion.workflow_id ? Number(observacion.workflow_id) : null,
+            clasificacion,
+          },
+          client: tx,
+        });
+      }
+    }
+
+    let eventoRetiro = reasignacion?.evento || null;
+    if (!eventoRetiro) {
+      const estadoActual = await obtenerEstadoResponsableEntregable(eid, { client: tx });
+      const labelsDefault = buildEstadoLabels(ETAPAS.PRESENTACION_ENTREGABLES);
+      const respTipo = String(estadoActual?.responsableTipo || 'PENDIENTE');
+      const respUsuario = estadoActual?.responsableUsuarioId != null
+        ? Number(estadoActual.responsableUsuarioId)
+        : null;
+      const respUnidad = estadoActual?.responsableUnidad || null;
+      const estadoCodigo = estadoActual?.estadoCodigo || labelsDefault.estadoCodigo;
+      const estadoLabel = estadoActual?.estadoLabel || labelsDefault.estadoLabel;
+      const etapaCodigo = estadoActual?.etapaCodigo || labelsDefault.etapaCodigo;
+      const eventoMetadata = JSON.stringify({
+        origen: 'RETIRO_EMISOR',
+        clasificacion,
+        observacion_id: oid,
+        workflow_observacion_id: observacion.workflow_id ? Number(observacion.workflow_id) : null,
+      });
+      const { rows: eventos } = await tx.query(`
+        INSERT INTO entregable_eventos (
+          orden_id, orden_entrega_id, requerimiento_id, evento_codigo,
+          estado_anterior_codigo, estado_anterior_label,
+          estado_nuevo_codigo, estado_nuevo_label,
+          etapa_anterior_codigo, etapa_nueva_codigo,
+          responsable_anterior_tipo, responsable_anterior_usuario, responsable_anterior_unidad,
+          responsable_nuevo_tipo, responsable_nuevo_usuario, responsable_nuevo_unidad,
+          ejecutado_usuario_id, ejecutado_por, motivo, metadata_json
+        )
+        SELECT
+          eo.orden_id, eo.orden_entrega_id, oc.requerimiento_id,
+          'ENTREGABLE_OBSERVACION_RETIRADA',
+          $7, $8, $7, $8, $9, $9,
+          $10, $11, $12, $10, $11, $12,
+          $3, $4, $5, $6::jsonb
+        FROM entregable_observaciones eo
+        JOIN ordenes_contratacion oc ON oc.id=eo.orden_id
+        WHERE eo.id=$1 AND eo.orden_entrega_id=$2
+        RETURNING *
+      `, [
+        oid,
+        eid,
+        uid,
+        ejecutadoPor,
+        motivoRetiro,
+        eventoMetadata,
+        estadoCodigo,
+        estadoLabel,
+        etapaCodigo,
+        respTipo,
+        respUsuario,
+        respUnidad,
+      ]);
+      eventoRetiro = eventos[0] || null;
+    }
+
+    return {
+      observacion: cerradas[0],
+      clasificacion,
+      reasignacion,
+      evento: eventoRetiro,
+      expediente_global_actualizado: false,
     };
   };
 

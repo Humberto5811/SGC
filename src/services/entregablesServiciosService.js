@@ -26,6 +26,9 @@ export const entregablesServiciosService = {
   observarEntregableDirigido(id, body) {
     return api.post(`${BASE}/${id}/observaciones-dirigidas`, body);
   },
+  retirarObservacionEntregable(id, observacionId, body) {
+    return api.post(`${BASE}/${id}/observaciones/${observacionId}/retirar`, body);
+  },
   getDetalle(id) {
     return api.get(`${BASE}/${id}`);
   },

@@ -89,6 +89,30 @@ function mapDestinatario(row) {
   };
 }
 
+export function clasificarObservacionEntregable(observacion = null) {
+  if (!observacion) return null;
+  const hasRouting = Boolean(observacion.workflow_observacion_id);
+  const hasDestino = Number(observacion.usuario_destino_id) > 0;
+  if (!hasRouting || !hasDestino) return 'LEGACY_SIN_ROUTING';
+  return 'DIRIGIDA_CANONICA';
+}
+
+export function esEmisorObservacionEntregable(observacion = null, userCtx = null) {
+  if (!observacion || !userCtx) return false;
+  const uid = Number(userCtx.id);
+  if (Number(observacion.usuario_origen_id) === uid) return true;
+  const observado = String(observacion.observado_por || '').trim().toLowerCase();
+  if (!observado) return false;
+  const aliases = [
+    userCtx.nombre,
+    userCtx.username,
+    userCtx.username && String(userCtx.username).includes('@')
+      ? String(userCtx.username).split('@')[0]
+      : null,
+  ].filter(Boolean).map((value) => String(value).trim().toLowerCase());
+  return aliases.includes(observado);
+}
+
 /** Lista únicamente usuarios activos con acceso efectivo al submódulo destino. */
 export async function listarDestinatariosObservacion({
   submoduloDestino,
@@ -420,6 +444,8 @@ export async function registrarRoutingObservacionEntregable({
 
 export default {
   CATALOGO_DESTINOS_OBSERVACION,
+  clasificarObservacionEntregable,
+  esEmisorObservacionEntregable,
   obtenerDestinoObservacion,
   listarDestinatariosObservacion,
   validarDestinatarioObservacion,

@@ -11,6 +11,7 @@ import {
   modificarRecepcionEntregable,
   observarEntregable,
   observarEntregableDirigido,
+  retirarObservacionEntregable,
   subsanarEntregable,
   listarCoordinadoresCMEntregable,
   derivarEntregableCoordinadorCM,
@@ -220,6 +221,19 @@ router.post('/:id/observaciones-dirigidas', async (req, res, next) => {
       req.esUsuario,
     );
     res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/observaciones/:observacionId/retirar', async (req, res, next) => {
+  try {
+    const data = await retirarObservacionEntregable(
+      req.params.id,
+      req.params.observacionId,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 

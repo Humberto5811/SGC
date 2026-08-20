@@ -101,12 +101,19 @@ export function entregableMenuItems(row) {
     }
     return items;
   }
-  if (row.solo_lectura_routing_origen) {
-    if (row.puede_ver_observacion_dirigida) {
+  if (row.solo_lectura_legacy_emisor || row.solo_lectura_routing_origen) {
+    if (row.puede_ver_observacion_abierta || row.puede_ver_observacion_dirigida) {
       items.push({
         act: 'verObservacionDirigida',
         label: 'Ver observación',
         icon: 'bi-exclamation-triangle',
+      });
+    }
+    if (row.puede_retirar_observacion) {
+      items.push({
+        act: 'retirarObservacion',
+        label: 'Retirar observación',
+        icon: 'bi-x-circle',
       });
     }
     if (row.puede_ver_trazabilidad) {
@@ -317,6 +324,7 @@ function buildActMap() {
     registrarRecepcion: (id) => openRegistrarRecepcion(id),
     observarEntregable: (id) => openObservarEntregable(id),
     verObservacionDirigida: (id) => openVerObservacionDirigida(id),
+    retirarObservacion: (id) => openRetirarObservacion(id),
     subsanarEntregable: (id) => openSubsanarEntregable(id),
     generarActa: (id) => openGenerarActa(id),
     adjuntarActaFirmada: (id) => openAdjuntarActaFirmada(id),
@@ -446,6 +454,31 @@ function render() {
           <div class="modal-footer">
             <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
             <button type="submit" class="btn btn-sm btn-warning" id="${PREFIX}ObservarBtn">Registrar observación</button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+
+    <div class="modal fade" id="${PREFIX}RetirarObsModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog"><div class="modal-content">
+        <form id="${PREFIX}RetirarObsForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-x-circle"></i> Retirar observación</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}RetirarEntregableId">
+            <input type="hidden" id="${PREFIX}RetirarObservacionId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}RetirarResumen"></div>
+            <div class="mb-2">
+              <label class="form-label small mb-1" for="${PREFIX}RetirarMotivo">Motivo del retiro <span class="text-danger">*</span></label>
+              <textarea class="form-control form-control-sm" id="${PREFIX}RetirarMotivo" rows="3" required></textarea>
+            </div>
+            <div id="${PREFIX}RetirarErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-sm btn-danger" id="${PREFIX}RetirarBtn">Retirar observación</button>
           </div>
         </form>
       </div></div>
@@ -785,6 +818,55 @@ function openVerObservacionDirigida(id) {
   const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
   modalEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
   modal.show();
+}
+
+function openRetirarObservacion(id) {
+  const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(id));
+  const obs = row?.observacion_abierta;
+  if (!obs?.id) {
+    window.alert('No hay observación abierta para retirar.');
+    return;
+  }
+  const errBox = document.getElementById(`${PREFIX}RetirarErr`);
+  errBox?.classList.add('d-none');
+  document.getElementById(`${PREFIX}RetirarMotivo`).value = '';
+  document.getElementById(`${PREFIX}RetirarEntregableId`).value = id;
+  document.getElementById(`${PREFIX}RetirarObservacionId`).value = obs.id;
+  document.getElementById(`${PREFIX}RetirarResumen`).innerHTML = `
+    <div><strong>Orden:</strong> ${esc(ordenLabel(row || {}))}</div>
+    <div><strong>Entregable:</strong> N.° ${esc(row?.numero_entrega ?? '—')}</div>
+    <div><strong>Clase:</strong> ${esc(row?.observacion_clase || '—')}</div>
+    <div class="mt-2"><strong>Motivo original:</strong><br>${esc(obs.motivo || '—')}</div>`;
+  window.bootstrap.Modal.getOrCreateInstance(document.getElementById(`${PREFIX}RetirarObsModal`)).show();
+}
+
+async function submitRetirarObservacion(e) {
+  e.preventDefault();
+  const id = document.getElementById(`${PREFIX}RetirarEntregableId`).value;
+  const observacionId = document.getElementById(`${PREFIX}RetirarObservacionId`).value;
+  const motivo = document.getElementById(`${PREFIX}RetirarMotivo`).value.trim();
+  const errBox = document.getElementById(`${PREFIX}RetirarErr`);
+  if (!motivo) {
+    if (errBox) {
+      errBox.textContent = 'El motivo del retiro es obligatorio.';
+      errBox.classList.remove('d-none');
+    }
+    return;
+  }
+  const submitBtn = document.getElementById(`${PREFIX}RetirarBtn`);
+  try {
+    if (submitBtn) submitBtn.disabled = true;
+    await entregablesServiciosService.retirarObservacionEntregable(id, observacionId, { motivo });
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}RetirarObsModal`))?.hide();
+    await load();
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo retirar la observación';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
 }
 
 async function openObservarEntregable(id) {
@@ -1665,6 +1747,7 @@ export function initPresentacionEntregableView() {
       }
     });
   });
+  document.getElementById(`${PREFIX}RetirarObsForm`)?.addEventListener('submit', submitRetirarObservacion);
   document.getElementById(`${PREFIX}SubsanarForm`)?.addEventListener('submit', submitSubsanarEntregable);
   document.getElementById(`${PREFIX}DerivarForm`)?.addEventListener('submit', submitDerivarCoordinadorCM);
   document.getElementById(`${PREFIX}DerivarResponsable`)?.addEventListener('change', (event) => {
