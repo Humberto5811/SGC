@@ -53,8 +53,8 @@ const dataConforme = {
   assert.match(raw, /MediaBox \[0 0 595/);
   ok('1. Genera PDF A4 válido');
 
-  assert.match(raw, /ACTA DE CONFORMIDAD DE SERVICIOS/);
-  ok('2. Título correcto de Servicios');
+  assert.match(raw, /ACTA DE CONFORMIDAD DE SERVICIO/);
+  ok('2. Título correcto de Servicio (modelo V1)');
 
   assert.doesNotMatch(raw, /ACTA DE RECEPCION Y CONFORMIDAD DE BIENES/);
   ok('3. No contiene título de Bienes');
@@ -65,28 +65,26 @@ const dataConforme = {
   assert.match(raw, /SERVICIOS GENERALES/);
   ok('5. Incluye proveedor');
 
-  assert.equal(pdf.fields.numero_entrega, 2);
+  assert.equal(pdf.fields.numero_entrega, '2');
   assert.match(raw, /ENTREGABLE/);
   ok('6. Incluye N.° entregable');
 
-  assert.match(raw, /MESA DE PARTES/);
   assert.match(raw, /25\/08\/2026/);
-  ok('7. Incluye fecha recepción Mesa de Partes');
+  ok('7. Incluye fecha recepción (culminación)');
 
-  assert.match(raw, /SGD-2026-12345/);
-  ok('8. Incluye expediente SGD');
+  assert.match(pdf.html, /SGD-2026-12345/);
+  ok('8. Incluye expediente SGD en metadata secundaria');
 
   assert.match(raw, /500\.00/);
-  assert.match(raw, /IMPORTE DEL ENTREGABLE/);
+  assert.match(raw, /MONTO A PAGAR/);
   ok('9. Incluye importe');
 
   assert.match(raw, /Maria Torres/);
-  assert.match(raw, /CONCLUSION/);
-  assert.match(raw, /cumplir lo requerido/);
-  ok('10. Incluye responsable y conclusión cuando se proporcionan');
+  assert.match(raw, /Responsable del Area Usuaria|Responsable del Área Usuaria/);
+  ok('10. Incluye responsable AU en bloque de firma');
 
-  assert.equal(ACTA_CONFORMIDAD_SERVICIOS_TITULO, 'ACTA DE CONFORMIDAD DE SERVICIOS');
-  ok('11. Constante de título de Servicios');
+  assert.equal(ACTA_CONFORMIDAD_SERVICIOS_TITULO, 'ACTA DE CONFORMIDAD DE SERVICIO');
+  ok('11. Constante de título de Servicio V1');
 }
 
 {
@@ -99,16 +97,15 @@ const dataConforme = {
     importe_entregable: 100,
   };
   const pdf = generateActaConformidadServiciosPdfServer(dataMinima);
-  assert.equal(pdf.fields.tiene_responsable, false);
-  assert.equal(pdf.fields.tiene_conclusion, false);
+  assert.equal(pdf.fields.firma_au.nombres, '');
   const raw = Buffer.from(pdf.base64, 'base64').toString('latin1');
-  assert.doesNotMatch(raw, /CONCLUSION/);
-  ok('12. Sin responsable/conclusión no los renderiza');
+  assert.doesNotMatch(raw, /Maria Torres/);
+  ok('12. Sin responsable no imprime nombre en firma AU');
 }
 
 {
   const pdf = generateActaConformidadServiciosPdfServer(dataConforme);
-  assert.match(pdf.html, /ACTA DE CONFORMIDAD DE SERVICIOS/);
+  assert.match(pdf.html, /ACTA DE CONFORMIDAD DE SERVICIO/);
   assert.doesNotMatch(pdf.html, /ACTA DE RECEPCIÓN Y CONFORMIDAD DE BIENES/);
   assert.match(pdf.nombre, /^ACTA-CS-1105-E2-V1\.pdf$/);
   ok('13. HTML de vista previa y nombre de archivo coherentes');

@@ -1,41 +1,31 @@
 /**
- * Generador server-side del Acta de Conformidad de Servicios (PDF 1.4).
- * RC8.15.5B — Presentación de Entregables de Servicios / Locación (OS).
+ * Generador server-side del Acta de Conformidad de Servicio (PDF 1.4).
+ * RC8.15.7A — Modelo institucional V1 (Anexo N.° 18).
  *
- * Reutiliza la infraestructura PDF de Recepción de Bienes:
- *   - PdfFormBuilder / assemblePdf / loadActaLogoDataUrl (recepcionActaPdfServer.js)
- *   - formatCalendarDdMmYyyy (shared/calendarDate.js)
- *   - splitFechaParts (shared/actaRecepcionBienesTemplate.js)
- *
- * Es específico para SERVICIOS:
- *   - Título: ACTA DE CONFORMIDAD DE SERVICIOS.
- *   - NO usa textos de recepción física de bienes.
- *   - NO reutiliza "ACTA DE RECEPCIÓN Y CONFORMIDAD DE BIENES".
- *
- * Contrato de separación: backend arma el objeto de datos → este generador recibe
- * datos → genera PDF. NO consulta BD directamente.
+ * Contrato: backend arma datos → generador renderiza. Sin SQL directo.
  */
 import { formatCalendarDdMmYyyy } from '../../shared/calendarDate.js';
-import { splitFechaParts } from '../../shared/actaRecepcionBienesTemplate.js';
+import {
+  ACTA_ANEXO_NUMERO,
+  ACTA_ENCABEZADO_DEFAULT,
+  ACTA_PENALIDAD_GLOSA,
+  splitFechaParts,
+} from '../../shared/actaRecepcionBienesTemplate.js';
 import {
   PdfFormBuilder,
   assemblePdf,
+  decodeActaLogoImage,
   loadActaLogoDataUrl,
 } from './recepcionActaPdfServer.js';
 
-export const ACTA_CONFORMIDAD_SERVICIOS_TITULO = 'ACTA DE CONFORMIDAD DE SERVICIOS';
+export const ACTA_CONFORMIDAD_SERVICIOS_TITULO = 'ACTA DE CONFORMIDAD DE SERVICIO';
 
-export const ACTA_CONFORMIDAD_SERVICIOS_TEXTO = 'Por medio de la presente, el Área Usuaria '
-  + 'deja constancia de la conformidad del servicio/locación prestado, verificando que el '
-  + 'entregable presentado cumple con los términos de referencia, especificaciones técnicas '
-  + 'y condiciones contractuales acordadas.';
-
-export const ACTA_CONFORMIDAD_SERVICIOS_ENCABEZADO = {
-  linea1: 'CONTRATACIÓN DE BIENES Y SERVICIOS IGUALES O INFERIORES A OCHO (8)',
-  linea2: 'UNIDADES IMPOSITIVAS TRIBUTARIAS – UIT EN EL INSTITUTO NACIONAL DE SALUD',
-};
+export const ACTA_CONFORMIDAD_SERVICIOS_TEXTO = 'Por medio del presente, los que suscriben, dan CONFORMIDAD '
+  + 'al servicio prestado, verificando que cumple con los términos de referencia, '
+  + 'especificaciones técnicas y condiciones contractuales acordadas.';
 
 const NO_DISPONIBLE = '—';
+const VACIO = '';
 
 function pick(...vals) {
   for (const v of vals) {
@@ -51,7 +41,9 @@ function fmtMonto(n, moneda = 'PEN') {
 }
 
 function fmtFecha(iso) {
-  return formatCalendarDdMmYyyy(iso);
+  if (!iso) return VACIO;
+  const f = formatCalendarDdMmYyyy(iso);
+  return f && f !== '—' ? f : VACIO;
 }
 
 function esc(v) {
@@ -62,80 +54,152 @@ function esc(v) {
     .replace(/"/g, '&quot;');
 }
 
+function buildEncabezadoLinea2(institucion = {}) {
+  if (institucion.encabezado_linea2) return institucion.encabezado_linea2;
+  if (institucion.nombre) {
+    return `UNIDADES IMPOSITIVAS TRIBUTARIAS – UIT EN ${String(institucion.nombre).toUpperCase()}`;
+  }
+  return ACTA_ENCABEZADO_DEFAULT.linea2;
+}
+
 /**
- * Normaliza el objeto de datos (ya construido por el backend) a los campos de la ficha.
- * Acepta forma plana (numero_orden, proveedor_ruc, ...) o anidada (orden/proveedor/...).
+ * Normaliza el objeto de datos (backend) a campos del modelo V1.
  */
 export function resolveActaConformidadServiciosFields(data = {}, opts = {}) {
+  const institucion = data.institucion || {};
   const orden = data.orden || {};
   const proveedor = data.proveedor || {};
   const entregable = data.entregable || {};
   const recepcion = data.recepcion || {};
+  const contrato = data.contrato || {};
+  const firmaAu = data.firma_au || {};
+  const firmaDirector = data.firma_director || {};
 
   const numeroOrden = pick(data.numero_orden, orden.numero_orden, orden.numero, data.orden_numero);
   const fechaOrdenRaw = pick(data.fecha_orden, orden.fecha_orden, orden.fecha, orden.fecha_emision);
-  const requerimiento = pick(data.requerimiento, data.requerimiento_codigo, data.codigo_requerimiento);
   const razonSocial = pick(data.proveedor, data.proveedor_razon_social, proveedor.razon_social, proveedor.nombre);
   const ruc = pick(data.ruc, data.proveedor_ruc, proveedor.ruc);
-  const centro = pick(data.centro, data.centro_costo, data.centroCosto);
-  const areaUsuaria = pick(data.area_usuaria, data.area, data.areaUsuaria);
-  const objetoServicio = pick(data.objeto_servicio, data.objeto, data.descripcion_servicio, data.descripcion);
   const numeroEntrega = pick(data.numero_entrega, entregable.numero_entrega, entregable.numero);
-  const denominacion = pick(data.denominacion, entregable.denominacion, entregable.etiqueta_entrega, entregable.descripcion);
-  const plazo = pick(data.plazo, entregable.plazo, data.plazo_entrega);
-  const fechaMaximaRaw = pick(data.fecha_maxima, entregable.fecha_maxima);
-  const fechaRecepcionRaw = pick(data.fecha_recepcion_mesa_partes, data.fecha_recepcion, recepcion.fecha_recepcion_mesa_partes);
-  const expedienteSgd = pick(data.numero_expediente_sgd, data.expediente_sgd, recepcion.numero_expediente_sgd);
-  const cantidad = pick(data.cantidad, entregable.cantidad);
-  const precioUnitario = pick(data.precio_unitario, entregable.precio_unitario);
+  const servicioPrestado = pick(
+    data.servicio_prestado,
+    data.denominacion,
+    entregable.denominacion,
+    entregable.etiqueta_entrega,
+    entregable.descripcion,
+    data.objeto_servicio,
+  );
   const importeEntregable = pick(data.importe_entregable, data.importe, entregable.importe);
-  const responsable = pick(data.responsable, recepcion.responsable);
+  const montoTotal = pick(data.monto_total, orden.monto_total, data.monto_total_orden);
+  const fechaInicioRaw = pick(data.fecha_inicio, entregable.fecha_base, data.fecha_base);
+  const fechaMaximaRaw = pick(data.fecha_maxima, entregable.fecha_maxima);
+  const fechaRecepcionRaw = pick(
+    data.fecha_recepcion_mesa_partes,
+    data.fecha_recepcion,
+    data.fecha_culminacion,
+    recepcion.fecha_recepcion_mesa_partes,
+  );
+  const expedienteSgd = pick(data.numero_expediente_sgd, data.expediente_sgd, recepcion.numero_expediente_sgd);
+  const requerimiento = pick(data.requerimiento, data.requerimiento_codigo, data.codigo_requerimiento);
+  const comprobantePago = pick(data.comprobante_pago, data.numero_comprobante_pago);
+  const informeProductos = pick(data.informe_productos, data.numero_informe_productos);
+  const folios = pick(data.folios, data.numero_folios);
   const fechaEmisionRaw = pick(data.fecha_emision, data.fecha_emision_acta, data.fecha_conformidad);
-  const conclusion = pick(data.conclusion, data.conclusion_conformidad);
-
-  const moneda = pick(data.moneda) || 'PEN';
+  const penalidadRaw = data.corresponde_penalidad;
+  const moneda = pick(data.moneda, orden.moneda) || 'PEN';
   const version = Number(pick(data.version, opts.version)) || 1;
   const numeroActa = pick(
-    data.numero_acta, opts.numeroActa,
+    data.numero_acta,
+    opts.numeroActa,
     `ACTA-CS-${numeroOrden || 'OS'}-E${numeroEntrega ?? 'X'}-V${version}`,
   );
 
-  const fechaOrden = fmtFecha(fechaOrdenRaw);
-  const ordenParts = splitFechaParts(fechaOrden);
+  const ordenParts = splitFechaParts(fmtFecha(fechaOrdenRaw));
+  const contratoNumero = pick(contrato.numero, data.numero_contrato, orden.numero_contrato);
+  const contratoFechaRaw = pick(contrato.fecha, data.fecha_contrato, orden.fecha_contrato);
+  const contratoParts = splitFechaParts(fmtFecha(contratoFechaRaw));
+  const tieneContrato = Boolean(contratoNumero && String(contratoNumero).trim());
+
+  let penalidad = VACIO;
+  if (penalidadRaw != null && String(penalidadRaw).trim() !== '') {
+    const p = String(penalidadRaw).trim().toUpperCase();
+    penalidad = (p === 'SI' || p === 'SÍ' || p.includes('SÍ')) ? 'SÍ' : (p === 'NO' ? 'NO' : VACIO);
+  }
+
+  const logoDataUrl = opts.logoDataUrl || data.logo_data_url || institucion.logo_data_url || '';
 
   return {
     encabezado: {
-      linea1: opts.encabezadoLinea1 || data.encabezado_linea1 || ACTA_CONFORMIDAD_SERVICIOS_ENCABEZADO.linea1,
-      linea2: opts.encabezadoLinea2 || data.encabezado_linea2 || ACTA_CONFORMIDAD_SERVICIOS_ENCABEZADO.linea2,
+      linea1: opts.encabezadoLinea1 || institucion.encabezado_linea1 || ACTA_ENCABEZADO_DEFAULT.linea1,
+      linea2: buildEncabezadoLinea2(institucion),
+    },
+    institucion: {
+      nombre: institucion.nombre || VACIO,
+      siglas: institucion.siglas || VACIO,
     },
     titulo: opts.titulo || data.titulo || ACTA_CONFORMIDAD_SERVICIOS_TITULO,
+    anexo: opts.anexoNumero || data.anexo_numero || ACTA_ANEXO_NUMERO,
     numero_acta: numeroActa,
     version,
     texto_declarativo: opts.textoDeclarativo || ACTA_CONFORMIDAD_SERVICIOS_TEXTO,
-    orden: { numero: numeroOrden || NO_DISPONIBLE, fecha: fechaOrden, ...ordenParts },
-    requerimiento: requerimiento || NO_DISPONIBLE,
-    proveedor: razonSocial || NO_DISPONIBLE,
+    glosa_penalidad: ACTA_PENALIDAD_GLOSA,
+    contrato: {
+      numero: tieneContrato ? contratoNumero : VACIO,
+      dia: tieneContrato ? contratoParts.dia : VACIO,
+      mes: tieneContrato ? contratoParts.mes : VACIO,
+      anio: tieneContrato ? contratoParts.anio : VACIO,
+      tiene: tieneContrato,
+    },
+    orden: {
+      numero: numeroOrden || VACIO,
+      ...ordenParts,
+    },
+    monto_total: montoTotal != null && montoTotal !== '' ? fmtMonto(montoTotal, moneda) : VACIO,
+    proveedor: razonSocial || VACIO,
     proveedor_ruc: ruc || '',
-    centro: centro || NO_DISPONIBLE,
-    area_usuaria: areaUsuaria || NO_DISPONIBLE,
-    objeto_servicio: objetoServicio || NO_DISPONIBLE,
-    numero_entrega: numeroEntrega != null && numeroEntrega !== '' ? numeroEntrega : NO_DISPONIBLE,
-    denominacion: denominacion || NO_DISPONIBLE,
-    plazo: plazo || NO_DISPONIBLE,
-    fecha_maxima: fmtFecha(fechaMaximaRaw),
-    fecha_recepcion: fmtFecha(fechaRecepcionRaw),
-    expediente_sgd: expedienteSgd || NO_DISPONIBLE,
-    cantidad: cantidad != null && cantidad !== '' ? cantidad : NO_DISPONIBLE,
-    precio_unitario: precioUnitario != null && precioUnitario !== '' ? fmtMonto(precioUnitario, moneda) : NO_DISPONIBLE,
-    importe_entregable: importeEntregable != null && importeEntregable !== '' ? fmtMonto(importeEntregable, moneda) : NO_DISPONIBLE,
-    responsable: responsable || NO_DISPONIBLE,
+    servicio_prestado: servicioPrestado || VACIO,
+    monto_pagar: importeEntregable != null && importeEntregable !== '' ? fmtMonto(importeEntregable, moneda) : VACIO,
+    comprobante_pago: comprobantePago || VACIO,
+    informe_productos: informeProductos || VACIO,
+    numero_entrega: numeroEntrega != null && numeroEntrega !== '' ? String(numeroEntrega) : VACIO,
+    folios: folios || VACIO,
+    fecha_inicio: fmtFecha(fechaInicioRaw),
+    fecha_limite: fmtFecha(fechaMaximaRaw),
+    fecha_culminacion: fmtFecha(fechaRecepcionRaw),
+    penalidad,
+    penalidad_pendiente: !penalidad,
     fecha_emision: fmtFecha(fechaEmisionRaw),
-    conclusion: conclusion || '',
-    tiene_responsable: !!responsable,
-    tiene_conclusion: !!conclusion,
+    meta_secundaria: [
+      requerimiento ? `Requerimiento: ${requerimiento}` : '',
+      expedienteSgd ? `Expediente SGD: ${expedienteSgd}` : '',
+    ].filter(Boolean).join(' | '),
+    firma_au: {
+      nombres: firmaAu.nombres || pick(data.responsable, recepcion.responsable) || VACIO,
+      cargo: firmaAu.cargo || 'Responsable del Área Usuaria',
+      unidad: firmaAu.unidad || pick(data.area_usuaria, data.area) || VACIO,
+    },
+    firma_director: {
+      nombres: firmaDirector.nombres || VACIO,
+      cargo: firmaDirector.cargo || 'Director/Jefe del Centro',
+      unidad: firmaDirector.unidad || pick(data.centro, data.centro_costo) || VACIO,
+      pendiente: firmaDirector.pendiente !== false && !firmaDirector.nombres,
+    },
+    logoDataUrl,
     moneda,
-    logoDataUrl: opts.logoDataUrl || data.logo_data_url || '',
   };
+}
+
+function drawTitleBox(b, margin, y, contentW, fields) {
+  const boxH = 48;
+  b.rect(margin, y, contentW, boxH);
+  const logoW = 56;
+  b.line(margin + logoW, y, margin + logoW, y + boxH);
+  if (fields.logoDataUrl) {
+    b.image('Im1', margin + 4, y + 4, logoW - 8, boxH - 8);
+  }
+  b.text(fields.titulo, margin + logoW + (contentW - logoW) / 2, y + 22, {
+    size: 10, bold: true, align: 'center', maxW: contentW - logoW - 12,
+  });
+  return y + boxH + 8;
 }
 
 function buildActaConformidadServiciosStream(fields) {
@@ -149,92 +213,137 @@ function buildActaConformidadServiciosStream(fields) {
   y += b.text(fields.encabezado.linea2, b.pageW / 2, y, { size: 8, bold: true, align: 'center', maxW: contentW });
   y += 6;
 
-  const boxH = 48;
-  b.rect(margin, y, contentW, boxH);
-  const logoW = 56;
-  b.line(margin + logoW, y, margin + logoW, y + boxH);
-  b.text('LOGO', margin + logoW / 2, y + 28, { size: 7, align: 'center' });
-  b.text(fields.titulo, margin + logoW + (contentW - logoW) / 2, y + 22, {
-    size: 10, bold: true, align: 'center', maxW: contentW - logoW - 12,
-  });
-  y += boxH + 8;
+  y = drawTitleBox(b, margin, y, contentW, fields);
 
+  b.text(`ANEXO N. ${fields.anexo}`, b.pageW / 2, y, { size: 10, bold: true, align: 'center' });
+  y += 12;
   b.text(`ACTA N. ${fields.numero_acta}`, b.pageW - margin, y, { size: 7, align: 'right' });
   y += 10;
   y += b.text(fields.texto_declarativo, margin, y, { size: 8, bold: true, maxW: contentW });
   y += 8;
 
-  // Bloque ORDEN DE SERVICIO (N.° + día/mes/año).
-  {
+  const half = (contentW - 10) / 2;
+  const drawMini = (x, title, num, dia, mes, anio) => {
     const rowH = 13;
     const h = rowH * 3;
-    const colW = contentW / 4;
-    b.rect(margin, y, contentW, h);
-    b.line(margin, y + rowH, margin + contentW, y + rowH);
-    b.line(margin, y + rowH * 2, margin + contentW, y + rowH * 2);
-    for (let i = 1; i < 4; i += 1) b.line(margin + colW * i, y + rowH, margin + colW * i, y + h);
-    b.text('ORDEN DE SERVICIO', margin + contentW / 2, y + 10, { size: 8, bold: true, align: 'center' });
+    b.rect(x, y, half, h);
+    b.line(x, y + rowH, x + half, y + rowH);
+    b.line(x, y + rowH * 2, x + half, y + rowH * 2);
+    const colW = half / 4;
+    for (let i = 1; i < 4; i += 1) b.line(x + colW * i, y + rowH, x + colW * i, y + h);
+    b.text(title, x + half / 2, y + 10, { size: 8, bold: true, align: 'center' });
     ['N.', 'DIA', 'MES', 'ANO'].forEach((lab, i) => {
-      b.text(lab, margin + colW * i + colW / 2, y + rowH + 10, { size: 7, bold: true, align: 'center' });
+      b.text(lab, x + colW * i + colW / 2, y + rowH + 10, { size: 7, bold: true, align: 'center' });
     });
-    [fields.orden.numero, fields.orden.dia, fields.orden.mes, fields.orden.anio].forEach((v, i) => {
-      b.text(String(v ?? '-'), margin + colW * i + colW / 2, y + rowH * 2 + 10, { size: 8, align: 'center' });
+    [num || VACIO, dia || VACIO, mes || VACIO, anio || VACIO].forEach((v, i) => {
+      b.text(String(v || ''), x + colW * i + colW / 2, y + rowH * 2 + 10, { size: 8, align: 'center' });
     });
-    y += h + 8;
-  }
+  };
+  drawMini(margin, 'CONTRATO', fields.contrato.numero, fields.contrato.dia, fields.contrato.mes, fields.contrato.anio);
+  drawMini(margin + half + 10, 'O/S', fields.orden.numero, fields.orden.dia, fields.orden.mes, fields.orden.anio);
+  y += 46;
 
-  const simpleRow = (lab, val, h = 16) => {
-    const labW = contentW * 0.42;
+  const simpleRow = (lab, val, minH = 16) => {
+    const labW = contentW * 0.38;
+    const valW = contentW - labW - 10;
+    const textH = b.measureText(String(val || VACIO), { size: 8, maxW: valW });
+    const h = Math.max(minH, textH + 8);
     b.rect(margin, y, contentW, h);
     b.line(margin + labW, y, margin + labW, y + h);
-    b.text(lab, margin + labW / 2, y + h / 2 + 3, { size: 7, bold: true, align: 'center', maxW: labW - 6 });
-    b.text(String(val ?? NO_DISPONIBLE), margin + labW + 4, y + h / 2 + 3, { size: 8, maxW: contentW - labW - 10 });
+    b.text(lab, margin + labW / 2, y + h / 2 - 2, { size: 7, bold: true, align: 'center', maxW: labW - 6 });
+    b.text(String(val || VACIO), margin + labW + 4, y + 6, { size: 8, maxW: valW });
     y += h;
   };
 
-  const proveedorTexto = fields.proveedor_ruc && fields.proveedor_ruc !== NO_DISPONIBLE && fields.proveedor_ruc !== '-'
+  const proveedorTexto = fields.proveedor_ruc
     ? `${fields.proveedor} · RUC ${fields.proveedor_ruc}`
     : fields.proveedor;
-  const centroArea = [fields.centro, fields.area_usuaria]
-    .filter((x) => x && x !== NO_DISPONIBLE)
-    .join(' – ') || NO_DISPONIBLE;
 
-  simpleRow('REQUERIMIENTO', fields.requerimiento);
+  simpleRow('MONTO TOTAL (Contrato u Orden)', fields.monto_total, 18);
   simpleRow('PROVEEDOR', proveedorTexto, 18);
-  simpleRow('CENTRO / AREA USUARIA', centroArea, 18);
-  simpleRow('OBJETO / DESCRIPCION DEL SERVICIO', fields.objeto_servicio, 22);
-  simpleRow('N. ENTREGABLE', fields.numero_entrega);
-  simpleRow('DENOMINACION', fields.denominacion, 20);
-  simpleRow('PLAZO', fields.plazo);
-  simpleRow('FECHA MAXIMA', fields.fecha_maxima);
-  simpleRow('FECHA RECEPCION MESA DE PARTES', fields.fecha_recepcion);
-  simpleRow('EXPEDIENTE SGD', fields.expediente_sgd);
-  simpleRow('CANTIDAD', fields.cantidad);
-  simpleRow('PRECIO UNITARIO', fields.precio_unitario);
-  simpleRow('IMPORTE DEL ENTREGABLE', fields.importe_entregable);
+  simpleRow('SERVICIO PRESTADO', fields.servicio_prestado, 28);
 
-  if (fields.tiene_responsable) {
-    simpleRow('RESPONSABLE', fields.responsable, 18);
-  }
+  const rH = 18;
+  const c1 = contentW * 0.28;
+  const c2 = contentW * 0.22;
+  const c3 = contentW * 0.28;
+  b.rect(margin, y, contentW, rH);
+  b.line(margin + c1, y, margin + c1, y + rH);
+  b.line(margin + c1 + c2, y, margin + c1 + c2, y + rH);
+  b.line(margin + c1 + c2 + c3, y, margin + c1 + c2 + c3, y + rH);
+  b.text('MONTO A PAGAR S/', margin + c1 / 2, y + 12, { size: 7, bold: true, align: 'center' });
+  b.text(fields.monto_pagar, margin + c1 + c2 / 2, y + 12, { size: 8, bold: true, align: 'center' });
+  b.text('COMPROBANTE DE PAGO', margin + c1 + c2 + c3 / 2, y + 12, { size: 7, bold: true, align: 'center' });
+  b.text(fields.comprobante_pago, margin + c1 + c2 + c3 + 4, y + 12, { size: 8, maxW: contentW - c1 - c2 - c3 - 8 });
+  y += rH;
 
-  if (fields.tiene_conclusion) {
-    const h = 40;
-    const labW = contentW * 0.30;
+  b.rect(margin, y, contentW, rH);
+  b.line(margin + c1, y, margin + c1, y + rH);
+  b.line(margin + c1 + c2, y, margin + c1 + c2, y + rH);
+  b.line(margin + c1 + c2 + c3, y, margin + c1 + c2 + c3, y + rH);
+  b.text('N. DE INFORME Y/O PRODUCTOS', margin + c1 / 2, y + 12, { size: 7, bold: true, align: 'center', maxW: c1 - 4 });
+  b.text(fields.informe_productos, margin + c1 + 3, y + 12, { size: 8, maxW: c2 - 4 });
+  b.text('N. ENTREGABLE', margin + c1 + c2 + c3 / 2, y + 12, { size: 7, bold: true, align: 'center' });
+  b.text(fields.numero_entrega, margin + c1 + c2 + c3 + (contentW - c1 - c2 - c3) / 2, y + 12, {
+    size: 9, bold: true, align: 'center',
+  });
+  y += rH;
+  simpleRow('N. DE FOLIOS', fields.folios, 14);
+
+  const dateRow = (lab, val) => {
+    const labW = contentW * 0.55;
+    const h = 18;
     b.rect(margin, y, contentW, h);
     b.line(margin + labW, y, margin + labW, y + h);
-    b.text('CONCLUSION', margin + labW / 2, y + 16, { size: 7, bold: true, align: 'center', maxW: labW - 6 });
-    b.text(fields.conclusion, margin + labW + 4, y + 12, { size: 7.5, maxW: contentW - labW - 10 });
-    y += h + 8;
+    b.text(lab, margin + labW / 2, y + 11, { size: 6.5, bold: true, align: 'center', maxW: labW - 6 });
+    b.text(val || VACIO, margin + labW + (contentW - labW) / 2, y + 11, { size: 8, align: 'center' });
+    y += h;
+  };
+  dateRow('Fecha de Inicio de Plazo', fields.fecha_inicio);
+  dateRow(
+    'Fecha Limite de culminacion del servicio o fecha de Recepcion por parte de la Entidad '
+    + '(para servicios que culminen en entrega de tangibles)',
+    fields.fecha_limite,
+  );
+  dateRow(
+    'Fecha de culminacion del servicio o fecha de Recepcion por parte de la Entidad '
+    + '(para servicios que culminen en entrega de tangibles)',
+    fields.fecha_culminacion,
+  );
+
+  const penH = 40;
+  const labW = contentW * 0.45;
+  b.rect(margin, y, contentW, penH);
+  b.line(margin + labW, y, margin + labW, y + penH);
+  b.text('Corresponde aplicacion de penalidad?', margin + labW / 2, y + 12, {
+    size: 7, bold: true, align: 'center', maxW: labW - 8,
+  });
+  b.text(fields.penalidad || VACIO, margin + labW / 2, y + 28, { size: 12, bold: true, align: 'center' });
+  b.text(fields.glosa_penalidad, margin + labW + 4, y + 10, { size: 6.5, maxW: contentW - labW - 10 });
+  y += penH + 10;
+
+  if (fields.meta_secundaria) {
+    b.text(fields.meta_secundaria, margin, y, { size: 6.5, maxW: contentW });
+    y += 12;
   }
 
-  b.text(`Fecha de emisión: ${fields.fecha_emision}`, b.pageW - margin, y, { size: 9, align: 'right' });
-  y += 30;
+  b.text(`Fecha de emision: ${fields.fecha_emision}`, b.pageW - margin, y, { size: 9, align: 'right' });
+  y += 36;
 
-  b.line(margin + 80, y, b.pageW - margin - 80, y);
-  b.text(fields.responsable, b.pageW / 2, y + 12, { size: 8, bold: true, align: 'center', maxW: contentW - 40 });
-  b.text('Responsable del Área Usuaria', b.pageW / 2, y + 22, { size: 7, align: 'center', maxW: contentW - 40 });
-  b.text(fields.area_usuaria !== NO_DISPONIBLE ? fields.area_usuaria : '', b.pageW / 2, y + 32, { size: 7, align: 'center', maxW: contentW - 40 });
-  b.text('(Firma y sello)', b.pageW / 2, y + 42, { size: 7, align: 'center' });
+  const colW = contentW / 2;
+  const firma = (x, f) => {
+    b.line(x + 20, y, x + colW - 20, y);
+    if (f.nombres) {
+      b.text(f.nombres, x + colW / 2, y + 12, { size: 8, bold: true, align: 'center', maxW: colW - 24 });
+    }
+    b.text(f.cargo, x + colW / 2, y + 22, { size: 7, align: 'center', maxW: colW - 24 });
+    if (f.unidad) {
+      b.text(f.unidad, x + colW / 2, y + 32, { size: 7, align: 'center', maxW: colW - 24 });
+    }
+    b.text('(Firma y Sello)', x + colW / 2, y + 42, { size: 7, align: 'center' });
+  };
+  firma(margin, fields.firma_au);
+  firma(margin + colW, fields.firma_director);
 
   return b.buildStream();
 }
@@ -248,39 +357,45 @@ export function getActaConformidadServiciosCss() {
 .acta-cs .title-box { display:grid; grid-template-columns:22mm 1fr; border:1.2px solid #000; min-height:22mm; align-items:stretch; }
 .acta-cs .logo-cell { border-right:1.2px solid #000; display:flex; align-items:center; justify-content:center; padding:2mm; }
 .acta-cs .logo-cell img { max-width:16mm; max-height:16mm; object-fit:contain; }
-.acta-cs .logo-fallback { width:14mm; height:14mm; border:1px dashed #666; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:7px; color:#666; }
 .acta-cs .title-cell { display:flex; align-items:center; justify-content:center; text-align:center; font-weight:700; font-size:13px; text-transform:uppercase; padding:2mm 3mm; }
-.acta-cs .meta-discreta { text-align:right; font-size:8px; margin:4px 0 6px; }
+.acta-cs .anexo { text-align:center; font-weight:700; margin:4px 0 8px; font-size:11px; }
+.acta-cs .meta-discreta { text-align:right; font-size:7.5px; color:#333; margin:-4px 0 6px; }
+.acta-cs .meta-sec { font-size:7.5px; color:#333; margin:4px 0 8px; }
 .acta-cs .declarativo { font-weight:700; font-size:9.5px; text-align:justify; margin:0 0 8px; }
 .acta-cs table.blk { width:100%; border-collapse:collapse; margin:0 0 6px; }
-.acta-cs table.blk td { border:1px solid #000; padding:2mm 2.5mm; vertical-align:top; }
-.acta-cs table.blk td.label { font-weight:700; width:40%; font-size:8.5px; text-transform:uppercase; }
+.acta-cs table.blk td, .acta-cs table.blk th { border:1px solid #000; padding:2mm 2.5mm; vertical-align:top; }
+.acta-cs table.blk td.label { font-weight:700; width:38%; font-size:8.5px; text-transform:uppercase; }
+.acta-cs .pair { display:grid; grid-template-columns:1fr 1fr; gap:4mm; margin-bottom:6px; }
+.acta-cs .ctr { text-align:center; font-weight:700; }
 .acta-cs .fecha-linea { text-align:right; margin:8px 0 12px; font-size:10px; }
-.acta-cs .firma { text-align:center; min-height:30mm; padding-top:16mm; }
-.acta-cs .firma .linea { border-top:1px solid #000; margin:0 20mm 4px; }
+.acta-cs .firmas { display:grid; grid-template-columns:1fr 1fr; gap:12mm; margin-top:8px; }
+.acta-cs .firma { text-align:center; min-height:38mm; padding-top:18mm; }
+.acta-cs .firma .linea { border-top:1px solid #000; margin:0 8mm 4px; }
 .acta-cs .firma .nm { font-weight:700; font-size:9px; }
 .acta-cs .firma .sm { font-size:8.5px; }
+.acta-cs .pen-si, .acta-cs .pen-no { font-size:14px; font-weight:700; text-align:center; }
+.acta-cs .glosa { font-size:8px; text-align:justify; }
 `;
 }
 
-/**
- * HTML de vista previa — misma estructura que el PDF institucional de servicios.
- */
 export function buildActaConformidadServiciosHtml(data = {}, opts = {}) {
   const f = resolveActaConformidadServiciosFields(data, opts);
   const logo = f.logoDataUrl
     ? `<img src="${esc(f.logoDataUrl)}" alt="Logo institucional" />`
-    : '<div class="logo-fallback">LOGO</div>';
-
-  const row = (lab, val) => `<tr><td class="label">${esc(lab)}</td><td>${esc(val)}</td></tr>`;
-  const proveedorTexto = f.proveedor_ruc && f.proveedor_ruc !== NO_DISPONIBLE && f.proveedor_ruc !== '-'
+    : '';
+  const proveedorTexto = f.proveedor_ruc
     ? `${f.proveedor} · RUC ${f.proveedor_ruc}`
     : f.proveedor;
-  const centroArea = [f.centro, f.area_usuaria].filter((x) => x && x !== NO_DISPONIBLE).join(' – ') || NO_DISPONIBLE;
-  const extras = [
-    f.tiene_responsable ? row('RESPONSABLE', f.responsable) : '',
-    f.tiene_conclusion ? row('CONCLUSIÓN', f.conclusion) : '',
-  ].join('');
+  const penClass = f.penalidad === 'SÍ' ? 'pen-si' : 'pen-no';
+
+  const miniTable = (title, num, dia, mes, anio) => `
+    <table class="blk">
+      <tr><td colspan="4" class="ctr">${esc(title)}</td></tr>
+      <tr><td class="ctr">N.°</td><td class="ctr">DÍA</td><td class="ctr">MES</td><td class="ctr">AÑO</td></tr>
+      <tr><td class="ctr">${esc(num)}</td><td class="ctr">${esc(dia)}</td><td class="ctr">${esc(mes)}</td><td class="ctr">${esc(anio)}</td></tr>
+    </table>`;
+
+  const row = (lab, val) => `<tr><td class="label">${esc(lab)}</td><td>${esc(val)}</td></tr>`;
 
   return `<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"/><title>${esc(f.numero_acta)}</title>
@@ -289,46 +404,68 @@ export function buildActaConformidadServiciosHtml(data = {}, opts = {}) {
 <article class="acta-cs" data-acta="${esc(f.numero_acta)}" data-version="${esc(f.version)}">
   <div class="hdr-lines"><div>${esc(f.encabezado.linea1)}</div><div>${esc(f.encabezado.linea2)}</div></div>
   <div class="title-box"><div class="logo-cell">${logo}</div><div class="title-cell">${esc(f.titulo)}</div></div>
+  <div class="anexo">ANEXO N.° ${esc(f.anexo)}</div>
   <div class="meta-discreta">ACTA N.° ${esc(f.numero_acta)}</div>
   <p class="declarativo">${esc(f.texto_declarativo)}</p>
+  <div class="pair">${miniTable('CONTRATO', f.contrato.numero, f.contrato.dia, f.contrato.mes, f.contrato.anio)}
+    ${miniTable('O/S', f.orden.numero, f.orden.dia, f.orden.mes, f.orden.anio)}</div>
   <table class="blk">
-    ${row('ORDEN DE SERVICIO', `${f.orden.numero} · ${f.orden.fecha}`)}
-    ${row('REQUERIMIENTO', f.requerimiento)}
+    ${row('MONTO TOTAL (Contrato u Orden)', f.monto_total)}
     ${row('PROVEEDOR', proveedorTexto)}
-    ${row('CENTRO / ÁREA USUARIA', centroArea)}
-    ${row('OBJETO / DESCRIPCIÓN DEL SERVICIO', f.objeto_servicio)}
-    ${row('N.° ENTREGABLE', f.numero_entrega)}
-    ${row('DENOMINACIÓN', f.denominacion)}
-    ${row('PLAZO', f.plazo)}
-    ${row('FECHA MÁXIMA', f.fecha_maxima)}
-    ${row('FECHA RECEPCIÓN MESA DE PARTES', f.fecha_recepcion)}
-    ${row('EXPEDIENTE SGD', f.expediente_sgd)}
-    ${row('CANTIDAD', f.cantidad)}
-    ${row('PRECIO UNITARIO', f.precio_unitario)}
-    ${row('IMPORTE DEL ENTREGABLE', f.importe_entregable)}
-    ${extras}
+    ${row('SERVICIO PRESTADO', f.servicio_prestado)}
   </table>
+  <table class="blk">
+    <tr>
+      <td class="label ctr">MONTO A PAGAR S/</td><td class="ctr">${esc(f.monto_pagar)}</td>
+      <td class="label ctr">COMPROBANTE DE PAGO</td><td>${esc(f.comprobante_pago)}</td>
+    </tr>
+    <tr>
+      <td class="label ctr">N.° DE INFORME Y/O PRODUCTOS</td><td>${esc(f.informe_productos)}</td>
+      <td class="label ctr">N.° ENTREGABLE</td><td class="ctr">${esc(f.numero_entrega)}</td>
+    </tr>
+    ${row('N.° DE FOLIOS', f.folios)}
+    ${row('Fecha de Inicio de Plazo', f.fecha_inicio)}
+    ${row('Fecha Límite de culminación del servicio o fecha de Recepción por parte de la Entidad (para servicios que culminen en entrega de tangibles)', f.fecha_limite)}
+    ${row('Fecha de culminación del servicio o fecha de Recepción por parte de la Entidad (para servicios que culminen en entrega de tangibles)', f.fecha_culminacion)}
+  </table>
+  <table class="blk">
+    <tr>
+      <td class="label ctr">¿Corresponde aplicación de penalidad?</td>
+      <td class="${penClass}">${esc(f.penalidad)}</td>
+    </tr>
+    <tr><td colspan="2" class="glosa">${esc(f.glosa_penalidad)}</td></tr>
+  </table>
+  ${f.meta_secundaria ? `<div class="meta-sec">${esc(f.meta_secundaria)}</div>` : ''}
   <div class="fecha-linea">Fecha de emisión: ${esc(f.fecha_emision)}</div>
-  <div class="firma">
-    <div class="linea"></div>
-    <div class="nm">${esc(f.responsable)}</div>
-    <div class="sm">Responsable del Área Usuaria</div>
-    <div class="sm">${esc(f.area_usuaria !== NO_DISPONIBLE ? f.area_usuaria : '')}</div>
-    <div class="sm">(Firma y sello)</div>
+  <div class="firmas">
+    <div class="firma">
+      <div class="linea"></div>
+      ${f.firma_au.nombres ? `<div class="nm">${esc(f.firma_au.nombres)}</div>` : ''}
+      <div class="sm">${esc(f.firma_au.cargo)}</div>
+      <div class="sm">${esc(f.firma_au.unidad)}</div>
+      <div class="sm">(Firma y Sello)</div>
+    </div>
+    <div class="firma">
+      <div class="linea"></div>
+      ${f.firma_director.nombres ? `<div class="nm">${esc(f.firma_director.nombres)}</div>` : ''}
+      <div class="sm">${esc(f.firma_director.cargo)}</div>
+      <div class="sm">${esc(f.firma_director.unidad)}</div>
+      <div class="sm">(Firma y Sello)</div>
+    </div>
   </div>
 </article>
 </body></html>`;
 }
 
-/**
- * @returns {{ nombre: string, mime_type: string, base64: string, data: object, fields: object, html: string, version: number }}
- */
 export function generateActaConformidadServiciosPdfServer(data = {}, opts = {}) {
-  const logoDataUrl = loadActaLogoDataUrl({ logoDataUrl: data.logo_data_url || opts.logoDataUrl });
+  const logoDataUrl = loadActaLogoDataUrl({
+    logoDataUrl: data.logo_data_url || data.institucion?.logo_data_url || opts.logoDataUrl,
+  });
   const fields = resolveActaConformidadServiciosFields(data, { ...opts, logoDataUrl });
-  const html = buildActaConformidadServiciosHtml(fields);
+  const html = buildActaConformidadServiciosHtml(data, { ...opts, logoDataUrl });
   const stream = buildActaConformidadServiciosStream(fields);
-  const pdf = assemblePdf(stream);
+  const logoImage = decodeActaLogoImage(logoDataUrl);
+  const pdf = assemblePdf(stream, { images: logoImage ? [logoImage] : [] });
 
   return {
     nombre: `${fields.numero_acta}.pdf`,
@@ -340,6 +477,3 @@ export function generateActaConformidadServiciosPdfServer(data = {}, opts = {}) 
     version: fields.version,
   };
 }
-
-
-

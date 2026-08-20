@@ -18,6 +18,10 @@ import { toIsoDateString } from './diasPlazo.js';
 import { resolverCentroDesdeRequerimiento } from './recepcionBienesAlcance.js';
 import { generateActaConformidadServiciosPdfServer } from './entregableConformidadPdfServer.js';
 import {
+  ACTA_ANEXO_NUMERO,
+  ACTA_ENCABEZADO_DEFAULT,
+} from '../../shared/actaRecepcionBienesTemplate.js';
+import {
   ensureResponsablePersonaEntregable,
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
@@ -2990,17 +2994,45 @@ async function validarPrecondicionesConformidad(entrega) {
 }
 
 /**
+ * Configuración institucional para actas (entidad + logotipo activo).
+ * Fuentes: tablas entidad y logotipos (mantenimiento institucional).
+ */
+async function loadInstitucionalActaConfig(client = null) {
+  const run = client ? client.query.bind(client) : query;
+  const entidad = (await run('SELECT nombre, siglas FROM entidad ORDER BY id LIMIT 1')).rows[0] || {};
+  const logo = (await run(`
+    SELECT data_url FROM logotipos
+    WHERE UPPER(COALESCE(estado, '')) = 'ACTIVO'
+      AND NULLIF(TRIM(data_url), '') IS NOT NULL
+    ORDER BY updated_at DESC NULLS LAST, id DESC
+    LIMIT 1
+  `)).rows[0] || null;
+  const nombre = String(entidad.nombre || '').trim();
+  return {
+    nombre,
+    siglas: String(entidad.siglas || '').trim(),
+    logo_data_url: logo?.data_url || '',
+    anexo_numero: ACTA_ANEXO_NUMERO,
+    encabezado_linea1: ACTA_ENCABEZADO_DEFAULT.linea1,
+    encabezado_linea2: nombre
+      ? `UNIDADES IMPOSITIVAS TRIBUTARIAS – UIT EN ${nombre.toUpperCase()}`
+      : ACTA_ENCABEZADO_DEFAULT.linea2,
+  };
+}
+
+/**
  * PASO 1 — Armador de datos reales del acta.
  * Construye el objeto que recibe generateActaConformidadServiciosPdfServer().
  * Resuelve fuentes reales (centro, cantidad/PU/total, recepción, responsable).
  */
 export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {}) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
-  const [recepcion, responsable] = await Promise.all([
+  const [recepcion, responsable, institucion] = await Promise.all([
     opts.recepcion
       ? Promise.resolve(opts.recepcion)
       : obtenerRecepcionVigenteEntregable(ordenEntregaId),
     getResponsableConformidad(ordenEntregaId),
+    opts.institucion ? Promise.resolve(opts.institucion) : loadInstitucionalActaConfig(opts.client),
   ]);
 
   let centro = '';
@@ -3015,19 +3047,26 @@ export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {
 
   const areaUsuaria = resolveAreaUsuaria({ requerimientoArea: entrega.req_area });
   const contract = buildEntregaContract(entrega, { totalEntregas: 1 });
+  const responsableNombre = responsable?.responsable_nombre || responsable?.responsable_username || '';
 
   return {
+    institucion,
+    logo_data_url: institucion.logo_data_url || '',
+    anexo_numero: institucion.anexo_numero || ACTA_ANEXO_NUMERO,
     numero_orden: entrega.numero_orden || '',
     fecha_orden: toIsoDateString(entrega.fecha_orden) || entrega.fecha_orden || null,
+    monto_total: entrega.monto_total != null ? Number(entrega.monto_total) : null,
     requerimiento: entrega.requerimiento_codigo || '',
     proveedor: entrega.proveedor_razon_social || '',
     ruc: entrega.proveedor_ruc || '',
     centro,
     area_usuaria: areaUsuaria || entrega.req_area || '',
+    servicio_prestado: contract.etiquetaEntrega || contract.descripcionEntrega || entrega.denominacion || '',
     objeto_servicio: entrega.denominacion || contract.descripcionEntrega || '',
     numero_entrega: entrega.numero_entrega,
     denominacion: contract.etiquetaEntrega || contract.descripcionEntrega || '',
     plazo: entrega.dias_plazo ? `${Number(entrega.dias_plazo)} días` : '',
+    fecha_inicio: toIsoDateString(entrega.fecha_base) || entrega.fecha_base || null,
     fecha_maxima: toIsoDateString(entrega.fecha_maxima) || entrega.fecha_maxima || null,
     fecha_recepcion_mesa_partes: recepcion?.fecha_recepcion_mesa_partes || null,
     numero_expediente_sgd: recepcion?.numero_expediente_sgd || '',
@@ -3035,7 +3074,22 @@ export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {
     precio_unitario: entrega.precio_unitario != null ? Number(entrega.precio_unitario) : null,
     importe_entregable: entrega.importe != null ? Number(entrega.importe)
       : (entrega.precio_total != null ? Number(entrega.precio_total) : null),
-    responsable: responsable?.responsable_nombre || responsable?.responsable_username || '',
+    comprobante_pago: opts.comprobante_pago || '',
+    informe_productos: opts.informe_productos || '',
+    folios: opts.folios || '',
+    corresponde_penalidad: opts.corresponde_penalidad ?? null,
+    responsable: responsableNombre,
+    firma_au: {
+      nombres: responsableNombre,
+      cargo: 'Responsable del Área Usuaria',
+      unidad: areaUsuaria || entrega.req_area || centro || '',
+    },
+    firma_director: {
+      nombres: opts.firma_director?.nombres || '',
+      cargo: 'Director/Jefe del Centro',
+      unidad: centro || '',
+      pendiente: true,
+    },
     fecha_emision: opts.fecha_emision || new Date().toISOString().slice(0, 10),
     conclusion: opts.conclusion || '',
     moneda: entrega.moneda || 'PEN',

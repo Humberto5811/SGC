@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 import { buildActaRecepcionData } from '../../shared/recepcionActaData.js';
 import {
   buildActaRecepcionHtml,
@@ -101,6 +102,28 @@ export class PdfFormBuilder {
       this.push('BT', `${font} ${size} Tf`, `${tx.toFixed(2)} ${y.toFixed(2)} Td`, `(${t}) Tj`, 'ET');
     });
     return lines.length * (size + 2);
+  }
+
+  measureText(str, { size = 9, maxW = null } = {}) {
+    if (!maxW) return size + 2;
+    const approx = Math.max(8, Math.floor(maxW / (size * 0.5)));
+    const words = String(str ?? '').split(/\s+/);
+    let lines = 0;
+    let cur = '';
+    words.forEach((w) => {
+      const next = cur ? `${cur} ${w}` : w;
+      if (latin1(next).length > approx && cur) {
+        lines += 1;
+        cur = w;
+      } else cur = next;
+    });
+    if (cur) lines += 1;
+    return Math.max(1, lines) * (size + 2);
+  }
+
+  image(name, x, yTop, w, h) {
+    const y = this.pageH - yTop - h;
+    this.push('q', `${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm`, `/${name} Do`, 'Q');
   }
 
   buildStream() {
@@ -239,33 +262,162 @@ function buildInstitucionalStream(fields) {
   return b.buildStream();
 }
 
-export function assemblePdf(stream) {
+export function assemblePdf(stream, { images = [] } = {}) {
   const streamLen = Buffer.byteLength(stream, 'latin1');
-  const objects = [];
-  objects.push('1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n');
-  objects.push('2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n');
-  objects.push(
-    '3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] '
-    + '/Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>endobj\n',
-  );
-  objects.push(`4 0 obj<< /Length ${streamLen} >>stream\n${stream}\nendstream\nendobj\n`);
-  objects.push('5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n');
-  objects.push('6 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>endobj\n');
+  let n = 1;
+  const catalog = n++;
+  const pages = n++;
+  const page = n++;
+  const contents = n++;
+  const font1 = n++;
+  const font2 = n++;
+  const imageSlots = images.map((img) => ({ num: n++, img }));
+
+  const xobjDict = imageSlots.length
+    ? `/XObject << ${imageSlots.map((slot, idx) => `/Im${idx + 1} ${slot.num} 0 R`).join(' ')} >>`
+    : '';
+
+  const chunks = [];
+  chunks.push(`${catalog} 0 obj<< /Type /Catalog /Pages ${pages} 0 R >>endobj\n`);
+  chunks.push(`${pages} 0 obj<< /Type /Pages /Kids [${page} 0 R] /Count 1 >>endobj\n`);
+  chunks.push(`${page} 0 obj<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 595.28 841.89] `
+    + `/Contents ${contents} 0 R /Resources << /Font << /F1 ${font1} 0 R /F2 ${font2} 0 R >> ${xobjDict} >> >>endobj\n`);
+  chunks.push(`${contents} 0 obj<< /Length ${streamLen} >>stream\n${stream}\nendstream\nendobj\n`);
+  chunks.push(`${font1} 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n`);
+  chunks.push(`${font2} 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>endobj\n`);
+
+  imageSlots.forEach(({ num, img }) => {
+    if (img.jpeg) {
+      chunks.push(`${num} 0 obj<< /Type /XObject /Subtype /Image /Width ${img.width} /Height ${img.height} `
+        + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.jpeg.length} >>stream\n`);
+      chunks.push(img.jpeg.toString('binary'));
+      chunks.push('\nendstream\nendobj\n');
+    } else if (img.rgb) {
+      const deflated = zlib.deflateSync(img.rgb);
+      chunks.push(`${num} 0 obj<< /Type /XObject /Subtype /Image /Width ${img.width} /Height ${img.height} `
+        + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${deflated.length} >>stream\n`);
+      chunks.push(deflated.toString('binary'));
+      chunks.push('\nendstream\nendobj\n');
+    }
+  });
 
   let pdf = '%PDF-1.4\n';
   const offsets = [0];
-  for (const obj of objects) {
+  for (const chunk of chunks) {
     offsets.push(Buffer.byteLength(pdf, 'latin1'));
-    pdf += obj;
+    pdf += chunk;
   }
   const xrefPos = Buffer.byteLength(pdf, 'latin1');
-  pdf += `xref\n0 ${objects.length + 1}\n`;
+  const total = offsets.length;
+  pdf += `xref\n0 ${total}\n`;
   pdf += '0000000000 65535 f \n';
-  for (let i = 1; i <= objects.length; i += 1) {
+  for (let i = 1; i < total; i += 1) {
     pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
   }
-  pdf += `trailer<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+  pdf += `trailer<< /Size ${total} /Root ${catalog} 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
   return pdf;
+}
+
+function jpegDimensions(buffer) {
+  let i = 2;
+  while (i + 9 < buffer.length) {
+    if (buffer[i] !== 0xff) break;
+    const marker = buffer[i + 1];
+    if (marker === 0xc0 || marker === 0xc2 || marker === 0xc1) {
+      return {
+        height: buffer.readUInt16BE(i + 5),
+        width: buffer.readUInt16BE(i + 7),
+      };
+    }
+    const len = buffer.readUInt16BE(i + 2);
+    i += 2 + len;
+  }
+  return { width: 89, height: 88 };
+}
+
+function paeth(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
+function decodePngToRgb(buffer) {
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (!buffer.subarray(0, 8).equals(sig)) return null;
+  let off = 8;
+  let width = 0;
+  let height = 0;
+  let colorType = 6;
+  const idats = [];
+  while (off + 8 <= buffer.length) {
+    const len = buffer.readUInt32BE(off);
+    const type = buffer.toString('ascii', off + 4, off + 8);
+    const data = buffer.subarray(off + 8, off + 8 + len);
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      colorType = data[9];
+    } else if (type === 'IDAT') idats.push(data);
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  const bpp = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (!width || !height || !bpp) return null;
+  const inflated = zlib.inflateSync(Buffer.concat(idats));
+  const rgb = Buffer.alloc(width * height * 3);
+  let prev = Buffer.alloc(width * bpp);
+  let inIdx = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = inflated[inIdx++];
+    const row = Buffer.from(inflated.subarray(inIdx, inIdx + width * bpp));
+    inIdx += width * bpp;
+    if (filter === 1) {
+      for (let i = bpp; i < row.length; i += 1) row[i] = (row[i] + row[i - bpp]) & 0xff;
+    } else if (filter === 2) {
+      for (let i = 0; i < row.length; i += 1) row[i] = (row[i] + prev[i]) & 0xff;
+    } else if (filter === 3) {
+      for (let i = 0; i < row.length; i += 1) {
+        const left = i >= bpp ? row[i - bpp] : 0;
+        row[i] = (row[i] + Math.floor((prev[i] + left) / 2)) & 0xff;
+      }
+    } else if (filter === 4) {
+      for (let i = 0; i < row.length; i += 1) {
+        const left = i >= bpp ? row[i - bpp] : 0;
+        const up = prev[i];
+        const upLeft = i >= bpp ? prev[i - bpp] : 0;
+        row[i] = (row[i] + paeth(left, up, upLeft)) & 0xff;
+      }
+    }
+    for (let x = 0; x < width; x += 1) {
+      const src = x * bpp;
+      const dst = (y * width + x) * 3;
+      rgb[dst] = row[src];
+      rgb[dst + 1] = row[src + 1];
+      rgb[dst + 2] = row[src + 2];
+    }
+    prev = row;
+  }
+  return { width, height, rgb };
+}
+
+/** Decodifica data URL institucional a objeto utilizable por assemblePdf. */
+export function decodeActaLogoImage(logoDataUrl = '') {
+  const raw = String(logoDataUrl || '').trim();
+  if (!raw) return null;
+  const m = raw.match(/^data:(image\/(?:png|jpeg|jpg));base64,(.+)$/i);
+  if (!m) return null;
+  const buffer = Buffer.from(m[2], 'base64');
+  if (/jpeg|jpg/i.test(m[1])) {
+    const dims = jpegDimensions(buffer);
+    return { width: dims.width, height: dims.height, jpeg: buffer };
+  }
+  const png = decodePngToRgb(buffer);
+  if (!png) return null;
+  return png;
 }
 
 /**
