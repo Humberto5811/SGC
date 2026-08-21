@@ -536,6 +536,145 @@ export async function reasignarResponsableEntregableMismaEtapa({
   });
 }
 
+/**
+ * Restaura responsable y etapa tras subsanar observación CM/Analista → AU.
+ */
+export async function restaurarResponsableEntregableEtapaRetorno({
+  ordenEntregaId,
+  etapaDestinoCodigo,
+  usuarioDestinoId,
+  eventoCodigo = 'ENTREGABLE_OBSERVACION_SUBSANADA',
+  usuarioOrigenId = null,
+  ejecutadoPor = null,
+  motivo = null,
+  metadata = null,
+  client = null,
+} = {}) {
+  const etapaDestino = String(etapaDestinoCodigo || '').trim().toUpperCase();
+  const destinoId = Number(usuarioDestinoId);
+  if (!etapaDestino) {
+    throw httpError('Etapa destino inválida', 400, 'ETAPA_DESTINO_INVALIDA');
+  }
+  if (!Number.isInteger(destinoId) || destinoId <= 0) {
+    throw httpError('usuario_destino_id debe ser un ID real', 400, 'USUARIO_DESTINO_ID_INVALIDO');
+  }
+  return runInTransaction(client, async (tx) => {
+    const context = await getEntregableContext(tx, ordenEntregaId, { lock: true });
+    if (String(context.entrega_estado || '').toUpperCase() !== 'ACTIVO') {
+      throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+    }
+    await inicializarEstadoResponsableEntregable(context.orden_entrega_id, {
+      actualizadoPor: ejecutadoPor,
+      metadata: { origen: 'restaurar_etapa_retorno' },
+      client: tx,
+    });
+    const previo = await getEstadoEspecifico(tx, context.orden_entrega_id, { lock: true });
+    if (!previo?.estado) {
+      throw httpError('Estado específico del entregable no inicializado', 409, 'ENTREGABLE_SIN_ESTADO');
+    }
+    const responsable = resolverResponsableSincero({
+      usuarioDestinoId: destinoId,
+      unidadDestino: null,
+      etapaCodigo: etapaDestino,
+    });
+    const actor = String(ejecutadoPor || usuarioOrigenId || '').slice(0, 150) || null;
+    const labels = buildEstadoLabels(etapaDestino);
+
+    await tx.query(`
+      UPDATE entregable_asignaciones
+      SET activo=FALSE, cerrado_por=$2, cerrado_at=NOW()
+      WHERE orden_entrega_id=$1 AND activo=TRUE
+    `, [Number(context.orden_entrega_id), actor]);
+
+    const { rows: estados } = await tx.query(`
+      UPDATE entregable_estado_vigente
+      SET estado_codigo=$2, estado_label=$3, etapa_codigo=$4, etapa_label=$5,
+          responsable_tipo=$6, responsable_usuario_id=$7,
+          responsable_unidad=$8, responsable_fuente=$9,
+          version=version+1, actualizado_por=$10, actualizado_at=NOW(),
+          metadata_json=$11::jsonb
+      WHERE orden_entrega_id=$1
+      RETURNING *
+    `, [
+      Number(context.orden_entrega_id),
+      labels.estadoCodigo,
+      labels.estadoLabel,
+      labels.etapaCodigo,
+      labels.etapaLabel,
+      responsable.responsableTipo,
+      responsable.responsableUsuarioId,
+      responsable.responsableUnidad,
+      responsable.responsableFuente,
+      actor,
+      metadata ? JSON.stringify(metadata) : null,
+    ]);
+
+    const { rows: asignaciones } = await tx.query(`
+      INSERT INTO entregable_asignaciones (
+        orden_id, orden_entrega_id, requerimiento_id, etapa_codigo,
+        usuario_id, unidad_codigo, tipo_responsable, activo,
+        asignado_por, motivo, origen_asignacion, metadata_json
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8,$9,'observacion_retorno',$10::jsonb)
+      RETURNING *
+    `, [
+      Number(context.orden_id),
+      Number(context.orden_entrega_id),
+      Number(context.requerimiento_id),
+      labels.etapaCodigo,
+      responsable.responsableUsuarioId,
+      responsable.responsableUnidad,
+      responsable.responsableTipo,
+      actor,
+      motivo,
+      metadata ? JSON.stringify(metadata) : null,
+    ]);
+
+    const { rows: eventos } = await tx.query(`
+      INSERT INTO entregable_eventos (
+        orden_id, orden_entrega_id, requerimiento_id, evento_codigo,
+        estado_anterior_codigo, estado_anterior_label,
+        estado_nuevo_codigo, estado_nuevo_label,
+        etapa_anterior_codigo, etapa_nueva_codigo,
+        responsable_anterior_tipo, responsable_anterior_usuario,
+        responsable_anterior_unidad, responsable_nuevo_tipo,
+        responsable_nuevo_usuario, responsable_nuevo_unidad,
+        ejecutado_usuario_id, ejecutado_por, motivo, metadata_json
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb
+      ) RETURNING *
+    `, [
+      Number(context.orden_id),
+      Number(context.orden_entrega_id),
+      Number(context.requerimiento_id),
+      String(eventoCodigo || 'ENTREGABLE_OBSERVACION_SUBSANADA').slice(0, 80),
+      previo.estado.estado_codigo,
+      previo.estado.estado_label,
+      labels.estadoCodigo,
+      labels.estadoLabel,
+      previo.estado.etapa_codigo,
+      labels.etapaCodigo,
+      previo.estado.responsable_tipo,
+      previo.estado.responsable_usuario_id,
+      previo.estado.responsable_unidad,
+      responsable.responsableTipo,
+      responsable.responsableUsuarioId,
+      responsable.responsableUnidad,
+      usuarioOrigenId != null ? Number(usuarioOrigenId) : null,
+      actor,
+      motivo,
+      metadata ? JSON.stringify(metadata) : null,
+    ]);
+
+    return {
+      estado: estados[0],
+      asignacion: asignaciones[0],
+      evento: eventos[0],
+      etapa_restaurada: labels.etapaCodigo,
+      expedienteGlobalActualizado: false,
+    };
+  });
+}
+
 export default {
   REGLA_AGREGACION_ENTREGABLES_FUTURA,
   obtenerEstadoResponsableEntregable,
@@ -544,4 +683,5 @@ export default {
   ensureResponsablePersonaEntregable,
   transicionarEntregable,
   reasignarResponsableEntregableMismaEtapa,
+  restaurarResponsableEntregableEtapaRetorno,
 };

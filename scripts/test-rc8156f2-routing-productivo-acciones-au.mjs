@@ -245,6 +245,7 @@ ok(menuRecibido.some((item) => item.label === 'Modificar entregable')
 const menuActaSinFirmada = entregableMenuItems({
   puede_ver_acta_generada: true,
   puede_adjuntar_acta_firmada: true,
+  puede_regenerar_acta: true,
   puede_observar: true,
   puede_derivar_coordinador_cm: false,
   puede_ver_trazabilidad: true,
@@ -254,9 +255,10 @@ const menuActaSinFirmada = entregableMenuItems({
 });
 ok(menuActaSinFirmada.some((item) => item.act === 'verActaGenerada')
   && menuActaSinFirmada.some((item) => item.act === 'adjuntarActaFirmada')
+  && menuActaSinFirmada.some((item) => item.act === 'generarActa' && item.label === 'Regenerar Acta de Conformidad')
   && menuActaSinFirmada.some((item) => item.act === 'observarEntregable')
   && !menuActaSinFirmada.some((item) => item.act === 'derivarCoordinadorCM'),
-'14. acta sin firmada no deriva CM');
+'14. acta sin firmada no deriva CM y permite regenerar');
 
 const menuConforme = entregableMenuItems({
   puede_ver_acta_generada: true,

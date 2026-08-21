@@ -26,16 +26,23 @@ import {
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
   reasignarResponsableEntregableMismaEtapa,
+  restaurarResponsableEntregableEtapaRetorno,
   transicionarEntregable,
 } from './entregableEstadoPersistido.js';
 import {
   CATALOGO_DESTINOS_OBSERVACION,
   clasificarObservacionEntregable,
   esEmisorObservacionEntregable,
+  extraerEtapaRetornoObservacion,
   listarDestinatariosObservacion,
   obtenerDestinoObservacion,
   registrarRoutingObservacionEntregable,
+  registrarRoutingObservacionEntregableAreaUsuaria,
 } from './observacionesEntregableRouting.js';
+import {
+  listResponsablesPresentacionEntregables,
+  validarDestinatarioAreaUsuariaOrden,
+} from './ordenesContratacion.js';
 import { buildEstadoLabels } from './expedienteEstadoPersistido.js';
 import { ETAPAS } from '../../shared/workflow/etapas.js';
 import { EVENTOS } from '../../shared/workflow/eventos.js';
@@ -50,6 +57,7 @@ export {
   listarEstadosResponsablesEntregables,
   obtenerEstadoResponsableEntregable,
   reasignarResponsableEntregableMismaEtapa,
+  restaurarResponsableEntregableEtapaRetorno,
   transicionarEntregable,
 } from './entregableEstadoPersistido.js';
 export {
@@ -115,6 +123,8 @@ export function mapEntregableBandejaRow(row) {
   const entregaId = Number(row.orden_entrega_id);
   const recepcionesCount = Number(row.numero_recepciones || 0);
   const ultimaRecepcion = row.ultima_recepcion || null;
+  const recepcionInicial = row.recepcion_inicial || null;
+  const recepcionMetadatos = recepcionInicial || ultimaRecepcion;
   const fechaMaxima = toIsoDateString(row.fecha_maxima) || row.fecha_maxima || null;
   const fechaBase = toIsoDateString(row.fecha_base) || row.fecha_base || null;
 
@@ -179,9 +189,11 @@ export function mapEntregableBandejaRow(row) {
     fecha_maxima: fechaMaxima,
     importe: money(row.importe),
     numero_recepciones: recepcionesCount,
-    fecha_recepcion_mesa_partes: ultimaRecepcion?.fecha_recepcion_mesa_partes || null,
-    numero_expediente_sgd: ultimaRecepcion?.numero_expediente_sgd || null,
+    fecha_recepcion_mesa_partes: toIsoDateString(recepcionMetadatos?.fecha_recepcion_mesa_partes)
+      || recepcionMetadatos?.fecha_recepcion_mesa_partes || null,
+    numero_expediente_sgd: recepcionMetadatos?.numero_expediente_sgd || null,
     ultima_recepcion: ultimaRecepcion,
+    recepcion_inicial: recepcionInicial,
     observacion_abierta: observacionAbierta,
     estado_ejecucion: estadoEjecucion,
     estado_ejecucion_label: situacionLabel,
@@ -255,6 +267,23 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
         LIMIT 1
       ) AS ultima_recepcion,
       (
+        SELECT json_build_object(
+          'id', er.id,
+          'numero_recepcion', er.numero_recepcion,
+          'tipo_recepcion', er.tipo_recepcion,
+          'fecha_recepcion_mesa_partes', er.fecha_recepcion_mesa_partes,
+          'numero_expediente_sgd', er.numero_expediente_sgd,
+          'estado', er.estado,
+          'registrado_por', er.registrado_por,
+          'registrado_at', er.registrado_at
+        )
+        FROM entregable_recepciones er
+        WHERE er.orden_entrega_id = oe.id
+          AND UPPER(COALESCE(er.tipo_recepcion, '')) = 'INICIAL'
+        ORDER BY er.numero_recepcion ASC, er.id ASC
+        LIMIT 1
+      ) AS recepcion_inicial,
+      (
         SELECT COUNT(*)::int FROM orden_entregas oe2
         WHERE oe2.orden_id = oc.id AND oe2.estado = 'ACTIVO'
       ) AS total_entregas,
@@ -287,11 +316,57 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
         SELECT MAX(eca.version)::int FROM entregable_conformidad_actas eca
         WHERE eca.orden_entrega_id = oe.id
           AND eca.recepcion_id = (
-            SELECT er.id FROM entregable_recepciones er
-            WHERE er.orden_entrega_id = oe.id
-              AND UPPER(COALESCE(er.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
-            ORDER BY er.numero_recepcion DESC, er.id DESC
-            LIMIT 1
+            SELECT COALESCE(
+              (
+                SELECT pres.id
+                FROM entregable_recepciones pres
+                WHERE pres.orden_entrega_id = oe.id
+                  AND pres.id = (
+                    SELECT er2.id FROM entregable_recepciones er2
+                    WHERE er2.orden_entrega_id = oe.id
+                      AND UPPER(COALESCE(er2.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+                    ORDER BY er2.numero_recepcion DESC, er2.id DESC
+                    LIMIT 1
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM entregable_conformidad_actas eca2
+                    WHERE eca2.orden_entrega_id = oe.id AND eca2.recepcion_id = pres.id
+                  )
+              ),
+              (
+                SELECT a.recepcion_id
+                FROM entregable_observaciones eo
+                JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
+                CROSS JOIN LATERAL (
+                  SELECT a2.recepcion_id
+                  FROM entregable_conformidad_acta_visados v2
+                  JOIN entregable_conformidad_actas a2 ON a2.id = v2.acta_id
+                  WHERE v2.orden_entrega_id = oe.id
+                    AND v2.vigente = TRUE AND v2.deleted_at IS NULL
+                  ORDER BY a2.version DESC, v2.id DESC
+                  LIMIT 1
+                ) a
+                WHERE eo.orden_entrega_id = oe.id
+                  AND eo.estado = 'OBS_SUBSANADA'
+                  AND wo.origen_submodulo_codigo IN ('REVISION_COORDINADOR_CM', 'REVISION_ANALISTA_CM')
+                  AND eo.recepcion_subsanacion_id = (
+                    SELECT er2.id FROM entregable_recepciones er2
+                    WHERE er2.orden_entrega_id = oe.id
+                      AND UPPER(COALESCE(er2.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+                    ORDER BY er2.numero_recepcion DESC, er2.id DESC
+                    LIMIT 1
+                  )
+                ORDER BY eo.subsanado_at DESC NULLS LAST, eo.id DESC
+                LIMIT 1
+              ),
+              (
+                SELECT er.id FROM entregable_recepciones er
+                WHERE er.orden_entrega_id = oe.id
+                  AND UPPER(COALESCE(er.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+                ORDER BY er.numero_recepcion DESC, er.id DESC
+                LIMIT 1
+              )
+            )
           )
       ) AS acta_generada_version,
       (
@@ -302,11 +377,57 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
           AND ecav.vigente = TRUE
           AND ecav.deleted_at IS NULL
           AND eca.recepcion_id = (
-            SELECT er.id FROM entregable_recepciones er
-            WHERE er.orden_entrega_id = oe.id
-              AND UPPER(COALESCE(er.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
-            ORDER BY er.numero_recepcion DESC, er.id DESC
-            LIMIT 1
+            SELECT COALESCE(
+              (
+                SELECT pres.id
+                FROM entregable_recepciones pres
+                WHERE pres.orden_entrega_id = oe.id
+                  AND pres.id = (
+                    SELECT er2.id FROM entregable_recepciones er2
+                    WHERE er2.orden_entrega_id = oe.id
+                      AND UPPER(COALESCE(er2.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+                    ORDER BY er2.numero_recepcion DESC, er2.id DESC
+                    LIMIT 1
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM entregable_conformidad_actas eca2
+                    WHERE eca2.orden_entrega_id = oe.id AND eca2.recepcion_id = pres.id
+                  )
+              ),
+              (
+                SELECT a.recepcion_id
+                FROM entregable_observaciones eo
+                JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
+                CROSS JOIN LATERAL (
+                  SELECT a2.recepcion_id
+                  FROM entregable_conformidad_acta_visados v2
+                  JOIN entregable_conformidad_actas a2 ON a2.id = v2.acta_id
+                  WHERE v2.orden_entrega_id = oe.id
+                    AND v2.vigente = TRUE AND v2.deleted_at IS NULL
+                  ORDER BY a2.version DESC, v2.id DESC
+                  LIMIT 1
+                ) a
+                WHERE eo.orden_entrega_id = oe.id
+                  AND eo.estado = 'OBS_SUBSANADA'
+                  AND wo.origen_submodulo_codigo IN ('REVISION_COORDINADOR_CM', 'REVISION_ANALISTA_CM')
+                  AND eo.recepcion_subsanacion_id = (
+                    SELECT er2.id FROM entregable_recepciones er2
+                    WHERE er2.orden_entrega_id = oe.id
+                      AND UPPER(COALESCE(er2.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+                    ORDER BY er2.numero_recepcion DESC, er2.id DESC
+                    LIMIT 1
+                  )
+                ORDER BY eo.subsanado_at DESC NULLS LAST, eo.id DESC
+                LIMIT 1
+              ),
+              (
+                SELECT er.id FROM entregable_recepciones er
+                WHERE er.orden_entrega_id = oe.id
+                  AND UPPER(COALESCE(er.estado,'')) IN ('RECIBIDO','SUBSANADO','CONFORME')
+                ORDER BY er.numero_recepcion DESC, er.id DESC
+                LIMIT 1
+              )
+            )
           )
       ) AS firmada_vigente_count
     FROM orden_entregas oe
@@ -416,6 +537,13 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
       && !soloLecturaEmisor
       && sinObservacionAbierta
       && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo);
+    item.puede_regenerar_acta = autorizado
+      && enPresentacion
+      && !soloLecturaEmisor
+      && sinObservacionAbierta
+      && item.situacion_codigo === 'ACTA_GENERADA'
+      && item.acta_generada_version > 0
+      && !item.firmada_vigente;
     item.puede_observar = autorizado
       && enPresentacion
       && !soloLecturaEmisor
@@ -694,7 +822,7 @@ export async function listarConformidadEntregable(ordenEntregaId) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   const eid = Number(ordenEntregaId);
   const [recepcionVigente, actasRes, visadosRes] = await Promise.all([
-    obtenerRecepcionVigenteEntregable(eid),
+    resolverRecepcionConformidadEntregable(eid),
     query(
       `SELECT a.id, a.orden_id, a.orden_entrega_id, a.recepcion_id, a.numero_acta,
               a.version, a.estado_documental, a.documento_nombre, a.documento_mime,
@@ -1217,17 +1345,19 @@ async function validarPrecondicionesDerivacion(client, entrega) {
     throw httpError('El entregable no corresponde a un servicio/locación', 409, 'ENTREGABLE_NO_SERVICIO');
   }
 
-  const recepcion = await obtenerRecepcionVigenteEntregable(entrega.id, { client, lock: true });
+  const recepcionPresentacion = await obtenerRecepcionVigenteEntregable(entrega.id, { client, lock: true });
+  const recepcion = await resolverRecepcionConformidadEntregable(entrega.id, { client });
   if (!recepcion) {
     throw httpError('El entregable no tiene una recepción vigente', 409, 'SIN_RECEPCION_VIGENTE');
   }
 
   const observaciones = (await client.query(`
-    SELECT *
-    FROM entregable_observaciones
-    WHERE orden_entrega_id=$1
-    ORDER BY observado_at DESC, id DESC
-    FOR UPDATE
+    SELECT eo.*, wo.origen_submodulo_codigo
+    FROM entregable_observaciones eo
+    LEFT JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
+    WHERE eo.orden_entrega_id=$1
+    ORDER BY eo.observado_at DESC, eo.id DESC
+    FOR UPDATE OF eo
   `, [Number(entrega.id)])).rows;
   if (observaciones.some((obs) => ['OBS_EMITIDA', 'OBS_EN_ATENCION'].includes(obs.estado))) {
     throw httpError(
@@ -1237,15 +1367,23 @@ async function validarPrecondicionesDerivacion(client, entrega) {
     );
   }
   const ultimaObservacion = observaciones[0] || null;
-  if (ultimaObservacion
-    && (!['OBS_SUBSANADA', 'OBS_CERRADA'].includes(ultimaObservacion.estado)
-      || (ultimaObservacion.estado === 'OBS_SUBSANADA'
-        && Number(ultimaObservacion.recepcion_subsanacion_id) !== Number(recepcion.id)))) {
+  if (ultimaObservacion && !['OBS_SUBSANADA', 'OBS_CERRADA'].includes(ultimaObservacion.estado)) {
     throw httpError(
       'La última observación del entregable no está subsanada',
       409,
       'OBSERVACION_NO_SUBSANADA',
     );
+  }
+  if (ultimaObservacion?.estado === 'OBS_SUBSANADA') {
+    const subsId = Number(ultimaObservacion.recepcion_subsanacion_id);
+    const presId = Number(recepcionPresentacion?.id);
+    if (!Number.isFinite(subsId) || subsId !== presId) {
+      throw httpError(
+        'La última observación del entregable no está subsanada',
+        409,
+        'OBSERVACION_NO_SUBSANADA',
+      );
+    }
   }
 
   const acta = (await client.query(`
@@ -1487,7 +1625,34 @@ export async function listarAnalistasPagoEntregable(ordenEntregaId, userCtx = nu
   return (await listarUsuariosAnalistaPago()).map(mapCoordinadorCM);
 }
 
-/** Observación atómica del Analista CM con retorno al último Coordinador confiable. */
+/** Usuarios AU activos del centro del expediente, candidatos a observación CM/Analista. */
+export async function listarDestinatariosAreaUsuariaEntregable(
+  ordenEntregaId,
+  { search = '' } = {},
+  userCtx = null,
+) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  const etapa = String(estado?.etapaCodigo || '').toUpperCase();
+  if (etapa === ETAPAS.REVISION_COORDINADOR_CM) {
+    assertCoordinadorCMResponsable(userCtx, estado);
+  } else if (etapa === ETAPAS.REVISION_ANALISTA_CM) {
+    assertAnalistaCMResponsable(userCtx, estado);
+  } else if (etapa === ETAPAS.PRESENTACION_ENTREGABLES) {
+    assertPuedeObservarEntregable(userCtx, {
+      responsable_usuario_id: estado?.responsableUsuarioId,
+    });
+  } else {
+    throw httpError(
+      'La etapa actual no permite seleccionar destinatarios Área Usuaria',
+      409,
+      'ETAPA_ENTREGABLE_NO_COMPATIBLE',
+    );
+  }
+  return listResponsablesPresentacionEntregables(Number(entrega.orden_id), { search });
+}
+
+/** Observación atómica del Analista CM hacia un AU activo del mismo centro. */
 export async function observarEntregableAnalistaCM(
   ordenEntregaId,
   body = {},
@@ -1496,7 +1661,15 @@ export async function observarEntregableAnalistaCM(
 ) {
   const eid = parseInt(ordenEntregaId, 10);
   const motivo = String(body?.motivo || '').trim();
+  const destinoUid = Number(body?.usuario_destino_id ?? body?.usuarioDestinoId);
   if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  if (!Number.isInteger(destinoUid) || destinoUid <= 0) {
+    throw httpError(
+      'Debe seleccionar un destinatario del Área Usuaria',
+      400,
+      'USUARIO_DESTINO_ID_REQUERIDO',
+    );
+  }
   if (!motivo) {
     throw httpError(
       'El motivo de observación es obligatorio',
@@ -1534,34 +1707,55 @@ export async function observarEntregableAnalistaCM(
     }
     assertAnalistaCMResponsable(userCtx, estadoAnterior);
     const precondiciones = await validarPrecondicionesDerivacion(client, entrega);
-    const coordinadorRetorno = await obtenerCoordinadorCMRetorno(client, eid);
-
-    const { rows: observaciones } = await client.query(`
-      INSERT INTO entregable_observaciones (
-        orden_id, orden_entrega_id, recepcion_id, motivo, estado,
-        observado_por, observado_at
-      ) VALUES ($1,$2,$3,$4,'OBS_EMITIDA',$5,NOW())
-      RETURNING *
-    `, [
+    const destinatario = await validarDestinatarioAreaUsuariaOrden(
       Number(entrega.orden_id),
-      eid,
-      Number(precondiciones.recepcion.id),
+      destinoUid,
+      client,
+    );
+
+    const { rows: abiertas } = await client.query(`
+      SELECT id
+      FROM entregable_observaciones
+      WHERE orden_entrega_id=$1
+        AND estado IN ('OBS_EMITIDA','OBS_EN_ATENCION')
+      LIMIT 1
+      FOR UPDATE
+    `, [eid]);
+    if (abiertas.length) {
+      throw httpError(
+        'El entregable ya tiene una observación formal abierta',
+        409,
+        'OBSERVACION_ABIERTA_EXISTE',
+      );
+    }
+
+    const routing = await registrarRoutingObservacionEntregableAreaUsuaria({
+      requerimientoId: Number(entrega.requerimiento_id),
+      ordenId: Number(entrega.orden_id),
+      ordenEntregaId: eid,
+      recepcionId: Number(precondiciones.recepcion.id),
+      origenSubmoduloCodigo: ETAPAS.REVISION_ANALISTA_CM,
+      etapaRetornoCodigo: ETAPAS.REVISION_ANALISTA_CM,
+      usuarioOrigenId: Number(userCtx?.id),
+      usuarioDestinoId: destinoUid,
+      destinatario,
       motivo,
-      observadoPor.slice(0, 150),
-    ]);
+      client,
+    });
     const transicion = await transicionarEntregable({
       ordenEntregaId: eid,
       evento: EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM,
       usuarioOrigenId: Number(userCtx?.id),
       ejecutadoPor: observadoPor,
-      usuarioDestinoId: Number(coordinadorRetorno.asignacion.usuario_id),
-      unidadDestino: 'COORDINADOR_CM',
+      usuarioDestinoId: destinoUid,
+      unidadDestino: 'AREA_USUARIA',
       motivo,
       metadata: {
         origen: 'ANALISTA_CM',
-        observacion_id: Number(observaciones[0].id),
+        observacion_id: Number(routing.entregable_observacion.id),
+        workflow_observacion_id: Number(routing.workflow_observacion.id),
         recepcion_id: Number(precondiciones.recepcion.id),
-        asignacion_coordinador_anterior_id: Number(coordinadorRetorno.asignacion.id),
+        etapa_retorno: ETAPAS.REVISION_ANALISTA_CM,
         acta_id: Number(precondiciones.acta.id),
         acta_firmada_id: Number(precondiciones.firmada.id),
       },
@@ -1570,11 +1764,12 @@ export async function observarEntregableAnalistaCM(
     const estado = await obtenerEstadoResponsableEntregable(eid, { client });
     await client.query('COMMIT');
     return {
-      observacion: observaciones[0],
+      observacion: routing.entregable_observacion,
+      workflow_observacion: routing.workflow_observacion,
+      destinatario,
       estado,
       asignacion: transicion.asignacion,
       evento: transicion.evento,
-      coordinador: mapCoordinadorCM(coordinadorRetorno.usuario),
       expediente_global_actualizado: false,
     };
   } catch (error) {
@@ -1919,8 +2114,8 @@ export async function observarEntregableDirigido(
 }
 
 /**
- * Restaura al emisor AU el responsable tras cerrar una observación dirigida en
- * PRESENTACION_ENTREGABLES, reutilizando reasignarResponsableEntregableMismaEtapa.
+ * Restaura al emisor el responsable tras subsanar/retirar una observación dirigida.
+ * F-2 PE conserva etapa; CM/Analista restaura etapa de retorno almacenada en routing.
  */
 async function restaurarResponsableEmisorObservacionDirigida({
   ordenEntregaId,
@@ -1943,7 +2138,36 @@ async function restaurarResponsableEmisorObservacionDirigida({
   if (etapaCodigo !== ETAPAS.PRESENTACION_ENTREGABLES) return null;
   if (Number(estadoActual?.responsableUsuarioId) !== destinoId) return null;
 
+  const origenEtapa = String(observacion.origen_submodulo_codigo || '').toUpperCase();
+  const etapaRetorno = extraerEtapaRetornoObservacion(observacion)
+    || (origenEtapa === ETAPAS.REVISION_COORDINADOR_CM || origenEtapa === ETAPAS.REVISION_ANALISTA_CM
+      ? origenEtapa
+      : null);
   const uid = Number(userCtx?.id);
+  const metadata = {
+    origen: metadataOrigen,
+    observacion_id: Number(observacion.id),
+    workflow_observacion_id: observacion.workflow_observacion_id
+      ? Number(observacion.workflow_observacion_id)
+      : null,
+    clasificacion,
+    etapa_retorno: etapaRetorno,
+  };
+
+  if (etapaRetorno && etapaRetorno !== ETAPAS.PRESENTACION_ENTREGABLES) {
+    return restaurarResponsableEntregableEtapaRetorno({
+      ordenEntregaId,
+      etapaDestinoCodigo: etapaRetorno,
+      usuarioDestinoId: origenId,
+      eventoCodigo,
+      usuarioOrigenId: Number.isInteger(uid) && uid > 0 ? uid : null,
+      ejecutadoPor,
+      motivo,
+      metadata,
+      client,
+    });
+  }
+
   return reasignarResponsableEntregableMismaEtapa({
     ordenEntregaId,
     usuarioDestinoId: origenId,
@@ -1951,14 +2175,7 @@ async function restaurarResponsableEmisorObservacionDirigida({
     usuarioOrigenId: Number.isInteger(uid) && uid > 0 ? uid : null,
     ejecutadoPor,
     motivo,
-    metadata: {
-      origen: metadataOrigen,
-      observacion_id: Number(observacion.id),
-      workflow_observacion_id: observacion.workflow_observacion_id
-        ? Number(observacion.workflow_observacion_id)
-        : null,
-      clasificacion,
-    },
+    metadata,
     client,
   });
 }
@@ -1998,7 +2215,9 @@ export async function retirarObservacionEntregable(
         wo.estado AS workflow_estado,
         wo.usuario_origen_id,
         wo.usuario_destino_id,
-        wo.destino_submodulo_codigo
+        wo.destino_submodulo_codigo,
+        wo.origen_submodulo_codigo,
+        wo.documentos
       FROM entregable_observaciones eo
       LEFT JOIN workflow_observaciones wo ON wo.id=eo.workflow_observacion_id
       WHERE eo.id=$1 AND eo.orden_entrega_id=$2
@@ -2023,6 +2242,8 @@ export async function retirarObservacionEntregable(
       workflow_observacion_id: observacion.workflow_observacion_id,
       usuario_origen_id: observacion.usuario_origen_id,
       usuario_destino_id: observacion.usuario_destino_id,
+      origen_submodulo_codigo: observacion.origen_submodulo_codigo,
+      documentos: observacion.documentos,
       observado_por: observacion.observado_por,
     };
     if (!esEmisorObservacionEntregable(obsCtx, userCtx)) {
@@ -2193,7 +2414,14 @@ export async function observarEntregable(
     const estadoEntregable = await obtenerEstadoResponsableEntregable(eid, { client });
     if (String(estadoEntregable?.etapaCodigo || '').toUpperCase() === 'REVISION_COORDINADOR_CM') {
       assertCoordinadorCMResponsable(userCtx, estadoEntregable);
-      const responsableAnterior = await obtenerResponsableAreaUsuariaAnterior(client, eid);
+      const destinoUid = Number(body?.usuario_destino_id ?? body?.usuarioDestinoId);
+      if (!Number.isInteger(destinoUid) || destinoUid <= 0) {
+        throw httpError(
+          'Debe seleccionar un destinatario del Área Usuaria',
+          400,
+          'USUARIO_DESTINO_ID_REQUERIDO',
+        );
+      }
       const { rows: recepcionRows } = await client.query(`
         SELECT *
         FROM entregable_recepciones
@@ -2233,38 +2461,46 @@ export async function observarEntregable(
           'OBSERVACION_ABIERTA_EXISTE',
         );
       }
-      const { rows: observaciones } = await client.query(`
-        INSERT INTO entregable_observaciones (
-          orden_id, orden_entrega_id, recepcion_id, motivo, estado,
-          observado_por, observado_at
-        ) VALUES ($1,$2,$3,$4,'OBS_EMITIDA',$5,NOW())
-        RETURNING *
-      `, [
+      const destinatario = await validarDestinatarioAreaUsuariaOrden(
         Number(entrega.orden_id),
-        eid,
-        Number(recepcion.id),
+        destinoUid,
+        client,
+      );
+      const routing = await registrarRoutingObservacionEntregableAreaUsuaria({
+        requerimientoId: Number(entrega.requerimiento_id),
+        ordenId: Number(entrega.orden_id),
+        ordenEntregaId: eid,
+        recepcionId: Number(recepcion.id),
+        origenSubmoduloCodigo: ETAPAS.REVISION_COORDINADOR_CM,
+        etapaRetornoCodigo: ETAPAS.REVISION_COORDINADOR_CM,
+        usuarioOrigenId: Number(userCtx?.id),
+        usuarioDestinoId: destinoUid,
+        destinatario,
         motivo,
-        observadoPor.slice(0, 150),
-      ]);
+        client,
+      });
       const transicion = await transicionarEntregable({
         ordenEntregaId: eid,
         evento: EVENTOS.ENTREGABLE_OBSERVADO_COORDINADOR_CM,
         usuarioOrigenId: Number(userCtx?.id),
         ejecutadoPor: observadoPor,
-        usuarioDestinoId: Number(responsableAnterior.usuario_id),
-        unidadDestino: responsableAnterior.unidad_codigo || 'AREA_USUARIA',
+        usuarioDestinoId: destinoUid,
+        unidadDestino: 'AREA_USUARIA',
         motivo,
         metadata: {
           origen: 'COORDINADOR_CM',
-          observacion_id: Number(observaciones[0].id),
+          observacion_id: Number(routing.entregable_observacion.id),
+          workflow_observacion_id: Number(routing.workflow_observacion.id),
           recepcion_id: Number(recepcion.id),
-          asignacion_area_usuaria_anterior_id: Number(responsableAnterior.id),
+          etapa_retorno: ETAPAS.REVISION_COORDINADOR_CM,
         },
         client,
       });
       await client.query('COMMIT');
       return {
-        ...observaciones[0],
+        ...routing.entregable_observacion,
+        workflow_observacion: routing.workflow_observacion,
+        destinatario: routing.destinatario,
         origen: 'COORDINADOR_CM',
         transicion,
       };
@@ -2432,7 +2668,8 @@ export async function subsanarEntregable(
 
     const { rows: observaciones } = await client.query(`
       SELECT eo.*, er.numero_recepcion AS numero_recepcion_observada,
-        wo.usuario_origen_id, wo.usuario_destino_id
+        wo.usuario_origen_id, wo.usuario_destino_id,
+        wo.origen_submodulo_codigo, wo.documentos
       FROM entregable_observaciones eo
       JOIN entregable_recepciones er
         ON er.id = eo.recepcion_id
@@ -2543,6 +2780,15 @@ export async function subsanarEntregable(
     }
 
     const obsSubsanada = observacionesActualizadas[0];
+    if (observacion.workflow_observacion_id) {
+      await client.query(`
+        UPDATE workflow_observaciones
+        SET estado = 'OBS_SUBSANADA',
+            subsanada_at = COALESCE(subsanada_at, NOW())
+        WHERE id = $1
+          AND estado IN ('OBS_EMITIDA', 'OBS_EN_ATENCION')
+      `, [Number(observacion.workflow_observacion_id)]);
+    }
     const reasignacion = await restaurarResponsableEmisorObservacionDirigida({
       ordenEntregaId: eid,
       observacion: {
@@ -2551,6 +2797,8 @@ export async function subsanarEntregable(
         workflow_observacion_id: observacion.workflow_observacion_id,
         usuario_origen_id: observacion.usuario_origen_id,
         usuario_destino_id: observacion.usuario_destino_id,
+        origen_submodulo_codigo: observacion.origen_submodulo_codigo,
+        documentos: observacion.documentos,
       },
       userCtx,
       ejecutadoPor: subsanadoPor.slice(0, 150),
@@ -3370,6 +3618,62 @@ function assertPuedeGestionarConformidad(userCtx, entrega, responsable) {
 }
 
 /**
+ * Recepción cuya conformidad documental rige operativamente.
+ * Tras subsanación de observación de revisión CM/Analista, la recepción de
+ * trazabilidad no reemplaza la recepción con acta firmada vigente.
+ */
+export async function resolverRecepcionConformidadEntregable(
+  ordenEntregaId,
+  { client = null } = {},
+) {
+  const recepcionPresentacion = await obtenerRecepcionVigenteEntregable(ordenEntregaId, { client });
+  if (!recepcionPresentacion) return null;
+
+  const runQuery = client ? client.query.bind(client) : query;
+  const eid = Number(ordenEntregaId);
+  const presId = Number(recepcionPresentacion.id);
+
+  const actaEnPresentacion = (await runQuery(`
+    SELECT 1 FROM entregable_conformidad_actas
+    WHERE orden_entrega_id = $1 AND recepcion_id = $2
+    LIMIT 1
+  `, [eid, presId])).rows.length > 0;
+  if (actaEnPresentacion) return recepcionPresentacion;
+
+  const { rows: reviewRows } = await runQuery(`
+    SELECT 1
+    FROM entregable_observaciones eo
+    JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
+    WHERE eo.orden_entrega_id = $1
+      AND eo.estado = 'OBS_SUBSANADA'
+      AND wo.origen_submodulo_codigo IN ('REVISION_COORDINADOR_CM', 'REVISION_ANALISTA_CM')
+      AND eo.recepcion_subsanacion_id = $2
+    LIMIT 1
+  `, [eid, presId]);
+
+  if (reviewRows.length) {
+    const { rows: firmadaRows } = await runQuery(`
+      SELECT a.recepcion_id
+      FROM entregable_conformidad_acta_visados v
+      JOIN entregable_conformidad_actas a ON a.id = v.acta_id
+      WHERE v.orden_entrega_id = $1
+        AND v.vigente = TRUE AND v.deleted_at IS NULL
+      ORDER BY a.version DESC, v.id DESC
+      LIMIT 1
+    `, [eid]);
+    if (firmadaRows[0]?.recepcion_id) {
+      const { rows: recepRows } = await runQuery(
+        `SELECT * FROM entregable_recepciones WHERE id = $1`,
+        [Number(firmadaRows[0].recepcion_id)],
+      );
+      if (recepRows[0]) return recepRows[0];
+    }
+  }
+
+  return recepcionPresentacion;
+}
+
+/**
  * Presentación canónica vigente: inicial o última subsanación válida según su
  * secuencia funcional. No infiere vigencia por MAX(id).
  */
@@ -3466,10 +3770,8 @@ async function loadInstitucionalActaConfig(client = null) {
  */
 export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {}) {
   const entrega = await getEntregableOrThrow(ordenEntregaId);
-  const [recepcion, responsable, institucion] = await Promise.all([
-    opts.recepcion
-      ? Promise.resolve(opts.recepcion)
-      : obtenerRecepcionVigenteEntregable(ordenEntregaId),
+  const [recepcionInicial, responsable, institucion] = await Promise.all([
+    obtenerRecepcionInicialEntregable(ordenEntregaId, { client: opts.client }),
     getResponsableConformidad(ordenEntregaId),
     opts.institucion ? Promise.resolve(opts.institucion) : loadInstitucionalActaConfig(opts.client),
   ]);
@@ -3487,6 +3789,9 @@ export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {
   const areaUsuaria = resolveAreaUsuaria({ requerimientoArea: entrega.req_area });
   const contract = buildEntregaContract(entrega, { totalEntregas: 1 });
   const responsableNombre = responsable?.responsable_nombre || responsable?.responsable_username || '';
+  const servicioContratado = String(entrega.denominacion || '').trim()
+    || contract.descripcionEntrega
+    || '';
 
   return {
     institucion,
@@ -3500,22 +3805,23 @@ export async function buildDatosActaConformidadServicio(ordenEntregaId, opts = {
     ruc: entrega.proveedor_ruc || '',
     centro,
     area_usuaria: areaUsuaria || entrega.req_area || '',
-    servicio_prestado: contract.etiquetaEntrega || contract.descripcionEntrega || entrega.denominacion || '',
-    objeto_servicio: entrega.denominacion || contract.descripcionEntrega || '',
+    servicio_prestado: servicioContratado,
+    objeto_servicio: servicioContratado,
     numero_entrega: entrega.numero_entrega,
     denominacion: contract.etiquetaEntrega || contract.descripcionEntrega || '',
     plazo: entrega.dias_plazo ? `${Number(entrega.dias_plazo)} días` : '',
     fecha_inicio: toIsoDateString(entrega.fecha_base) || entrega.fecha_base || null,
     fecha_maxima: toIsoDateString(entrega.fecha_maxima) || entrega.fecha_maxima || null,
-    fecha_recepcion_mesa_partes: recepcion?.fecha_recepcion_mesa_partes || null,
-    numero_expediente_sgd: recepcion?.numero_expediente_sgd || '',
+    fecha_recepcion_mesa_partes: toIsoDateString(recepcionInicial?.fecha_recepcion_mesa_partes)
+      || recepcionInicial?.fecha_recepcion_mesa_partes || null,
+    numero_expediente_sgd: recepcionInicial?.numero_expediente_sgd || '',
     cantidad: entrega.cantidad != null ? Number(entrega.cantidad) : null,
     precio_unitario: entrega.precio_unitario != null ? Number(entrega.precio_unitario) : null,
     importe_entregable: entrega.importe != null ? Number(entrega.importe)
       : (entrega.precio_total != null ? Number(entrega.precio_total) : null),
     comprobante_pago: opts.comprobante_pago || '',
-    informe_productos: opts.informe_productos || '',
-    folios: opts.folios || '',
+    informe_productos: contract.etiquetaEntrega || '',
+    folios: opts.folios || '—',
     corresponde_penalidad: opts.corresponde_penalidad ?? null,
     responsable: responsableNombre,
     firma_au: {

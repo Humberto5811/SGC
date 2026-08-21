@@ -179,9 +179,9 @@ try {
   const generadaR2 = await generarActaConformidadEntregable(
     e1, { conclusion: 'CONFORME' }, ADMIN, 'test-d1a',
   );
-  ok(datosR2.numero_expediente_sgd === 'SGD-D1A-R2'
+  ok(datosR2.numero_expediente_sgd === 'SGD-D1A-R1'
     && Number(generadaR2.data.recepcion_id) === Number(r2.id),
-  'H. generación vigente usa los datos de la subsanación');
+  'H. recepcion_id vigente subsanación y metadatos INICIAL en acta');
   await adjuntarActaConformidadFirmada(e1, {
     acta_id: generadaR2.data.id,
     contenido_base64: PDF,

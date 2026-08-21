@@ -23,6 +23,7 @@ import {
   listarAnalistasPagoEntregable,
   observarEntregableAnalistaCM,
   derivarEntregablePago,
+  listarDestinatariosAreaUsuariaEntregable,
   listarTrazabilidadEntregable,
   getDocumentoRecepcionEntregable,
   getDocumentoRecepcionEntregableBytes,
@@ -181,6 +182,17 @@ router.post('/:id/derivar-pago', async (req, res, next) => {
       req.esUsuario,
     );
     res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/destinatarios-area-usuaria', async (req, res, next) => {
+  try {
+    const data = await listarDestinatariosAreaUsuariaEntregable(
+      req.params.id,
+      { search: req.query.q || req.query.search || '' },
+      req.esUserCtx,
+    );
+    res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
 

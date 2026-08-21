@@ -77,12 +77,12 @@ ok(EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM
 'A. existe evento canónico de observación del Analista CM');
 ok(obsServicio != null, 'B. Servicio admite observación desde Revisión Analista CM');
 ok(obsLocacion != null, 'C. Locación admite observación desde Revisión Analista CM');
-ok(obsServicio?.etapa_destino === ETAPAS.REVISION_COORDINADOR_CM
-  && obsLocacion?.etapa_destino === ETAPAS.REVISION_COORDINADOR_CM,
-'D. observación retorna a Revisión Coordinador CM');
-ok(obsServicio?.responsable_destino === PERFILES_FUNCIONALES.COORDINADOR_CM
-  && obsLocacion?.responsable_destino === PERFILES_FUNCIONALES.COORDINADOR_CM,
-'E. responsable funcional de retorno es COORDINADOR_CM');
+ok(obsServicio?.etapa_destino === ETAPAS.PRESENTACION_ENTREGABLES
+  && obsLocacion?.etapa_destino === ETAPAS.PRESENTACION_ENTREGABLES,
+'D. observación pasa temporalmente a Presentación Entregables');
+ok(obsServicio?.responsable_destino === PERFILES_FUNCIONALES.AREA_USUARIA
+  && obsLocacion?.responsable_destino === PERFILES_FUNCIONALES.AREA_USUARIA,
+'E. responsable funcional temporal es AREA_USUARIA');
 
 ok(EVENTOS.ENTREGABLE_DERIVADO_PAGO
   && getEventoMeta(EVENTOS.ENTREGABLE_DERIVADO_PAGO)?.tipo === 'DERIVACION'
@@ -177,12 +177,12 @@ try {
     usuarioOrigenId: usuario.id,
     ejecutadoPor: 'test-e1',
     usuarioDestinoId: usuario.id,
-    unidadDestino: 'COORDINADOR_CM',
+    unidadDestino: 'AREA_USUARIA',
     motivo: 'Fixture observación Analista CM',
   });
   const estadoRetorno = await obtenerEstadoResponsableEntregable(eObservacion);
-  ok(retorno.estado?.etapa_codigo === ETAPAS.REVISION_COORDINADOR_CM
-    && estadoRetorno.etapaCodigo === ETAPAS.REVISION_COORDINADOR_CM
+  ok(retorno.estado?.etapa_codigo === ETAPAS.PRESENTACION_ENTREGABLES
+    && estadoRetorno.etapaCodigo === ETAPAS.PRESENTACION_ENTREGABLES
     && await snapshotEntregable(e2) === e2Before,
   'N. observación transiciona solo el entregable afectado');
 

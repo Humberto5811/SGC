@@ -23,6 +23,10 @@ export const entregablesServiciosService = {
     const query = new URLSearchParams({ submoduloDestino }).toString();
     return api.get(`${BASE}/observaciones-dirigidas/destinatarios?${query}`);
   },
+  listarDestinatariosAreaUsuaria(id, params = {}) {
+    const query = new URLSearchParams(params).toString();
+    return api.get(`${BASE}/${id}/destinatarios-area-usuaria${query ? `?${query}` : ''}`);
+  },
   observarEntregableDirigido(id, body) {
     return api.post(`${BASE}/${id}/observaciones-dirigidas`, body);
   },
@@ -69,8 +73,8 @@ export const entregablesServiciosService = {
       responsable_id: responsableId,
     });
   },
-  observarAnalistaCM(id, motivo) {
-    return api.post(`${BASE}/${id}/observaciones-analista-cm`, { motivo });
+  observarAnalistaCM(id, body) {
+    return api.post(`${BASE}/${id}/observaciones-analista-cm`, body);
   },
   listarAnalistasPago(id) {
     return api.get(`${BASE}/${id}/analistas-pago`);

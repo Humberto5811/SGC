@@ -2833,13 +2833,71 @@ export async function listResponsablesPresentacionEntregables(ordenId, { search 
       rol: u.rol,
     }));
 
+  const vistos = new Set();
+  const usuariosUnicos = usuarios.filter((u) => {
+    const id = Number(u.id);
+    if (!Number.isFinite(id) || id <= 0 || vistos.has(id)) return false;
+    vistos.add(id);
+    return true;
+  });
+
   return {
     submodulo: SUBMODULO_PRESENTACION_ENTREGABLES,
     centro: {
       codigo: centro.centro_codigo,
       nombre: centro.centro_nombre || centro.centro_codigo,
     },
-    usuarios,
+    usuarios: usuariosUnicos,
+  };
+}
+
+/**
+ * RC8.15.6G-2 — Valida que un usuario destino sea AU activo del centro del expediente.
+ * Reutiliza el mismo criterio que listResponsablesPresentacionEntregables.
+ */
+export async function validarDestinatarioAreaUsuariaOrden(
+  ordenId,
+  usuarioDestinoId,
+  client = null,
+) {
+  const uid = Number(usuarioDestinoId);
+  if (!Number.isInteger(uid) || uid <= 0) {
+    const err = new Error('usuario_destino_id debe ser un ID real');
+    err.code = 'USUARIO_DESTINO_ID_INVALIDO';
+    err.status = 400;
+    throw err;
+  }
+  const centro = await resolveCentroDesdeOrden(ordenId);
+  await validarResponsableCentro(uid, centro, centro.area_id ?? null, client);
+  const db = client || { query };
+  const { rows } = await db.query(`
+    SELECT id, dni, username, apellidos, nombres, nombre, cargo, rol, activo, permisos
+    FROM usuarios WHERE id=$1
+  `, [uid]);
+  const row = rows[0];
+  if (!row?.activo) {
+    const err = new Error('Usuario destino inactivo');
+    err.code = 'USUARIO_DESTINO_INACTIVO';
+    err.status = 409;
+    throw err;
+  }
+  if (!hasFunctionalProfile(
+    { id: row.id, rol: row.rol, cargo: row.cargo, permisos: row.permisos },
+    PERFILES_FUNCIONALES.AREA_USUARIA,
+  )) {
+    const err = new Error('El destinatario no tiene perfil Área Usuaria');
+    err.code = 'USUARIO_DESTINO_SIN_PERFIL_AU';
+    err.status = 403;
+    throw err;
+  }
+  const nombre = [row.apellidos, row.nombres].filter(Boolean).join(' ').trim()
+    || row.nombre || row.username || row.dni || `Usuario ${row.id}`;
+  return {
+    id: Number(row.id),
+    nombre,
+    cargo: row.cargo || '',
+    username: row.username || row.dni || '',
+    rol: row.rol || '',
   };
 }
 

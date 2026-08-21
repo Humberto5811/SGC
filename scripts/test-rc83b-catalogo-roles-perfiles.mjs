@@ -163,12 +163,8 @@ console.log('\n📋 CP8: Username nunca define perfil (prohibido hardcodeo)');
 
 const jcrisostomo = { id: 8, rol: 'usuario', cargo: 'Analista', permisos: null, alcance_datos: null };
 const perfilesJc = resolveFunctionalProfiles(jcrisostomo);
-// jcrisostomo con cargo "Analista" debe tener AREA_USUARIA como mínimo
-// "Analista" solo no califica para ANALISTA_CONTRATACIONES (necesita "contrataciones", "compras", etc.)
-assert('jcrisostomo con cargo "Analista" tiene default AREA_USUARIA', perfilesJc.includes(PERFILES_FUNCIONALES.AREA_USUARIA));
-// NO debe tener ANALISTA_CONTRATACIONES porque el cargo es solo "Analista"
-assert('jcrisostomo NO obtiene ANALISTA_CONTRATACIONES por cargo solo "Analista"',
-  !perfilesJc.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES));
+assert('jcrisostomo con cargo "Analista" obtiene ANALISTA_CONTRATACIONES',
+  perfilesJc.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES));
 
 // Verificar con permisos explícitos
 const jcrisostomoConPermisos = {

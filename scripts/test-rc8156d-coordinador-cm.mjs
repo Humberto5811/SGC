@@ -153,6 +153,14 @@ try {
     UPDATE usuarios SET cargo='Analista CM',
       permisos='{"perfil":"ANALISTA_CM"}'::jsonb, activo=TRUE WHERE id=$1
   `, [analista.id]);
+  const centroReq = (await query(`
+    SELECT r.cmn, r.area, r.payload FROM requerimientos r WHERE r.id=$1
+  `, [base.requerimiento_id])).rows[0];
+  const { resolverCentroDesdeRequerimiento } = await import('../server/lib/recepcionBienesAlcance.js');
+  const centro = resolverCentroDesdeRequerimiento(centroReq);
+  await query(`
+    UPDATE usuarios SET centro=$2, codigo_centro_costo=$2 WHERE id=$1
+  `, [areaUsuaria.id, centro.centro_codigo]);
   ok(resolveFunctionalProfiles({ permisos: { perfil: 'ANALISTA_CM' } })
     .includes('ANALISTA_CONTRATACIONES'), 'alias ANALISTA_CM resuelve a ANALISTA_CONTRATACIONES');
 
@@ -266,12 +274,21 @@ try {
   ));
   ok(sinMotivo?.code === 'MOTIVO_OBSERVACION_REQUERIDO',
     'B. observación del Coordinador requiere motivo');
+  const sinDestino = await expectReject(() => observarEntregable(
+    observarFixture.id,
+    { recepcion_id: observarFixture.recepcion.id, motivo: 'Sin destino' },
+    coordinadorCtx,
+    coordinador.username,
+  ));
+  ok(sinDestino?.code === 'USUARIO_DESTINO_ID_REQUERIDO',
+    'B2. observación del Coordinador requiere destinatario AU');
 
   const resultadoObservacion = await observarEntregable(
     observarFixture.id,
     {
       recepcion_id: observarFixture.recepcion.id,
       motivo: 'Subsanar documentación observada por Coordinación CM',
+      usuario_destino_id: areaUsuaria.id,
     },
     coordinadorCtx,
     coordinador.username,
@@ -287,21 +304,29 @@ try {
   'C. observación reutiliza entregable_observaciones');
   ok(estadoObservado.etapa_codigo === 'PRESENTACION_ENTREGABLES'
     && Number(estadoObservado.responsable_usuario_id) === Number(areaUsuaria.id),
-  'D. E1 vuelve al Área Usuaria PERSONA anterior');
+  'D. E1 pasa al AU seleccionado en PRESENTACION_ENTREGABLES');
+  const workflowObs = (await query(`
+    SELECT wo.* FROM workflow_observaciones wo
+    JOIN entregable_observaciones eo ON eo.workflow_observacion_id=wo.id
+    WHERE eo.id=$1
+  `, [resultadoObservacion.id])).rows[0];
+  ok(workflowObs
+    && Number(workflowObs.usuario_origen_id) === Number(coordinador.id)
+    && Number(workflowObs.usuario_destino_id) === Number(areaUsuaria.id)
+    && workflowObs.origen_submodulo_codigo === 'REVISION_COORDINADOR_CM',
+  'E. routing canónico registra emisor, destinatario y etapa origen');
   const asignacionesObservada = (await query(`
     SELECT * FROM entregable_asignaciones
     WHERE orden_entrega_id=$1 ORDER BY id
   `, [observarFixture.id])).rows;
-  ok(asignacionesObservada.length === 3
-    && asignacionesObservada[0].etapa_codigo === 'PRESENTACION_ENTREGABLES'
-    && Number(asignacionesObservada[0].usuario_id) === Number(areaUsuaria.id)
-    && asignacionesObservada[0].activo === false
+  ok(asignacionesObservada.at(-1).etapa_codigo === 'PRESENTACION_ENTREGABLES'
     && Number(asignacionesObservada.at(-1).usuario_id) === Number(areaUsuaria.id)
     && asignacionesObservada.at(-1).activo === true,
-  'E. responsable AU se recupera del historial y crea nueva asignación');
+  'F. asignación activa queda en AU destino');
   ok(resultadoObservacion.estado === 'OBS_EMITIDA'
-    && resultadoObservacion.origen === 'COORDINADOR_CM',
-  'F. observación CM queda formalmente abierta y con origen');
+    && resultadoObservacion.origen === 'COORDINADOR_CM'
+    && resultadoObservacion.workflow_observacion,
+  'G. observación CM queda abierta con workflow enlazado');
   const bandejaArea = await listarBandejaEntregablesServicios(areaCtx);
   const filaObservada = bandejaArea.find(
     (row) => Number(row.orden_entrega_id) === observarFixture.id,
@@ -311,9 +336,9 @@ try {
     && filaObservada?.puede_subsanar
     && accionesArea.some((item) => item.act === 'subsanarEntregable')
     && !accionesArea.some((item) => item.act === 'generarActa'),
-  'G. E1 queda OBSERVADO y Área Usuaria solo puede subsanar');
+  'H. E1 queda OBSERVADO y Área Usuaria solo puede subsanar');
   ok(await snapshotEntregable(hermano.id) === hermanoBefore,
-    'H. E2 permanece intacto tras observar E1');
+    'I. E2 permanece intacto tras observar E1');
 
   const analistas = await listarAnalistasCMEntregable(derivarFixture.id, coordinadorCtx);
   ok(analistas.some((item) => Number(item.id) === Number(analista.id))

@@ -10,7 +10,7 @@ export default async function requireAuth(req, res, next) {
   }
   try {
     const { rows } = await query(
-      `SELECT id, dni, username, nombre, apellidos, nombres, rol,
+      `SELECT id, dni, username, nombre, apellidos, nombres, rol, cargo,
               centro, codigo_centro_costo, alcance_datos, area_id,
               descripcion_area, permisos
        FROM usuarios WHERE id = $1 AND activo = TRUE`,

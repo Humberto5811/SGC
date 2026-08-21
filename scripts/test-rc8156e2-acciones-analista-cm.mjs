@@ -136,6 +136,15 @@ try {
   await configurar(sinPerfil.id, true, 'Usuario sin perfil', 'AREA_USUARIA');
   await configurar(pagoInactivo.id, false, 'Analista de Pago', 'ANALISTA_PAGO');
 
+  const centroReq = (await query(`
+    SELECT r.cmn, r.area, r.payload FROM requerimientos r WHERE r.id=$1
+  `, [base.requerimiento_id])).rows[0];
+  const { resolverCentroDesdeRequerimiento } = await import('../server/lib/recepcionBienesAlcance.js');
+  const centro = resolverCentroDesdeRequerimiento(centroReq);
+  await query(`
+    UPDATE usuarios SET centro=$2, codigo_centro_costo=$2 WHERE id=$1
+  `, [area.id, centro.centro_codigo]);
+
   const ctx = (user, perfil, rol = 'usuario') => ({
     id: Number(user.id), username: user.username, nombre: user.nombre,
     permisos: { perfil }, cargo: perfil, rol,
@@ -242,60 +251,42 @@ try {
     () => observarEntregableAnalistaCM(observar.id, { motivo: '   ' }, analistaCtx),
     'D. motivo vacío se rechaza sin escritura parcial',
   );
-
-  await query(`
-    UPDATE entregable_asignaciones SET etapa_codigo='PRESENTACION_ENTREGABLES'
-    WHERE id=(SELECT id FROM entregable_asignaciones
-      WHERE orden_entrega_id=$1 AND etapa_codigo='REVISION_COORDINADOR_CM'
-      ORDER BY id DESC LIMIT 1)
-  `, [sinCoordinador.id]);
   await assertAtomic(
-    sinCoordinador.id, 'COORDINADOR_CM_RETORNO_NO_RESUELTO',
-    () => observarEntregableAnalistaCM(sinCoordinador.id, { motivo: 'Sin retorno' }, analistaCtx),
-    'F. coordinador histórico inexistente bloquea atómicamente',
+    observar.id, 'USUARIO_DESTINO_ID_REQUERIDO',
+    () => observarEntregableAnalistaCM(observar.id, { motivo: 'Sin destino' }, analistaCtx),
+    'E. destinatario AU es obligatorio',
   );
-
-  await query('UPDATE usuarios SET activo=FALSE WHERE id=$1', [coordinador.id]);
-  await assertAtomic(
-    coordinadorInvalido.id, 'COORDINADOR_CM_RETORNO_NO_RESUELTO',
-    () => observarEntregableAnalistaCM(coordinadorInvalido.id, { motivo: 'Inactivo' }, analistaCtx),
-    'G. Coordinador inactivo bloquea atómicamente',
-  );
-  await query(`
-    UPDATE usuarios SET activo=TRUE, cargo='Usuario sin perfil',
-      permisos='{"perfil":"AREA_USUARIA"}'::jsonb WHERE id=$1
-  `, [coordinador.id]);
-  await assertAtomic(
-    coordinadorInvalido.id, 'COORDINADOR_CM_RETORNO_NO_RESUELTO',
-    () => observarEntregableAnalistaCM(coordinadorInvalido.id, { motivo: 'Sin perfil' }, analistaCtx),
-    'H. Coordinador sin perfil bloquea atómicamente',
-  );
-  await query(`
-    UPDATE usuarios SET cargo='Coordinador CM',
-      permisos='{"perfil":"COORDINADOR_CM"}'::jsonb WHERE id=$1
-  `, [coordinador.id]);
 
   const obsAdmin = await observarEntregableAnalistaCM(
-    adminObs.id, { motivo: 'Override institucional' }, adminCtx, sinPerfil.username,
+    adminObs.id,
+    { motivo: 'Override institucional', usuario_destino_id: area.id },
+    adminCtx,
+    sinPerfil.username,
   );
-  ok(obsAdmin.estado.etapaCodigo === ETAPAS.REVISION_COORDINADOR_CM,
-    'C. administrador conserva override institucional');
+  ok(obsAdmin.estado.etapaCodigo === ETAPAS.PRESENTACION_ENTREGABLES
+    && Number(obsAdmin.estado.responsableUsuarioId) === Number(area.id),
+    'C. administrador conserva override y envía a AU seleccionado');
   const resultadoObs = await observarEntregableAnalistaCM(
-    observar.id, { motivo: 'Observación productiva Analista CM' }, analistaCtx, analista.username,
+    observar.id,
+    { motivo: 'Observación productiva Analista CM', usuario_destino_id: area.id },
+    analistaCtx,
+    analista.username,
   );
   const obsDb = (await query(
     'SELECT * FROM entregable_observaciones WHERE orden_entrega_id=$1 ORDER BY id DESC LIMIT 1',
     [observar.id],
   )).rows[0];
   ok(Number(obsDb.recepcion_id) === Number(observar.recepcion.id)
-    && obsDb.estado === 'OBS_EMITIDA', 'E. observación se vincula a recepción vigente');
-  ok(resultadoObs.estado.etapaCodigo === ETAPAS.REVISION_COORDINADOR_CM
-    && Number(resultadoObs.estado.responsableUsuarioId) === Number(coordinador.id),
-  'I/J. observación retorna al último Coordinador CM PERSONA');
+    && obsDb.estado === 'OBS_EMITIDA'
+    && obsDb.workflow_observacion_id != null,
+  'F. observación se vincula a recepción y workflow canónico');
+  ok(resultadoObs.estado.etapaCodigo === ETAPAS.PRESENTACION_ENTREGABLES
+    && Number(resultadoObs.estado.responsableUsuarioId) === Number(area.id),
+  'G/H. observación pasa temporalmente al AU seleccionado');
   ok(resultadoObs.evento.evento_codigo === EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM,
-    'K. evento de observación queda registrado');
+    'I. evento de observación queda registrado');
   ok(await snapshotEntregable(hermano.id) === hermanoBefore,
-    'L. E2 queda intacto tras observar E1');
+    'J. E2 queda intacto tras observar E1');
 
   const listaPago = await listarAnalistasPagoEntregable(pagoOk.id, analistaCtx);
   ok(listaPago.some((item) => Number(item.id) === Number(pago.id))

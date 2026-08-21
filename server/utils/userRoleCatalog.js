@@ -225,7 +225,12 @@ function legacyIsAlmacen(cargoNorm) {
  */
 function legacyIsAnalistaContrataciones(cargoNorm) {
   if (!cargoNorm) return false;
-  return /analista/.test(cargoNorm) && (/compra/.test(cargoNorm) || /contrat/.test(cargoNorm) || /\bccp\b/.test(cargoNorm) || /\bcm\b/.test(cargoNorm));
+  if (legacyIsCoordinadorCM(cargoNorm)) return false;
+  if (cargoNorm === 'analista' || cargoNorm === 'analista cm' || cargoNorm === 'especialista cm') {
+    return true;
+  }
+  return /analista/.test(cargoNorm)
+    && (/compra/.test(cargoNorm) || /contrat/.test(cargoNorm) || /\bccp\b/.test(cargoNorm) || /\bcm\b/.test(cargoNorm));
 }
 
 /**

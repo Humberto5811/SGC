@@ -29,8 +29,9 @@ const dataConforme = {
   centro: 'Lima / Chorrillos',
   area_usuaria: 'UNIDAD DE EPIDEMIOLOGIA',
   objeto_servicio: 'Servicio de mantenimiento preventivo de equipos de laboratorio',
+  servicio_prestado: 'Servicio de mantenimiento preventivo de equipos de laboratorio',
+  informe_productos: 'Entregable 2 — Informe de mantenimiento',
   numero_entrega: 2,
-  denominacion: 'Entregable 2 — Informe de mantenimiento',
   plazo: '30 días calendario',
   fecha_maxima: '2026-08-30',
   fecha_recepcion_mesa_partes: '2026-08-25',
@@ -65,9 +66,9 @@ const dataConforme = {
   assert.match(raw, /SERVICIOS GENERALES/);
   ok('5. Incluye proveedor');
 
-  assert.equal(pdf.fields.numero_entrega, '2');
-  assert.match(raw, /ENTREGABLE/);
-  ok('6. Incluye N.° entregable');
+  assert.equal(pdf.fields.informe_productos, 'Entregable 2 — Informe de mantenimiento');
+  assert.doesNotMatch(raw, /N\. ENTREGABLE/);
+  ok('6. informe/productos con etiqueta; sin columna N. ENTREGABLE');
 
   assert.match(raw, /25\/08\/2026/);
   ok('7. Incluye fecha recepción (culminación)');
@@ -81,6 +82,8 @@ const dataConforme = {
 
   assert.match(raw, /Maria Torres/);
   assert.match(raw, /Responsable del Area Usuaria|Responsable del Área Usuaria/);
+  assert.match(raw, /- RUC 20123456789/);
+  assert.doesNotMatch(raw, /\? RUC/);
   ok('10. Incluye responsable AU en bloque de firma');
 
   assert.equal(ACTA_CONFORMIDAD_SERVICIOS_TITULO, 'ACTA DE CONFORMIDAD DE SERVICIO');

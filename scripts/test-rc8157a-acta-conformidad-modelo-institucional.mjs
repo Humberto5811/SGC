@@ -40,6 +40,7 @@ const mockData = {
   centro: 'Lima / Chorrillos',
   area_usuaria: 'UNIDAD DE EPIDEMIOLOGIA',
   servicio_prestado: longDesc,
+  informe_productos: 'SEGUNDO ENTREGABLE',
   numero_entrega: 2,
   importe_entregable: 500,
   fecha_inicio: '2026-08-05',
@@ -93,47 +94,67 @@ console.log('\n=== RC8.15.7A — Modelo institucional Acta Conformidad Servicio 
   ok(true, '8. OS real en bloque O/S');
 
   assert.match(raw, /SERVICIOS GENERALES/);
-  ok(true, '9. proveedor');
+  assert.match(raw, /- RUC 20123456789/);
+  assert.doesNotMatch(raw, /\? RUC/);
+  assert.match(pdf.html, /SERVICIOS GENERALES S\.A\.C\. - RUC 20123456789/);
+  assert.doesNotMatch(pdf.html, /· RUC/);
+  ok(true, '9. proveedor con separador - RUC (sin carácter corrupto)');
 
   assert.match(raw, /mantenimiento preventivo/);
   ok(true, '10. servicio prestado');
 
-  assert.match(raw, /500\.00/);
-  ok(true, '11. importe');
+  assert.match(raw, /SEGUNDO ENTREGABLE/);
+  ok(true, '11. informe/productos con etiqueta del entregable');
 
-  assert.match(raw, /\b2\b/);
-  ok(true, '12. entregable');
+  assert.match(raw, /500\.00/);
+  ok(true, '12. importe');
 
   assert.match(raw, /05\/08\/2026/);
   assert.match(raw, /30\/08\/2026/);
   assert.match(raw, /25\/08\/2026/);
   ok(true, '13. fechas contractuales y recepción');
 
-  assert.equal(pdf.fields.penalidad, '');
-  assert.equal(pdf.fields.penalidad_pendiente, true);
-  ok(true, '14. penalidad no inventada');
+  assert.equal(pdf.fields.penalidad, 'NO CORRESPONDE');
+  assert.equal(pdf.fields.penalidad_pendiente, false);
+  assert.match(raw, /NO CORRESPONDE/);
+  ok(true, '14. penalidad por defecto NO CORRESPONDE');
+
+  assert.doesNotMatch(raw, /ACTA N\./);
+  assert.doesNotMatch(pdf.html, /ACTA N\.°/);
+  ok(true, '15. identificador ACTA N. no se imprime');
 
   assert.match(raw, /Responsable del Area Usuaria|Responsable del Área Usuaria/);
   assert.match(raw, /Walter Vasquez/);
-  ok(true, '15. firma AU izquierda');
+  ok(true, '16. firma AU izquierda');
 
   assert.match(raw, /Director\/Jefe del Centro/);
-  ok(true, '16. firma Director/Jefe derecha');
+  ok(true, '17. firma Director/Jefe derecha');
 
   assert.match(raw, /Walter Vasquez/);
   assert.doesNotMatch(raw, /Director\/Jefe del Centro[\s\S]{0,40}Walter Vasquez/);
-  ok(true, '17. nombres no hardcodeados cruzados (AU ≠ Director)');
+  ok(true, '18. nombres no hardcodeados cruzados (AU ≠ Director)');
 
   const fieldsLong = resolveActaConformidadServiciosFields({ ...mockData, servicio_prestado: longDesc });
   assert.ok(fieldsLong.servicio_prestado.length > 80);
-  ok(true, '18. descripción larga resuelta sin truncar en fields');
+  ok(true, '19. descripción larga resuelta sin truncar en fields');
 
   assert.match(pdf.nombre, /^ACTA-CS-9901-E2-V1\.pdf$/);
-  ok(true, '19. versionado documental vigente');
+  ok(true, '20. versionado documental vigente en nombre de archivo');
+
+  assert.doesNotMatch(raw, /N\. ENTREGABLE/);
+  ok(true, '21. sin columna N. ENTREGABLE');
+
+  assert.match(pdf.fields.texto_declarativo, /Términos de Referencia contractuales acordados/);
+  ok(true, '22. texto introductorio institucional');
 
   const src = readFileSync('server/lib/entregableConformidadPdfServer.js', 'utf8');
+  assert.match(src, /ROW_PAD/);
+  assert.match(src, /row-vcenter/);
+  assert.match(src, /vertical-align:\s*middle/);
+  assert.match(src, /labTextH[\s\S]{0,120}valTextH/);
+  ok(true, '23. filas MONTO/PROVEEDOR/SERVICIO con padding y centrado vertical');
   assert.doesNotMatch(src, /from '\.\.\/db\.js'|query\(/);
-  ok(true, '20. generador continúa sin SQL');
+  ok(true, '24. generador continúa sin SQL');
 }
 
 console.log(`\nResultado: ${passed} OK, ${failed} FAIL\n`);

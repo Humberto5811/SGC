@@ -224,6 +224,7 @@ try {
   const menuActa = entregableMenuItems({
     puede_ver_acta_generada: true,
     puede_adjuntar_acta_firmada: true,
+    puede_regenerar_acta: true,
     puede_observar: true,
     puede_ver_trazabilidad: true,
     acta_generada_version: 1,
@@ -231,6 +232,8 @@ try {
     situacion_codigo: 'ACTA_GENERADA',
   });
   ok(menuActa.some((item) => item.act === 'adjuntarActaFirmada'), '12. acta sin firmada permite Adjuntar firmada');
+  ok(menuActa.some((item) => item.act === 'generarActa' && item.label === 'Regenerar Acta de Conformidad'),
+    '12b. acta sin firmada permite Regenerar Acta');
 
   const menuConforme = entregableMenuItems({
     puede_ver_acta_generada: true,

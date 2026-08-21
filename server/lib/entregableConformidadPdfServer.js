@@ -20,12 +20,22 @@ import {
 
 export const ACTA_CONFORMIDAD_SERVICIOS_TITULO = 'ACTA DE CONFORMIDAD DE SERVICIO';
 
-export const ACTA_CONFORMIDAD_SERVICIOS_TEXTO = 'Por medio del presente, los que suscriben, dan CONFORMIDAD '
-  + 'al servicio prestado, verificando que cumple con los términos de referencia, '
-  + 'especificaciones técnicas y condiciones contractuales acordadas.';
+export const ACTA_CONFORMIDAD_SERVICIOS_TEXTO = 'Por medio del presente, los que suscriben, dan CONFORMIDAD del servicio '
+  + 'que a continuación se detalla, el mismo que ha sido realizado a satisfacción del área usuaria, '
+  + 'cumpliendo con los Términos de Referencia contractuales acordados, en señal de lo cual firmamos '
+  + 'la presente, de acuerdo al siguiente detalle:';
+
+const PENALIDAD_DEFAULT = 'NO CORRESPONDE';
 
 const NO_DISPONIBLE = '—';
 const VACIO = '';
+const ROW_PAD = 6;
+
+function formatProveedorConformidadTexto(proveedor, ruc) {
+  const nombre = String(proveedor || VACIO).trim();
+  const rucVal = String(ruc || '').trim();
+  return rucVal ? `${nombre} - RUC ${rucVal}` : nombre;
+}
 
 function pick(...vals) {
   for (const v of vals) {
@@ -82,11 +92,10 @@ export function resolveActaConformidadServiciosFields(data = {}, opts = {}) {
   const numeroEntrega = pick(data.numero_entrega, entregable.numero_entrega, entregable.numero);
   const servicioPrestado = pick(
     data.servicio_prestado,
-    data.denominacion,
-    entregable.denominacion,
-    entregable.etiqueta_entrega,
-    entregable.descripcion,
     data.objeto_servicio,
+    entregable.denominacion,
+    entregable.descripcion,
+    data.denominacion,
   );
   const importeEntregable = pick(data.importe_entregable, data.importe, entregable.importe);
   const montoTotal = pick(data.monto_total, orden.monto_total, data.monto_total_orden);
@@ -119,10 +128,12 @@ export function resolveActaConformidadServiciosFields(data = {}, opts = {}) {
   const contratoParts = splitFechaParts(fmtFecha(contratoFechaRaw));
   const tieneContrato = Boolean(contratoNumero && String(contratoNumero).trim());
 
-  let penalidad = VACIO;
+  let penalidad = PENALIDAD_DEFAULT;
   if (penalidadRaw != null && String(penalidadRaw).trim() !== '') {
     const p = String(penalidadRaw).trim().toUpperCase();
-    penalidad = (p === 'SI' || p === 'SÍ' || p.includes('SÍ')) ? 'SÍ' : (p === 'NO' ? 'NO' : VACIO);
+    if (p === 'SI' || p === 'SÍ' || p.includes('SÍ')) penalidad = 'SÍ';
+    else if (p === 'NO' || p === 'NO CORRESPONDE') penalidad = PENALIDAD_DEFAULT;
+    else penalidad = String(penalidadRaw).trim();
   }
 
   const logoDataUrl = opts.logoDataUrl || data.logo_data_url || institucion.logo_data_url || '';
@@ -160,13 +171,12 @@ export function resolveActaConformidadServiciosFields(data = {}, opts = {}) {
     monto_pagar: importeEntregable != null && importeEntregable !== '' ? fmtMonto(importeEntregable, moneda) : VACIO,
     comprobante_pago: comprobantePago || VACIO,
     informe_productos: informeProductos || VACIO,
-    numero_entrega: numeroEntrega != null && numeroEntrega !== '' ? String(numeroEntrega) : VACIO,
-    folios: folios || VACIO,
+    folios: folios != null && String(folios).trim() !== '' ? String(folios).trim() : NO_DISPONIBLE,
     fecha_inicio: fmtFecha(fechaInicioRaw),
     fecha_limite: fmtFecha(fechaMaximaRaw),
     fecha_culminacion: fmtFecha(fechaRecepcionRaw),
     penalidad,
-    penalidad_pendiente: !penalidad,
+    penalidad_pendiente: penalidad === VACIO,
     fecha_emision: fmtFecha(fechaEmisionRaw),
     meta_secundaria: [
       requerimiento ? `Requerimiento: ${requerimiento}` : '',
@@ -216,9 +226,7 @@ function buildActaConformidadServiciosStream(fields) {
   y = drawTitleBox(b, margin, y, contentW, fields);
 
   b.text(`ANEXO N. ${fields.anexo}`, b.pageW / 2, y, { size: 10, bold: true, align: 'center' });
-  y += 12;
-  b.text(`ACTA N. ${fields.numero_acta}`, b.pageW - margin, y, { size: 7, align: 'right' });
-  y += 10;
+  y += 14;
   y += b.text(fields.texto_declarativo, margin, y, { size: 8, bold: true, maxW: contentW });
   y += 8;
 
@@ -243,21 +251,28 @@ function buildActaConformidadServiciosStream(fields) {
   drawMini(margin + half + 10, 'O/S', fields.orden.numero, fields.orden.dia, fields.orden.mes, fields.orden.anio);
   y += 46;
 
-  const simpleRow = (lab, val, minH = 16) => {
+  const simpleRow = (lab, val, minH = 18) => {
     const labW = contentW * 0.38;
     const valW = contentW - labW - 10;
-    const textH = b.measureText(String(val || VACIO), { size: 8, maxW: valW });
-    const h = Math.max(minH, textH + 8);
+    const labSize = 7;
+    const valSize = 8;
+    const labTextH = b.measureText(lab, { size: labSize, maxW: labW - 8 });
+    const valTextH = b.measureText(String(val || VACIO), { size: valSize, maxW: valW - 8 });
+    const h = Math.max(minH, Math.max(labTextH, valTextH) + ROW_PAD * 2);
+    const labStartY = y + (h - labTextH) / 2;
+    const valStartY = y + (h - valTextH) / 2;
     b.rect(margin, y, contentW, h);
     b.line(margin + labW, y, margin + labW, y + h);
-    b.text(lab, margin + labW / 2, y + h / 2 - 2, { size: 7, bold: true, align: 'center', maxW: labW - 6 });
-    b.text(String(val || VACIO), margin + labW + 4, y + 6, { size: 8, maxW: valW });
+    b.text(lab, margin + labW / 2, labStartY, {
+      size: labSize, bold: true, align: 'center', maxW: labW - 8,
+    });
+    b.text(String(val || VACIO), margin + labW + 4, valStartY, {
+      size: valSize, maxW: valW - 8,
+    });
     y += h;
   };
 
-  const proveedorTexto = fields.proveedor_ruc
-    ? `${fields.proveedor} · RUC ${fields.proveedor_ruc}`
-    : fields.proveedor;
+  const proveedorTexto = formatProveedorConformidadTexto(fields.proveedor, fields.proveedor_ruc);
 
   simpleRow('MONTO TOTAL (Contrato u Orden)', fields.monto_total, 18);
   simpleRow('PROVEEDOR', proveedorTexto, 18);
@@ -283,20 +298,21 @@ function buildActaConformidadServiciosStream(fields) {
   b.line(margin + c1 + c2 + c3, y, margin + c1 + c2 + c3, y + rH);
   b.text('N. DE INFORME Y/O PRODUCTOS', margin + c1 / 2, y + 12, { size: 7, bold: true, align: 'center', maxW: c1 - 4 });
   b.text(fields.informe_productos, margin + c1 + 3, y + 12, { size: 8, maxW: c2 - 4 });
-  b.text('N. ENTREGABLE', margin + c1 + c2 + c3 / 2, y + 12, { size: 7, bold: true, align: 'center' });
-  b.text(fields.numero_entrega, margin + c1 + c2 + c3 + (contentW - c1 - c2 - c3) / 2, y + 12, {
-    size: 9, bold: true, align: 'center',
+  b.text('N. DE FOLIOS', margin + c1 + c2 + c3 / 2, y + 12, { size: 7, bold: true, align: 'center', maxW: c3 - 4 });
+  b.text(fields.folios, margin + c1 + c2 + c3 + (contentW - c1 - c2 - c3) / 2, y + 12, {
+    size: 8, align: 'center',
   });
   y += rH;
-  simpleRow('N. DE FOLIOS', fields.folios, 14);
 
   const dateRow = (lab, val) => {
     const labW = contentW * 0.55;
-    const h = 18;
+    const valW = contentW - labW;
+    const labH = b.measureText(lab, { size: 6.5, maxW: labW - 8, bold: true });
+    const h = Math.max(22, labH + 10);
     b.rect(margin, y, contentW, h);
     b.line(margin + labW, y, margin + labW, y + h);
-    b.text(lab, margin + labW / 2, y + 11, { size: 6.5, bold: true, align: 'center', maxW: labW - 6 });
-    b.text(val || VACIO, margin + labW + (contentW - labW) / 2, y + 11, { size: 8, align: 'center' });
+    b.text(lab, margin + labW / 2, y + 8, { size: 6.5, bold: true, align: 'center', maxW: labW - 8 });
+    b.text(val || VACIO, margin + labW + valW / 2, y + h / 2, { size: 8, align: 'center' });
     y += h;
   };
   dateRow('Fecha de Inicio de Plazo', fields.fecha_inicio);
@@ -364,6 +380,7 @@ export function getActaConformidadServiciosCss() {
 .acta-cs .declarativo { font-weight:700; font-size:9.5px; text-align:justify; margin:0 0 8px; }
 .acta-cs table.blk { width:100%; border-collapse:collapse; margin:0 0 6px; }
 .acta-cs table.blk td, .acta-cs table.blk th { border:1px solid #000; padding:2mm 2.5mm; vertical-align:top; }
+.acta-cs table.blk tr.row-vcenter td { vertical-align:middle; padding:3mm 2.5mm; }
 .acta-cs table.blk td.label { font-weight:700; width:38%; font-size:8.5px; text-transform:uppercase; }
 .acta-cs .pair { display:grid; grid-template-columns:1fr 1fr; gap:4mm; margin-bottom:6px; }
 .acta-cs .ctr { text-align:center; font-weight:700; }
@@ -383,9 +400,7 @@ export function buildActaConformidadServiciosHtml(data = {}, opts = {}) {
   const logo = f.logoDataUrl
     ? `<img src="${esc(f.logoDataUrl)}" alt="Logo institucional" />`
     : '';
-  const proveedorTexto = f.proveedor_ruc
-    ? `${f.proveedor} · RUC ${f.proveedor_ruc}`
-    : f.proveedor;
+  const proveedorTexto = formatProveedorConformidadTexto(f.proveedor, f.proveedor_ruc);
   const penClass = f.penalidad === 'SÍ' ? 'pen-si' : 'pen-no';
 
   const miniTable = (title, num, dia, mes, anio) => `
@@ -395,7 +410,8 @@ export function buildActaConformidadServiciosHtml(data = {}, opts = {}) {
       <tr><td class="ctr">${esc(num)}</td><td class="ctr">${esc(dia)}</td><td class="ctr">${esc(mes)}</td><td class="ctr">${esc(anio)}</td></tr>
     </table>`;
 
-  const row = (lab, val) => `<tr><td class="label">${esc(lab)}</td><td>${esc(val)}</td></tr>`;
+  const row = (lab, val) => `<tr class="row-vcenter"><td class="label">${esc(lab)}</td><td>${esc(val)}</td></tr>`;
+  const dateRow = (lab, val) => `<tr><td class="label">${esc(lab)}</td><td class="ctr">${esc(val)}</td></tr>`;
 
   return `<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"/><title>${esc(f.numero_acta)}</title>
@@ -405,7 +421,6 @@ export function buildActaConformidadServiciosHtml(data = {}, opts = {}) {
   <div class="hdr-lines"><div>${esc(f.encabezado.linea1)}</div><div>${esc(f.encabezado.linea2)}</div></div>
   <div class="title-box"><div class="logo-cell">${logo}</div><div class="title-cell">${esc(f.titulo)}</div></div>
   <div class="anexo">ANEXO N.° ${esc(f.anexo)}</div>
-  <div class="meta-discreta">ACTA N.° ${esc(f.numero_acta)}</div>
   <p class="declarativo">${esc(f.texto_declarativo)}</p>
   <div class="pair">${miniTable('CONTRATO', f.contrato.numero, f.contrato.dia, f.contrato.mes, f.contrato.anio)}
     ${miniTable('O/S', f.orden.numero, f.orden.dia, f.orden.mes, f.orden.anio)}</div>
@@ -421,16 +436,15 @@ export function buildActaConformidadServiciosHtml(data = {}, opts = {}) {
     </tr>
     <tr>
       <td class="label ctr">N.° DE INFORME Y/O PRODUCTOS</td><td>${esc(f.informe_productos)}</td>
-      <td class="label ctr">N.° ENTREGABLE</td><td class="ctr">${esc(f.numero_entrega)}</td>
+      <td class="label ctr">N.° DE FOLIOS</td><td class="ctr">${esc(f.folios)}</td>
     </tr>
-    ${row('N.° DE FOLIOS', f.folios)}
-    ${row('Fecha de Inicio de Plazo', f.fecha_inicio)}
-    ${row('Fecha Límite de culminación del servicio o fecha de Recepción por parte de la Entidad (para servicios que culminen en entrega de tangibles)', f.fecha_limite)}
-    ${row('Fecha de culminación del servicio o fecha de Recepción por parte de la Entidad (para servicios que culminen en entrega de tangibles)', f.fecha_culminacion)}
+    ${dateRow('Fecha de Inicio de Plazo', f.fecha_inicio)}
+    ${dateRow('Fecha Límite de culminación del servicio o fecha de Recepción por parte de la Entidad (para servicios que culminen en entrega de tangibles)', f.fecha_limite)}
+    ${dateRow('Fecha de culminación del servicio o fecha de Recepción por parte de la Entidad (para servicios que culminen en entrega de tangibles)', f.fecha_culminacion)}
   </table>
   <table class="blk">
     <tr>
-      <td class="label ctr">¿Corresponde aplicación de penalidad?</td>
+      <td class="label ctr" style="width:45%">¿Corresponde aplicación de penalidad?</td>
       <td class="${penClass}">${esc(f.penalidad)}</td>
     </tr>
     <tr><td colspan="2" class="glosa">${esc(f.glosa_penalidad)}</td></tr>

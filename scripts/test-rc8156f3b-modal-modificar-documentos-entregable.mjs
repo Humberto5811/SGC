@@ -5,10 +5,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pool, { query } from '../server/db.js';
+import { toIsoDateString } from '../server/lib/diasPlazo.js';
 import {
   adjuntarDocumentosRecepcionEntregable,
   getDetalleEntregableServicio,
   inicializarEstadoResponsableEntregable,
+  listarBandejaEntregablesServicios,
+  modificarRecepcionEntregable,
   retirarDocumentoRecepcionEntregable,
 } from '../server/lib/entregablesServicios.js';
 import { ensureResponsablePersonaEntregable } from '../server/lib/entregableEstadoPersistido.js';
@@ -28,11 +31,22 @@ function pdfBase64(label) {
 console.log('\n=== RC8.15.6F-3B — Modal Modificar entregable ===\n');
 
 const view = read('src/views/ejecucion/presentacionEntregableView.js');
+const openFn = view.match(/async function openRegistrarRecepcion[\s\S]*?^}/m)?.[0] || '';
+const submitFn = view.match(/async function submitRegistrarRecepcion[\s\S]*?^}/m)?.[0] || '';
 ok(/documentos_entregable_gestionables/.test(view), 'A. UI usa documentos_entregable_gestionables');
 ok(/Entregable N\.°/.test(view), 'B. UI muestra Entregable N.°');
 ok(/pe-doc-retire/.test(view) && /Eliminar/.test(view), 'C. UI tiene Eliminar');
 ok(!/pe-doc-replace/.test(view), 'D. UI sin botón Reemplazar');
 ok(!/Presentación inicial/.test(view.match(/renderModificarDocumentosSection[\s\S]*?^}/m)?.[0] || ''), 'E. modal sin bloques históricos');
+ok(/Fecha recepción Mesa de Partes/.test(view) && /Expediente SGD/.test(view) && /Observación/.test(view),
+  'F. modal conserva campos de metadatos');
+ok(/recepcionInicial\.fecha_recepcion_mesa_partes/.test(openFn), 'G. fecha cargada desde recepción INICIAL');
+ok(/recepcionInicial\.numero_expediente_sgd/.test(openFn), 'H. SGD cargado desde recepción INICIAL');
+ok(/recepcionInicial\.observacion/.test(openFn), 'I. observación cargada desde recepción INICIAL');
+ok(!/if \(editando\) \{[\s\S]*?metaWrap\?\.classList\.add\('d-none'\)/.test(openFn),
+  'J. metadatos visibles en modo edición');
+ok(/if \(editando\)[\s\S]*modificarRecepcion/.test(submitFn),
+  'K. Guardar cambios persiste metadatos vía modificarRecepcion');
 
 const permPe = {
   modulos: ['EJECUCION'],
@@ -72,7 +86,7 @@ try {
     INSERT INTO entregable_recepciones (
       orden_entrega_id, orden_id, numero_recepcion, tipo_recepcion,
       fecha_recepcion_mesa_partes, numero_expediente_sgd, observacion, estado, registrado_por
-    ) VALUES ($1,$2,1,'INICIAL',CURRENT_DATE,$3,'Entregable','RECIBIDO','test-f3b') RETURNING id
+    ) VALUES ($1,$2,1,'INICIAL','2026-08-19',$3,'Entregable','RECIBIDO','test-f3b') RETURNING id
   `, [e1, ordenId, `SGD-INI-${nonce}`])).rows[0].id);
   await query(`
     INSERT INTO entregable_recepcion_documentos (
@@ -84,7 +98,7 @@ try {
     INSERT INTO entregable_recepciones (
       orden_entrega_id, orden_id, numero_recepcion, tipo_recepcion,
       fecha_recepcion_mesa_partes, numero_expediente_sgd, observacion, estado, registrado_por
-    ) VALUES ($1,$2,2,'SUBSANACION',CURRENT_DATE,$3,'Respuesta obs','RECIBIDO','test-f3b') RETURNING id
+    ) VALUES ($1,$2,2,'SUBSANACION','2026-08-19',$3,'Respuesta obs','RECIBIDO','test-f3b') RETURNING id
   `, [e1, ordenId, `SGD-SUB-${nonce}`])).rows[0].id);
   docSubId = Number((await query(`
     INSERT INTO entregable_recepcion_documentos (
@@ -120,6 +134,34 @@ try {
   }, respCtx, usuarioResp.username);
   const detalle2 = await getDetalleEntregableServicio(e1);
   ok((detalle2.documentos_entregable_gestionables || []).length === 2, '6. múltiples vigentes INICIAL en gestionables');
+
+  const mod = await modificarRecepcionEntregable(e1, {
+    fecha_recepcion_mesa_partes: '2026-08-20',
+    numero_expediente_sgd: `SGD-EDIT-${nonce}`,
+    observacion: 'Observación editada',
+    documentos: [],
+  }, respCtx, usuarioResp.username);
+  ok(mod.numero_expediente_sgd === `SGD-EDIT-${nonce}`, '8. expediente SGD INICIAL persistido');
+  ok(mod.observacion === 'Observación editada', '9. observación INICIAL persistida');
+  const fechaIni = (await query(
+    'SELECT fecha_recepcion_mesa_partes::text AS f FROM entregable_recepciones WHERE id=$1',
+    [recepInicialId],
+  )).rows[0]?.f;
+  ok(String(fechaIni).slice(0, 10) === '2026-08-20', '7. fecha INICIAL persistida');
+
+  const detalle3 = await getDetalleEntregableServicio(e1);
+  ok(toIsoDateString(detalle3.recepcion_inicial?.fecha_recepcion_mesa_partes) === '2026-08-20',
+    '12. detalle refleja fecha INICIAL modificada');
+  const bandeja = await listarBandejaEntregablesServicios(respCtx);
+  const fila = bandeja.find((row) => Number(row.orden_entrega_id) === e1);
+  ok(String(fila?.fecha_recepcion_mesa_partes || '').slice(0, 10) === '2026-08-20',
+    '13. bandeja refleja fecha INICIAL modificada');
+  ok(String(fila?.ultima_recepcion?.fecha_recepcion_mesa_partes || '').slice(0, 10) === '2026-08-19',
+    '14. subsanación conserva su propia fecha');
+
+  const subRow = (await query('SELECT numero_expediente_sgd, observacion FROM entregable_recepciones WHERE id=$1', [recepSubId])).rows[0];
+  ok(subRow.numero_expediente_sgd === `SGD-SUB-${nonce}`, '10. metadatos de subsanación no se alteran');
+  ok(subRow.observacion === 'Respuesta obs', '11. observación de subsanación intacta');
 } catch (error) {
   ok(false, `fixture (${error.message})`);
 } finally {

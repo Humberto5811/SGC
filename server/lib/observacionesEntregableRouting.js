@@ -442,6 +442,155 @@ export async function registrarRoutingObservacionEntregable({
   });
 }
 
+const ETAPAS_RETORNO_VALIDAS = Object.freeze([
+  'REVISION_COORDINADOR_CM',
+  'REVISION_ANALISTA_CM',
+]);
+
+function parseRoutingDocumentos(documentos) {
+  if (!documentos) return {};
+  if (typeof documentos === 'object' && !Array.isArray(documentos)) return documentos;
+  if (typeof documentos === 'string') {
+    try { return JSON.parse(documentos); } catch (_) { return {}; }
+  }
+  return {};
+}
+
+export function extraerEtapaRetornoObservacion(observacion = null) {
+  const routing = parseRoutingDocumentos(observacion?.documentos);
+  const code = String(routing?.etapa_retorno || '').trim().toUpperCase();
+  return ETAPAS_RETORNO_VALIDAS.includes(code) ? code : null;
+}
+
+/**
+ * RC8.15.6G-2 — Routing canónico CM/Analista → Área Usuaria con etapa de retorno.
+ */
+export async function registrarRoutingObservacionEntregableAreaUsuaria({
+  requerimientoId,
+  ordenId,
+  ordenEntregaId,
+  recepcionId,
+  origenSubmoduloCodigo,
+  etapaRetornoCodigo,
+  usuarioOrigenId,
+  usuarioDestinoId,
+  destinatario,
+  motivo,
+  client = null,
+} = {}) {
+  const rid = Number(requerimientoId);
+  const oid = Number(ordenId);
+  const eid = Number(ordenEntregaId);
+  const recepcion = Number(recepcionId);
+  const origenUid = Number(usuarioOrigenId);
+  const destinoUid = Number(usuarioDestinoId);
+  const texto = String(motivo || '').trim();
+  const origenEtapa = String(origenSubmoduloCodigo || '').trim().toUpperCase();
+  const etapaRetorno = String(etapaRetornoCodigo || '').trim().toUpperCase();
+  if (![rid, oid, eid, recepcion, origenUid, destinoUid].every((id) => Number.isInteger(id) && id > 0)) {
+    throw httpError('Contexto de observación inválido', 400, 'CONTEXTO_OBSERVACION_INVALIDO');
+  }
+  if (!texto) {
+    throw httpError('El motivo de observación es obligatorio', 400, 'MOTIVO_OBSERVACION_REQUERIDO');
+  }
+  if (!ETAPAS_RETORNO_VALIDAS.includes(etapaRetorno)) {
+    throw httpError('Etapa de retorno inválida', 400, 'ETAPA_RETORNO_INVALIDA');
+  }
+  if (!destinatario?.id) {
+    throw httpError('Destinatario Área Usuaria inválido', 422, 'USUARIO_DESTINO_INVALIDO');
+  }
+
+  return runInTransaction(client, async (tx) => {
+    const { rows: origenRows } = await tx.query(`
+      SELECT id, dni, username, apellidos, nombres, nombre, activo
+      FROM usuarios WHERE id=$1
+    `, [origenUid]);
+    const usuarioOrigen = origenRows[0];
+    if (!usuarioOrigen?.activo) {
+      throw httpError('Usuario origen inexistente o inactivo', 409, 'USUARIO_ORIGEN_INVALIDO');
+    }
+
+    const { rows: contextoRows } = await tx.query(`
+      SELECT oe.id AS orden_entrega_id, oe.orden_id, oc.requerimiento_id, er.id AS recepcion_id
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id=oe.orden_id
+      JOIN entregable_recepciones er
+        ON er.orden_entrega_id=oe.id AND er.orden_id=oe.orden_id
+      WHERE oe.id=$1 AND oe.orden_id=$2
+        AND oc.requerimiento_id=$3 AND er.id=$4
+      FOR UPDATE OF oe, er
+    `, [eid, oid, rid, recepcion]);
+    if (!contextoRows.length) {
+      throw httpError(
+        'Orden, entregable, recepción y requerimiento no forman el mismo contexto',
+        409,
+        'CONTEXTO_OBSERVACION_CRUZADO',
+      );
+    }
+
+    const origenNombre = usuarioOrigen.username
+      || usuarioOrigen.nombre
+      || usuarioOrigen.dni
+      || String(origenUid);
+    const routingMeta = JSON.stringify({
+      etapa_retorno: etapaRetorno,
+      tipo_routing: 'CM_ANALISTA_AU',
+      origen_etapa: origenEtapa,
+    });
+    const { rows: workflowRows } = await tx.query(`
+      INSERT INTO workflow_observaciones (
+        expediente_id, origen, estado, emitida_por, responsable_subsanacion,
+        motivo, documentos, dias_plazo, emitida_at,
+        origen_submodulo_codigo, destino_submodulo_codigo,
+        usuario_origen_id, usuario_destino_id
+      ) VALUES (
+        $1,'ENTREGABLE_SERVICIO','OBS_EMITIDA',$2,$3,$4,$5::jsonb,5,NOW(),$6,'PRESENTACION_ENTREGABLES',$7,$8
+      )
+      RETURNING *
+    `, [
+      rid,
+      origenNombre.slice(0, 150),
+      (destinatario.username || destinatario.nombre).slice(0, 150),
+      texto,
+      routingMeta,
+      origenEtapa.slice(0, 80),
+      origenUid,
+      destinatario.id,
+    ]);
+    const workflowObservacion = workflowRows[0];
+
+    const { rows: entregableRows } = await tx.query(`
+      INSERT INTO entregable_observaciones (
+        orden_id, orden_entrega_id, recepcion_id, workflow_observacion_id,
+        motivo, estado, observado_por, observado_at
+      ) VALUES ($1,$2,$3,$4,$5,'OBS_EMITIDA',$6,NOW())
+      RETURNING *
+    `, [
+      oid,
+      eid,
+      recepcion,
+      Number(workflowObservacion.id),
+      texto,
+      origenNombre.slice(0, 150),
+    ]);
+
+    return {
+      workflow_observacion: workflowObservacion,
+      entregable_observacion: entregableRows[0],
+      destinatario,
+      cambio_responsable: {
+        preparado: true,
+        ejecutado: false,
+        usuario_origen_id: origenUid,
+        usuario_destino_id: destinatario.id,
+        etapa_retorno: etapaRetorno,
+        origen_etapa: origenEtapa,
+        requiere_etapa_workflow_explicita: true,
+      },
+    };
+  });
+}
+
 export default {
   CATALOGO_DESTINOS_OBSERVACION,
   clasificarObservacionEntregable,
@@ -451,4 +600,6 @@ export default {
   validarDestinatarioObservacion,
   listarMisObservacionesDirigidas,
   registrarRoutingObservacionEntregable,
+  registrarRoutingObservacionEntregableAreaUsuaria,
+  extraerEtapaRetornoObservacion,
 };
