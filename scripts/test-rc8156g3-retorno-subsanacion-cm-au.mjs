@@ -6,6 +6,7 @@ import {
   derivarEntregableAnalistaCM,
   derivarEntregableCoordinadorCM,
   listarBandejaEntregablesServicios,
+  listarBandejaPreparacionExpedientePago,
   observarEntregable,
   obtenerRecepcionVigenteEntregable,
   subsanarEntregable,
@@ -71,13 +72,54 @@ function pdf(label) {
 
 async function verificarOs1105Intacta() {
   const row = (await query(`
-    SELECT oe.id AS orden_entrega_id
+    SELECT oe.id AS orden_entrega_id, ev.etapa_codigo, ev.responsable_usuario_id,
+      u.username AS responsable_username, u.nombre AS responsable_nombre,
+      u.rol, u.cargo, u.permisos
     FROM ordenes_contratacion oc
     JOIN orden_entregas oe ON oe.orden_id = oc.id AND oe.numero_entrega = 1 AND oe.estado = 'ACTIVO'
+    LEFT JOIN entregable_estado_vigente ev ON ev.orden_entrega_id = oe.id
+    LEFT JOIN usuarios u ON u.id = ev.responsable_usuario_id
     WHERE oc.tipo_orden = 'OS' AND oc.numero_orden = '1105'
     ORDER BY oc.id LIMIT 1
   `)).rows[0];
-  if (!row) return { ok: false, motivo: 'OS 1105/E1 no encontrada' };
+  if (!row?.orden_entrega_id) return { ok: false, motivo: 'OS 1105/E1 no encontrada' };
+
+  const etapa = String(row.etapa_codigo || '').toUpperCase();
+
+  if (etapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO) {
+    const analistaCtx = {
+      id: Number(row.responsable_usuario_id),
+      username: row.responsable_username,
+      nombre: row.responsable_nombre,
+      cargo: row.cargo,
+      rol: row.rol,
+      permisos: row.permisos,
+    };
+    if (!analistaCtx.id) {
+      return { ok: false, motivo: 'OS 1105/E1 en PEP sin responsable PERSONA' };
+    }
+    const filaPagos = (await listarBandejaPreparacionExpedientePago(analistaCtx))
+      .find((item) => Number(item.orden_entrega_id) === Number(row.orden_entrega_id));
+    const filaPe = (await listarBandejaEntregablesServicios(analistaCtx))
+      .find((item) => Number(item.orden_entrega_id) === Number(row.orden_entrega_id));
+    const checks = {
+      etapa_pep: etapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
+      conforme: ['CONFORME', 'SUBSANADO'].includes(filaPagos?.situacion_codigo),
+      firmada: filaPagos?.firmada_vigente === true,
+      sin_obs_abierta: filaPagos?.observacion_abierta == null,
+      en_pagos: Boolean(filaPagos),
+      en_presentacion: Boolean(filaPe),
+      presentacion_solo_consulta: Boolean(filaPe)
+        && !entregableMenuItems(filaPe).some((item) => ['derivarPago', 'observarEntregable'].includes(item.act)),
+      analista_operativo: Boolean(filaPagos?.puede_ver_expediente_pago),
+    };
+    return {
+      ok: Object.values(checks).every(Boolean),
+      checks,
+      fila: filaPagos,
+      flujo: 'FASE1_PEP',
+    };
+  }
 
   const coord = (await query(`
     SELECT id, username, nombre, rol, cargo, permisos
@@ -95,7 +137,7 @@ async function verificarOs1105Intacta() {
   })).find((item) => Number(item.orden_entrega_id) === Number(row.orden_entrega_id));
 
   const checks = {
-    etapa: fila?.estado_etapa_codigo === 'REVISION_COORDINADOR_CM',
+    etapa: fila?.estado_etapa_codigo === ETAPAS.REVISION_COORDINADOR_CM,
     conforme: fila?.situacion_codigo === 'CONFORME',
     firmada: fila?.firmada_vigente === true,
     derivar: fila?.puede_derivar_analista_cm === true,
@@ -104,6 +146,7 @@ async function verificarOs1105Intacta() {
     ok: Object.values(checks).every(Boolean),
     checks,
     fila,
+    flujo: 'LEGACY_RCM',
   };
 }
 
@@ -254,7 +297,7 @@ try {
   const derivacion = await derivarEntregableAnalistaCM(
     e1.id, { responsable_id: analista.id }, ctx(coordinador, 'COORDINADOR_CM'), coordinador.username,
   );
-  ok(derivacion?.estado?.etapaCodigo === ETAPAS.REVISION_ANALISTA_CM,
+  ok(derivacion?.estado?.etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
     'CASO 1b. derivación a Analista CM ejecuta con acta firmada preservada');
 
   const e2 = await crearEntrega(2);
@@ -363,9 +406,12 @@ try {
 
   try {
     const os1105 = await verificarOs1105Intacta();
-    ok(os1105.ok, 'OS 1105/E1 intacta y puede_derivar_analista_cm para wrodriguez');
+    const msgOs1105 = os1105.flujo === 'FASE1_PEP'
+      ? 'OS 1105/E1 intacta en PREPARACION_EXPEDIENTE_PAGO (flujo Fase 1/2)'
+      : 'OS 1105/E1 intacta y puede_derivar_analista_cm para wrodriguez (legacy RCM)';
+    ok(os1105.ok, msgOs1105);
     if (!os1105.ok && os1105.checks) {
-      console.error('  checks OS1105:', os1105.checks);
+      console.error(`  checks OS1105 (${os1105.flujo || '—'}):`, os1105.checks);
     }
   } catch (error) {
     cleanupErrors.push(error);

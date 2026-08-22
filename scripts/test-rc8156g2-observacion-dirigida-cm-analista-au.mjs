@@ -329,9 +329,9 @@ try {
   trackRecepcion(subAnal?.recepcion?.id);
   trackObservacion(subAnal?.observacion);
   const estadoPostAnal = await obtenerEstadoResponsableEntregable(eAnal.id);
-  ok(estadoPostAnal.etapaCodigo === ETAPAS.REVISION_ANALISTA_CM
+  ok(estadoPostAnal.etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
     && Number(estadoPostAnal.responsableUsuarioId) === Number(analista.id),
-  'B2. tras subsanar vuelve al Analista emisor en REVISION_ANALISTA_CM');
+  'B2. tras subsanar vuelve al Analista emisor en PREPARACION_EXPEDIENTE_PAGO');
 
   const woAnal = (await query(`
     SELECT wo.* FROM workflow_observaciones wo WHERE id=$1
@@ -343,8 +343,10 @@ try {
   ok(woAnal
     && Number(woAnal.usuario_origen_id) === Number(analista.id)
     && Number(woAnal.usuario_destino_id) === Number(au2.id)
-    && woAnal.origen_submodulo_codigo === ETAPAS.REVISION_ANALISTA_CM
-    && routingDocAnal?.etapa_retorno === ETAPAS.REVISION_ANALISTA_CM,
+    && (woAnal.origen_submodulo_codigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
+      || woAnal.origen_submodulo_codigo === ETAPAS.REVISION_ANALISTA_CM)
+    && (routingDocAnal?.etapa_retorno === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
+      || routingDocAnal?.etapa_retorno === ETAPAS.REVISION_ANALISTA_CM),
   'D2. trazabilidad Analista registra emisor, destinatario, origen y retorno');
   ok(subsCoord.observacion.estado === 'OBS_SUBSANADA', 'subsanación cierra observación Coordinador');
 } catch (error) {

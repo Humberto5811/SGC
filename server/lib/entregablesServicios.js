@@ -44,10 +44,28 @@ import {
   validarDestinatarioAreaUsuariaOrden,
 } from './ordenesContratacion.js';
 import { buildEstadoLabels } from './expedienteEstadoPersistido.js';
-import { ETAPAS } from '../../shared/workflow/etapas.js';
+import { ETAPAS, getEtapaMeta } from '../../shared/workflow/etapas.js';
+import {
+  calcularPenalidadPlazosBase,
+  validarCoherenciaPenalidad,
+} from '../../shared/penalidadPlazos.js';
+import {
+  eliminarPagoDocumentoFisico,
+  leerPagoDocumentoBytes,
+  persistirPagoDocumento,
+} from './entregablePagoDocumentos.js';
+import {
+  obtenerFichaCalculoPenalidad,
+  calcularPenalidadEntregable as calcularPenalidadEntregableG7,
+  generarFormatoPenalidadEntregable,
+  adjuntarFormatoPenalidadFirmado,
+  generarCartaPenalidadEntregable,
+  getDocumentoPenalidadPagoBytes,
+} from './entregablePenalidadPago.js';
 import { EVENTOS } from '../../shared/workflow/eventos.js';
 import {
   PERFILES_FUNCIONALES,
+  hasAnalistaPagoDerivacionAccess,
   resolveFunctionalProfiles,
 } from '../utils/userRoleCatalog.js';
 
@@ -215,7 +233,7 @@ export function mapEntregableBandejaRow(row) {
  * Devuelve cada entregable ACTIVO (unidad separada), sin duplicar por cambios de
  * estado de la orden (se agrupa por orden_entrega).
  */
-export async function listarBandejaEntregablesServicios(userCtx = null) {
+export async function listarBandejaEntregablesServicios(userCtx = null, opts = {}) {
   const { rows } = await query(`
     SELECT
       oe.id AS orden_entrega_id,
@@ -503,8 +521,9 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
     const etapaCodigo = String(erv?.etapaCodigo || erv?.estadoCodigo || '').toUpperCase();
     const enPresentacion = etapaCodigo === 'PRESENTACION_ENTREGABLES';
     const enRevisionCoordinador = etapaCodigo === 'REVISION_COORDINADOR_CM';
-    const enRevisionAnalista = etapaCodigo === 'REVISION_ANALISTA_CM';
-    const enDerivacionPago = etapaCodigo === 'DERIVACION_PAGO';
+    const enRevisionAnalista = etapaCodigo === ETAPAS.REVISION_ANALISTA_CM;
+    const enPreparacionPago = etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO;
+    const enDerivacionPago = etapaCodigo === ETAPAS.DERIVACION_PAGO;
     const analistaCMResponsable = esAdmin(userCtx)
       || (responsablePersonaActual
         && perfilesUsuario.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES));
@@ -595,15 +614,20 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
       && item.situacion_codigo === 'CONFORME'
       && !item.observacion_abierta;
     item.puede_observar_analista_cm = analistaCMResponsable
-      && enRevisionAnalista
-      && item.situacion_codigo === 'CONFORME'
+      && (enRevisionAnalista || enPreparacionPago)
+      && (item.situacion_codigo === 'CONFORME'
+        || (enPreparacionPago && item.situacion_codigo === 'SUBSANADO'))
       && !item.observacion_abierta;
     item.puede_derivar_pago = analistaCMResponsable
-      && enRevisionAnalista
+      && (enRevisionAnalista || enPreparacionPago)
       && item.situacion_codigo === 'CONFORME'
       && item.acta_generada_version > 0
       && item.firmada_vigente
       && !item.observacion_abierta;
+    if ((enPreparacionPago || enDerivacionPago) && opts.vista !== 'pagos') {
+      item.puede_observar_analista_cm = false;
+      item.puede_derivar_pago = false;
+    }
     item.puede_ver_trazabilidad = etapaVisibleTrazabilidadEntregable(etapaCodigo)
       && puedeAccederTrazabilidadEntregable(userCtx, erv, item, {
         accesoRoutingObservacion: routingTrazabilidadIds.has(Number(item.orden_entrega_id)),
@@ -623,6 +647,327 @@ export async function listarBandejaEntregablesServicios(userCtx = null) {
         estadoLabel: labelsCanon.estadoLabel,
       };
     }
+  }
+
+  const incluir = (opts.etapas?.incluir || []).map((e) => String(e).toUpperCase());
+  const excluir = opts.etapas?.excluir != null
+    ? opts.etapas.excluir.map((e) => String(e).toUpperCase())
+    : [];
+  let result = list;
+  if (incluir.length) {
+    const set = new Set(incluir);
+    result = result.filter((item) => set.has(String(item.estado_etapa_codigo || '').toUpperCase()));
+  }
+  if (excluir.length) {
+    const set = new Set(excluir);
+    result = result.filter((item) => !set.has(String(item.estado_etapa_codigo || '').toUpperCase()));
+  }
+  return result;
+}
+
+export const ESTADOS_PENALIDAD_EVALUACION = Object.freeze({
+  PENDIENTE: 'PENDIENTE',
+  NO_CORRESPONDE: 'NO_CORRESPONDE',
+  CORRESPONDE: 'CORRESPONDE',
+});
+
+const PENALIDAD_EVALUACION_LABELS = Object.freeze({
+  PENDIENTE: 'Pendiente',
+  NO_CORRESPONDE: 'No corresponde',
+  CORRESPONDE: 'Corresponde',
+});
+
+export function labelPenalidadEvaluacion(estadoCodigo) {
+  const key = String(estadoCodigo || ESTADOS_PENALIDAD_EVALUACION.PENDIENTE).toUpperCase();
+  return PENALIDAD_EVALUACION_LABELS[key] || PENALIDAD_EVALUACION_LABELS.PENDIENTE;
+}
+
+async function listarPenalidadEvaluacionPorEntregas(ordenEntregaIds = [], client = null) {
+  const ids = [...new Set(ordenEntregaIds.map((id) => Number(id)).filter((id) => id > 0))];
+  if (!ids.length) return new Map();
+  const runner = client || { query: (...args) => query(...args) };
+  const { rows } = await runner.query(`
+    SELECT pe.*, u.nombre AS evaluador_nombre, u.username AS evaluador_username
+    FROM entregable_penalidad_evaluacion pe
+    LEFT JOIN usuarios u ON u.id = pe.usuario_evaluador_id
+    WHERE pe.orden_entrega_id = ANY($1::int[])
+  `, [ids]);
+  return new Map(rows.map((row) => [Number(row.orden_entrega_id), row]));
+}
+
+function mapPenalidadEvaluacionRow(row) {
+  if (!row) {
+    return {
+      corresponde_penalidad: null,
+      estado_penalidad: ESTADOS_PENALIDAD_EVALUACION.PENDIENTE,
+      penalidad_codigo: ESTADOS_PENALIDAD_EVALUACION.PENDIENTE,
+      penalidad_label: labelPenalidadEvaluacion(ESTADOS_PENALIDAD_EVALUACION.PENDIENTE),
+      observacion: null,
+      usuario_evaluador_id: null,
+      fecha_evaluacion: null,
+      evaluador_nombre: null,
+    };
+  }
+  return {
+    id: row.id,
+    orden_entrega_id: row.orden_entrega_id,
+    corresponde_penalidad: row.corresponde_penalidad,
+    estado_penalidad: row.estado_penalidad,
+    penalidad_codigo: row.estado_penalidad,
+    penalidad_label: labelPenalidadEvaluacion(row.estado_penalidad),
+    observacion: row.observacion,
+    usuario_evaluador_id: row.usuario_evaluador_id,
+    fecha_evaluacion: row.fecha_evaluacion,
+    evaluador_nombre: row.evaluador_nombre || row.evaluador_username || null,
+  };
+}
+
+function assertEtapaPermiteEvaluarPenalidad(estado, entrega) {
+  if (String(entrega?.estado || '').toUpperCase() !== 'ACTIVO') {
+    throw httpError('El entregable no está ACTIVO', 409, 'ENTREGABLE_NO_ACTIVO');
+  }
+  const etapa = String(estado?.etapaCodigo || estado?.etapa_codigo || '').toUpperCase();
+  if (etapa !== ETAPAS.PREPARACION_EXPEDIENTE_PAGO) {
+    throw httpError(
+      'La evaluación de penalidad solo está habilitada en preparación de expediente de pago',
+      409,
+      'PENALIDAD_ETAPA_NO_PERMITIDA',
+    );
+  }
+}
+
+function parseCorrespondePenalidadInput(raw) {
+  if (raw === true || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 0 || raw === '0') return false;
+  const text = String(raw ?? '').trim().toUpperCase();
+  if (['SI', 'SÍ', 'S', 'TRUE', 'YES'].includes(text)) return true;
+  if (['NO', 'N', 'FALSE'].includes(text)) return false;
+  throw httpError(
+    'corresponde_penalidad debe ser Sí o No',
+    400,
+    'PENALIDAD_CORRESPONDE_INVALIDO',
+  );
+}
+
+async function registrarEventoPenalidadEntregable(client, {
+  entrega,
+  estado,
+  eventoCodigo,
+  usuarioOrigenId,
+  ejecutadoPor,
+  motivo,
+  metadata,
+}) {
+  const labels = buildEstadoLabels(
+    estado.etapaCodigo || estado.etapa_codigo,
+    estado.estadoCodigo || estado.estado_codigo,
+  );
+  const { rows } = await client.query(`
+    INSERT INTO entregable_eventos (
+      orden_id, orden_entrega_id, requerimiento_id, evento_codigo,
+      estado_anterior_codigo, estado_anterior_label,
+      estado_nuevo_codigo, estado_nuevo_label,
+      etapa_anterior_codigo, etapa_nueva_codigo,
+      responsable_anterior_tipo, responsable_anterior_usuario,
+      responsable_anterior_unidad, responsable_nuevo_tipo,
+      responsable_nuevo_usuario, responsable_nuevo_unidad,
+      ejecutado_usuario_id, ejecutado_por, motivo, metadata_json
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb
+    ) RETURNING *
+  `, [
+    Number(entrega.orden_id),
+    Number(entrega.id),
+    Number(entrega.requerimiento_id),
+    String(eventoCodigo).slice(0, 80),
+    estado.estadoCodigo || estado.estado_codigo,
+    labels.estadoLabel,
+    estado.estadoCodigo || estado.estado_codigo,
+    labels.estadoLabel,
+    estado.etapaCodigo || estado.etapa_codigo,
+    estado.etapaCodigo || estado.etapa_codigo,
+    estado.responsableTipo || estado.responsable_tipo,
+    estado.responsableUsuarioId || estado.responsable_usuario_id,
+    estado.responsableUnidad || estado.responsable_unidad,
+    estado.responsableTipo || estado.responsable_tipo,
+    estado.responsableUsuarioId || estado.responsable_usuario_id,
+    estado.responsableUnidad || estado.responsable_unidad,
+    usuarioOrigenId != null ? Number(usuarioOrigenId) : null,
+    String(ejecutadoPor || usuarioOrigenId || '').slice(0, 150) || null,
+    motivo,
+    metadata ? JSON.stringify(metadata) : null,
+  ]);
+  return rows[0];
+}
+
+/** RC8.15.6G-5 — Consulta evaluación de penalidad del entregable en Pagos. */
+export async function obtenerPenalidadEvaluacionEntregable(ordenEntregaId, userCtx = null) {
+  const entrega = await getEntregableOrThrow(ordenEntregaId);
+  const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
+  assertAnalistaCMResponsable(userCtx, estado);
+  const penalidadMap = await listarPenalidadEvaluacionPorEntregas([entrega.id]);
+  return mapPenalidadEvaluacionRow(penalidadMap.get(Number(entrega.id)) || null);
+}
+
+/** RC8.15.6G-5 — Evalúa o modifica penalidad (Analista CM responsable en PEP). */
+export async function evaluarPenalidadEntregable(ordenEntregaId, body = {}, userCtx = null, usuario = null) {
+  const eid = parseInt(ordenEntregaId, 10);
+  if (!Number.isFinite(eid)) throw httpError('orden_entrega_id inválido');
+  const correspondePenalidad = parseCorrespondePenalidadInput(
+    body.corresponde_penalidad ?? body.correspondePenalidad,
+  );
+  const estadoPenalidad = correspondePenalidad
+    ? ESTADOS_PENALIDAD_EVALUACION.CORRESPONDE
+    : ESTADOS_PENALIDAD_EVALUACION.NO_CORRESPONDE;
+  const observacion = String(body.observacion ?? body.observacion_sustento ?? '').trim() || null;
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.enviado_proveedor_at
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid]);
+    const entrega = rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    assertEtapaPermiteEvaluarPenalidad(estado, entrega);
+    assertAnalistaCMResponsable(userCtx, estado);
+    const plazosCtx = await construirContextoPlazosPenalidad(entrega, { client });
+    const coherencia = validarCoherenciaPenalidad({
+      correspondePenalidad,
+      diasAtraso: plazosCtx.dias_atraso,
+      observacion,
+    });
+    if (!coherencia.ok) {
+      throw httpError(coherencia.message, 422, coherencia.code);
+    }
+
+    const { rows: prevRows } = await client.query(`
+      SELECT * FROM entregable_penalidad_evaluacion
+      WHERE orden_entrega_id = $1
+      FOR UPDATE
+    `, [eid]);
+    const previo = prevRows[0] || null;
+    const evaluadorId = Number(userCtx?.id);
+    let evaluacion;
+
+    if (previo) {
+      const { rows: updated } = await client.query(`
+        UPDATE entregable_penalidad_evaluacion
+        SET corresponde_penalidad = $2,
+            estado_penalidad = $3,
+            observacion = $4,
+            usuario_evaluador_id = $5,
+            fecha_evaluacion = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `, [previo.id, correspondePenalidad, estadoPenalidad, observacion, evaluadorId]);
+      evaluacion = updated[0];
+    } else {
+      const { rows: inserted } = await client.query(`
+        INSERT INTO entregable_penalidad_evaluacion (
+          orden_id, orden_entrega_id, requerimiento_id,
+          corresponde_penalidad, estado_penalidad, observacion,
+          usuario_evaluador_id, fecha_evaluacion
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+        RETURNING *
+      `, [
+        Number(entrega.orden_id),
+        eid,
+        Number(entrega.requerimiento_id),
+        correspondePenalidad,
+        estadoPenalidad,
+        observacion,
+        evaluadorId,
+      ]);
+      evaluacion = inserted[0];
+    }
+
+    const eventoCodigo = previo
+      ? 'ENTREGABLE_PENALIDAD_MODIFICADA'
+      : 'ENTREGABLE_PENALIDAD_EVALUADA';
+    const evento = await registrarEventoPenalidadEntregable(client, {
+      entrega,
+      estado,
+      eventoCodigo,
+      usuarioOrigenId: evaluadorId,
+      ejecutadoPor: usuario || userCtx?.username || userCtx?.nombre || evaluadorId,
+      motivo: previo ? 'Modificación de evaluación de penalidad' : 'Evaluación inicial de penalidad',
+      metadata: {
+        corresponde_penalidad: correspondePenalidad,
+        estado_penalidad: estadoPenalidad,
+        observacion,
+        dias_atraso: plazosCtx.dias_atraso,
+        fecha_maxima_ajustada: plazosCtx.fecha_maxima_ajustada,
+        total_dias_ampliacion: plazosCtx.total_dias_ampliacion,
+        evaluacion_anterior: previo ? {
+          corresponde_penalidad: previo.corresponde_penalidad,
+          estado_penalidad: previo.estado_penalidad,
+          observacion: previo.observacion,
+          usuario_evaluador_id: previo.usuario_evaluador_id,
+          fecha_evaluacion: previo.fecha_evaluacion,
+        } : null,
+      },
+    });
+
+    await client.query('COMMIT');
+    return {
+      evaluacion: mapPenalidadEvaluacionRow(evaluacion),
+      evento,
+      es_modificacion: Boolean(previo),
+    };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** RC8.15.6F1 — Bandeja Pagos: entregables en preparación de expediente (Analista CM). */
+export async function listarBandejaPreparacionExpedientePago(userCtx = null) {
+  const list = await listarBandejaEntregablesServicios(userCtx, {
+    etapas: { incluir: [ETAPAS.PREPARACION_EXPEDIENTE_PAGO], excluir: [] },
+    vista: 'pagos',
+  });
+  const reqIds = [...new Set(list.map((item) => Number(item.requerimiento_id)).filter((id) => id > 0))];
+  const centrosPorReq = new Map();
+  if (reqIds.length) {
+    const { rows } = await query(`
+      SELECT id, cmn, area, payload FROM requerimientos WHERE id = ANY($1::int[])
+    `, [reqIds]);
+    for (const row of rows) {
+      try {
+        const centro = resolverCentroDesdeRequerimiento(row);
+        centrosPorReq.set(Number(row.id), centro.centro_codigo || centro.centro_nombre || '');
+      } catch (_) {
+        centrosPorReq.set(Number(row.id), '');
+      }
+    }
+  }
+  const penalidadMap = await listarPenalidadEvaluacionPorEntregas(
+    list.map((item) => item.orden_entrega_id),
+  );
+  for (const item of list) {
+    item.centro = centrosPorReq.get(Number(item.requerimiento_id)) || item.centro || '';
+    const responsablePersonaActual = Number.isFinite(Number(item.responsable_usuario_id))
+      && Number(userCtx?.id) === Number(item.responsable_usuario_id);
+    const autorizadoPagos = esAdmin(userCtx) || responsablePersonaActual;
+    item.puede_ver_expediente_pago = autorizadoPagos;
+    item.puede_ver_trazabilidad_pago = autorizadoPagos && Boolean(item.puede_ver_trazabilidad);
+    item.puede_observar_pago = autorizadoPagos && Boolean(item.puede_observar_analista_cm);
+    item.puede_evaluar_penalidad_pago = autorizadoPagos;
+    Object.assign(
+      item,
+      mapPenalidadEvaluacionRow(penalidadMap.get(Number(item.orden_entrega_id)) || null),
+    );
+    item.puede_calcular_penalidad_pago = autorizadoPagos
+      && String(item.estado_penalidad || item.penalidad_codigo || '').toUpperCase() === 'CORRESPONDE';
   }
   return list;
 }
@@ -1062,10 +1407,10 @@ function esAnalistaCMActivo(row) {
 }
 
 function esAnalistaPagoActivo(row) {
-  return row?.activo === true && resolveFunctionalProfiles({
+  return hasAnalistaPagoDerivacionAccess({
     ...row,
     permisos: permisosUsuario(row),
-  }).includes(PERFILES_FUNCIONALES.ANALISTA_PAGO);
+  });
 }
 
 function mapCoordinadorCM(row) {
@@ -1185,7 +1530,14 @@ function etapaVisibleTrazabilidadEntregable(etapaCodigo) {
   return etapa === ETAPAS.PRESENTACION_ENTREGABLES
     || etapa === ETAPAS.REVISION_COORDINADOR_CM
     || etapa === ETAPAS.REVISION_ANALISTA_CM
+    || etapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
     || etapa === ETAPAS.DERIVACION_PAGO;
+}
+
+function etapaAnalistaCMOperativa(etapaCodigo) {
+  const etapa = String(etapaCodigo || '').toUpperCase();
+  return etapa === ETAPAS.REVISION_ANALISTA_CM
+    || etapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO;
 }
 
 /** Política única: admin, responsable canónico o emisor/destinatario de obs. dirigida. */
@@ -1611,7 +1963,7 @@ export async function listarAnalistasPagoEntregable(ordenEntregaId, userCtx = nu
   const entrega = await getEntregableOrThrow(ordenEntregaId);
   const estado = await obtenerEstadoResponsableEntregable(ordenEntregaId);
   if (estado?.fuenteEstado !== 'ENTREGABLE'
-    || String(estado?.etapaCodigo || '').toUpperCase() !== 'REVISION_ANALISTA_CM') {
+    || !etapaAnalistaCMOperativa(estado?.etapaCodigo)) {
     throw httpError(
       'El entregable no está en Revisión Analista CM',
       409,
@@ -1636,7 +1988,7 @@ export async function listarDestinatariosAreaUsuariaEntregable(
   const etapa = String(estado?.etapaCodigo || '').toUpperCase();
   if (etapa === ETAPAS.REVISION_COORDINADOR_CM) {
     assertCoordinadorCMResponsable(userCtx, estado);
-  } else if (etapa === ETAPAS.REVISION_ANALISTA_CM) {
+  } else if (etapa === ETAPAS.REVISION_ANALISTA_CM || etapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO) {
     assertAnalistaCMResponsable(userCtx, estado);
   } else if (etapa === ETAPAS.PRESENTACION_ENTREGABLES) {
     assertPuedeObservarEntregable(userCtx, {
@@ -1698,7 +2050,7 @@ export async function observarEntregableAnalistaCM(
     if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
     const estadoAnterior = await obtenerEstadoResponsableEntregable(eid, { client });
     if (estadoAnterior?.fuenteEstado !== 'ENTREGABLE'
-      || String(estadoAnterior?.etapaCodigo || '').toUpperCase() !== 'REVISION_ANALISTA_CM') {
+      || !etapaAnalistaCMOperativa(estadoAnterior?.etapaCodigo)) {
       throw httpError(
         'El entregable no está en Revisión Analista CM',
         409,
@@ -1706,6 +2058,7 @@ export async function observarEntregableAnalistaCM(
       );
     }
     assertAnalistaCMResponsable(userCtx, estadoAnterior);
+    const etapaAnalista = String(estadoAnterior?.etapaCodigo || ETAPAS.REVISION_ANALISTA_CM).toUpperCase();
     const precondiciones = await validarPrecondicionesDerivacion(client, entrega);
     const destinatario = await validarDestinatarioAreaUsuariaOrden(
       Number(entrega.orden_id),
@@ -1734,8 +2087,8 @@ export async function observarEntregableAnalistaCM(
       ordenId: Number(entrega.orden_id),
       ordenEntregaId: eid,
       recepcionId: Number(precondiciones.recepcion.id),
-      origenSubmoduloCodigo: ETAPAS.REVISION_ANALISTA_CM,
-      etapaRetornoCodigo: ETAPAS.REVISION_ANALISTA_CM,
+      origenSubmoduloCodigo: etapaAnalista,
+      etapaRetornoCodigo: etapaAnalista,
       usuarioOrigenId: Number(userCtx?.id),
       usuarioDestinoId: destinoUid,
       destinatario,
@@ -1755,7 +2108,7 @@ export async function observarEntregableAnalistaCM(
         observacion_id: Number(routing.entregable_observacion.id),
         workflow_observacion_id: Number(routing.workflow_observacion.id),
         recepcion_id: Number(precondiciones.recepcion.id),
-        etapa_retorno: ETAPAS.REVISION_ANALISTA_CM,
+        etapa_retorno: etapaAnalista,
         acta_id: Number(precondiciones.acta.id),
         acta_firmada_id: Number(precondiciones.firmada.id),
       },
@@ -1814,7 +2167,7 @@ export async function derivarEntregablePago(
     if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
     const estadoAnterior = await obtenerEstadoResponsableEntregable(eid, { client });
     if (estadoAnterior?.fuenteEstado !== 'ENTREGABLE'
-      || String(estadoAnterior?.etapaCodigo || '').toUpperCase() !== 'REVISION_ANALISTA_CM') {
+      || !etapaAnalistaCMOperativa(estadoAnterior?.etapaCodigo)) {
       throw httpError(
         'El entregable no está en Revisión Analista CM',
         409,
@@ -1903,6 +2256,419 @@ export async function listarTrazabilidadEntregable(ordenEntregaId, userCtx = nul
   return [...rows, ...routings].sort(
     (a, b) => new Date(b.ocurrido_at || 0).getTime() - new Date(a.ocurrido_at || 0).getTime(),
   );
+}
+
+function mapAmpliacionPlazoRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    orden_entrega_id: row.orden_entrega_id,
+    dias_ampliacion: Number(row.dias_ampliacion),
+    numero_documento: row.numero_documento,
+    fecha_documento: toIsoDateString(row.fecha_documento) || row.fecha_documento,
+    observacion: row.observacion || null,
+    documento_id: row.documento_id,
+    documento_nombre: row.nombre_archivo || row.documento_nombre || null,
+    documento_mime_type: row.mime_type || row.documento_mime_type || null,
+    documento_tamanio_bytes: row.tamanio_bytes ?? row.documento_tamanio_bytes ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function listarAmpliacionesPlazoRows(ordenEntregaId, { client = null } = {}) {
+  const run = client || { query };
+  const { rows } = await run.query(`
+    SELECT a.*,
+      d.nombre_archivo,
+      d.mime_type,
+      d.tamanio_bytes,
+      d.id AS documento_id
+    FROM entregable_penalidad_ampliacion_plazo a
+    JOIN entregable_pago_documentos d ON d.id = a.documento_id
+    WHERE a.orden_entrega_id = $1
+    ORDER BY a.fecha_documento ASC, a.id ASC
+  `, [Number(ordenEntregaId)]);
+  return rows.map(mapAmpliacionPlazoRow);
+}
+
+async function construirContextoPlazosPenalidad(entrega, { client = null } = {}) {
+  const notif = resolveOrdenFechaNotificacion(
+    { enviado_proveedor_at: entrega.enviado_proveedor_at },
+    [],
+  );
+  const recepcion = await obtenerRecepcionVigenteEntregable(entrega.id, { client });
+  const ampliaciones = await listarAmpliacionesPlazoRows(entrega.id, { client });
+  const plazos = calcularPenalidadPlazosBase({
+    fechaMaximaContractual: toIsoDateString(entrega.fecha_maxima),
+    ampliaciones,
+    fechaPresentacion: recepcion?.fecha_recepcion_mesa_partes,
+  });
+  return {
+    orden_entrega_id: Number(entrega.id),
+    orden_id: Number(entrega.orden_id),
+    numero_orden: entrega.numero_orden,
+    tipo_orden: entrega.tipo_orden,
+    anio_orden: entrega.anio_orden,
+    numero_entrega: entrega.numero_entrega,
+    proveedor_razon_social: entrega.proveedor_razon_social || '',
+    fecha_notificacion: notif.fechaNotificacion,
+    dias_plazo: Number(entrega.dias_plazo || 0),
+    fecha_inicio_plazo: toIsoDateString(entrega.fecha_base) || entrega.fecha_base,
+    fecha_maxima_contractual: toIsoDateString(entrega.fecha_maxima) || entrega.fecha_maxima,
+    fecha_presentacion: toIsoDateString(recepcion?.fecha_recepcion_mesa_partes),
+    ampliaciones,
+    ...plazos,
+  };
+}
+
+function puedeEditarPenalidadPago(userCtx, estado) {
+  if (esAdmin(userCtx)) return true;
+  const perfiles = resolveFunctionalProfiles(userCtx);
+  return Number(userCtx?.id) === Number(estado?.responsableUsuarioId)
+    && estado?.responsableTipo === 'PERSONA'
+    && perfiles.includes(PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES)
+    && String(estado?.etapaCodigo || '').toUpperCase() === ETAPAS.PREPARACION_EXPEDIENTE_PAGO;
+}
+
+/** RC8.15.6G-6 — Panel de trazabilidad con encabezado del entregable (no expediente global). */
+export async function obtenerPanelTrazabilidadEntregable(ordenEntregaId, userCtx = null) {
+  const { entrega, estado } = await assertAccesoTrazabilidadEntregable(ordenEntregaId, userCtx);
+  const eventos = await listarTrazabilidadEntregable(ordenEntregaId, userCtx);
+  const etapaMeta = getEtapaMeta(estado.etapaCodigo);
+  const responsableLabel = estado.responsableTipo === 'PERSONA'
+    ? (estado.responsableNombre || estado.responsableUsername || '—')
+    : (estado.responsableUnidad || etapaMeta?.responsableLabel || '—');
+  return {
+    contexto: {
+      orden_entrega_id: Number(entrega.id),
+      orden_id: Number(entrega.orden_id),
+      requerimiento_id: Number(entrega.requerimiento_id),
+      tipo_orden: entrega.tipo_orden,
+      numero_orden: entrega.numero_orden,
+      numero_entrega: entrega.numero_entrega,
+      estado_codigo: estado.estadoCodigo,
+      estado_label: estado.estadoLabel,
+      etapa_codigo: estado.etapaCodigo,
+      etapa_label: estado.etapaLabel,
+      submodulo_codigo: etapaMeta?.submoduloCodigo || '',
+      submodulo_label: etapaMeta?.submoduloLabel || '',
+      responsable_nombre: responsableLabel,
+      responsable_username: estado.responsableUsername || '',
+      responsable_usuario_id: estado.responsableUsuarioId || null,
+      fuente_estado: estado.fuenteEstado,
+      fallback_global: Boolean(estado.fallbackGlobal),
+      desde_at: estado.actualizadoAt,
+    },
+    eventos,
+  };
+}
+
+/** RC8.15.6G-6 — Contexto contractual + ampliaciones + cálculos base para penalidad. */
+export async function obtenerContextoPenalidadPagoEntregable(ordenEntregaId, userCtx = null) {
+  const { entrega, estado } = await assertAccesoTrazabilidadEntregable(ordenEntregaId, userCtx);
+  const penalidadMap = await listarPenalidadEvaluacionPorEntregas([entrega.id]);
+  const evaluacion = mapPenalidadEvaluacionRow(penalidadMap.get(Number(entrega.id)) || null);
+  const plazos = await construirContextoPlazosPenalidad(entrega);
+  return {
+    ...plazos,
+    evaluacion,
+    puede_editar: puedeEditarPenalidadPago(userCtx, estado),
+  };
+}
+
+async function registrarEventoAmpliacionPlazo(client, {
+  entrega,
+  estado,
+  eventoCodigo,
+  userCtx,
+  usuario,
+  motivo,
+  metadata,
+}) {
+  return registrarEventoPenalidadEntregable(client, {
+    entrega,
+    estado,
+    eventoCodigo,
+    usuarioOrigenId: userCtx?.id,
+    ejecutadoPor: usuario || userCtx?.username || userCtx?.nombre || userCtx?.id,
+    motivo,
+    metadata,
+  });
+}
+
+/** RC8.15.6G-6 — Registra ampliación de plazo aprobada. */
+export async function registrarAmpliacionPlazoPenalidad(
+  ordenEntregaId,
+  body = {},
+  userCtx = null,
+  usuario = null,
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const dias = parseInt(body.dias_ampliacion ?? body.diasAmpliacion, 10);
+  const numeroDocumento = String(body.numero_documento ?? body.numeroDocumento ?? '').trim();
+  const fechaDocumento = toIsoDateString(body.fecha_documento ?? body.fechaDocumento);
+  const observacion = String(body.observacion ?? '').trim() || null;
+  const archivo = body.documento || body.archivo || body;
+  if (!Number.isFinite(dias) || dias <= 0) {
+    throw httpError('dias_ampliacion debe ser mayor a cero', 400, 'AMPLIACION_DIAS_INVALIDO');
+  }
+  if (!numeroDocumento) {
+    throw httpError('numero_documento es obligatorio', 400, 'AMPLIACION_NUMERO_REQUERIDO');
+  }
+  if (!fechaDocumento) {
+    throw httpError('fecha_documento es obligatoria', 400, 'AMPLIACION_FECHA_REQUERIDA');
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const entrega = (await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.enviado_proveedor_at
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid])).rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    assertEtapaPermiteEvaluarPenalidad(estado, entrega);
+    assertAnalistaCMResponsable(userCtx, estado);
+
+    const documento = await persistirPagoDocumento({
+      client,
+      ordenId: entrega.orden_id,
+      ordenEntregaId: eid,
+      archivo,
+      createdBy: usuario || userCtx?.username || null,
+    });
+    const { rows: inserted } = await client.query(`
+      INSERT INTO entregable_penalidad_ampliacion_plazo (
+        orden_id, orden_entrega_id, dias_ampliacion, numero_documento,
+        fecha_documento, observacion, documento_id, registrado_por_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING *
+    `, [
+      Number(entrega.orden_id),
+      eid,
+      dias,
+      numeroDocumento.slice(0, 120),
+      fechaDocumento,
+      observacion,
+      Number(documento.id),
+      Number(userCtx?.id) > 0 ? Number(userCtx.id) : null,
+    ]);
+    const ampliacion = mapAmpliacionPlazoRow({
+      ...inserted[0],
+      nombre_archivo: documento.nombre_archivo,
+      mime_type: documento.mime_type,
+      tamanio_bytes: documento.tamanio_bytes,
+      documento_id: documento.id,
+    });
+    await registrarEventoAmpliacionPlazo(client, {
+      entrega,
+      estado,
+      eventoCodigo: 'ENTREGABLE_PENALIDAD_AMPLIACION_REGISTRADA',
+      userCtx,
+      usuario,
+      motivo: 'Ampliación de plazo aprobada registrada',
+      metadata: { ampliacion_id: ampliacion.id, dias_ampliacion: dias, numero_documento: numeroDocumento },
+    });
+    await client.query('COMMIT');
+    const plazos = await construirContextoPlazosPenalidad(entrega);
+    return { ampliacion, plazos };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** RC8.15.6G-6 — Modifica ampliación de plazo aprobada. */
+export async function modificarAmpliacionPlazoPenalidad(
+  ordenEntregaId,
+  ampliacionId,
+  body = {},
+  userCtx = null,
+  usuario = null,
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const aid = parseInt(ampliacionId, 10);
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const entrega = (await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.enviado_proveedor_at
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid])).rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    assertEtapaPermiteEvaluarPenalidad(estado, entrega);
+    assertAnalistaCMResponsable(userCtx, estado);
+
+    const { rows: prevRows } = await client.query(`
+      SELECT a.*, d.*
+      FROM entregable_penalidad_ampliacion_plazo a
+      JOIN entregable_pago_documentos d ON d.id = a.documento_id
+      WHERE a.id = $1 AND a.orden_entrega_id = $2
+      FOR UPDATE OF a
+    `, [aid, eid]);
+    const previo = prevRows[0];
+    if (!previo) throw httpError('Ampliación no encontrada', 404, 'AMPLIACION_NO_ENCONTRADA');
+
+    const dias = body.dias_ampliacion != null
+      ? parseInt(body.dias_ampliacion, 10)
+      : Number(previo.dias_ampliacion);
+    const numeroDocumento = body.numero_documento != null
+      ? String(body.numero_documento).trim()
+      : previo.numero_documento;
+    const fechaDocumento = body.fecha_documento != null
+      ? toIsoDateString(body.fecha_documento)
+      : toIsoDateString(previo.fecha_documento);
+    const observacion = body.observacion != null
+      ? (String(body.observacion).trim() || null)
+      : previo.observacion;
+    if (!Number.isFinite(dias) || dias <= 0) {
+      throw httpError('dias_ampliacion debe ser mayor a cero', 400, 'AMPLIACION_DIAS_INVALIDO');
+    }
+    if (!numeroDocumento) {
+      throw httpError('numero_documento es obligatorio', 400, 'AMPLIACION_NUMERO_REQUERIDO');
+    }
+    if (!fechaDocumento) {
+      throw httpError('fecha_documento es obligatoria', 400, 'AMPLIACION_FECHA_REQUERIDA');
+    }
+
+    let documentoId = previo.documento_id;
+    const archivo = body.documento || body.archivo;
+    if (archivo?.contenido_base64) {
+      const documento = await persistirPagoDocumento({
+        client,
+        ordenId: entrega.orden_id,
+        ordenEntregaId: eid,
+        archivo,
+        createdBy: usuario || userCtx?.username || null,
+      });
+      documentoId = documento.id;
+      await eliminarPagoDocumentoFisico(previo);
+    }
+
+    const { rows: updated } = await client.query(`
+      UPDATE entregable_penalidad_ampliacion_plazo
+      SET dias_ampliacion = $3,
+          numero_documento = $4,
+          fecha_documento = $5,
+          observacion = $6,
+          documento_id = $7,
+          updated_at = NOW()
+      WHERE id = $1 AND orden_entrega_id = $2
+      RETURNING *
+    `, [aid, eid, dias, numeroDocumento.slice(0, 120), fechaDocumento, observacion, documentoId]);
+    const docRow = (await client.query(
+      'SELECT * FROM entregable_pago_documentos WHERE id = $1',
+      [documentoId],
+    )).rows[0];
+    const ampliacion = mapAmpliacionPlazoRow({ ...updated[0], ...docRow, documento_id: documentoId });
+    await registrarEventoAmpliacionPlazo(client, {
+      entrega,
+      estado,
+      eventoCodigo: 'ENTREGABLE_PENALIDAD_AMPLIACION_MODIFICADA',
+      userCtx,
+      usuario,
+      motivo: 'Ampliación de plazo aprobada modificada',
+      metadata: { ampliacion_id: ampliacion.id, anterior: mapAmpliacionPlazoRow(previo) },
+    });
+    await client.query('COMMIT');
+    const plazos = await construirContextoPlazosPenalidad(entrega);
+    return { ampliacion, plazos };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** RC8.15.6G-6 — Elimina ampliación de plazo aprobada. */
+export async function eliminarAmpliacionPlazoPenalidad(
+  ordenEntregaId,
+  ampliacionId,
+  userCtx = null,
+  usuario = null,
+) {
+  const eid = parseInt(ordenEntregaId, 10);
+  const aid = parseInt(ampliacionId, 10);
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const entrega = (await client.query(`
+      SELECT oe.*, oc.requerimiento_id, oc.enviado_proveedor_at
+      FROM orden_entregas oe
+      JOIN ordenes_contratacion oc ON oc.id = oe.orden_id
+      WHERE oe.id = $1
+      FOR UPDATE OF oe
+    `, [eid])).rows[0];
+    if (!entrega) throw httpError('Entregable no encontrado', 404, 'ENTREGABLE_NO_ENCONTRADO');
+    const estado = await obtenerEstadoResponsableEntregable(eid, { client });
+    assertEtapaPermiteEvaluarPenalidad(estado, entrega);
+    assertAnalistaCMResponsable(userCtx, estado);
+
+    const { rows: prevRows } = await client.query(`
+      SELECT a.*, d.*
+      FROM entregable_penalidad_ampliacion_plazo a
+      JOIN entregable_pago_documentos d ON d.id = a.documento_id
+      WHERE a.id = $1 AND a.orden_entrega_id = $2
+      FOR UPDATE OF a
+    `, [aid, eid]);
+    const previo = prevRows[0];
+    if (!previo) throw httpError('Ampliación no encontrada', 404, 'AMPLIACION_NO_ENCONTRADA');
+
+    await client.query(
+      'DELETE FROM entregable_penalidad_ampliacion_plazo WHERE id = $1 AND orden_entrega_id = $2',
+      [aid, eid],
+    );
+    await eliminarPagoDocumentoFisico(previo);
+    await client.query('DELETE FROM entregable_pago_documentos WHERE id = $1', [previo.documento_id]);
+    await registrarEventoAmpliacionPlazo(client, {
+      entrega,
+      estado,
+      eventoCodigo: 'ENTREGABLE_PENALIDAD_AMPLIACION_ELIMINADA',
+      userCtx,
+      usuario,
+      motivo: 'Ampliación de plazo aprobada eliminada',
+      metadata: { ampliacion_id: aid, anterior: mapAmpliacionPlazoRow(previo) },
+    });
+    await client.query('COMMIT');
+    const plazos = await construirContextoPlazosPenalidad(entrega);
+    return { eliminado: true, plazos };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexión rota */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Descarga documento de ampliación de plazo. */
+export async function getDocumentoAmpliacionPlazoBytes(ordenEntregaId, ampliacionId, userCtx = null) {
+  await assertAccesoTrazabilidadEntregable(ordenEntregaId, userCtx);
+  const aid = parseInt(ampliacionId, 10);
+  const { rows } = await query(`
+    SELECT a.*, d.*
+    FROM entregable_penalidad_ampliacion_plazo a
+    JOIN entregable_pago_documentos d ON d.id = a.documento_id
+    WHERE a.id = $1 AND a.orden_entrega_id = $2
+  `, [aid, Number(ordenEntregaId)]);
+  if (!rows.length) throw httpError('Ampliación no encontrada', 404, 'AMPLIACION_NO_ENCONTRADA');
+  const bytes = await leerPagoDocumentoBytes(rows[0]);
+  return {
+    nombre_archivo: rows[0].nombre_archivo,
+    mime_type: rows[0].mime_type,
+    bytes,
+  };
 }
 
 /** Historial formal de observaciones de todas las presentaciones del entregable. */
@@ -2140,7 +2906,9 @@ async function restaurarResponsableEmisorObservacionDirigida({
 
   const origenEtapa = String(observacion.origen_submodulo_codigo || '').toUpperCase();
   const etapaRetorno = extraerEtapaRetornoObservacion(observacion)
-    || (origenEtapa === ETAPAS.REVISION_COORDINADOR_CM || origenEtapa === ETAPAS.REVISION_ANALISTA_CM
+    || (origenEtapa === ETAPAS.REVISION_COORDINADOR_CM
+      || origenEtapa === ETAPAS.REVISION_ANALISTA_CM
+      || origenEtapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
       ? origenEtapa
       : null);
   const uid = Number(userCtx?.id);
@@ -4152,3 +4920,21 @@ export async function getActaConformidadFirmadaBytes(ordenEntregaId, visadoId) {
   if (!buffer.length) throw httpError('Acta firmada no disponible', 404, 'ACTA_FIRMADA_SIN_CONTENIDO');
   return { buffer, mimeType: rows[0].mime_type || ACTA_MIME_PDF, nombre: rows[0].nombre || 'acta-firmada.pdf' };
 }
+
+/** RC8.15.6G-7 — Delegación cálculo/documentos penalidad. */
+const penalidadG7Deps = { obtenerContextoPenalidadPagoEntregable };
+
+export async function obtenerFichaCalculoPenalidadEntregable(ordenEntregaId, userCtx = null) {
+  return obtenerFichaCalculoPenalidad(ordenEntregaId, userCtx, penalidadG7Deps);
+}
+
+export async function calcularPenalidadEntregable(ordenEntregaId, userCtx = null, usuario = null) {
+  return calcularPenalidadEntregableG7(ordenEntregaId, userCtx, usuario, penalidadG7Deps);
+}
+
+export {
+  generarFormatoPenalidadEntregable,
+  adjuntarFormatoPenalidadFirmado,
+  generarCartaPenalidadEntregable,
+  getDocumentoPenalidadPagoBytes,
+};

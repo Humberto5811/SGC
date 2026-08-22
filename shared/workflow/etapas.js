@@ -26,6 +26,7 @@ export const ETAPAS = Object.freeze({
   PRESENTACION_ENTREGABLES: 'PRESENTACION_ENTREGABLES',
   REVISION_COORDINADOR_CM: 'REVISION_COORDINADOR_CM',
   REVISION_ANALISTA_CM: 'REVISION_ANALISTA_CM',
+  PREPARACION_EXPEDIENTE_PAGO: 'PREPARACION_EXPEDIENTE_PAGO',
   DERIVACION_PAGO: 'DERIVACION_PAGO',
   FINALIZADO: 'FINALIZADO',
 });
@@ -123,6 +124,12 @@ const ETAPA_META_DEF = Object.freeze({
   REVISION_ANALISTA_CM: Object.freeze({
     codigo: 'REVISION_ANALISTA_CM', label: 'Revisión Analista CM',
     submoduloCodigo: 'PRESENTACION_ENTREGABLES', submoduloLabel: 'Presentación de Entregables',
+    responsableCodigo: 'ANALISTA_CONTRATACIONES', responsableLabel: 'Analista de Contrataciones',
+    tipos: Object.freeze(['SERVICIO', 'LOCACION']), terminal: false,
+  }),
+  PREPARACION_EXPEDIENTE_PAGO: Object.freeze({
+    codigo: 'PREPARACION_EXPEDIENTE_PAGO', label: 'Preparación de expediente para Pago',
+    submoduloCodigo: 'TESORERIA', submoduloLabel: 'Pagos',
     responsableCodigo: 'ANALISTA_CONTRATACIONES', responsableLabel: 'Analista de Contrataciones',
     tipos: Object.freeze(['SERVICIO', 'LOCACION']), terminal: false,
   }),

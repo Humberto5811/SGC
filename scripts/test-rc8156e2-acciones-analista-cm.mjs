@@ -243,12 +243,16 @@ try {
   const hermanoBefore = await snapshotEntregable(hermano.id);
   await assertAtomic(
     observar.id, 'ANALISTA_CM_NO_AUTORIZADO',
-    () => observarEntregableAnalistaCM(observar.id, { motivo: 'No autorizado' }, otroAnalistaCtx),
+    () => observarEntregableAnalistaCM(
+      observar.id, { motivo: 'No autorizado', usuario_destino_id: area.id }, otroAnalistaCtx,
+    ),
     'A/B. solo Analista CM responsable puede mutar (403)',
   );
   await assertAtomic(
     observar.id, 'MOTIVO_OBSERVACION_REQUERIDO',
-    () => observarEntregableAnalistaCM(observar.id, { motivo: '   ' }, analistaCtx),
+    () => observarEntregableAnalistaCM(
+      observar.id, { motivo: '   ', usuario_destino_id: area.id }, analistaCtx,
+    ),
     'D. motivo vacío se rechaza sin escritura parcial',
   );
   await assertAtomic(

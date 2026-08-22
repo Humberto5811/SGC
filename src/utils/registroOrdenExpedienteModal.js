@@ -421,7 +421,14 @@ export async function openExpedienteOrdenModal(row) {
 
   modalEl.querySelector('#roExpTraza')?.addEventListener('click', async () => {
     try {
-      await showTrazabilidadModal(r.requerimiento_id);
+      if (row?.orden_entrega_id) {
+        const { openEntregableTrazabilidadModal } = await import('./entregableTrazabilidadModal.js');
+        await openEntregableTrazabilidadModal(row.orden_entrega_id);
+      } else if (r.requerimiento_id) {
+        await showTrazabilidadModal(r.requerimiento_id);
+      } else {
+        throw new Error('No hay entregable ni requerimiento asociado para trazabilidad');
+      }
     } catch (e) {
       showErr(modalEl, e.message || 'No se pudo abrir la trazabilidad');
     }

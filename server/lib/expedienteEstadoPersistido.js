@@ -30,7 +30,8 @@ export function mapEtapaDestinoBD(destino) {
   if (destino === 'RECEPCION_BIENES'
     || destino === 'PRESENTACION_ENTREGABLES'
     || destino === 'REVISION_COORDINADOR_CM'
-    || destino === 'REVISION_ANALISTA_CM') return 'EN_EJECUCION';
+    || destino === 'REVISION_ANALISTA_CM'
+    || destino === 'PREPARACION_EXPEDIENTE_PAGO') return 'EN_EJECUCION';
   return destino;
 }
 

@@ -95,6 +95,12 @@ export function entregableMenuItems(row) {
     }
     return items;
   }
+  if (etapa === 'PREPARACION_EXPEDIENTE_PAGO') {
+    if (row.puede_ver_trazabilidad) {
+      items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
+    }
+    return items;
+  }
   if (etapa === 'DERIVACION_PAGO') {
     if (row.puede_ver_trazabilidad) {
       items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
@@ -1122,7 +1128,8 @@ async function submitObservarEntregable(e) {
     const row = entregablesCache.find(
       (item) => String(item.orden_entrega_id) === String(id),
     ) || {};
-    if (String(row.estado_etapa_codigo || '').toUpperCase() === 'REVISION_ANALISTA_CM') {
+    if (String(row.estado_etapa_codigo || '').toUpperCase() === 'REVISION_ANALISTA_CM'
+      || String(row.estado_etapa_codigo || '').toUpperCase() === 'PREPARACION_EXPEDIENTE_PAGO') {
       await entregablesServiciosService.observarAnalistaCM(id, {
         motivo,
         usuario_destino_id: Number(destinoAu),

@@ -334,6 +334,56 @@ export function resolveFunctionalProfiles(usuario) {
   return [...new Set(perfiles)];
 }
 
+function normalizePermisosObj(permisos) {
+  if (permisos && typeof permisos === 'object') return permisos;
+  try { return JSON.parse(permisos || '{}'); } catch (_) { return {}; }
+}
+
+/** Actividades de TESORERIA distintas de solo lectura (VER). */
+const ACTIVIDADES_OPERATIVAS_TESORERIA = new Set([
+  'CREAR', 'EDITAR', 'ELIMINAR', 'APROBAR', 'OBSERVAR', 'DERIVAR',
+  'RECHAZAR', 'EXPORTAR', 'FIRMAR', 'DESCARGAR',
+]);
+
+/**
+ * Acceso operativo al submódulo TESORERIA (derivación/gestión, no solo VER).
+ * @param {object} permisos
+ */
+export function hasTesoreriaOperationalAccess(permisos) {
+  const p = normalizePermisosObj(permisos);
+  const submodulos = Array.isArray(p.submodulos)
+    ? p.submodulos.map((s) => String(s).trim().toUpperCase())
+    : [];
+  if (!submodulos.includes('TESORERIA')) return false;
+
+  const acts = p.actividadesPorSubmodulo?.TESORERIA;
+  if (!Array.isArray(acts) || !acts.length) return false;
+  return acts
+    .map((a) => String(a).trim().toUpperCase())
+    .filter(Boolean)
+    .some((a) => ACTIVIDADES_OPERATIVAS_TESORERIA.has(a));
+}
+
+function hasExplicitOrLegacyAnalistaPago(usuario) {
+  const permisos = normalizePermisosObj(usuario?.permisos);
+  if (extractExplicitProfile(permisos) === PERFILES_FUNCIONALES.ANALISTA_PAGO) return true;
+  const cargoNorm = normalizeTextoInstitucional(usuario?.cargo || '');
+  return legacyIsAnalistaPago(cargoNorm);
+}
+
+/**
+ * Candidato a Analista de Pago para derivación de entregables:
+ * perfil explícito/legacy ANALISTA_PAGO o TESORERIA con gestión operativa.
+ * @param {{ activo?: boolean, rol?: string, cargo?: string, permisos?: object }} usuario
+ */
+export function hasAnalistaPagoDerivacionAccess(usuario) {
+  if (!usuario || usuario.activo === false) return false;
+  if (isAdminSecurityRole(usuario)) return true;
+  const permisos = normalizePermisosObj(usuario.permisos);
+  if (hasExplicitOrLegacyAnalistaPago({ ...usuario, permisos })) return true;
+  return hasTesoreriaOperationalAccess(permisos);
+}
+
 // ---------------------------------------------------------------------------
 // E. FUNCIONES DE CONSULTA DE PERFILES
 // ---------------------------------------------------------------------------
@@ -349,8 +399,12 @@ export function hasFunctionalProfile(usuario, perfil) {
   if (!usuario || !perfil) return false;
   // Admin tiene todos los perfiles implícitamente
   if (isAdminSecurityRole(usuario)) return true;
+  const code = String(perfil).toUpperCase();
+  if (code === PERFILES_FUNCIONALES.ANALISTA_PAGO) {
+    return hasAnalistaPagoDerivacionAccess(usuario);
+  }
   const perfiles = resolveFunctionalProfiles(usuario);
-  return perfiles.includes(String(perfil).toUpperCase());
+  return perfiles.includes(code);
 }
 
 /**
@@ -436,6 +490,8 @@ export default {
   isAdminSecurityRole,
   resolveFunctionalProfiles,
   hasFunctionalProfile,
+  hasTesoreriaOperationalAccess,
+  hasAnalistaPagoDerivacionAccess,
   isTransversalProfile,
   getUserOperationalScope,
 };

@@ -57,10 +57,10 @@ async function snapshotGlobal(requerimientoId) {
   });
 }
 
-function transition(tipo, evento) {
+function transition(tipo, evento, origen = ETAPAS.REVISION_ANALISTA_CM) {
   return getTransition({
     tipoContratacion: tipo,
-    etapaOrigen: ETAPAS.REVISION_ANALISTA_CM,
+    etapaOrigen: origen,
     eventoCodigo: evento,
   });
 }
@@ -69,8 +69,9 @@ console.log('\n=== RC8.15.6E-1 — Workflow canónico Analista CM ===\n');
 
 const obsServicio = transition('SERVICIO', EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM);
 const obsLocacion = transition('LOCACION', EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM);
-const pagoServicio = transition('SERVICIO', EVENTOS.ENTREGABLE_DERIVADO_PAGO);
-const pagoLocacion = transition('LOCACION', EVENTOS.ENTREGABLE_DERIVADO_PAGO);
+const obsServicioPep = transition('SERVICIO', EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM, ETAPAS.PREPARACION_EXPEDIENTE_PAGO);
+const pagoServicio = transition('SERVICIO', EVENTOS.ENTREGABLE_DERIVADO_PAGO, ETAPAS.PREPARACION_EXPEDIENTE_PAGO);
+const pagoLocacion = transition('LOCACION', EVENTOS.ENTREGABLE_DERIVADO_PAGO, ETAPAS.PREPARACION_EXPEDIENTE_PAGO);
 
 ok(EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM
   && getEventoMeta(EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM)?.tipo === 'DEVOLUCION',
@@ -88,10 +89,11 @@ ok(EVENTOS.ENTREGABLE_DERIVADO_PAGO
   && getEventoMeta(EVENTOS.ENTREGABLE_DERIVADO_PAGO)?.tipo === 'DERIVACION'
   && EVENTOS.ENTREGABLE_DERIVADO_PAGO !== EVENTOS.EXPEDIENTE_DERIVADO_PAGO,
 'F. Pago usa evento específico de scope entregable');
+ok(obsServicioPep != null, 'B2. Preparación Pago admite observación Analista CM');
 ok(pagoServicio?.etapa_destino === ETAPAS.DERIVACION_PAGO,
-  'G. Servicio deriva desde Analista CM a DERIVACION_PAGO');
+  'G. Servicio deriva desde Preparación Pago a DERIVACION_PAGO');
 ok(pagoLocacion?.etapa_destino === ETAPAS.DERIVACION_PAGO,
-  'H. Locación deriva desde Analista CM a DERIVACION_PAGO');
+  'H. Locación deriva desde Preparación Pago a DERIVACION_PAGO');
 ok(pagoServicio?.responsable_destino === PERFILES_FUNCIONALES.ANALISTA_PAGO
   && pagoLocacion?.responsable_destino === PERFILES_FUNCIONALES.ANALISTA_PAGO,
 'I. destino funcional de Pago es ANALISTA_PAGO');
@@ -103,11 +105,11 @@ ok(transition('BIEN', EVENTOS.ENTREGABLE_OBSERVADO_ANALISTA_CM) == null
   && transition('BIEN', EVENTOS.ENTREGABLE_DERIVADO_PAGO) == null,
 'K. Bienes no adquiere transiciones del Analista CM');
 
-const visualAnalista = getEstadoCatalogEntry(ETAPAS.REVISION_ANALISTA_CM);
+const visualPrepPago = getEstadoCatalogEntry(ETAPAS.PREPARACION_EXPEDIENTE_PAGO);
 const visualPago = getEstadoCatalogEntry(ETAPAS.DERIVACION_PAGO);
-ok(visualAnalista.categoria === 'EN_PROCESO'
-  && visualAnalista.icono !== 'bi-question-circle',
-'L. REVISION_ANALISTA_CM tiene representación visual conocida');
+ok(visualPrepPago.categoria === 'DERIVADO'
+  && visualPrepPago.icono !== 'bi-question-circle',
+'L. PREPARACION_EXPEDIENTE_PAGO tiene representación visual conocida');
 ok(visualPago.categoria === 'DERIVADO'
   && visualPago.icono !== 'bi-question-circle',
 'M. DERIVACION_PAGO tiene representación visual conocida');

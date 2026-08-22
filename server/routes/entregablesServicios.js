@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import {
   listarBandejaEntregablesServicios,
+  listarBandejaPreparacionExpedientePago,
   listarBandejaOrdenesEntregablesServicios,
   getDetalleEntregableServicio,
   registrarRecepcionEntregable,
@@ -23,6 +24,20 @@ import {
   listarAnalistasPagoEntregable,
   observarEntregableAnalistaCM,
   derivarEntregablePago,
+  evaluarPenalidadEntregable,
+  obtenerPenalidadEvaluacionEntregable,
+  obtenerContextoPenalidadPagoEntregable,
+  registrarAmpliacionPlazoPenalidad,
+  modificarAmpliacionPlazoPenalidad,
+  eliminarAmpliacionPlazoPenalidad,
+  getDocumentoAmpliacionPlazoBytes,
+  obtenerPanelTrazabilidadEntregable,
+  obtenerFichaCalculoPenalidadEntregable,
+  calcularPenalidadEntregable,
+  generarFormatoPenalidadEntregable,
+  adjuntarFormatoPenalidadFirmado,
+  generarCartaPenalidadEntregable,
+  getDocumentoPenalidadPagoBytes,
   listarDestinatariosAreaUsuariaEntregable,
   listarTrazabilidadEntregable,
   getDocumentoRecepcionEntregable,
@@ -77,6 +92,13 @@ router.get('/bandeja', async (req, res, next) => {
 router.get('/bandeja-ordenes', async (req, res, next) => {
   try {
     const data = await listarBandejaOrdenesEntregablesServicios(req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/pagos/bandeja', async (req, res, next) => {
+  try {
+    const data = await listarBandejaPreparacionExpedientePago(req.esUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
@@ -173,6 +195,136 @@ router.post('/:id/observaciones-analista-cm', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.get('/:id/penalidad-evaluacion', async (req, res, next) => {
+  try {
+    const data = req.query.contexto === '1' || req.query.completo === '1'
+      ? await obtenerContextoPenalidadPagoEntregable(req.params.id, req.esUserCtx)
+      : await obtenerPenalidadEvaluacionEntregable(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/penalidad-ampliaciones', async (req, res, next) => {
+  try {
+    const data = await registrarAmpliacionPlazoPenalidad(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id/penalidad-ampliaciones/:ampliacionId', async (req, res, next) => {
+  try {
+    const data = await modificarAmpliacionPlazoPenalidad(
+      req.params.id,
+      req.params.ampliacionId,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id/penalidad-ampliaciones/:ampliacionId', async (req, res, next) => {
+  try {
+    const data = await eliminarAmpliacionPlazoPenalidad(
+      req.params.id,
+      req.params.ampliacionId,
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/penalidad-ampliaciones/:ampliacionId/documento', async (req, res, next) => {
+  try {
+    const doc = await getDocumentoAmpliacionPlazoBytes(
+      req.params.id,
+      req.params.ampliacionId,
+      req.esUserCtx,
+    );
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(doc.nombre_archivo || 'documento')}"`,
+    );
+    res.send(doc.bytes);
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/penalidad-evaluacion', async (req, res, next) => {
+  try {
+    const data = await evaluarPenalidadEntregable(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(data?.es_modificacion ? 200 : 201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/penalidad-calculo', async (req, res, next) => {
+  try {
+    const data = await obtenerFichaCalculoPenalidadEntregable(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/penalidad-calculo', async (req, res, next) => {
+  try {
+    const data = await calcularPenalidadEntregable(req.params.id, req.esUserCtx, req.esUsuario);
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/penalidad-formato', async (req, res, next) => {
+  try {
+    const data = await generarFormatoPenalidadEntregable(req.params.id, req.esUserCtx, req.esUsuario);
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/penalidad-formato/firmado', async (req, res, next) => {
+  try {
+    const data = await adjuntarFormatoPenalidadFirmado(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/penalidad-carta', async (req, res, next) => {
+  try {
+    const data = await generarCartaPenalidadEntregable(req.params.id, req.esUserCtx, req.esUsuario);
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/penalidad-documentos/:documentoId', async (req, res, next) => {
+  try {
+    const doc = await getDocumentoPenalidadPagoBytes(
+      req.params.id,
+      req.params.documentoId,
+      req.esUserCtx,
+    );
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(doc.nombre_archivo || 'documento')}"`,
+    );
+    res.send(doc.bytes);
+  } catch (err) { next(err); }
+});
+
 router.post('/:id/derivar-pago', async (req, res, next) => {
   try {
     const data = await derivarEntregablePago(
@@ -198,7 +350,9 @@ router.get('/:id/destinatarios-area-usuaria', async (req, res, next) => {
 
 router.get('/:id/trazabilidad', async (req, res, next) => {
   try {
-    const data = await listarTrazabilidadEntregable(req.params.id, req.esUserCtx);
+    const data = req.query.panel === '1' || req.query.contexto === '1'
+      ? await obtenerPanelTrazabilidadEntregable(req.params.id, req.esUserCtx)
+      : await listarTrazabilidadEntregable(req.params.id, req.esUserCtx);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });

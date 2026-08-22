@@ -11,11 +11,13 @@ import {
   derivarEntregableCoordinadorCM,
   listarAnalistasCMEntregable,
   listarBandejaEntregablesServicios,
+  listarBandejaPreparacionExpedientePago,
   listarTrazabilidadEntregable,
   observarEntregable,
 } from '../server/lib/entregablesServicios.js';
 import { inicializarEstadoResponsableEntregable } from '../server/lib/entregableEstadoPersistido.js';
 import { entregableMenuItems } from '../src/views/ejecucion/presentacionEntregableView.js';
+import { pagoMenuItems } from '../src/views/ejecucion/derivacionPagoView.js';
 import { ETAPAS } from '../shared/workflow/etapas.js';
 import { EVENTOS } from '../shared/workflow/eventos.js';
 import { getTransition } from '../shared/workflow/transiciones.js';
@@ -100,7 +102,7 @@ ok(ETAPAS.REVISION_ANALISTA_CM === 'REVISION_ANALISTA_CM'
     tipoContratacion: 'SERVICIO',
     etapaOrigen: ETAPAS.REVISION_COORDINADOR_CM,
     eventoCodigo: EVENTOS.ENTREGABLE_DERIVADO_ANALISTA_CM,
-  })?.etapa_destino === ETAPAS.REVISION_ANALISTA_CM,
+  })?.etapa_destino === ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
 'etapa y transición canónica de Analista CM existen');
 ok(/analistas-cm/.test(routeSource)
   && /derivar-analista-cm/.test(routeSource)
@@ -353,8 +355,8 @@ try {
     coordinadorCtx,
     coordinador.username,
   );
-  ok(resultadoAnalista.estado?.etapaCodigo === 'REVISION_ANALISTA_CM',
-    'L. etapa final es REVISION_ANALISTA_CM');
+  ok(resultadoAnalista.estado?.etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
+    'L. etapa final es PREPARACION_EXPEDIENTE_PAGO');
   ok(resultadoAnalista.estado?.responsableTipo === 'PERSONA'
     && Number(resultadoAnalista.estado?.responsableUsuarioId) === Number(analista.id),
   'M. responsable final es Analista CM PERSONA');
@@ -365,23 +367,32 @@ try {
   ok(asignacionesAnalista.some((row) => row.etapa_codigo === 'REVISION_COORDINADOR_CM'
     && Number(row.usuario_id) === Number(coordinador.id)
     && row.activo === false), 'N. asignación del Coordinador se cierra');
-  ok(asignacionesAnalista.at(-1).etapa_codigo === 'REVISION_ANALISTA_CM'
+  ok(asignacionesAnalista.at(-1).etapa_codigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
     && Number(asignacionesAnalista.at(-1).usuario_id) === Number(analista.id)
     && asignacionesAnalista.at(-1).activo === true,
   'O. asignación del Analista queda activa');
   const trazabilidad = await listarTrazabilidadEntregable(derivarFixture.id, analistaCtx);
   ok(trazabilidad.some((evento) => evento.evento_codigo === 'ENTREGABLE_DERIVADO_ANALISTA_CM'
     && evento.etapa_anterior_codigo === 'REVISION_COORDINADOR_CM'
-    && evento.etapa_nueva_codigo === 'REVISION_ANALISTA_CM'),
+    && evento.etapa_nueva_codigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO),
   'P. evento de derivación Analista registrado en entregable_eventos');
-  const bandejaAnalista = await listarBandejaEntregablesServicios(analistaCtx);
+  const bandejaAnalista = await listarBandejaPreparacionExpedientePago(analistaCtx);
   const filaAnalista = bandejaAnalista.find(
     (row) => Number(row.orden_entrega_id) === derivarFixture.id,
   );
-  const accionesAnalista = entregableMenuItems(filaAnalista || {});
+  ok(Boolean(filaAnalista), 'Analista CM ve el entregable en bandeja Pagos');
+  const accionesAnalista = pagoMenuItems(filaAnalista || {});
   ok(accionesAnalista.map((item) => item.act).join(',')
-    === 'verExpediente,observarEntregable,derivarPago,verTrazabilidad',
-  'Analista CM recibe las acciones productivas definidas en RC8.15.6E-2');
+    === 'verExpediente,verTrazabilidad',
+  'Analista CM recibe acciones F1 en bandeja Pagos (sin operar desde Presentación)');
+  ok(!entregableMenuItems({
+    ...filaAnalista,
+    estado_etapa_codigo: ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
+    puede_observar_analista_cm: true,
+    puede_derivar_pago: true,
+    puede_ver_trazabilidad: true,
+  }).some((item) => item.act === 'derivarPago' || item.act === 'observarEntregable'),
+  'Presentación no expone acciones Analista CM para etapa Pagos');
   ok(await snapshotEntregable(hermano.id) === hermanoBefore,
     'E2 permanece intacto tras derivar otro E1 a Analista');
   ok(await snapshotExpediente(requerimientoId) === expedienteBefore,

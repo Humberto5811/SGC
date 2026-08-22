@@ -30,3 +30,6 @@ C:\SGC-BACKUP-*
 *.docx
 convertir.py
 *.stackdump 
+
+# Archivos generados en runtime
+server/storage/

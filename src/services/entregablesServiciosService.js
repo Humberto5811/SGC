@@ -9,6 +9,9 @@ export const entregablesServiciosService = {
   listarBandeja() {
     return api.get(`${BASE}/bandeja`);
   },
+  listarBandejaPagos() {
+    return api.get(`${BASE}/pagos/bandeja`);
+  },
   listarBandejaOrdenes() {
     return api.get(`${BASE}/bandeja-ordenes`);
   },
@@ -76,6 +79,45 @@ export const entregablesServiciosService = {
   observarAnalistaCM(id, body) {
     return api.post(`${BASE}/${id}/observaciones-analista-cm`, body);
   },
+  obtenerPenalidadEvaluacion(id) {
+    return api.get(`${BASE}/${id}/penalidad-evaluacion`);
+  },
+  obtenerContextoPenalidadPago(id) {
+    return api.get(`${BASE}/${id}/penalidad-evaluacion?contexto=1`);
+  },
+  evaluarPenalidad(id, body) {
+    return api.post(`${BASE}/${id}/penalidad-evaluacion`, body);
+  },
+  registrarAmpliacionPlazoPenalidad(id, body) {
+    return api.post(`${BASE}/${id}/penalidad-ampliaciones`, body);
+  },
+  modificarAmpliacionPlazoPenalidad(id, ampliacionId, body) {
+    return api.put(`${BASE}/${id}/penalidad-ampliaciones/${ampliacionId}`, body);
+  },
+  eliminarAmpliacionPlazoPenalidad(id, ampliacionId) {
+    return api.del(`${BASE}/${id}/penalidad-ampliaciones/${ampliacionId}`);
+  },
+  documentoAmpliacionPlazoUrl(id, ampliacionId) {
+    return `/api${BASE}/${id}/penalidad-ampliaciones/${ampliacionId}/documento`;
+  },
+  obtenerFichaCalculoPenalidad(id) {
+    return api.get(`${BASE}/${id}/penalidad-calculo`);
+  },
+  calcularPenalidad(id) {
+    return api.post(`${BASE}/${id}/penalidad-calculo`, {});
+  },
+  generarFormatoPenalidad(id) {
+    return api.post(`${BASE}/${id}/penalidad-formato`, {});
+  },
+  adjuntarFormatoPenalidadFirmado(id, body) {
+    return api.post(`${BASE}/${id}/penalidad-formato/firmado`, body);
+  },
+  generarCartaPenalidad(id) {
+    return api.post(`${BASE}/${id}/penalidad-carta`, {});
+  },
+  documentoPenalidadUrl(id, documentoId) {
+    return `/api${BASE}/${id}/penalidad-documentos/${documentoId}`;
+  },
   listarAnalistasPago(id) {
     return api.get(`${BASE}/${id}/analistas-pago`);
   },
@@ -84,6 +126,9 @@ export const entregablesServiciosService = {
   },
   listarTrazabilidad(id) {
     return api.get(`${BASE}/${id}/trazabilidad`);
+  },
+  listarTrazabilidadPanel(id) {
+    return api.get(`${BASE}/${id}/trazabilidad?panel=1`);
   },
   getDocumento(recepcionId, documentoId) {
     return api.get(`${BASE}/recepciones/${recepcionId}/documentos/${documentoId}`);

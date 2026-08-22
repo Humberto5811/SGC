@@ -445,6 +445,7 @@ export async function registrarRoutingObservacionEntregable({
 const ETAPAS_RETORNO_VALIDAS = Object.freeze([
   'REVISION_COORDINADOR_CM',
   'REVISION_ANALISTA_CM',
+  'PREPARACION_EXPEDIENTE_PAGO',
 ]);
 
 function parseRoutingDocumentos(documentos) {
