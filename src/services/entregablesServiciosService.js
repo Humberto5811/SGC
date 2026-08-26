@@ -39,6 +39,9 @@ export const entregablesServiciosService = {
   getDetalle(id) {
     return api.get(`${BASE}/${id}`);
   },
+  listarDocumentosTipificados(id) {
+    return api.get(`${BASE}/${id}/documentos-tipificados`);
+  },
   registrarRecepcion(id, body) {
     return api.post(`${BASE}/${id}/registrar-recepcion`, body);
   },
@@ -166,6 +169,27 @@ export const entregablesServiciosService = {
   },
   downloadActaFirmadaBlob(id, visadoId) {
     return api.getBlob(`${BASE}/${id}/conformidad/firmadas/${encodeURIComponent(visadoId)}/download`);
+  },
+  obtenerChecklistPago(id) {
+    return api.get(`${BASE}/${id}/checklist-pago`);
+  },
+  listarEntregablesChecklistPago(id) {
+    return api.get(`${BASE}/${id}/checklist-pago/entregables`);
+  },
+  obtenerActaConformidadPago(id) {
+    return api.get(`${BASE}/${id}/checklist-pago/acta-conformidad`);
+  },
+  adjuntarDocumentoChecklistPago(id, body) {
+    return api.post(`${BASE}/${id}/checklist-pago/documentos`, body);
+  },
+  reemplazarDocumentoChecklistPago(id, documentoId, body) {
+    return api.put(`${BASE}/${id}/checklist-pago/documentos/${documentoId}/reemplazar`, body);
+  },
+  retirarDocumentoChecklistPago(id, documentoId) {
+    return api.del(`${BASE}/${id}/checklist-pago/documentos/${documentoId}`);
+  },
+  previewDocumentoChecklistPagoUrl(id, documentoId) {
+    return `/api${BASE}/${id}/checklist-pago/documentos/${documentoId}/preview`;
   },
 };
 

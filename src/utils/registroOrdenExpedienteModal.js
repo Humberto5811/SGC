@@ -4,23 +4,15 @@
  */
 import { ordenesContratacionService } from '../services/ordenesContratacionService.js';
 import { adjuntosService } from '../services/adjuntosService.js';
-import { openBase64Document, previewAdjuntoById } from './documentViewer.js';
+import { api } from '../services/apiService.js';
+import { openBase64Document, openBlobDocument, previewAdjuntoById } from './documentViewer.js';
 import { fmtMonto, fmtFecha, fmtFechaHora } from './ordenesUtils.js';
 import { showTrazabilidadModal } from '../views/requerimiento/reqShared.js';
-
-const API_BASE = '/api';
 
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function authHeaders() {
-  try {
-    const t = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
-    return t ? { Authorization: `Bearer ${t}` } : {};
-  } catch (_) { return {}; }
 }
 
 function ensureRoot() {
@@ -77,6 +69,7 @@ function docsTable(rows) {
             data-id="${esc(d.documentoId || d.id || '')}"
             data-cot="${esc(d.cotizacion_id || '')}"
             data-ref="${esc(d.ref || d.preview_ref || '')}"
+            data-recepcion="${esc(d.recepcion_id || '')}"
             data-name="${esc(d.nombre || 'documento')}"
             ${d.previewDisponible === false ? 'disabled title="Vista no disponible"' : ''}>Ver</button>
         </td>
@@ -113,15 +106,12 @@ async function openDoc(btn, data) {
     if (ref === 'anexo05a_firmado' || ref === 'anexo_tecnico_firmado') ref = 'anexo05a';
     if (ref === 'anexo05b_firmado' || ref === 'anexo_economico_firmado') ref = 'anexo05b';
     if (!cotId || !ref) throw new Error('Referencia de cotización incompleta');
-    const url = `${API_BASE}/contrataciones/portal-analista/cotizaciones/${cotId}/documento/${encodeURIComponent(ref)}/ver`;
-    const res = await fetch(url, { headers: { ...authHeaders() } });
-    if (res.status === 403) throw new Error('No tiene permiso para ver este documento (403)');
-    if (res.status === 404) throw new Error('Documento no encontrado (404)');
-    if (!res.ok) throw new Error(`No se pudo abrir el documento (${res.status})`);
-    const blob = await res.blob();
-    const obj = URL.createObjectURL(blob);
-    window.open(obj, '_blank');
-    setTimeout(() => URL.revokeObjectURL(obj), 60_000);
+    const path = `/contrataciones/portal-analista/cotizaciones/${cotId}/documento/${encodeURIComponent(ref)}/ver`;
+    const { blob, contentType, contentDisposition } = await api.getBlob(path);
+    let nombre = name;
+    const m = String(contentDisposition || '').match(/filename="([^"]+)"/);
+    if (m) nombre = decodeURIComponent(m[1]);
+    await openBlobDocument({ nombre, mime_type: contentType, blob });
     return;
   }
   if (kind === 'orden' && data?.resumen?.orden_id && id) {
@@ -137,6 +127,12 @@ async function openDoc(btn, data) {
   }
   if (kind === 'recepcion_bien') {
     throw new Error('Abra el documento desde Recepción de Bienes (visor específico)');
+  }
+  if (kind === 'entregable_recepcion' && btn.dataset.recepcion && id) {
+    const path = `/entregables-servicios/recepciones/${btn.dataset.recepcion}/documentos/${id}/preview`;
+    const { blob, contentType } = await api.getBlob(path);
+    await openBlobDocument({ nombre: name, mime_type: contentType, blob });
+    return;
   }
   throw new Error('No se pudo abrir el documento');
 }

@@ -32,6 +32,33 @@ async function guardAdjuntoByReq(req, requerimientoId) {
     // Si falla la consulta de asignación, continuar con alcance organizacional
   }
 
+  // RC8.15.6G-7H — expediente de orden / Pagos: quien puede ver el expediente
+  // del entregable puede consultar adjuntos del requerimiento vinculado.
+  try {
+    const { resolveAccesoRegistroOrdenes } = await import('../lib/accesoRegistroOrdenes.js');
+    const ro = await resolveAccesoRegistroOrdenes({
+      usuarioId: userId,
+      requerimientoId: Number(requerimientoId),
+      actividad: 'VER',
+      userRow: req.user || null,
+    });
+    if (ro.permitido) return;
+  } catch (_) { /* continuar */ }
+
+  try {
+    const { rows } = await query(`
+      SELECT 1
+      FROM ordenes_contratacion oc
+      JOIN orden_entregas oe ON oe.orden_id = oc.id
+      JOIN entregable_estado_vigente eev ON eev.orden_entrega_id = oe.id
+      WHERE oc.requerimiento_id = $1
+        AND eev.responsable_usuario_id = $2
+        AND UPPER(COALESCE(eev.etapa_codigo, '')) = 'PREPARACION_EXPEDIENTE_PAGO'
+      LIMIT 1
+    `, [requerimientoId, userId]);
+    if (rows.length) return;
+  } catch (_) { /* continuar */ }
+
   // 3. Verificar alcance organizacional
   await assertCanAccessRequirement(userId, requerimientoId, 'VER');
 }

@@ -36,7 +36,7 @@ const submitFn = view.match(/async function submitRegistrarRecepcion[\s\S]*?^}/m
 ok(/documentos_entregable_gestionables/.test(view), 'A. UI usa documentos_entregable_gestionables');
 ok(/Entregable N\.°/.test(view), 'B. UI muestra Entregable N.°');
 ok(/pe-doc-retire/.test(view) && /Eliminar/.test(view), 'C. UI tiene Eliminar');
-ok(!/pe-doc-replace/.test(view), 'D. UI sin botón Reemplazar');
+ok(/pe-doc-replace/.test(view) && /Reemplazar/.test(view), 'D. UI tiene Reemplazar');
 ok(!/Presentación inicial/.test(view.match(/renderModificarDocumentosSection[\s\S]*?^}/m)?.[0] || ''), 'E. modal sin bloques históricos');
 ok(/Fecha recepción Mesa de Partes/.test(view) && /Expediente SGD/.test(view) && /Observación/.test(view),
   'F. modal conserva campos de metadatos');

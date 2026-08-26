@@ -2566,6 +2566,46 @@ export async function getExpedienteOrdenCompleto(ordenId) {
     }));
   } catch (_) { /* migración recepción pendiente */ }
 
+  let docsEntregableServicio = [];
+  try {
+    const { rows } = await query(`
+      SELECT d.id, d.recepcion_id, d.tipo_documento, d.nombre, d.nombre_archivo,
+        d.mime_type, d.fecha_documento, d.vigencia_desde, d.vigencia_hasta,
+        d.observacion, d.vigente, d.created_at,
+        oe.numero_entrega, oe.etiqueta_entrega, oe.codigo_entrega
+      FROM entregable_recepcion_documentos d
+      JOIN entregable_recepciones er ON er.id = d.recepcion_id
+      JOIN orden_entregas oe ON oe.id = er.orden_entrega_id
+      WHERE er.orden_id = $1
+        AND UPPER(COALESCE(er.tipo_recepcion, '')) = 'INICIAL'
+        AND d.vigente = TRUE
+      ORDER BY oe.numero_entrega, d.tipo_documento, d.id
+    `, [orden.id]);
+    const { documentoValidoParaPago, labelTipoDocumento } = await import('../../shared/entregableDocumentosTipos.js');
+    docsEntregableServicio = rows.map((d) => ({
+      documentoId: d.id,
+      id: d.id,
+      recepcion_id: d.recepcion_id,
+      origen: 'ENTREGABLE',
+      tipo: labelTipoDocumento(d.tipo_documento),
+      tipo_documento: d.tipo_documento,
+      nombre: d.nombre || d.nombre_archivo,
+      nombre_archivo: d.nombre_archivo,
+      mime_type: d.mime_type,
+      fecha: d.fecha_documento || d.created_at,
+      fecha_documento: d.fecha_documento,
+      vigencia_desde: d.vigencia_desde,
+      vigencia_hasta: d.vigencia_hasta,
+      observacion: d.observacion,
+      valido_para_pago: documentoValidoParaPago(d),
+      entregable_numero: d.numero_entrega,
+      entregable_etiqueta: d.etiqueta_entrega || d.codigo_entrega,
+      kind: 'entregable_recepcion',
+      previewDisponible: true,
+      registro_origen_id: d.id,
+    }));
+  } catch (_) { /* tablas entregable opcionales */ }
+
   const { dedupeDocumentos, consolidateOrdenDocumentos } = await import('../../shared/expedienteDocumentos.js');
 
   const docs = dedupeDocumentos([
@@ -2586,6 +2626,7 @@ export async function getExpedienteOrdenCompleto(ordenId) {
     ...docsCcp,
     ...consolidateOrdenDocumentos(documentos),
     ...docsRecepcion,
+    ...docsEntregableServicio,
   ]);
 
   const ultimoEnvio = envios?.[0] || null;

@@ -14,6 +14,13 @@ import {
 import { openBase64Document, previewAdjuntoById } from '../../utils/documentViewer.js';
 import { fmtFecha, fmtMonto } from '../../utils/ordenesUtils.js';
 import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
+import {
+  TIPOS_DOCUMENTO_ENTREGABLE,
+  TIPO_ENTREGABLE,
+  TIPO_OTRO,
+  labelTipoDocumento,
+  tipoPermiteVigencia,
+} from '../../../shared/entregableDocumentosTipos.js';
 
 const VIEW_ID = 'presentacion-entregables-servicios';
 const LIST_ID = 'peList';
@@ -23,6 +30,8 @@ const TAB_ORDENES = 'ordenes';
 const TAB_ENTREGABLES = 'entregables';
 
 let currentTab = TAB_ORDENES;
+let pendingAttachAction = null;
+let pendingRegisterDocs = [];
 let ordenesCache = [];
 let entregablesCache = [];
 let filtroQ = '';
@@ -406,10 +415,44 @@ function render() {
             </div>
             <div class="mb-2 d-none" id="${PREFIX}DocsSection"></div>
             <div class="mb-2" id="${PREFIX}FileWrap">
-              <label class="form-label small mb-0" id="${PREFIX}FileLabel">Documento (PDF) <span class="text-danger">*</span></label>
+              <label class="form-label small mb-0" id="${PREFIX}FileLabel">Documento ENTREGABLE (PDF) <span class="text-danger">*</span></label>
               <input type="file" class="form-control form-control-sm" id="${PREFIX}File" accept="application/pdf">
             </div>
-            <input type="file" class="d-none" id="${PREFIX}DocAttachInput" accept="application/pdf" multiple>
+            <div class="mb-2 d-none" id="${PREFIX}RegisterExtraDocs"></div>
+            <div class="d-none border rounded p-2 mb-2" id="${PREFIX}DocAttachPanel">
+              <div class="small fw-semibold mb-2">Documento tipificado</div>
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <label class="form-label small mb-0">Tipo</label>
+                  <select class="form-select form-select-sm" id="${PREFIX}DocTipo"></select>
+                </div>
+                <div class="col-md-4 d-none" id="${PREFIX}DocOtroWrap">
+                  <label class="form-label small mb-0">Descripción <span class="text-danger">*</span></label>
+                  <input type="text" class="form-control form-control-sm" id="${PREFIX}DocNombre" maxlength="300">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small mb-0">Fecha documento</label>
+                  <input type="date" class="form-control form-control-sm" id="${PREFIX}DocFecha">
+                </div>
+                <div class="col-md-4 d-none" id="${PREFIX}DocVigenciaWrap">
+                  <label class="form-label small mb-0">Vigencia desde</label>
+                  <input type="date" class="form-control form-control-sm" id="${PREFIX}DocVigenciaDesde">
+                </div>
+                <div class="col-md-4 d-none" id="${PREFIX}DocVigenciaWrapHasta">
+                  <label class="form-label small mb-0">Vigencia hasta</label>
+                  <input type="date" class="form-control form-control-sm" id="${PREFIX}DocVigenciaHasta">
+                </div>
+                <div class="col-12">
+                  <label class="form-label small mb-0">Observación</label>
+                  <input type="text" class="form-control form-control-sm" id="${PREFIX}DocObservacion" maxlength="500">
+                </div>
+              </div>
+              <div class="d-flex flex-wrap gap-2 mt-2">
+                <button type="button" class="btn btn-sm btn-outline-primary" id="${PREFIX}DocAttachPick">Seleccionar PDF</button>
+                <button type="button" class="btn btn-sm btn-link" id="${PREFIX}DocAttachCancel">Cancelar</button>
+              </div>
+            </div>
+            <input type="file" class="d-none" id="${PREFIX}DocAttachInput" accept="application/pdf">
             <div id="${PREFIX}ModalErr" class="alert alert-danger d-none py-2 small"></div>
           </div>
           <div class="modal-footer">
@@ -690,6 +733,10 @@ async function openRegistrarRecepcion(id) {
   document.getElementById(`${PREFIX}Sgd`).value = '';
   document.getElementById(`${PREFIX}Obs`).value = '';
   document.getElementById(`${PREFIX}File`).value = '';
+  pendingRegisterDocs = [];
+  pendingAttachAction = null;
+  clearDocAttachPanel();
+  renderRegisterExtraDocs();
   document.getElementById(`${PREFIX}ModalErr`)?.classList.add('d-none');
   const modalEl = document.getElementById(`${PREFIX}Modal`);
   modalEl.dataset.mode = 'create';
@@ -716,14 +763,17 @@ async function openRegistrarRecepcion(id) {
       ? '<i class="bi bi-pencil-square"></i> Modificar entregable'
       : '<i class="bi bi-box-arrow-in-down"></i> Registrar entregable';
     document.getElementById(`${PREFIX}SubmitBtn`).textContent = editando ? 'Guardar cambios' : 'Registrar';
-    document.getElementById(`${PREFIX}FileLabel`).innerHTML = 'Documento (PDF) <span class="text-danger">*</span>';
+    document.getElementById(`${PREFIX}FileLabel`).innerHTML = 'Documento ENTREGABLE (PDF) <span class="text-danger">*</span>';
     if (editando) {
       metaWrap?.classList.remove('d-none');
       fileWrap?.classList.add('d-none');
+      document.getElementById(`${PREFIX}RegisterExtraDocs`)?.classList.add('d-none');
       document.getElementById(`${PREFIX}Fecha`).value = String(recepcionInicial.fecha_recepcion_mesa_partes || '').slice(0, 10);
       document.getElementById(`${PREFIX}Sgd`).value = recepcionInicial.numero_expediente_sgd || '';
       document.getElementById(`${PREFIX}Obs`).value = recepcionInicial.observacion || '';
       renderModificarDocumentosSection(data, puedeGestionar);
+    } else {
+      renderRegisterExtraDocs();
     }
   } catch (err) {
     const errBox = document.getElementById(`${PREFIX}ModalErr`);
@@ -734,34 +784,123 @@ async function openRegistrarRecepcion(id) {
   }
 }
 
+function tiposOcupados(docs = []) {
+  const set = new Set();
+  docs.forEach((d) => {
+    const t = String(d.tipo_documento || TIPO_ENTREGABLE).toUpperCase();
+    if (t !== TIPO_OTRO) set.add(t);
+  });
+  return set;
+}
+
+function renderTipoSelectOptions(selected = TIPO_ENTREGABLE, excludeFilled = new Set()) {
+  return TIPOS_DOCUMENTO_ENTREGABLE
+    .filter((t) => t.multiples || !excludeFilled.has(t.codigo))
+    .map((t) => `<option value="${esc(t.codigo)}" ${t.codigo === selected ? 'selected' : ''}>${esc(t.label)}${t.obligatorio ? ' *' : ''}</option>`)
+    .join('');
+}
+
+function syncDocAttachPanelFields() {
+  const tipo = document.getElementById(`${PREFIX}DocTipo`)?.value || TIPO_ENTREGABLE;
+  document.getElementById(`${PREFIX}DocOtroWrap`)?.classList.toggle('d-none', tipo !== TIPO_OTRO);
+  const showVig = tipoPermiteVigencia(tipo);
+  document.getElementById(`${PREFIX}DocVigenciaWrap`)?.classList.toggle('d-none', !showVig);
+  document.getElementById(`${PREFIX}DocVigenciaWrapHasta`)?.classList.toggle('d-none', !showVig);
+}
+
+function readDocAttachMeta() {
+  const tipo = document.getElementById(`${PREFIX}DocTipo`)?.value || TIPO_ENTREGABLE;
+  return {
+    tipo_documento: tipo,
+    nombre: document.getElementById(`${PREFIX}DocNombre`)?.value?.trim() || null,
+    fecha_documento: document.getElementById(`${PREFIX}DocFecha`)?.value || null,
+    vigencia_desde: document.getElementById(`${PREFIX}DocVigenciaDesde`)?.value || null,
+    vigencia_hasta: document.getElementById(`${PREFIX}DocVigenciaHasta`)?.value || null,
+    observacion: document.getElementById(`${PREFIX}DocObservacion`)?.value?.trim() || null,
+  };
+}
+
+function clearDocAttachPanel() {
+  pendingAttachAction = null;
+  document.getElementById(`${PREFIX}DocAttachPanel`)?.classList.add('d-none');
+  ['DocNombre', 'DocFecha', 'DocVigenciaDesde', 'DocVigenciaHasta', 'DocObservacion']
+    .forEach((id) => {
+      const el = document.getElementById(`${PREFIX}${id}`);
+      if (el) el.value = '';
+    });
+}
+
+function openDocAttachPanel({ mode = 'attach', excludeFilled = new Set(), replaceDocId = null } = {}) {
+  pendingAttachAction = { mode, replaceDocId };
+  const panel = document.getElementById(`${PREFIX}DocAttachPanel`);
+  const select = document.getElementById(`${PREFIX}DocTipo`);
+  if (select) {
+    select.innerHTML = renderTipoSelectOptions(mode === 'register' ? TIPO_ENTREGABLE : TIPO_OTRO, excludeFilled);
+    select.disabled = mode === 'replace';
+  }
+  panel?.classList.remove('d-none');
+  syncDocAttachPanelFields();
+}
+
+function renderRegisterExtraDocs() {
+  const wrap = document.getElementById(`${PREFIX}RegisterExtraDocs`);
+  if (!wrap) return;
+  wrap.classList.remove('d-none');
+  wrap.innerHTML = `
+    ${pendingRegisterDocs.length ? '<div class="small fw-semibold mb-1">Documentos adicionales</div>' : ''}
+    ${pendingRegisterDocs.map((d, i) => `
+      <div class="border rounded p-2 mb-1 small d-flex justify-content-between align-items-center">
+        <span>${esc(labelTipoDocumento(d.tipo_documento))}: ${esc(d.nombre || d.nombre_archivo || 'PDF')}</span>
+        <button type="button" class="btn btn-sm btn-outline-danger pe-reg-doc-remove" data-i="${i}">Quitar</button>
+      </div>`).join('')}
+    <button type="button" class="btn btn-sm btn-outline-success mt-1" id="${PREFIX}RegisterAddDoc">
+      <i class="bi bi-paperclip"></i> Adjuntar otro documento
+    </button>`;
+}
+
+function renderDocMetaLine(doc) {
+  const parts = [];
+  if (doc.fecha_documento) parts.push(`Fecha: ${fmtFecha(doc.fecha_documento)}`);
+  if (doc.vigencia_desde || doc.vigencia_hasta) {
+    parts.push(`Vigencia: ${fmtFecha(doc.vigencia_desde) || '—'} → ${fmtFecha(doc.vigencia_hasta) || '—'}`);
+  }
+  if (doc.observacion) parts.push(doc.observacion);
+  if (doc.valido_para_pago === false) parts.push('Vencido para pago');
+  return parts.length ? `<div class="text-muted" style="font-size:10px">${esc(parts.join(' · '))}</div>` : '';
+}
+
 function renderModificarDocumentosSection(data, puedeGestionar) {
   const section = document.getElementById(`${PREFIX}DocsSection`);
   if (!section) return;
   const docs = data.documentos_entregable_gestionables || [];
   const numeroEntrega = data.numero_entrega ?? '—';
+  const ocupados = tiposOcupados(docs);
   section.classList.remove('d-none');
   section.innerHTML = `
-    <div class="mb-3 small fw-semibold">Entregable N.° ${esc(numeroEntrega)}</div>
+    <div class="mb-3 small fw-semibold">Entregable N.° ${esc(numeroEntrega)} — documentos tipificados</div>
     ${docs.length ? docs.map((doc) => `
-      <div class="border rounded p-2 mb-2 small d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <div class="text-truncate" style="max-width:260px" title="${esc(doc.nombre_archivo || '')}">
-          ${esc(doc.nombre_archivo || 'Documento')}
-        </div>
-        <div class="d-flex flex-wrap gap-1">
-          <button type="button" class="btn btn-sm btn-outline-primary pe-doc-preview"
-            data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}">
-            Ver
-          </button>
-          ${puedeGestionar ? `
-            <button type="button" class="btn btn-sm btn-outline-danger pe-doc-retire"
-              data-doc="${esc(doc.id)}">
-              Eliminar
-            </button>` : ''}
+      <div class="border rounded p-2 mb-2 small">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+          <div style="min-width:220px">
+            <div><span class="badge bg-light text-dark border me-1">${esc(doc.tipo_label || labelTipoDocumento(doc.tipo_documento))}</span>
+              <strong>${esc(doc.nombre || doc.nombre_archivo || 'Documento')}</strong></div>
+            ${renderDocMetaLine(doc)}
+          </div>
+          <div class="d-flex flex-wrap gap-1">
+            <button type="button" class="btn btn-sm btn-outline-primary pe-doc-preview"
+              data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}">Ver</button>
+            ${puedeGestionar ? `
+              <button type="button" class="btn btn-sm btn-outline-secondary pe-doc-replace"
+                data-doc="${esc(doc.id)}" data-tipo="${esc(doc.tipo_documento || TIPO_ENTREGABLE)}">Reemplazar</button>
+              <button type="button" class="btn btn-sm btn-outline-danger pe-doc-retire"
+                data-doc="${esc(doc.id)}">Eliminar</button>` : ''}
+          </div>
         </div>
       </div>`).join('') : '<p class="text-muted small mb-2">Sin documentos vigentes del entregable.</p>'}
     ${puedeGestionar ? `
-      <button type="button" class="btn btn-sm btn-outline-success pe-doc-attach">
-        <i class="bi bi-paperclip"></i> Adjuntar PDF
+      <button type="button" class="btn btn-sm btn-outline-success pe-doc-attach"
+        ${[...TIPOS_DOCUMENTO_ENTREGABLE].every((t) => !t.multiples && ocupados.has(t.codigo)) ? 'disabled' : ''}>
+        <i class="bi bi-paperclip"></i> Adjuntar documento
       </button>` : ''}`;
 }
 
@@ -798,6 +937,7 @@ async function onModificarDocumentoAction(e) {
     if (!window.confirm('¿Eliminar este documento del entregable?')) return;
     try {
       await entregablesServiciosService.retirarDocumentoRecepcion(entregaId, retireBtn.dataset.doc);
+      clearDocAttachPanel();
       await refreshModificarDocumentos(entregaId);
     } catch (err) {
       if (errBox) {
@@ -808,31 +948,76 @@ async function onModificarDocumentoAction(e) {
     return;
   }
 
+  const replaceBtn = e.target.closest('.pe-doc-replace');
+  if (replaceBtn) {
+    const tipoSelect = document.getElementById(`${PREFIX}DocTipo`);
+    if (tipoSelect) {
+      tipoSelect.innerHTML = `<option value="${esc(replaceBtn.dataset.tipo || TIPO_ENTREGABLE)}">${esc(labelTipoDocumento(replaceBtn.dataset.tipo))}</option>`;
+      tipoSelect.value = replaceBtn.dataset.tipo || TIPO_ENTREGABLE;
+      tipoSelect.disabled = true;
+    }
+    openDocAttachPanel({ mode: 'replace', replaceDocId: replaceBtn.dataset.doc });
+    return;
+  }
+
   const attachBtn = e.target.closest('.pe-doc-attach');
   if (attachBtn) {
-    document.getElementById(`${PREFIX}DocAttachInput`)?.click();
+    const resp = await entregablesServiciosService.getDetalle(entregaId);
+    const data = resp?.data || resp || {};
+    openDocAttachPanel({ mode: 'attach', excludeFilled: tiposOcupados(data.documentos_entregable_gestionables || []) });
+    return;
   }
 }
 
 async function onDocAttachSelected(e) {
   const input = e.target;
-  const files = [...(input.files || [])];
+  const file = input.files?.[0];
   input.value = '';
-  if (!files.length) return;
+  if (!file) return;
   const modalEl = document.getElementById(`${PREFIX}Modal`);
   const entregaId = modalEl?.dataset.entregaId || document.getElementById(`${PREFIX}EntregableId`)?.value;
   const errBox = document.getElementById(`${PREFIX}ModalErr`);
-  if (!entregaId) return;
-  try {
-    const documentos = await Promise.all(files.map((file) => fileToDocumentoPayload(file)));
-    await entregablesServiciosService.adjuntarDocumentosRecepcion(entregaId, { documentos });
-    await refreshModificarDocumentos(entregaId);
-  } catch (err) {
-    if (errBox) {
-      errBox.textContent = err.message || 'No se pudieron adjuntar documentos';
-      errBox.classList.remove('d-none');
+  const meta = readDocAttachMeta();
+  const payload = await fileToDocumentoPayload(file);
+  Object.assign(payload, meta);
+  const editando = modalEl?.dataset.mode === 'edit';
+
+  if (pendingAttachAction?.mode === 'replace' && pendingAttachAction.replaceDocId) {
+    if (!editando || !entregaId) return;
+    try {
+      await entregablesServiciosService.reemplazarDocumentoRecepcion(
+        entregaId,
+        pendingAttachAction.replaceDocId,
+        { documentos: [payload] },
+      );
+      clearDocAttachPanel();
+      await refreshModificarDocumentos(entregaId);
+    } catch (err) {
+      if (errBox) {
+        errBox.textContent = err.message || 'No se pudo reemplazar el documento';
+        errBox.classList.remove('d-none');
+      }
     }
+    return;
   }
+
+  if (editando && entregaId) {
+    try {
+      await entregablesServiciosService.adjuntarDocumentosRecepcion(entregaId, { documentos: [payload] });
+      clearDocAttachPanel();
+      await refreshModificarDocumentos(entregaId);
+    } catch (err) {
+      if (errBox) {
+        errBox.textContent = err.message || 'No se pudieron adjuntar documentos';
+        errBox.classList.remove('d-none');
+      }
+    }
+    return;
+  }
+
+  pendingRegisterDocs.push(payload);
+  clearDocAttachPanel();
+  renderRegisterExtraDocs();
 }
 
 async function submitRegistrarRecepcion(e) {
@@ -883,7 +1068,12 @@ async function submitRegistrarRecepcion(e) {
         }
         return;
       }
-      payload.documentos = [{ nombre_archivo: nombre, mime_type: mime, contenido_base64: contenido }];
+      payload.documentos = [{
+        tipo_documento: TIPO_ENTREGABLE,
+        nombre_archivo: nombre,
+        mime_type: mime,
+        contenido_base64: contenido,
+      }, ...pendingRegisterDocs];
       await entregablesServiciosService.registrarRecepcion(id, payload);
     }
     window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}Modal`))?.hide();
@@ -1797,9 +1987,12 @@ async function openDetalle(id) {
         </div></div></div>
         <div class="col-md-6"><div class="card h-100"><div class="card-body">
           <h6 class="text-muted text-uppercase small mb-2">Documentos del entregable</h6>
-          ${docsEntregable.length ? docsEntregable.map((doc) => `
+          ${docsEntregable.filter((d) => d.vigente !== false).length ? docsEntregable.filter((d) => d.vigente !== false).map((doc) => `
             <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
-              <div class="text-truncate" style="max-width:260px" title="${esc(doc.nombre_archivo)}">${esc(doc.nombre_archivo)}</div>
+              <div class="text-truncate" style="max-width:260px" title="${esc(doc.nombre || doc.nombre_archivo)}">
+                <span class="badge bg-light text-dark border me-1">${esc(doc.tipo_label || labelTipoDocumento(doc.tipo_documento))}</span>
+                ${esc(doc.nombre || doc.nombre_archivo)}
+              </div>
               <button type="button" class="btn btn-sm btn-outline-secondary pe-doc-preview" data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}"><i class="bi bi-eye"></i></button>
             </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos del entregable.</p>'}
         </div></div></div>
@@ -1917,6 +2110,27 @@ export function initPresentacionEntregableView() {
   });
   document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', submitRegistrarRecepcion);
   document.getElementById(`${PREFIX}DocsSection`)?.addEventListener('click', onModificarDocumentoAction);
+  document.getElementById(`${PREFIX}RegisterExtraDocs`)?.addEventListener('click', (e) => {
+    const regRemove = e.target.closest('.pe-reg-doc-remove');
+    if (regRemove) {
+      pendingRegisterDocs.splice(Number(regRemove.dataset.i), 1);
+      renderRegisterExtraDocs();
+      return;
+    }
+    if (e.target.closest(`#${PREFIX}RegisterAddDoc`)) {
+      const filled = new Set([TIPO_ENTREGABLE]);
+      pendingRegisterDocs.forEach((d) => {
+        const t = String(d.tipo_documento || '').toUpperCase();
+        if (t !== TIPO_OTRO) filled.add(t);
+      });
+      openDocAttachPanel({ mode: 'register', excludeFilled: filled });
+    }
+  });
+  document.getElementById(`${PREFIX}DocAttachPick`)?.addEventListener('click', () => {
+    document.getElementById(`${PREFIX}DocAttachInput`)?.click();
+  });
+  document.getElementById(`${PREFIX}DocAttachCancel`)?.addEventListener('click', clearDocAttachPanel);
+  document.getElementById(`${PREFIX}DocTipo`)?.addEventListener('change', syncDocAttachPanelFields);
   document.getElementById(`${PREFIX}DocAttachInput`)?.addEventListener('change', onDocAttachSelected);
   document.getElementById(`${PREFIX}ObservarForm`)?.addEventListener('submit', submitObservarEntregable);
   document.getElementById(`${PREFIX}ObservarDestinoSubmodulo`)?.addEventListener('change', (event) => {

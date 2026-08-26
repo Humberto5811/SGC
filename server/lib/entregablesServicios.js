@@ -11,6 +11,18 @@
 import { getClient, query } from '../db.js';
 import { buildEntregaContract } from '../../shared/entregaContractual.js';
 import {
+  assertEntregableObligatorioPresente,
+  buildDocumentosTipificadosEntregable,
+  documentoValidoParaPago,
+  labelTipoDocumento,
+  mapDocumentoEntregableRow,
+  normalizeTipoDocumento,
+  TIPO_ENTREGABLE,
+  TIPO_OTRO,
+  tipoPermiteMultiples,
+  validarMetadatosDocumentoEntregable,
+} from '../../shared/entregableDocumentosTipos.js';
+import {
   resolveAreaUsuaria,
   resolveOrdenFechaNotificacion,
 } from '../../shared/ordenCronogramaContractual.js';
@@ -960,6 +972,9 @@ export async function listarBandejaPreparacionExpedientePago(userCtx = null) {
     const autorizadoPagos = esAdmin(userCtx) || responsablePersonaActual;
     item.puede_ver_expediente_pago = autorizadoPagos;
     item.puede_ver_trazabilidad_pago = autorizadoPagos && Boolean(item.puede_ver_trazabilidad);
+    item.puede_ver_entregable_pago = autorizadoPagos;
+    item.puede_ver_acta_pago = autorizadoPagos;
+    item.puede_checklist_pago = autorizadoPagos;
     item.puede_observar_pago = autorizadoPagos && Boolean(item.puede_observar_analista_cm);
     item.puede_evaluar_penalidad_pago = autorizadoPagos;
     Object.assign(
@@ -1295,9 +1310,15 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
           SELECT json_agg(json_build_object(
             'id', d.id,
             'recepcion_id', d.recepcion_id,
+            'tipo_documento', d.tipo_documento,
+            'nombre', d.nombre,
             'nombre_archivo', d.nombre_archivo,
             'mime_type', d.mime_type,
             'tamanio_bytes', d.tamanio_bytes,
+            'fecha_documento', d.fecha_documento,
+            'vigencia_desde', d.vigencia_desde,
+            'vigencia_hasta', d.vigencia_hasta,
+            'observacion', d.observacion,
             'vigente', d.vigente,
             'reemplaza_id', d.reemplaza_id,
             'created_at', d.created_at
@@ -1309,8 +1330,9 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
       ORDER BY er.numero_recepcion DESC, er.id DESC
     `, [ordenEntregaId]),
     query(`
-      SELECT d.id, d.recepcion_id, d.nombre_archivo, d.mime_type, d.tamanio_bytes,
-        d.vigente, d.reemplaza_id, d.created_at
+      SELECT d.id, d.recepcion_id, d.tipo_documento, d.nombre, d.nombre_archivo,
+        d.mime_type, d.tamanio_bytes, d.fecha_documento, d.vigencia_desde, d.vigencia_hasta,
+        d.observacion, d.vigente, d.reemplaza_id, d.created_at
       FROM entregable_recepcion_documentos d
       JOIN entregable_recepciones er ON er.id = d.recepcion_id
       WHERE er.orden_entrega_id = $1
@@ -1348,7 +1370,7 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
     .filter((d) => d.vigente);
   const documentosEntregableGestionables = (recepcionInicial?.documentos || [])
     .filter((d) => d.vigente)
-    .map((d) => ({ ...d, recepcion_id: recepcionInicial.id }));
+    .map((d) => mapDocumentoEntregableRow({ ...d, recepcion_id: recepcionInicial.id }));
   const documentoVigente = documentosVigentesPresentacion[0] || null;
   const observaciones = observacionesRes.rows || [];
   const observacionAbierta = observaciones.find(
@@ -1380,7 +1402,8 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
     documento_vigente: documentoVigente,
     documentos_vigentes_presentacion: documentosVigentesPresentacion,
     documentos_entregable_gestionables: documentosEntregableGestionables,
-    documentos_entregable: documentosRes.rows || [],
+    documentos_tipificados: buildDocumentosTipificadosEntregable(documentosEntregableGestionables),
+    documentos_entregable: (documentosRes.rows || []).map((d) => mapDocumentoEntregableRow(d)),
     observaciones,
     observacion_abierta: observacionAbierta,
     expediente: expediente,
@@ -3657,7 +3680,12 @@ export async function registrarRecepcionEntregable(
   if (!archivos.length || !archivos.some((a) => String(a?.contenido_base64 || '').trim())) {
     throw httpError('Archivo del entregable es obligatorio');
   }
-  const docsValidados = archivos.map((a) => validateArchivo({
+  const archivosNormalizados = archivos.map((a, i) => ({
+    ...a,
+    tipo_documento: normalizeTipoDocumento(a?.tipo_documento || (i === 0 ? TIPO_ENTREGABLE : a?.tipo_documento)),
+  }));
+  assertEntregableObligatorioPresente(archivosNormalizados.map((a) => ({ ...a, vigente: true })));
+  const docsValidados = archivosNormalizados.map((a) => validateArchivo({
     contenido_base64: a?.contenido_base64,
     nombre_archivo: a?.nombre_archivo || a?.nombre,
     mime_type: a?.mime_type || 'application/pdf',
@@ -3721,19 +3749,27 @@ export async function registrarRecepcionEntregable(
       String(usuario || '').slice(0, 150),
     ]);
 
-    for (let i = 0; i < archivos.length; i += 1) {
-      const a = archivos[i];
+    for (let i = 0; i < archivosNormalizados.length; i += 1) {
+      const a = archivosNormalizados[i];
       const v = docsValidados[i];
+      const meta = validarMetadatosDocumentoEntregable(a, a.tipo_documento);
       await client.query(`
         INSERT INTO entregable_recepcion_documentos (
-          recepcion_id, nombre_archivo, mime_type, contenido_base64, tamanio_bytes, vigente
-        ) VALUES ($1,$2,$3,$4,$5,TRUE)
+          recepcion_id, nombre_archivo, mime_type, contenido_base64, tamanio_bytes, vigente,
+          tipo_documento, nombre, fecha_documento, vigencia_desde, vigencia_hasta, observacion
+        ) VALUES ($1,$2,$3,$4,$5,TRUE,$6,$7,$8,$9,$10,$11)
       `, [
         recepcionRows[0].id,
-        String(a?.nombre_archivo || a?.nombre || `entregable-${i + 1}.pdf`).slice(0, 300),
+        String(a?.nombre_archivo || a?.nombre || `${meta.tipo_documento.toLowerCase()}-${i + 1}.pdf`).slice(0, 300),
         String(a?.mime_type || 'application/pdf').slice(0, 120),
         v.raw,
         v.bytes,
+        meta.tipo_documento,
+        meta.nombre,
+        meta.fecha_documento,
+        meta.vigencia_desde,
+        meta.vigencia_hasta,
+        meta.observacion,
       ]);
     }
 
@@ -3874,6 +3910,12 @@ export async function modificarRecepcionEntregable(
       `, [recepcion.id]);
       documentoVigente = docsVigentes[0] || null;
     }
+
+    const { rows: vigentesTipos } = await client.query(`
+      SELECT tipo_documento, vigente FROM entregable_recepcion_documentos
+      WHERE recepcion_id = $1 AND vigente = TRUE
+    `, [recepcion.id]);
+    assertEntregableObligatorioPresente(vigentesTipos);
 
     const operadorId = Number(userCtx?.id);
     if (Number.isInteger(operadorId) && operadorId > 0) {
@@ -4028,6 +4070,72 @@ async function registrarEventoDocumentoEntregable(client, {
   ]);
 }
 
+async function assertTipoDocumentoDisponible(client, recepcionId, tipo) {
+  if (tipoPermiteMultiples(tipo)) return;
+  const { rows } = await client.query(`
+    SELECT id FROM entregable_recepcion_documentos
+    WHERE recepcion_id = $1
+      AND UPPER(COALESCE(tipo_documento, 'ENTREGABLE')) = $2
+      AND vigente = TRUE
+    LIMIT 1
+  `, [recepcionId, normalizeTipoDocumento(tipo)]);
+  if (rows.length) {
+    throw httpError(
+      `Ya existe un documento vigente de tipo ${labelTipoDocumento(tipo)}. Use reemplazar.`,
+      409,
+      'DOCUMENTO_TIPO_YA_EXISTE',
+    );
+  }
+}
+
+function prepararArchivoDocumentoEntregable(archivo, { defaultTipo = TIPO_ENTREGABLE } = {}) {
+  const hasExplicitTipo = archivo?.tipo_documento != null && String(archivo.tipo_documento).trim() !== '';
+  const payload = { ...archivo };
+  if (!hasExplicitTipo) payload.tipo_documento = defaultTipo;
+  if (!payload.nombre && defaultTipo === TIPO_OTRO) {
+    payload.nombre = String(payload.nombre_archivo || payload.nombre || 'Documento')
+      .replace(/\.pdf$/i, '');
+  }
+  const docValidado = validateArchivo({
+    contenido_base64: payload.contenido_base64,
+    nombre_archivo: payload.nombre_archivo || payload.nombre,
+    mime_type: payload.mime_type || 'application/pdf',
+  });
+  const meta = validarMetadatosDocumentoEntregable(payload, payload.tipo_documento);
+  return { docValidado, meta, payload };
+}
+
+async function insertDocumentoRecepcionEntregable(client, recepcionId, archivo, reemplazaId = null, opts = {}) {
+  const { docValidado, meta, payload } = prepararArchivoDocumentoEntregable(archivo, opts);
+  if (reemplazaId == null) {
+    await assertTipoDocumentoDisponible(client, recepcionId, meta.tipo_documento);
+  }
+  const { rows } = await client.query(`
+    INSERT INTO entregable_recepcion_documentos (
+      recepcion_id, nombre_archivo, mime_type, contenido_base64,
+      tamanio_bytes, vigente, reemplaza_id,
+      tipo_documento, nombre, fecha_documento, vigencia_desde, vigencia_hasta, observacion
+    ) VALUES ($1,$2,$3,$4,$5,TRUE,$6,$7,$8,$9,$10,$11,$12)
+    RETURNING id, recepcion_id, tipo_documento, nombre, nombre_archivo, mime_type, tamanio_bytes,
+      fecha_documento, vigencia_desde, vigencia_hasta, observacion,
+      vigente, reemplaza_id, created_at
+  `, [
+    recepcionId,
+    String(payload.nombre_archivo || payload.nombre || `${meta.tipo_documento.toLowerCase()}.pdf`).slice(0, 300),
+    String(archivo.mime_type || 'application/pdf').slice(0, 120),
+    docValidado.raw,
+    docValidado.bytes,
+    reemplazaId,
+    meta.tipo_documento,
+    meta.nombre,
+    meta.fecha_documento,
+    meta.vigencia_desde,
+    meta.vigencia_hasta,
+    meta.observacion,
+  ]);
+  return mapDocumentoEntregableRow(rows[0]);
+}
+
 async function persistirDocumentosAdjuntos({
   client,
   entrega,
@@ -4038,36 +4146,21 @@ async function persistirDocumentosAdjuntos({
   ejecutadoPor,
 }) {
   const insertados = [];
+  const legacyMode = archivos.every((a) => a?.tipo_documento == null || String(a.tipo_documento).trim() === '');
   for (const archivo of archivos) {
-    const docValidado = validateArchivo({
-      contenido_base64: archivo.contenido_base64,
-      nombre_archivo: archivo.nombre_archivo || archivo.nombre,
-      mime_type: archivo.mime_type || 'application/pdf',
+    const row = await insertDocumentoRecepcionEntregable(client, recepcionId, archivo, null, {
+      defaultTipo: legacyMode ? TIPO_OTRO : TIPO_ENTREGABLE,
     });
-    const { rows } = await client.query(`
-      INSERT INTO entregable_recepcion_documentos (
-        recepcion_id, nombre_archivo, mime_type, contenido_base64,
-        tamanio_bytes, vigente, reemplaza_id
-      ) VALUES ($1,$2,$3,$4,$5,TRUE,NULL)
-      RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
-        vigente, reemplaza_id, created_at
-    `, [
-      recepcionId,
-      String(archivo.nombre_archivo || archivo.nombre || 'entregable.pdf').slice(0, 300),
-      String(archivo.mime_type || 'application/pdf').slice(0, 120),
-      docValidado.raw,
-      docValidado.bytes,
-    ]);
-    insertados.push(rows[0]);
+    insertados.push(row);
     await registrarEventoDocumentoEntregable(client, {
       entrega,
       estado,
       eventoCodigo: 'ENTREGABLE_DOCUMENTO_ADJUNTADO',
       recepcionId,
-      documentoId: rows[0].id,
+      documentoId: row.id,
       ejecutadoPor,
       userCtx,
-      motivo: 'Documento adjuntado al entregable',
+      motivo: `Documento ${row.tipo_label || row.tipo_documento} adjuntado al entregable`,
     });
   }
   return insertados;
@@ -4083,11 +4176,6 @@ async function persistirDocumentoReemplazo({
   userCtx,
   ejecutadoPor,
 }) {
-  const docValidado = validateArchivo({
-    contenido_base64: archivo.contenido_base64,
-    nombre_archivo: archivo.nombre_archivo || archivo.nombre,
-    mime_type: archivo.mime_type || 'application/pdf',
-  });
   const { rows: anteriores } = await client.query(`
     SELECT d.* FROM entregable_recepcion_documentos d
     JOIN entregable_recepciones er ON er.id = d.recepcion_id
@@ -4098,6 +4186,15 @@ async function persistirDocumentoReemplazo({
   if (!anteriores.length) {
     throw httpError('Documento vigente del entregable no encontrado', 404, 'DOCUMENTO_NO_ENCONTRADO');
   }
+  const docValidado = validateArchivo({
+    contenido_base64: archivo.contenido_base64,
+    nombre_archivo: archivo.nombre_archivo || archivo.nombre,
+    mime_type: archivo.mime_type || 'application/pdf',
+  });
+  const meta = validarMetadatosDocumentoEntregable(
+    { ...archivo, tipo_documento: archivo.tipo_documento || anteriores[0].tipo_documento },
+    archivo.tipo_documento || anteriores[0].tipo_documento,
+  );
   await client.query(`
     UPDATE entregable_recepcion_documentos
     SET vigente = FALSE
@@ -4106,31 +4203,40 @@ async function persistirDocumentoReemplazo({
   const { rows: nuevosDocs } = await client.query(`
     INSERT INTO entregable_recepcion_documentos (
       recepcion_id, nombre_archivo, mime_type, contenido_base64,
-      tamanio_bytes, vigente, reemplaza_id
-    ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)
-    RETURNING id, recepcion_id, nombre_archivo, mime_type, tamanio_bytes,
+      tamanio_bytes, vigente, reemplaza_id,
+      tipo_documento, nombre, fecha_documento, vigencia_desde, vigencia_hasta, observacion
+    ) VALUES ($1,$2,$3,$4,$5,TRUE,$6,$7,$8,$9,$10,$11,$12)
+    RETURNING id, recepcion_id, tipo_documento, nombre, nombre_archivo, mime_type, tamanio_bytes,
+      fecha_documento, vigencia_desde, vigencia_hasta, observacion,
       vigente, reemplaza_id, created_at
   `, [
     recepcionId,
-    String(archivo.nombre_archivo || archivo.nombre || 'entregable.pdf').slice(0, 300),
+    String(archivo.nombre_archivo || archivo.nombre || anteriores[0].nombre_archivo || 'entregable.pdf').slice(0, 300),
     String(archivo.mime_type || 'application/pdf').slice(0, 120),
     docValidado.raw,
     docValidado.bytes,
     documentoAnteriorId,
+    meta.tipo_documento,
+    meta.nombre,
+    meta.fecha_documento,
+    meta.vigencia_desde,
+    meta.vigencia_hasta,
+    meta.observacion,
   ]);
+  const documento = mapDocumentoEntregableRow(nuevosDocs[0]);
   await registrarEventoDocumentoEntregable(client, {
     entrega,
     estado,
     eventoCodigo: 'ENTREGABLE_DOCUMENTO_REEMPLAZADO',
     recepcionId,
-    documentoId: nuevosDocs[0].id,
+    documentoId: documento.id,
     reemplazaId: documentoAnteriorId,
     reemplazadoId: documentoAnteriorId,
     ejecutadoPor,
     userCtx,
-    motivo: 'Documento reemplazado en el entregable',
+    motivo: `Documento ${documento.tipo_label || documento.tipo_documento} reemplazado`,
   });
-  return nuevosDocs[0];
+  return documento;
 }
 
 async function persistirDocumentoRetiro({
@@ -4151,6 +4257,17 @@ async function persistirDocumentoRetiro({
   `, [documentoId, recepcionId]);
   if (!rows.length) {
     throw httpError('Documento vigente del entregable no encontrado', 404, 'DOCUMENTO_NO_ENCONTRADO');
+  }
+  if (normalizeTipoDocumento(rows[0].tipo_documento) === TIPO_ENTREGABLE) {
+    const { rows: otros } = await client.query(`
+      SELECT id FROM entregable_recepcion_documentos
+      WHERE recepcion_id = $1 AND vigente = TRUE AND id <> $2
+        AND UPPER(COALESCE(tipo_documento, 'ENTREGABLE')) = 'ENTREGABLE'
+      LIMIT 1
+    `, [recepcionId, documentoId]);
+    if (!otros.length) {
+      throw httpError('Debe conservar al menos un documento ENTREGABLE vigente', 409, 'ENTREGABLE_OBLIGATORIO');
+    }
   }
   await client.query(`
     UPDATE entregable_recepcion_documentos
@@ -4275,23 +4392,29 @@ export async function retirarDocumentoRecepcionEntregable(
   }
 }
 
+/** RC8.15.6G-7I — Documentos tipificados vigentes del entregable (reutilizable por Pagos/Checklist). */
+export async function listarDocumentosTipificadosEntregable(ordenEntregaId) {
+  const detalle = await getDetalleEntregableServicio(ordenEntregaId);
+  return detalle.documentos_tipificados || [];
+}
+
 /** Contenido documental de una recepción (preview/download). */
 export async function getDocumentoRecepcionEntregable(recepcionId, documentoId) {
   const { rows } = await query(`
     SELECT d.id, d.nombre_archivo, d.mime_type, d.contenido_base64, d.tamanio_bytes,
-      d.recepcion_id
+      d.recepcion_id, d.tipo_documento, d.nombre, d.fecha_documento,
+      d.vigencia_desde, d.vigencia_hasta, d.observacion, d.vigente
     FROM entregable_recepcion_documentos d
     WHERE d.recepcion_id = $1 AND d.id = $2
   `, [parseInt(recepcionId, 10), parseInt(documentoId, 10)]);
   if (!rows.length) throw httpError('Documento no encontrado', 404);
   const row = rows[0];
   return {
-    id: row.id,
+    ...mapDocumentoEntregableRow(row),
     nombre: row.nombre_archivo,
     mime_type: row.mime_type,
     contenido_base64: row.contenido_base64,
     tamano_bytes: row.tamanio_bytes,
-    recepcion_id: row.recepcion_id,
   };
 }
 

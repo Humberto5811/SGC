@@ -10,6 +10,11 @@ import {
 import { fmtFecha, fmtMonto } from '../../utils/ordenesUtils.js';
 import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
 import { openEntregableTrazabilidadModal } from '../../utils/entregableTrazabilidadModal.js';
+import {
+  openChecklistPagoModal,
+  openVerActaConformidadPagoModal,
+  openVerEntregablePagoModal,
+} from '../../utils/entregableChecklistPagoModal.js';
 
 const VIEW_ID = 'derivacion-pago';
 const LIST_ID = 'pagoList';
@@ -192,6 +197,15 @@ function ordenLabel(row) {
 
 export function pagoMenuItems(row) {
   const items = [];
+  if (row.puede_ver_entregable_pago) {
+    items.push({ act: 'verEntregable', label: 'Ver entregable', icon: 'bi-file-earmark-text' });
+  }
+  if (row.puede_ver_acta_pago) {
+    items.push({ act: 'verActaConformidad', label: 'Ver Acta de Conformidad', icon: 'bi-file-check' });
+  }
+  if (row.puede_checklist_pago) {
+    items.push({ act: 'checklistDocumentos', label: 'Checklist de documentos', icon: 'bi-list-check' });
+  }
   if (row.puede_ver_expediente_pago) {
     items.push({ act: 'verExpediente', label: 'Ver expediente', icon: 'bi-folder2-open' });
   }
@@ -542,6 +556,13 @@ async function ejecutarAdjuntarFirmado() {
 
 function buildActMap() {
   return {
+    verEntregable: (id) => openVerEntregablePagoModal(id).catch((err) => {
+      window.alert(err.message || 'No se pudo abrir el entregable');
+    }),
+    verActaConformidad: (id) => openVerActaConformidadPagoModal(id),
+    checklistDocumentos: (id) => openChecklistPagoModal(id).catch((err) => {
+      window.alert(err.message || 'No se pudo abrir el checklist');
+    }),
     verExpediente: (id) => {
       const row = bandejaCache.find((item) => String(item.orden_entrega_id) === String(id));
       if (row) openExpedienteOrdenModal(row);

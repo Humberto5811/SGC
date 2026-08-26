@@ -7,6 +7,7 @@ import {
   listarBandejaEntregablesServicios,
   listarBandejaPreparacionExpedientePago,
   listarBandejaOrdenesEntregablesServicios,
+  listarDocumentosTipificadosEntregable,
   getDetalleEntregableServicio,
   registrarRecepcionEntregable,
   modificarRecepcionEntregable,
@@ -51,10 +52,14 @@ import {
   getActaConformidadFirmadaBytes,
 } from '../lib/entregablesServicios.js';
 import {
-  CATALOGO_DESTINOS_OBSERVACION,
-  listarDestinatariosObservacion,
-  listarMisObservacionesDirigidas,
-} from '../lib/observacionesEntregableRouting.js';
+  adjuntarDocumentoChecklistAnalista,
+  getDocumentoChecklistPagoBytes,
+  listarDocumentosEntregablePago,
+  obtenerActaConformidadPagoPreview,
+  obtenerChecklistExpedientePago,
+  reemplazarDocumentoChecklistAnalista,
+  retirarDocumentoChecklistAnalista,
+} from '../lib/entregableChecklistPago.js';
 
 const router = Router();
 
@@ -127,6 +132,13 @@ router.get('/observaciones-dirigidas/destinatarios', async (req, res, next) => {
     const data = await listarDestinatariosObservacion({
       submoduloDestino: req.query.submoduloDestino || req.query.destino_submodulo_codigo,
     });
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/documentos-tipificados', async (req, res, next) => {
+  try {
+    const data = await listarDocumentosTipificadosEntregable(req.params.id);
     res.json({ ok: true, data });
   } catch (err) { next(err); }
 });
@@ -320,6 +332,96 @@ router.get('/:id/penalidad-documentos/:documentoId', async (req, res, next) => {
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(doc.nombre_archivo || 'documento')}"`,
+    );
+    res.send(doc.bytes);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/checklist-pago', async (req, res, next) => {
+  try {
+    const data = await obtenerChecklistExpedientePago(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/checklist-pago/entregables', async (req, res, next) => {
+  try {
+    const data = await listarDocumentosEntregablePago(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/checklist-pago/acta-conformidad', async (req, res, next) => {
+  try {
+    const data = await obtenerActaConformidadPagoPreview(req.params.id, req.esUserCtx);
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/checklist-pago/documentos', async (req, res, next) => {
+  try {
+    const data = await adjuntarDocumentoChecklistAnalista(
+      req.params.id,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.status(201).json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id/checklist-pago/documentos/:documentoId/reemplazar', async (req, res, next) => {
+  try {
+    const data = await reemplazarDocumentoChecklistAnalista(
+      req.params.id,
+      req.params.documentoId,
+      req.body || {},
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id/checklist-pago/documentos/:documentoId', async (req, res, next) => {
+  try {
+    const data = await retirarDocumentoChecklistAnalista(
+      req.params.id,
+      req.params.documentoId,
+      req.esUserCtx,
+      req.esUsuario,
+    );
+    res.json({ ok: true, data });
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/checklist-pago/documentos/:documentoId/preview', async (req, res, next) => {
+  try {
+    const doc = await getDocumentoChecklistPagoBytes(
+      req.params.id,
+      req.params.documentoId,
+      req.esUserCtx,
+    );
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(doc.nombre_archivo || 'documento')}"`,
+    );
+    res.send(doc.bytes);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/checklist-pago/documentos/:documentoId/download', async (req, res, next) => {
+  try {
+    const doc = await getDocumentoChecklistPagoBytes(
+      req.params.id,
+      req.params.documentoId,
+      req.esUserCtx,
+    );
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(doc.nombre_archivo || 'documento')}"`,
     );
     res.send(doc.bytes);
   } catch (err) { next(err); }
