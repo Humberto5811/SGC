@@ -344,6 +344,53 @@ export async function loadEstadoAsignacionPersistidaBatch(requerimientoIds = [],
   return out;
 }
 
+/**
+ * RC8.15.6G-8D0 — Materializa expediente_estado_vigente cuando el bootstrap legacy
+ * solo escribió requerimientos (sin tocar reglas de transición).
+ */
+export async function materializarExpedienteEstadoVigenteSiAusente(
+  requerimientoId,
+  { actorRol = 'Sistema', client = null } = {},
+) {
+  const rid = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+  const queryFn = client
+    ? client.query.bind(client)
+    : (await import('../db.js')).query;
+  const { rows: vigentes } = await queryFn(
+    'SELECT 1 FROM expediente_estado_vigente WHERE requerimiento_id = $1',
+    [rid],
+  );
+  if (vigentes.length) return { materializado: false, motivo: 'ya_existe' };
+
+  const { rows: reqRows } = await queryFn('SELECT * FROM requerimientos WHERE id = $1', [rid]);
+  if (!reqRows.length) return null;
+  const row = reqRows[0];
+  const etapaRaw = String(row.estado_actual || 'REGISTRO').trim().toUpperCase();
+  const eventoInicial = (etapaRaw === 'REGISTRO' || etapaRaw === 'REGISTRADO')
+    ? 'REQUERIMIENTO_REGISTRADO'
+    : null;
+  if (!eventoInicial) {
+    return { materializado: false, motivo: 'etapa_sin_materializacion_automatica', etapa: etapaRaw };
+  }
+
+  const meta = getEtapaMeta('REGISTRO');
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const tr = await transicionarExpediente({
+    requerimientoId: rid,
+    evento: eventoInicial,
+    unidadDestino: row.responsable_actual || meta?.responsableLabel || 'Usuario AU',
+    motivo: 'Materialización canónica expediente_estado_vigente',
+    metadata: {
+      client_request_id: `materializar-erv:${rid}:${eventoInicial}`,
+      via: 'materializarExpedienteEstadoVigenteSiAusente',
+    },
+    actorRol,
+    client,
+  });
+  return { materializado: true, transicion: tr };
+}
+
 export default {
   FUENTE_RESPONSABLE,
   mapEtapaDestinoBD,

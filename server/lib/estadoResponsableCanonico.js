@@ -26,7 +26,47 @@ function normalizarEstadoCodigo(raw) {
 function normalizarEtapaCodigo(raw) {
   let c = esc(raw).toUpperCase();
   if (c === 'REGISTRO_ORDENES' || c === 'ORDEN') c = 'REGISTRO_ORDEN';
+  if (c === 'REGISTRADO') c = 'REGISTRO';
   return c;
+}
+
+/** RC8.15.6G-8D0 — corrige filas con texto humano en estado_codigo (backfill/sync legacy). */
+function resolverEstadoPersistido(e) {
+  let etapaCodigo = normalizarEtapaCodigo(e.etapa_codigo || e.etapaCodigo);
+  const rawCodigo = esc(e.estado_codigo || e.estadoCodigo);
+  let estadoCodigo = normalizarEstadoCodigo(rawCodigo);
+  let estadoLabel = esc(e.estado_label || e.estadoLabel);
+  const labelCatalogo = estadoCodigo ? getLabelEstado(estadoCodigo) : '';
+  const pareceTextoHumano = rawCodigo
+    && (/[\s]/.test(rawCodigo) || /^En /i.test(rawCodigo))
+    && !labelCatalogo;
+
+  if (pareceTextoHumano && etapaCodigo) {
+    estadoLabel = rawCodigo;
+    estadoCodigo = etapaCodigo;
+  } else if (!labelCatalogo && etapaCodigo && (!estadoCodigo || estadoCodigo === estadoLabel)) {
+    estadoCodigo = etapaCodigo;
+    if (!estadoLabel) {
+      const meta = getEtapaMeta(etapaCodigo);
+      estadoLabel = meta?.label || getLabelEtapa(etapaCodigo) || rawCodigo;
+    }
+  }
+
+  const etapaMeta = getEtapaMeta(etapaCodigo);
+  const etapaLabel = esc(e.etapa_label || e.etapaLabel)
+    || etapaMeta?.label
+    || getLabelEtapa(etapaCodigo)
+    || (etapaCodigo === 'REGISTRO_ORDEN' ? 'Registro de Órdenes' : etapaCodigo);
+
+  const catalog = getEstadoCatalogEntry(estadoCodigo, estadoLabel);
+  if (!estadoLabel) {
+    estadoLabel = catalog.label
+      || getLabelEstado(estadoCodigo)
+      || (estadoCodigo === etapaCodigo ? etapaLabel : estadoCodigo)
+      || (estadoCodigo === 'REGISTRO_ORDENES' ? 'Registro de órdenes' : '');
+  }
+
+  return { estadoCodigo, estadoLabel, etapaCodigo, etapaLabel };
 }
 
 /**
@@ -36,19 +76,13 @@ export function buildContratoCanonico(estadoRow, asignacion = null) {
   const e = estadoRow || {};
   const a = asignacion || null;
 
-  const estadoCodigo = normalizarEstadoCodigo(e.estado_codigo || e.estadoCodigo);
-  const catalog = getEstadoCatalogEntry(estadoCodigo, esc(e.estado_label || e.estadoLabel));
-  const estadoLabel = catalog.label
-    || esc(e.estado_label || e.estadoLabel)
-    || getLabelEstado(estadoCodigo)
-    || (estadoCodigo === 'REGISTRO_ORDENES' ? 'Registro de órdenes' : estadoCodigo);
-
-  let etapaCodigo = normalizarEtapaCodigo(e.etapa_codigo || e.etapaCodigo);
-  const etapaMeta = getEtapaMeta(etapaCodigo);
-  const etapaLabel = esc(e.etapa_label || e.etapaLabel)
-    || etapaMeta?.label
-    || getLabelEtapa(etapaCodigo)
-    || (etapaCodigo === 'REGISTRO_ORDEN' ? 'Registro de Órdenes' : etapaCodigo);
+  const {
+    estadoCodigo,
+    estadoLabel,
+    etapaCodigo,
+    etapaLabel,
+  } = resolverEstadoPersistido(e);
+  const catalog = getEstadoCatalogEntry(estadoCodigo, estadoLabel);
 
   let responsableTipo = esc(
     a?.tipo_responsable || a?.tipoResponsable || e.responsable_tipo || e.responsableTipo || TIPO_RESPONSABLE.PENDIENTE,

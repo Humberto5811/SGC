@@ -393,42 +393,44 @@ function extractWorkflowSnapshot(r) {
 export function enrichReqRow(r) {
   const monto_total = calcMontoTotal(r);
   const dias = r.dias_en_estado ?? r.diasEnEstado ?? calcDiasEnEstado(r.fecha_estado_actual || r.fechaEstadoActual);
-  const ubicacion = resolveUbicacionExpediente(r);
   const workflowSnapshot = extractWorkflowSnapshot(r);
+  const erv = r.estado_responsable_vigente;
+  const hasCanon = erv && typeof erv === 'object' && erv.canonicalMissing !== true
+    && (erv.estadoCodigo || erv.estado_codigo || erv.estadoLabel || erv.estado_label || erv.etapaCodigo || erv.etapa_codigo);
+
+  const ubicacion = hasCanon
+    ? String(erv.etapaCodigo || erv.etapa_codigo || '').toUpperCase()
+    : resolveUbicacionExpediente(r);
   const snapEtapa = workflowSnapshot?.etapaActual
     ? String(workflowSnapshot.etapaActual).toUpperCase()
     : null;
   const etapaWorkflow = ubicacion || snapEtapa;
   const snapSub = workflowSnapshot?.subModuloActual || workflowSnapshot?.moduloActual || null;
 
-  // RC8.4D — contrato estado_responsable_vigente como fuente primaria (backend enriquece en batch)
-  const erv = r.estado_responsable_vigente;
-  const subRaw = erv?.etapaLabel
-    || snapSub
-    || r.sub_modulo_actual
-    || r.subModuloActual
-    || ETAPA_LABELS[etapaWorkflow]
-    || getEstadoActualTexto(etapaWorkflow);
+  const subRaw = hasCanon
+    ? (erv.etapaLabel || erv.etapa_label || '')
+    : (snapSub || r.sub_modulo_actual || r.subModuloActual || ETAPA_LABELS[etapaWorkflow] || getEstadoActualTexto(etapaWorkflow));
   const subModulo = normalizeSubmoduloLabel(subRaw) || '';
 
-  const estadoNegocio = erv?.estadoLabel
-    || String(r?.estado || '').trim()
-    || resolveEstadoNegocioFromRow(r);
+  const estadoNegocio = hasCanon
+    ? (erv.estadoLabel || erv.estado_label || '')
+    : (String(r?.estado || '').trim() || resolveEstadoNegocioFromRow(r));
 
-  const estadoActualTextoRaw = erv?.etapaLabel
-    || subModulo
-    || r.estado_actual_texto
-    || r.estadoActualTexto
-    || getEstadoActualTexto(etapaWorkflow);
+  const estadoActualTextoRaw = hasCanon
+    ? (erv.etapaLabel || erv.etapa_label || erv.estadoLabel || erv.estado_label || '')
+    : (subModulo || r.estado_actual_texto || r.estadoActualTexto || getEstadoActualTexto(etapaWorkflow));
   const estadoActualTexto = isTesoreriaAlias(estadoActualTextoRaw)
     ? (String(estadoActualTextoRaw).trim().toLowerCase().startsWith('en ')
       ? 'En Pagos'
       : normalizeSubmoduloLabel(estadoActualTextoRaw))
     : estadoActualTextoRaw;
 
-  // RC8.4D — responsable vigente: PERSONA > UNIDAD > PENDIENTE
   let responsableActual;
-  if (erv) {
+  if (hasCanon) {
+    responsableActual = adaptEstadoResponsable(r).responsableDisplay || 'Pendiente de asignación';
+  } else if (erv?.canonicalMissing === true) {
+    responsableActual = 'Pendiente de asignación';
+  } else if (erv) {
     if (erv.responsableTipo === 'PERSONA') {
       responsableActual = erv.responsableNombre || erv.responsableUsername || '—';
     } else if (erv.responsableTipo === 'UNIDAD') {
@@ -439,8 +441,6 @@ export function enrichReqRow(r) {
       responsableActual = erv.responsableUnidad || erv.responsableNombre || '—';
     }
   } else {
-    // Fallback legacy: nunca usar r.responsable (es centro CNCC)
-    // RC8.4F — priorizar responsableActual ya enriquecido sobre responsable_actual BD
     responsableActual = r.responsableActual || r.responsable_actual || '—';
   }
 
@@ -450,14 +450,13 @@ export function enrichReqRow(r) {
     estado: estadoNegocio,
     monto_total,
     dias_en_estado: dias,
-    estadoActual: erv?.etapaCodigo || etapaWorkflow,
-    estado_actual: erv?.etapaCodigo || etapaWorkflow,
+    estadoActual: hasCanon ? (erv.etapaCodigo || erv.etapa_codigo || etapaWorkflow) : etapaWorkflow,
+    estado_actual: hasCanon ? (erv.etapaCodigo || erv.etapa_codigo || etapaWorkflow) : etapaWorkflow,
     estadoActualTexto,
     estado_actual_texto: estadoActualTexto,
-    sub_modulo_actual: r.sub_modulo_actual || subModulo || '',
-    subModuloActual: subModulo || r.subModuloActual,
+    sub_modulo_actual: hasCanon ? subModulo : (r.sub_modulo_actual || subModulo || ''),
+    subModuloActual: hasCanon ? subModulo : (subModulo || r.subModuloActual),
     responsableActual,
-    // RC8.4D — exponer contrato completo para consumidores visuales
     estado_responsable_vigente: erv || null,
     workflowSnapshot,
     obsMotor,

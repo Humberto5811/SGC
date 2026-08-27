@@ -131,6 +131,13 @@ export async function ejecutarRegistroCrear(requerimientoId, usuario = 'Sistema'
         },
       );
       if (!result.ok) return { ok: false, error: 'Transición no permitida por Workflow Engine' };
+      // RC8.15.6G-8D0 — legacy no escribe expediente_estado_vigente; materializar canónico.
+      try {
+        const { materializarExpedienteEstadoVigenteSiAusente } = await import('./expedienteEstadoPersistido.js');
+        await materializarExpedienteEstadoVigenteSiAusente(requerimientoId, { actorRol: usuario });
+      } catch (err) {
+        if (err?.code !== 'TRANSITION_NOT_FOUND') throw err;
+      }
       return { ok: true, requerimiento: result.legacy };
     },
   });

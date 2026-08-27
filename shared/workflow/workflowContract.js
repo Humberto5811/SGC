@@ -319,7 +319,7 @@ export function normalizarEtapaCodigo(raw) {
   // matriz. Al leer estado_actual, traducimos al canónico de la matriz.
   if (s === 'ACTOS_PREPARATORIOS') return ETAPAS.COORDINACION_CM;
   if (s === 'ORDEN_COMPRA') return ETAPAS.REGISTRO_ORDEN;
-  if (s === 'REGISTRO') return ETAPAS.REGISTRO;
+  if (s === 'REGISTRO' || s === 'REGISTRADO') return ETAPAS.REGISTRO;
   if (s === 'CONSULTAS' || s === 'PORTAL_PROVEEDORES') return ETAPAS.INVITACIONES;
   if (s === 'VALIDACION' || s === 'VALIDACION_USUARIO') return ETAPAS.VALIDACIONES;
   if (s === 'LIQUIDACION' || s === 'ARCHIVO') return ETAPAS.FINALIZADO;

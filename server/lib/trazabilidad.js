@@ -681,19 +681,8 @@ export async function enrichRequerimientoRowsWithCcp(rows = []) {
 
     // RC8.4D — anexar estado_responsable_vigente en batch (sin N+1)
     try {
-      const { resolveEstadoResponsableBatch } = await import('./resolvedorEstadoResponsable.js');
-      const ids = withCcp.map((r) => parseInt(r?.id, 10)).filter((n) => Number.isFinite(n) && n > 0);
-      if (ids.length) {
-        const resolved = await resolveEstadoResponsableBatch(ids, withCcp);
-        for (const row of withCcp) {
-          const id = parseInt(row?.id, 10);
-          if (Number.isFinite(id) && resolved.has(id)) {
-            row.estado_responsable_vigente = resolved.get(id);
-          } else {
-            row.estado_responsable_vigente = null;
-          }
-        }
-      }
+      const { enrichEstadoResponsableForBandeja } = await import('./enrichEstadoResponsable.js');
+      await enrichEstadoResponsableForBandeja(withCcp, 'id');
     } catch (_) { /* resolvedor no disponible — sin anexar */ }
 
     return withCcp;
@@ -878,6 +867,17 @@ export async function inicializarTrazabilidad(requerimientoId, usuario = 'Sistem
       await query(`UPDATE requerimientos SET estado = $2 WHERE id = $1`, [requerimientoId, 'Registrado']);
       return enrichRequerimientoRow({ ...row, estado: 'Registrado' });
     }
+    // RC8.15.6G-8D0 — expediente legacy sin fila canónica
+    try {
+      const { rows: vRows } = await query(
+        'SELECT 1 FROM expediente_estado_vigente WHERE requerimiento_id = $1',
+        [requerimientoId],
+      );
+      if (!vRows.length) {
+        const { materializarExpedienteEstadoVigenteSiAusente } = await import('./expedienteEstadoPersistido.js');
+        await materializarExpedienteEstadoVigenteSiAusente(requerimientoId, { actorRol: usuario });
+      }
+    } catch (_) { /* materialización best-effort */ }
     return enrichRequerimientoRow(row);
   }
 

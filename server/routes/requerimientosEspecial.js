@@ -28,8 +28,13 @@ import {
   assertCanAccessRequirement,
   canAccessRequirement,
 } from '../lib/userDataScope.js';
+import { listarAreasAutorizadasUsuario } from '../lib/areasAutorizadasUsuario.js';
 import { assertAccesoRegistroOrdenes } from '../lib/accesoRegistroOrdenes.js';
 import { resolveResponsablePersonaDisplay } from '../lib/usuarioDisplay.js';
+import {
+  eliminarRequerimientoInicial,
+  MSG_REQUERIMIENTO_NO_ELIMINABLE,
+} from '../lib/eliminarRequerimiento.js';
 
 const router = express.Router();
 
@@ -91,52 +96,16 @@ router.get('/areas-alcance', async (req, res, next) => {
   try {
     const userId = authUserId(req);
     if (!userId) return res.status(401).json({ error: 'No autenticado' });
-    const scope = await resolveUserDataScope({ userId, moduleCode: 'REGISTRO_REQUERIMIENTO' });
     const q = String(req.query.q || req.query.search || '').trim();
-    const params = [];
-    let where = 'WHERE 1=1';
-
-    if (!scope.skipOrgFilter && !scope.isInstitutional) {
-      if (scope.scopeType === 'CENTRO') {
-        if (scope.centroIds?.length) {
-          params.push(scope.centroIds);
-          where += ` AND a.centro_id = ANY($${params.length}::int[])`;
-        } else {
-          return res.json({ data: [], scopeType: scope.scopeType });
-        }
-      } else {
-        const parts = [];
-        if (scope.areaIds?.length) {
-          params.push(scope.areaIds);
-          parts.push(`a.id = ANY($${params.length}::int[])`);
-        }
-        if (scope.centroCostoCodigos?.length) {
-          params.push(scope.centroCostoCodigos);
-          parts.push(`UPPER(TRIM(a.codigo)) = ANY($${params.length}::text[])`);
-        }
-        if (!parts.length) return res.json({ data: [], scopeType: scope.scopeType });
-        where += ` AND (${parts.join(' OR ')})`;
-      }
-    }
-
-    if (q.length >= 2) {
-      params.push(`%${q}%`);
-      const i = params.length;
-      where += ` AND (a.codigo ILIKE $${i} OR a.nombre ILIKE $${i} OR a.responsable ILIKE $${i} OR c.codigo ILIKE $${i})`;
-    }
-
-    params.push(50);
-    const { rows } = await query(`
-      SELECT a.id, a.codigo, a.nombre, a.responsable,
-             c.id AS centro_id, COALESCE(c.codigo, '') AS centro, COALESCE(c.nombre, '') AS centro_nombre,
-             COALESCE(a.codigo, '') AS codigo_centro_costo
-      FROM areas a
-      LEFT JOIN centros c ON a.centro_id = c.id
-      ${where}
-      ORDER BY a.nombre ASC
-      LIMIT $${params.length}
-    `, params);
-    res.json({ data: rows, scopeType: scope.scopeType });
+    const centroId = req.query.centroId || req.query.centro_id || null;
+    const result = await listarAreasAutorizadasUsuario(
+      { userId },
+      { q, limit: 50, centroId },
+    );
+    res.json({
+      data: result.data,
+      scopeType: result.scopeType,
+    });
   } catch (err) { next(err); }
 });
 
@@ -618,6 +587,29 @@ router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
     }
     return res.json({ success: true, requerimiento: result.requerimiento });
   } catch (err) { next(err); }
+});
+
+// DELETE /api/requerimientos/:id — RC8.15.6G-8D1 (prioridad sobre CRUD genérico)
+router.delete('/:id', guardRequirementAccess, async (req, res, next) => {
+  try {
+    const result = await eliminarRequerimientoInicial(req.params.id);
+    res.json(result);
+  } catch (err) {
+    if (err.status === 404) {
+      return res.status(404).json({ error: err.message, message: err.message, code: err.code || 'NOT_FOUND' });
+    }
+    if (err.status === 409 || err.code === 'REQUERIMIENTO_NO_ELIMINABLE') {
+      return res.status(409).json({
+        error: err.message || MSG_REQUERIMIENTO_NO_ELIMINABLE,
+        message: err.message || MSG_REQUERIMIENTO_NO_ELIMINABLE,
+        code: err.code || 'REQUERIMIENTO_NO_ELIMINABLE',
+      });
+    }
+    if (err.status === 400) {
+      return res.status(400).json({ error: err.message, message: err.message, code: err.code });
+    }
+    return next(err);
+  }
 });
 
 export default router;

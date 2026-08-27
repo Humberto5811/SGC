@@ -27,6 +27,23 @@ export const ROLES_SEGURIDAD_LEGACY = {
   DEC: 'dec',
 };
 
+/** RC8.15.6G-8D3 — Roles generales de actuación (UI / alcance). */
+export const ROLES_GENERALES = Object.freeze({
+  DIRECTOR: 'DIRECTOR',
+  COORDINADOR: 'COORDINADOR',
+  USUARIO: 'USUARIO',
+  OPERADOR: 'OPERADOR',
+  ADMINISTRADOR: 'ADMINISTRADOR',
+});
+
+export const ROLES_GENERALES_LABELS = Object.freeze({
+  [ROLES_GENERALES.DIRECTOR]: 'Director',
+  [ROLES_GENERALES.COORDINADOR]: 'Coordinador',
+  [ROLES_GENERALES.USUARIO]: 'Usuario',
+  [ROLES_GENERALES.OPERADOR]: 'Operador',
+  [ROLES_GENERALES.ADMINISTRADOR]: 'Administrador',
+});
+
 /** Etiquetas visuales para los roles legacy. */
 export const ROLES_SEGURIDAD_LABELS = {
   [ROLES_SEGURIDAD_LEGACY.ADMIN]: 'Administrador',
@@ -106,8 +123,49 @@ export function normalizeSecurityRole(valor) {
   if (v === 'admin' || v === 'administrador') return ROLES_SEGURIDAD_LEGACY.ADMIN;
   if (v === 'au' || v === 'area_usuaria' || v === 'area usuaria') return ROLES_SEGURIDAD_LEGACY.AU;
   if (v === 'dec') return ROLES_SEGURIDAD_LEGACY.DEC;
-  if (v === 'usuario') return ROLES_SEGURIDAD_LEGACY.USUARIO;
+  if (v === 'usuario' || v === 'director' || v === 'coordinador' || v === 'operador') {
+    return ROLES_SEGURIDAD_LEGACY.USUARIO;
+  }
   // Valor desconocido → usuario mínimo
+  return ROLES_SEGURIDAD_LEGACY.USUARIO;
+}
+
+/** Normaliza rol general institucional. */
+export function normalizeRolGeneral(valor, fallback = ROLES_GENERALES.USUARIO) {
+  const v = String(valor || '').trim().toUpperCase();
+  if (ROLES_GENERALES[v]) return ROLES_GENERALES[v];
+  if (v === 'ADMIN' || v === 'ADMINISTRADOR') return ROLES_GENERALES.ADMINISTRADOR;
+  if (v === 'AU' || v === 'AREA USUARIA') return ROLES_GENERALES.USUARIO;
+  return fallback;
+}
+
+/** Rol general persistido en BD (columna rol) a partir del usuario. */
+export function rolGeneralFromUsuario(usuario = {}) {
+  const rolRaw = String(usuario.rol || '').trim();
+  const mapped = normalizeRolGeneral(rolRaw, '');
+  if (mapped) return mapped;
+  if (normalizeSecurityRole(rolRaw) === ROLES_SEGURIDAD_LEGACY.ADMIN) {
+    return ROLES_GENERALES.ADMINISTRADOR;
+  }
+  if (normalizeSecurityRole(rolRaw) === ROLES_SEGURIDAD_LEGACY.DEC) {
+    return ROLES_GENERALES.USUARIO;
+  }
+  const cargoNorm = normalizeTextoInstitucional(usuario.cargo || '');
+  if (/director|gerente/.test(cargoNorm)) return ROLES_GENERALES.DIRECTOR;
+  if (/coordinador/.test(cargoNorm) && /centro|administrativ/.test(cargoNorm)) {
+    return ROLES_GENERALES.COORDINADOR;
+  }
+  if (/operador|especialista/.test(cargoNorm)) return ROLES_GENERALES.OPERADOR;
+  return ROLES_GENERALES.USUARIO;
+}
+
+/** Valor de columna usuarios.rol para un rol general (compat legacy). */
+export function rolGeneralToLegacyRol(rolGeneral) {
+  const g = normalizeRolGeneral(rolGeneral);
+  if (g === ROLES_GENERALES.ADMINISTRADOR) return ROLES_SEGURIDAD_LEGACY.ADMIN;
+  if (g === ROLES_GENERALES.DIRECTOR) return 'director';
+  if (g === ROLES_GENERALES.COORDINADOR) return 'coordinador';
+  if (g === ROLES_GENERALES.OPERADOR) return 'operador';
   return ROLES_SEGURIDAD_LEGACY.USUARIO;
 }
 
@@ -481,12 +539,17 @@ export function getUserOperationalScope(usuario) {
 
 export default {
   ROLES_SEGURIDAD_LEGACY,
+  ROLES_GENERALES,
+  ROLES_GENERALES_LABELS,
   ROLES_SEGURIDAD_LABELS,
   PERFILES_FUNCIONALES,
   PERFILES_FUNCIONALES_LABELS,
   PERFILES_TRANSVERSALES,
   normalizeTextoInstitucional,
   normalizeSecurityRole,
+  normalizeRolGeneral,
+  rolGeneralFromUsuario,
+  rolGeneralToLegacyRol,
   isAdminSecurityRole,
   resolveFunctionalProfiles,
   hasFunctionalProfile,

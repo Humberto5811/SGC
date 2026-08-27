@@ -1012,8 +1012,18 @@ async function openRequerimiento(id) {
 }
 
 async function deleteRequerimiento(id) {
-  if (!confirm('¿Eliminar este requerimiento?')) return;
   try {
+    const row = await requerimientosService.getById(id);
+    const codigo = row?.codigo || `#${id}`;
+    const desc = String(row?.denominacion || '').trim() || 'Sin descripción';
+    const msg = [
+      `¿Eliminar definitivamente el requerimiento ${codigo}?`,
+      '',
+      desc,
+      '',
+      'Esta acción no se puede deshacer.',
+    ].join('\n');
+    if (!confirm(msg)) return;
     await requerimientosService.remove(id);
     loadList();
   } catch (e) {

@@ -24,6 +24,10 @@ export const usuariosService = {
   }),
   resetPassword: (id, body) => api.post(`/usuarios/${id}/reset-password`, body),
   buscarArea: (q) => api.get(`/usuarios/areas-buscar?q=${encodeURIComponent(q)}`),
+  listCentros: () => api.get('/usuarios/catalogos/centros'),
+  listAreasCentro: (centroId) => api.get(`/usuarios/catalogos/centros/${centroId}/areas`),
+  getAlcance: (id) => api.get(`/usuarios/${id}/alcance-organizacional`),
+  saveAlcance: (id, body) => api.put(`/usuarios/${id}/alcance-organizacional`, body),
 };
 
 export default usuariosService;

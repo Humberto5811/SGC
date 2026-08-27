@@ -6,14 +6,13 @@
  * La recepción real se registra vía /api/entregables-servicios.
  */
 import { entregablesServiciosService } from '../../services/entregablesServiciosService.js';
-import { ordenesContratacionService } from '../../services/ordenesContratacionService.js';
 import { renderEstadoBadgeFromRow, renderEstadoBadgeHtml } from '../../ui/workflow/EstadoBadge.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
-import { openBase64Document, previewAdjuntoById } from '../../utils/documentViewer.js';
+import { openBase64Document, openBlobDocument } from '../../utils/documentViewer.js';
 import { fmtFecha, fmtMonto } from '../../utils/ordenesUtils.js';
-import { openExpedienteOrdenModal } from '../../utils/registroOrdenExpedienteModal.js';
+import { openExpedienteOrdenModal, openExpedienteDocumento } from '../../utils/registroOrdenExpedienteModal.js';
 import {
   TIPOS_DOCUMENTO_ENTREGABLE,
   TIPO_ENTREGABLE,
@@ -67,6 +66,28 @@ function situacionBadge(row) {
 function plazoLabel(dias) {
   const d = Number(dias || 0);
   return d > 0 ? `${d} día${d === 1 ? '' : 's'}` : '—';
+}
+
+function renderEntregableEstadoCell(row) {
+  const etapa = row.estado_etapa_label || row.etapa_label || '';
+  if (row.situacion_codigo === 'OBSERVADO') {
+    return `${renderEstadoBadgeHtml({ estadoCodigo: 'OBSERVADO', estadoLabel: 'Observado' })}
+      ${etapa ? `<div class="text-muted small mt-1">${esc(etapa)}</div>` : ''}`;
+  }
+  return renderEstadoBadgeFromRow(row);
+}
+
+function labelEtapaRetornoObservacion(obs = {}) {
+  const code = String(obs?.etapa_retorno || obs?.origen_submodulo_codigo || '').toUpperCase();
+  if (code === 'PREPARACION_EXPEDIENTE_PAGO') return 'Pagos';
+  if (code === 'REVISION_ANALISTA_CM') return 'Revisión Analista CM';
+  if (code === 'REVISION_COORDINADOR_CM') return 'Revisión Coordinador CM';
+  if (code === 'PRESENTACION_ENTREGABLES') return 'Presentación de Entregables de Servicios';
+  return code || '—';
+}
+
+function personaLabel(nombre, username) {
+  return nombre || username || '—';
 }
 
 export function ordenMenuItems(row) {
@@ -129,6 +150,31 @@ export function entregableMenuItems(row) {
         act: 'retirarObservacion',
         label: 'Retirar observación',
         icon: 'bi-x-circle',
+      });
+    }
+    if (row.puede_ver_trazabilidad) {
+      items.push({ act: 'verTrazabilidad', label: 'Ver trazabilidad', icon: 'bi-clock-history' });
+    }
+    return items;
+  }
+  if (row.situacion_codigo === 'OBSERVADO' && row.puede_subsanar) {
+    if (row.puede_modificar_entregable) {
+      items.push({
+        act: 'registrarRecepcion',
+        label: 'Modificar entregable',
+        icon: 'bi-pencil-square',
+      });
+    }
+    items.push({
+      act: 'subsanarEntregable',
+      label: row.observacion_retorno_pep ? 'Subsanar y derivar a Pagos' : 'Subsanar observación',
+      icon: 'bi-arrow-repeat',
+    });
+    if (row.puede_ver_observacion_abierta || row.puede_ver_observacion_dirigida) {
+      items.push({
+        act: 'verObservacionDirigida',
+        label: 'Ver observación',
+        icon: 'bi-exclamation-triangle',
       });
     }
     if (row.puede_ver_trazabilidad) {
@@ -265,7 +311,7 @@ function renderEntregableRow(row) {
       <td class="text-end small">${row.precio_total != null ? esc(fmtMonto(row.precio_total)) : '—'}</td>
       <td class="small text-nowrap">${esc(fmtFecha(row.fecha_maxima))}</td>
       <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
-      <td>${renderEstadoBadgeFromRow(row)}</td>
+      <td>${renderEntregableEstadoCell(row)}</td>
       <td class="small">${renderResponsableCellHtml(row, esc)}</td>
       ${renderActionMenuCell(id, entregableMenuItems(row))}
     </tr>`;
@@ -548,6 +594,48 @@ function render() {
       </div></div>
     </div>
 
+    <div class="modal fade" id="${PREFIX}VerObservacionModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+        <form id="${PREFIX}VerObservacionForm">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Ver observación</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="${PREFIX}VerObservacionEntregableId">
+            <input type="hidden" id="${PREFIX}VerObservacionObservacionId">
+            <div class="border rounded p-2 small mb-3" id="${PREFIX}VerObservacionResumen"></div>
+            <div id="${PREFIX}VerObservacionSubsanarWrap" class="d-none border-top pt-3 mt-2">
+              <h6 class="small fw-bold mb-2">Subsanar y derivar a Pagos</h6>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Nueva fecha recepción Mesa de Partes <span class="text-danger">*</span></label>
+                <input type="date" class="form-control form-control-sm" id="${PREFIX}VerObservacionFecha">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Nuevo expediente SGD <span class="text-danger">*</span></label>
+                <input type="text" class="form-control form-control-sm" id="${PREFIX}VerObservacionSgd">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Observación / respuesta <span class="text-muted">(opcional)</span></label>
+                <textarea class="form-control form-control-sm" id="${PREFIX}VerObservacionComentario" rows="2"></textarea>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Nuevo PDF del entregable <span class="text-danger">*</span></label>
+                <input type="file" class="form-control form-control-sm" id="${PREFIX}VerObservacionFile" accept="application/pdf">
+              </div>
+              <div class="mb-2 d-none" id="${PREFIX}VerObservacionDocsSection"></div>
+            </div>
+            <div id="${PREFIX}VerObservacionErr" class="alert alert-danger d-none py-2 small"></div>
+          </div>
+          <div class="modal-footer flex-wrap gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+            <button type="button" class="btn btn-sm btn-outline-danger d-none" id="${PREFIX}VerObservacionRetirarBtn">Retirar observación</button>
+            <button type="submit" class="btn btn-sm btn-primary d-none" id="${PREFIX}VerObservacionSubsanarBtn">Subsanar y derivar a Pagos</button>
+          </div>
+        </form>
+      </div></div>
+    </div>
+
     <div class="modal fade" id="${PREFIX}SubsanarModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
         <form id="${PREFIX}SubsanarForm">
@@ -575,6 +663,7 @@ function render() {
               <label class="form-label small mb-1">Nuevo PDF del entregable <span class="text-danger">*</span></label>
               <input type="file" class="form-control form-control-sm" id="${PREFIX}SubsanarFile" accept="application/pdf" required>
             </div>
+            <div class="mb-2 d-none" id="${PREFIX}SubsanarDocsSection"></div>
             <div id="${PREFIX}SubsanarErr" class="alert alert-danger d-none py-2 small"></div>
           </div>
           <div class="modal-footer">
@@ -820,6 +909,8 @@ function readDocAttachMeta() {
   };
 }
 
+let docAttachPanelHome = null;
+
 function clearDocAttachPanel() {
   pendingAttachAction = null;
   document.getElementById(`${PREFIX}DocAttachPanel`)?.classList.add('d-none');
@@ -828,11 +919,25 @@ function clearDocAttachPanel() {
       const el = document.getElementById(`${PREFIX}${id}`);
       if (el) el.value = '';
     });
+  const panel = document.getElementById(`${PREFIX}DocAttachPanel`);
+  if (panel && docAttachPanelHome && panel.parentElement !== docAttachPanelHome) {
+    docAttachPanelHome.appendChild(panel);
+  }
 }
 
 function openDocAttachPanel({ mode = 'attach', excludeFilled = new Set(), replaceDocId = null } = {}) {
   pendingAttachAction = { mode, replaceDocId };
   const panel = document.getElementById(`${PREFIX}DocAttachPanel`);
+  if (panel && !docAttachPanelHome) docAttachPanelHome = panel.parentElement;
+  const subsanar = document.getElementById(`${PREFIX}SubsanarModal`);
+  const verObs = document.getElementById(`${PREFIX}VerObservacionModal`);
+  const activeParent = verObs?.classList.contains('show') ? verObs : subsanar;
+  const targetBody = activeParent?.classList.contains('show')
+    ? activeParent.querySelector('.modal-body')
+    : docAttachPanelHome;
+  if (panel && targetBody && panel.parentElement !== targetBody) {
+    targetBody.appendChild(panel);
+  }
   const select = document.getElementById(`${PREFIX}DocTipo`);
   if (select) {
     select.innerHTML = renderTipoSelectOptions(mode === 'register' ? TIPO_ENTREGABLE : TIPO_OTRO, excludeFilled);
@@ -869,8 +974,8 @@ function renderDocMetaLine(doc) {
   return parts.length ? `<div class="text-muted" style="font-size:10px">${esc(parts.join(' · '))}</div>` : '';
 }
 
-function renderModificarDocumentosSection(data, puedeGestionar) {
-  const section = document.getElementById(`${PREFIX}DocsSection`);
+function renderModificarDocumentosSection(data, puedeGestionar, sectionId = `${PREFIX}DocsSection`) {
+  const section = document.getElementById(sectionId);
   if (!section) return;
   const docs = data.documentos_entregable_gestionables || [];
   const numeroEntrega = data.numero_entrega ?? '—';
@@ -912,6 +1017,29 @@ async function refreshModificarDocumentos(entregaId) {
   renderModificarDocumentosSection(data, puedeGestionar);
 }
 
+async function refreshSubsanarDocumentos(entregaId) {
+  const resp = await entregablesServiciosService.getDetalle(entregaId);
+  const data = resp?.data || resp || {};
+  const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(entregaId));
+  renderModificarDocumentosSection(data, Boolean(row?.puede_subsanar), `${PREFIX}SubsanarDocsSection`);
+}
+
+async function refreshVerObservacionDocumentos(entregaId) {
+  const resp = await entregablesServiciosService.getDetalle(entregaId);
+  const data = resp?.data || resp || {};
+  renderModificarDocumentosSection(data, true, `${PREFIX}VerObservacionDocsSection`);
+}
+
+function activeDocumentosModal() {
+  const verObs = document.getElementById(`${PREFIX}VerObservacionModal`);
+  if (verObs?.classList.contains('show')) return verObs;
+  const modificar = document.getElementById(`${PREFIX}Modal`);
+  if (modificar?.classList.contains('show') && modificar.dataset.mode === 'edit') return modificar;
+  const subsanar = document.getElementById(`${PREFIX}SubsanarModal`);
+  if (subsanar?.classList.contains('show')) return subsanar;
+  return modificar;
+}
+
 async function fileToDocumentoPayload(file) {
   const contenido_base64 = await new Promise((resolve) => {
     const reader = new FileReader();
@@ -926,11 +1054,19 @@ async function fileToDocumentoPayload(file) {
 }
 
 async function onModificarDocumentoAction(e) {
-  const modalEl = document.getElementById(`${PREFIX}Modal`);
-  if (!modalEl || modalEl.dataset.mode !== 'edit') return;
-  const entregaId = modalEl.dataset.entregaId || document.getElementById(`${PREFIX}EntregableId`)?.value;
+  const modalEl = activeDocumentosModal();
+  if (!modalEl) return;
+  const isSubsanar = modalEl.id === `${PREFIX}SubsanarModal`;
+  const isVerObs = modalEl.id === `${PREFIX}VerObservacionModal`;
+  if (!isSubsanar && !isVerObs && modalEl.dataset.mode !== 'edit') return;
+  const entregaId = modalEl.dataset.entregaId
+    || document.getElementById(`${PREFIX}EntregableId`)?.value
+    || document.getElementById(`${PREFIX}SubsanarEntregableId`)?.value
+    || document.getElementById(`${PREFIX}VerObservacionEntregableId`)?.value;
   if (!entregaId) return;
-  const errBox = document.getElementById(`${PREFIX}ModalErr`);
+  const errBox = document.getElementById(
+    isVerObs ? `${PREFIX}VerObservacionErr` : (isSubsanar ? `${PREFIX}SubsanarErr` : `${PREFIX}ModalErr`),
+  );
 
   const retireBtn = e.target.closest('.pe-doc-retire');
   if (retireBtn) {
@@ -938,7 +1074,9 @@ async function onModificarDocumentoAction(e) {
     try {
       await entregablesServiciosService.retirarDocumentoRecepcion(entregaId, retireBtn.dataset.doc);
       clearDocAttachPanel();
-      await refreshModificarDocumentos(entregaId);
+      if (isVerObs) await refreshVerObservacionDocumentos(entregaId);
+      else if (isSubsanar) await refreshSubsanarDocumentos(entregaId);
+      else await refreshModificarDocumentos(entregaId);
     } catch (err) {
       if (errBox) {
         errBox.textContent = err.message || 'No se pudo eliminar el documento';
@@ -974,13 +1112,20 @@ async function onDocAttachSelected(e) {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
-  const modalEl = document.getElementById(`${PREFIX}Modal`);
-  const entregaId = modalEl?.dataset.entregaId || document.getElementById(`${PREFIX}EntregableId`)?.value;
-  const errBox = document.getElementById(`${PREFIX}ModalErr`);
+  const modalEl = activeDocumentosModal();
+  const isSubsanar = modalEl?.id === `${PREFIX}SubsanarModal`;
+  const isVerObs = modalEl?.id === `${PREFIX}VerObservacionModal`;
+  const entregaId = modalEl?.dataset.entregaId
+    || document.getElementById(`${PREFIX}EntregableId`)?.value
+    || document.getElementById(`${PREFIX}SubsanarEntregableId`)?.value
+    || document.getElementById(`${PREFIX}VerObservacionEntregableId`)?.value;
+  const errBox = document.getElementById(
+    isVerObs ? `${PREFIX}VerObservacionErr` : (isSubsanar ? `${PREFIX}SubsanarErr` : `${PREFIX}ModalErr`),
+  );
   const meta = readDocAttachMeta();
   const payload = await fileToDocumentoPayload(file);
   Object.assign(payload, meta);
-  const editando = modalEl?.dataset.mode === 'edit';
+  const editando = isVerObs || isSubsanar || modalEl?.dataset.mode === 'edit';
 
   if (pendingAttachAction?.mode === 'replace' && pendingAttachAction.replaceDocId) {
     if (!editando || !entregaId) return;
@@ -991,7 +1136,9 @@ async function onDocAttachSelected(e) {
         { documentos: [payload] },
       );
       clearDocAttachPanel();
-      await refreshModificarDocumentos(entregaId);
+      if (isVerObs) await refreshVerObservacionDocumentos(entregaId);
+      else if (isSubsanar) await refreshSubsanarDocumentos(entregaId);
+      else await refreshModificarDocumentos(entregaId);
     } catch (err) {
       if (errBox) {
         errBox.textContent = err.message || 'No se pudo reemplazar el documento';
@@ -1005,7 +1152,9 @@ async function onDocAttachSelected(e) {
     try {
       await entregablesServiciosService.adjuntarDocumentosRecepcion(entregaId, { documentos: [payload] });
       clearDocAttachPanel();
-      await refreshModificarDocumentos(entregaId);
+      if (isVerObs) await refreshVerObservacionDocumentos(entregaId);
+      else if (isSubsanar) await refreshSubsanarDocumentos(entregaId);
+      else await refreshModificarDocumentos(entregaId);
     } catch (err) {
       if (errBox) {
         errBox.textContent = err.message || 'No se pudieron adjuntar documentos';
@@ -1124,38 +1273,108 @@ async function loadDestinatariosObservacion(submoduloCodigo) {
 }
 
 function openVerObservacionDirigida(id) {
+  openVerObservacionModal(id);
+}
+
+async function openVerObservacionModal(id) {
   const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(id));
-  const obs = row?.observacion_abierta;
-  if (!obs?.id) {
-    window.alert('No hay observación dirigida vigente para este entregable.');
+  const errBox = document.getElementById(`${PREFIX}VerObservacionErr`);
+  errBox?.classList.add('d-none');
+  document.getElementById(`${PREFIX}VerObservacionEntregableId`).value = id;
+  document.getElementById(`${PREFIX}VerObservacionObservacionId`).value = '';
+  document.getElementById(`${PREFIX}VerObservacionFecha`).value = '';
+  document.getElementById(`${PREFIX}VerObservacionSgd`).value = '';
+  document.getElementById(`${PREFIX}VerObservacionComentario`).value = '';
+  document.getElementById(`${PREFIX}VerObservacionFile`).value = '';
+  const modalEl = document.getElementById(`${PREFIX}VerObservacionModal`);
+  modalEl.dataset.entregaId = id;
+  const subsWrap = document.getElementById(`${PREFIX}VerObservacionSubsanarWrap`);
+  const subsBtn = document.getElementById(`${PREFIX}VerObservacionSubsanarBtn`);
+  const retBtn = document.getElementById(`${PREFIX}VerObservacionRetirarBtn`);
+  subsWrap?.classList.add('d-none');
+  subsBtn?.classList.add('d-none');
+  retBtn?.classList.add('d-none');
+  window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  try {
+    const resp = await entregablesServiciosService.getDetalle(id);
+    const data = resp?.data || resp || {};
+    const obs = data.observacion_abierta || row?.observacion_abierta || null;
+    if (!obs?.id) throw new Error('No hay observación dirigida vigente para este entregable.');
+    document.getElementById(`${PREFIX}VerObservacionObservacionId`).value = obs.id;
+    document.getElementById(`${PREFIX}VerObservacionResumen`).innerHTML = `
+      <div class="row g-2">
+        <div class="col-md-6"><strong>Orden:</strong> ${esc(ordenLabel(data))}</div>
+        <div class="col-md-6"><strong>Entregable:</strong> N.° ${esc(data.numero_entrega ?? '—')}</div>
+        <div class="col-md-6"><strong>Estado observación:</strong> ${esc(obs.estado || '—')}</div>
+        <div class="col-md-6"><strong>Submódulo retorno:</strong> ${esc(labelEtapaRetornoObservacion(obs))}</div>
+        <div class="col-md-6"><strong>Analista CM emisor:</strong> ${esc(personaLabel(obs.emisor_nombre, obs.emisor_username))}</div>
+        <div class="col-md-6"><strong>Destinatario actual:</strong> ${esc(personaLabel(obs.destinatario_nombre, obs.destinatario_username))}</div>
+        <div class="col-12 mt-2"><strong>Motivo:</strong>
+          <div class="border rounded bg-light p-2 mt-1" style="white-space:pre-wrap">${esc(obs.motivo || '—')}</div>
+        </div>
+      </div>`;
+    if (row?.puede_subsanar && row?.observacion_retorno_pep) {
+      subsWrap?.classList.remove('d-none');
+      subsBtn?.classList.remove('d-none');
+      renderModificarDocumentosSection(data, true, `${PREFIX}VerObservacionDocsSection`);
+    }
+    if (row?.puede_retirar_observacion) {
+      retBtn?.classList.remove('d-none');
+    }
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo consultar la observación';
+      errBox.classList.remove('d-none');
+    }
+  }
+}
+
+async function submitVerObservacionSubsanar(e) {
+  e.preventDefault();
+  const id = document.getElementById(`${PREFIX}VerObservacionEntregableId`).value;
+  const observacionId = document.getElementById(`${PREFIX}VerObservacionObservacionId`).value;
+  const fecha = document.getElementById(`${PREFIX}VerObservacionFecha`).value;
+  const sgd = document.getElementById(`${PREFIX}VerObservacionSgd`).value.trim();
+  const comentario = document.getElementById(`${PREFIX}VerObservacionComentario`).value.trim();
+  const fileInput = document.getElementById(`${PREFIX}VerObservacionFile`);
+  const errBox = document.getElementById(`${PREFIX}VerObservacionErr`);
+  if (!observacionId || !fecha || !sgd || !fileInput?.files?.length) {
+    if (errBox) {
+      errBox.textContent = 'Fecha, Expediente SGD y nuevo PDF son obligatorios para subsanar.';
+      errBox.classList.remove('d-none');
+    }
     return;
   }
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `<div class="modal fade" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">Observación dirigida</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
-      </div>
-      <div class="modal-body small">
-        <div class="row g-2">
-          <div class="col-md-6"><strong>Orden:</strong> ${esc(ordenLabel(row || {}))}</div>
-          <div class="col-md-6"><strong>Entregable:</strong> N.° ${esc(row?.numero_entrega ?? '—')}</div>
-          <div class="col-md-6"><strong>Estado:</strong> ${esc(obs.estado || '—')}</div>
-          <div class="col-12 mt-2"><strong>Motivo:</strong>
-            <div class="border rounded bg-light p-2 mt-1" style="white-space:pre-wrap">${esc(obs.motivo || '—')}</div>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-      </div>
-    </div></div></div>`;
-  document.body.appendChild(wrap);
-  const modalEl = wrap.firstElementChild;
-  const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
-  modalEl.addEventListener('hidden.bs.modal', () => wrap.remove(), { once: true });
-  modal.show();
+  const file = fileInput.files[0];
+  const contenido = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.readAsDataURL(file);
+  });
+  const submitBtn = document.getElementById(`${PREFIX}VerObservacionSubsanarBtn`);
+  try {
+    if (submitBtn) submitBtn.disabled = true;
+    await entregablesServiciosService.subsanarEntregable(id, {
+      observacion_id: Number(observacionId),
+      fecha_recepcion_mesa_partes: fecha,
+      numero_expediente_sgd: sgd,
+      observacion: comentario,
+      documentos: [{
+        nombre_archivo: file.name,
+        mime_type: file.type || 'application/pdf',
+        contenido_base64: contenido,
+      }],
+    });
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}VerObservacionModal`))?.hide();
+    await load();
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'No se pudo registrar la subsanación';
+      errBox.classList.remove('d-none');
+    }
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
 }
 
 function openRetirarObservacion(id) {
@@ -1365,6 +1584,15 @@ async function openSubsanarEntregable(id) {
   document.getElementById(`${PREFIX}SubsanarComentario`).value = '';
   document.getElementById(`${PREFIX}SubsanarFile`).value = '';
   const modalEl = document.getElementById(`${PREFIX}SubsanarModal`);
+  modalEl.dataset.entregaId = id;
+  const row = entregablesCache.find((item) => String(item.orden_entrega_id) === String(id));
+  const titulo = row?.observacion_retorno_pep
+    ? '<i class="bi bi-arrow-repeat"></i> Subsanar y derivar a Pagos'
+    : '<i class="bi bi-arrow-repeat"></i> Subsanar observación';
+  modalEl.querySelector('.modal-title').innerHTML = titulo;
+  document.getElementById(`${PREFIX}SubsanarBtn`).textContent = row?.observacion_retorno_pep
+    ? 'Subsanar y derivar a Pagos'
+    : 'Registrar subsanación';
   window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
   try {
     const resp = await entregablesServiciosService.getDetalle(id);
@@ -1382,6 +1610,7 @@ async function openSubsanarEntregable(id) {
       <div><strong>Fecha de recepción anterior:</strong> ${esc(fmtFecha(recepcion.fecha_recepcion_mesa_partes))}</div>
       <div><strong>Expediente SGD anterior:</strong> ${esc(recepcion.numero_expediente_sgd || '—')}</div>
       <div class="mt-2"><strong>Motivo de observación:</strong><br>${esc(observacion.motivo || '—')}</div>`;
+    renderModificarDocumentosSection(data, Boolean(row?.puede_subsanar), `${PREFIX}SubsanarDocsSection`);
   } catch (err) {
     if (errBox) {
       errBox.textContent = err.message || 'No se pudo consultar la observación';
@@ -1931,20 +2160,23 @@ async function onConformidadVer(e) {
 }
 
 async function openDetalle(id) {
-  // RC8.15.4/8.15.5B — Expediente organizado en secciones: Datos de la orden ·
-  // Datos del entregable · Recepciones · Documentos del entregable · Documentos de la
-  // orden · Conformidad del entregable (Acta generada + Acta firmada).
+  // RC8.15.6G-8C — Expediente: Orden · Entregable · Recepciones · Docs entregable ·
+  // Conformidad · Docs orden/expediente (observaciones solo vía Ver observación / trazabilidad).
   const body = document.getElementById(`${PREFIX}DetalleBody`);
+  const modalEl = document.getElementById(`${PREFIX}DetalleModal`);
   if (body) body.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span></div>';
-  const modal = window.bootstrap.Modal.getOrCreateInstance(document.getElementById(`${PREFIX}DetalleModal`));
+  const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
   modal.show();
   try {
     const resp = await entregablesServiciosService.getDetalle(id);
     const data = resp?.data || resp || {};
+    if (modalEl) {
+      modalEl.dataset.ordenId = String(data.orden_id || '');
+      modalEl.dataset.requerimientoId = String(data.requerimiento_id || '');
+    }
     const recepciones = data.recepciones || [];
     const docsEntregable = data.documentos_entregable || [];
     const docsOrden = data.expediente?.documentos || [];
-    const observaciones = data.observaciones || [];
     const subsanaciones = recepciones
       .filter((r) => r.tipo_recepcion === 'SUBSANACION')
       .sort((a, b) => Number(a.numero_recepcion) - Number(b.numero_recepcion));
@@ -1996,71 +2228,42 @@ async function openDetalle(id) {
               <button type="button" class="btn btn-sm btn-outline-secondary pe-doc-preview" data-recepcion="${esc(doc.recepcion_id)}" data-doc="${esc(doc.id)}"><i class="bi bi-eye"></i></button>
             </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos del entregable.</p>'}
         </div></div></div>
+        ${renderConformidadHtml(conformidad, id)}
         <div class="col-12"><div class="card"><div class="card-body">
-          <h6 class="text-muted text-uppercase small mb-2">Documentos de la orden</h6>
+          <h6 class="text-muted text-uppercase small mb-2">Documentos de la orden / expediente</h6>
           ${docsOrden.length ? docsOrden.map((doc) => `
             <div class="border rounded p-2 mb-2 small d-flex justify-content-between align-items-center">
               <div>
                 <div class="fw-semibold text-truncate" style="max-width:320px" title="${esc(doc.nombre || doc.tipo || 'Documento')}">${esc(doc.nombre || doc.tipo || 'Documento')}</div>
                 <div class="text-muted">${esc(doc.tipo || doc.origen || '')}</div>
               </div>
-              <button type="button" class="btn btn-sm btn-outline-primary pe-orden-doc" data-kind="${esc(doc.kind || 'orden')}" data-id="${esc(doc.id || doc.documentoId || '')}" data-name="${esc(doc.nombre || 'documento')}" data-orden="${esc(data.orden_id)}" ${doc.previewDisponible === false ? 'disabled' : ''}><i class="bi bi-eye"></i> Ver</button>
+              <button type="button" class="btn btn-sm btn-outline-primary pe-orden-doc"
+                data-kind="${esc(doc.kind || 'orden')}"
+                data-id="${esc(doc.id || doc.documentoId || '')}"
+                data-cot="${esc(doc.cotizacion_id || '')}"
+                data-ref="${esc(doc.ref || doc.preview_ref || '')}"
+                data-recepcion="${esc(doc.recepcion_id || '')}"
+                data-name="${esc(doc.nombre || 'documento')}"><i class="bi bi-eye"></i> Ver</button>
             </div>`).join('') : '<p class="text-muted small mb-0">Sin documentos de la orden.</p>'}
         </div></div></div>
-        <div class="col-12"><div class="card"><div class="card-body">
-          <h6 class="text-muted text-uppercase small mb-2">Observaciones</h6>
-          ${observaciones.length ? observaciones.map((obs) => {
-            const recepcionObservada = recepciones.find(
-              (r) => Number(r.id) === Number(obs.recepcion_id),
-            );
-            const recepcionSubsanacion = recepciones.find(
-              (r) => Number(r.id) === Number(obs.recepcion_subsanacion_id),
-            );
-            return `
-              <div class="border rounded p-2 mb-2 small">
-                <div class="d-flex justify-content-between gap-2">
-                  <strong>${esc(fmtFecha(obs.observado_at))}</strong>
-                  <span class="badge bg-secondary">${esc(obs.estado || '—')}</span>
-                </div>
-                <div class="mt-1">${esc(obs.motivo || '—')}</div>
-                <div class="text-muted">Usuario observador: ${esc(obs.observado_por || '—')} · Recepción observada: N.° ${esc(recepcionObservada?.numero_recepcion ?? obs.recepcion_id ?? '—')}</div>
-                ${recepcionSubsanacion ? `<div class="text-muted">→ Subsanación vinculada: Presentación N.° ${esc(recepcionSubsanacion.numero_recepcion)} · ${esc(fmtFecha(obs.subsanado_at))} · ${esc(obs.subsanado_por || '—')}</div>` : ''}
-              </div>`;
-          }).join('') : '<p class="text-muted small mb-0">Sin observaciones formales.</p>'}
-        </div></div></div>
-        ${renderConformidadHtml(conformidad, id)}
       </div>`;
   } catch (err) {
     if (body) body.innerHTML = `<div class="alert alert-danger">${esc(err.message || 'No se pudo cargar el expediente')}</div>`;
   }
 }
 
-/** Reutiliza el visor documental institucional (openBase64Document / previewAdjuntoById). */
+/** Reutiliza visor documental institucional (G-7H). */
 async function onOrdenDocVer(e) {
   const btn = e.target.closest('.pe-orden-doc');
   if (!btn) return;
-  const kind = btn.dataset.kind;
-  const id = btn.dataset.id;
-  const name = btn.dataset.name || 'documento';
+  const modalEl = document.getElementById(`${PREFIX}DetalleModal`);
   try {
-    if (!id) throw new Error('Documento sin identificador válido');
-    if (kind === 'adjunto') {
-      await previewAdjuntoById(id, name);
-      return;
-    }
-    if (kind === 'orden') {
-      const ordenId = btn.dataset.orden;
-      const res = await ordenesContratacionService.getDocumento(ordenId, id, true);
-      const doc = res?.data || res;
-      if (!doc?.contenido_base64) throw new Error('Documento sin contenido');
-      openBase64Document({
-        nombre: doc.nombre_archivo || name,
-        mime_type: doc.mime_type || 'application/pdf',
-        contenido_base64: doc.contenido_base64,
-      });
-      return;
-    }
-    window.alert('Vista no disponible para este tipo de documento.');
+    await openExpedienteDocumento(btn, {
+      resumen: {
+        orden_id: Number(modalEl?.dataset.ordenId || btn.dataset.orden || 0),
+        requerimiento_id: Number(modalEl?.dataset.requerimientoId || 0),
+      },
+    });
   } catch (err) {
     window.alert(err.message || 'No se pudo abrir el documento');
   }
@@ -2071,9 +2274,11 @@ async function onDetalleDocPreview(e) {
   if (!btn) return;
   try {
     const blob = await entregablesServiciosService.previewDocumentoBlob(btn.dataset.recepcion, btn.dataset.doc);
-    const url = URL.createObjectURL(blob.blob);
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    await openBlobDocument({
+      nombre: 'documento-entregable.pdf',
+      mime_type: blob.contentType,
+      blob: blob.blob,
+    });
   } catch (err) {
     window.alert(err.message || 'No se pudo abrir el documento');
   }
@@ -2110,6 +2315,7 @@ export function initPresentacionEntregableView() {
   });
   document.getElementById(`${PREFIX}Form`)?.addEventListener('submit', submitRegistrarRecepcion);
   document.getElementById(`${PREFIX}DocsSection`)?.addEventListener('click', onModificarDocumentoAction);
+  document.getElementById(`${PREFIX}SubsanarModal`)?.addEventListener('click', onModificarDocumentoAction);
   document.getElementById(`${PREFIX}RegisterExtraDocs`)?.addEventListener('click', (e) => {
     const regRemove = e.target.closest('.pe-reg-doc-remove');
     if (regRemove) {
@@ -2141,6 +2347,13 @@ export function initPresentacionEntregableView() {
         errBox.classList.remove('d-none');
       }
     });
+  });
+  document.getElementById(`${PREFIX}VerObservacionForm`)?.addEventListener('submit', submitVerObservacionSubsanar);
+  document.getElementById(`${PREFIX}VerObservacionModal`)?.addEventListener('click', onModificarDocumentoAction);
+  document.getElementById(`${PREFIX}VerObservacionRetirarBtn`)?.addEventListener('click', () => {
+    const id = document.getElementById(`${PREFIX}VerObservacionEntregableId`)?.value;
+    window.bootstrap.Modal.getInstance(document.getElementById(`${PREFIX}VerObservacionModal`))?.hide();
+    if (id) openRetirarObservacion(id);
   });
   document.getElementById(`${PREFIX}RetirarObsForm`)?.addEventListener('submit', submitRetirarObservacion);
   document.getElementById(`${PREFIX}SubsanarForm`)?.addEventListener('submit', submitSubsanarEntregable);

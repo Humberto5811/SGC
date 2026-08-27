@@ -15,6 +15,7 @@
 
 import { resolveEstadoResponsableBatch } from './resolvedorEstadoResponsable.js';
 import { getEstadoResponsableCanonico } from './estadoResponsableCanonico.js';
+import { buildEstadoLabels } from './expedienteEstadoPersistido.js';
 
 /**
  * Enriquece cada fila con estado_responsable_vigente usando true batch (sin N+1).
@@ -75,3 +76,52 @@ export async function enrichEstadoResponsableForBandeja(rows, idField = 'requeri
 }
 
 export default enrichEstadoResponsableForBandeja;
+
+function resolveResponsablePlano(contrato) {
+  if (!contrato) return { responsable: '', responsable_tipo: 'PENDIENTE', responsable_usuario_id: null };
+  const responsable = contrato.responsableNombre
+    || contrato.responsableUsername
+    || contrato.responsableUnidad
+    || (contrato.responsableTipo === 'PENDIENTE' ? 'Pendiente' : '');
+  return {
+    responsable,
+    responsable_tipo: contrato.responsableTipo || 'PENDIENTE',
+    responsable_usuario_id: contrato.responsableUsuarioId ?? null,
+  };
+}
+
+/**
+ * RC8.15.6G-8D0 — Aplica contrato canónico a una fila de bandeja (expediente o entregable).
+ * Normaliza labels vía catálogo; no reinfiere desde legacy.
+ */
+export function aplicarContratoEstadoResponsableEnFila(row, contrato, opts = {}) {
+  if (!row) return row;
+  if (!contrato || contrato.canonicalMissing === true) {
+    if (contrato) row.estado_responsable_vigente = contrato;
+    return row;
+  }
+
+  const etapaCodigoCanon = contrato.etapaCodigo || contrato.estadoCodigo || '';
+  const labelsCanon = buildEstadoLabels(
+    etapaCodigoCanon,
+    contrato.estadoCodigo || etapaCodigoCanon,
+  );
+  const erv = {
+    ...contrato,
+    etapaCodigo: etapaCodigoCanon || labelsCanon.etapaCodigo,
+    etapaLabel: contrato.etapaLabel || labelsCanon.etapaLabel,
+    estadoCodigo: labelsCanon.estadoCodigo || contrato.estadoCodigo,
+    estadoLabel: contrato.estadoLabel || labelsCanon.estadoLabel,
+  };
+  row.estado_responsable_vigente = erv;
+
+  if (opts.syncFlatFields !== false) {
+    row.estado_etapa_codigo = erv.etapaCodigo;
+    row.estado_etapa_label = erv.etapaLabel;
+    row.etapa_label = erv.etapaLabel;
+    Object.assign(row, resolveResponsablePlano(erv));
+  }
+  return row;
+}
+
+export { resolveResponsablePlano };

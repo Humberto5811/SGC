@@ -4,6 +4,13 @@ import bcrypt from 'bcrypt';
 import { query } from '../db.js';
 import { normalizePermisos, permisosFromRol, allPermisos } from '../lib/permissionsCatalog.js';
 import { getEstadoPassword, buildCredentialsMessage } from './auth.js';
+import { isAdminSecurityRole } from '../utils/userRoleCatalog.js';
+import {
+  cargarAlcanceOrganizacionalUsuario,
+  guardarAlcanceOrganizacionalUsuario,
+  listarCentrosCatalogo,
+  listarAreasPorCentro,
+} from '../lib/areasAutorizadasUsuario.js';
 
 const router = express.Router();
 
@@ -80,12 +87,30 @@ async function requireAdmin(req, res, next) {
     const userId = req.headers['x-user-id'];
     if (!userId) return res.status(401).json({ error: 'No autenticado' });
     const { rows } = await query('SELECT rol FROM usuarios WHERE id = $1 AND activo = TRUE', [userId]);
-    if (!rows.length || rows[0].rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
+    if (!rows.length || !isAdminSecurityRole(rows[0])) {
+      return res.status(403).json({ error: 'Solo administradores' });
+    }
     next();
   } catch (err) { next(err); }
 }
 
 router.use(requireAdmin);
+
+// GET /api/usuarios/catalogos/centros
+router.get('/catalogos/centros', async (req, res, next) => {
+  try {
+    const data = await listarCentrosCatalogo();
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+// GET /api/usuarios/catalogos/centros/:centroId/areas
+router.get('/catalogos/centros/:centroId/areas', async (req, res, next) => {
+  try {
+    const data = await listarAreasPorCentro(req.params.centroId);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
 
 // GET /api/usuarios/areas-buscar?q=
 router.get('/areas-buscar', async (req, res, next) => {
@@ -319,6 +344,24 @@ router.post('/:id/reset-password', async (req, res, next) => {
         mensaje: buildCredentialsMessage(u.username, tempPassword, b.system_url || ''),
       },
     });
+  } catch (err) { next(err); }
+});
+
+// GET /api/usuarios/:id/alcance-organizacional
+router.get('/:id/alcance-organizacional', async (req, res, next) => {
+  try {
+    const alcance = await cargarAlcanceOrganizacionalUsuario(req.params.id);
+    if (!alcance) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json(alcance);
+  } catch (err) { next(err); }
+});
+
+// PUT /api/usuarios/:id/alcance-organizacional
+router.put('/:id/alcance-organizacional', async (req, res, next) => {
+  try {
+    const actor = req.body?.usuario_operacion || req.headers['x-user-name'] || 'admin';
+    const alcance = await guardarAlcanceOrganizacionalUsuario(req.params.id, req.body || {}, actor);
+    res.json(alcance);
   } catch (err) { next(err); }
 });
 

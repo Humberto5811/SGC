@@ -137,6 +137,11 @@ async function openDoc(btn, data) {
   throw new Error('No se pudo abrir el documento');
 }
 
+/** RC8.15.6G-7H/G-8C — Visor autenticado compartido para documentos del expediente. */
+export async function openExpedienteDocumento(btn, data = {}) {
+  return openDoc(btn, data);
+}
+
 // RC8.13.4 — este modal ya no ofrece un botón "Editar" genérico en el pie (ver
 // modal-footer más abajo): las acciones de edición siguen disponibles desde el menú
 // Acciones ⋮ de la bandeja de Registro de Órdenes (registroOrdenesView.js), que ya

@@ -3,7 +3,7 @@
  * Bandeja de entregables en PREPARACION_EXPEDIENTE_PAGO (Analista CM).
  */
 import { entregablesServiciosService } from '../../services/entregablesServiciosService.js';
-import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
+import { renderEstadoBadgeFromRow, renderEstadoBadgeHtml } from '../../ui/workflow/EstadoBadge.js';
 import {
   renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
@@ -195,6 +195,25 @@ function ordenLabel(row) {
   return `${row.tipo_orden || 'OS'} ${row.numero_orden || ''}`;
 }
 
+function labelSubmoduloDestinoObservacion(data = {}) {
+  const tipoOrden = String(data.tipo_orden || '').toUpperCase();
+  const tipoContr = String(data.tipo_contratacion || '').toUpperCase();
+  const reqTipo = String(data.req_tipo || data.tipo_requerimiento || '').toUpperCase();
+  if (tipoOrden === 'OS' || /SERVIC|LOCAC|LOCADOR/.test(`${tipoContr} ${reqTipo}`)) {
+    return 'Presentación de Entregables de Servicios';
+  }
+  return 'Recepción de Bienes';
+}
+
+function renderPagoEstadoCell(row) {
+  if (row.en_seguimiento_observado_pago) {
+    const etapa = row.estado_etapa_label || row.etapa_label || '';
+    return `${renderEstadoBadgeHtml({ estadoCodigo: 'OBSERVADO', estadoLabel: 'Observado' })}
+      ${etapa ? `<div class="text-muted small mt-1">${esc(etapa)}</div>` : ''}`;
+  }
+  return renderEstadoBadgeFromRow(row);
+}
+
 export function pagoMenuItems(row) {
   const items = [];
   if (row.puede_ver_entregable_pago) {
@@ -244,7 +263,7 @@ function renderRow(row) {
     <td class="small text-nowrap">${esc(fmtFecha(row.fecha_recepcion_mesa_partes))}</td>
     <td class="text-end small">${row.precio_total != null ? esc(fmtMonto(row.precio_total)) : '—'}</td>
     <td class="small text-center">${renderPenalidadBadge(row)}</td>
-    <td>${renderEstadoBadgeFromRow(row)}</td>
+    <td>${renderPagoEstadoCell(row)}</td>
     <td class="small">${renderResponsableCellHtml(row, esc)}</td>
     ${renderActionMenuCell(id, pagoMenuItems(row))}
   </tr>`;
@@ -344,7 +363,10 @@ async function openObservarEntregable(id) {
       <div><strong>Orden:</strong> ${esc(ordenLabel(data))}</div>
       <div><strong>Entregable:</strong> N.° ${esc(data.numero_entrega ?? '—')}</div>
       <div><strong>Proveedor:</strong> ${esc(data.proveedor_razon_social || '—')}</div>
-      <div><strong>Fecha recepción:</strong> ${esc(fmtFecha(recepcion.fecha_recepcion_mesa_partes))}</div>`;
+      <div><strong>Fecha recepción:</strong> ${esc(fmtFecha(recepcion.fecha_recepcion_mesa_partes))}</div>
+      <div><strong>Submódulo destino:</strong> ${esc(labelSubmoduloDestinoObservacion(data))}</div>`;
+    const submoduloInput = document.getElementById(`${PREFIX}ObservarSubmodulo`);
+    if (submoduloInput) submoduloInput.value = labelSubmoduloDestinoObservacion(data);
     await loadDestinatariosAreaUsuaria(id);
   } catch (err) {
     if (errBox) {
@@ -692,6 +714,10 @@ function renderDerivacionPagoView() {
             <div class="modal-body">
               <input type="hidden" id="${PREFIX}ObservarEntregableId">
               <div class="border rounded p-2 small mb-3" id="${PREFIX}ObservarResumen"></div>
+              <div class="mb-2">
+                <label class="form-label small mb-1">Submódulo destino</label>
+                <input type="text" class="form-control form-control-sm bg-light" id="${PREFIX}ObservarSubmodulo" readonly tabindex="-1">
+              </div>
               <div class="mb-2">
                 <label class="form-label small mb-1" for="${PREFIX}ObservarDestinoAu">Destinatario <span class="text-danger">*</span></label>
                 <select class="form-select form-select-sm" id="${PREFIX}ObservarDestinoAu" required disabled>

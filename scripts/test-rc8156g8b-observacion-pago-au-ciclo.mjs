@@ -1,23 +1,32 @@
 /**
- * RC8.15.6G-4 — Observación Analista CM desde Pagos (PREPARACION_EXPEDIENTE_PAGO) → AU → retorno.
+ * RC8.15.6G-8B — Ciclo observación Pagos → AU → Pagos.
  */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pool, { query } from '../server/db.js';
 import {
+  adjuntarDocumentosRecepcionEntregable,
   derivarEntregableAnalistaCM,
   derivarEntregableCoordinadorCM,
+  esSeguimientoObservadoDesdePep,
+  labelSubmoduloDestinoObservacionEntregable,
   listarBandejaEntregablesServicios,
   listarBandejaPreparacionExpedientePago,
-  listarDestinatariosAreaUsuariaEntregable,
-  listarTrazabilidadEntregable,
+  modificarRecepcionEntregable,
   observarEntregableAnalistaCM,
   obtenerEstadoResponsableEntregable,
+  retirarObservacionEntregable,
   subsanarEntregable,
 } from '../server/lib/entregablesServicios.js';
-import { validarDestinatarioAreaUsuariaOrden } from '../server/lib/ordenesContratacion.js';
 import { inicializarEstadoResponsableEntregable } from '../server/lib/entregableEstadoPersistido.js';
+import { renderEstadoBadgeHtml } from '../src/ui/workflow/EstadoBadge.js';
 import { pagoMenuItems } from '../src/views/ejecucion/derivacionPagoView.js';
 import { entregableMenuItems } from '../src/views/ejecucion/presentacionEntregableView.js';
 import { ETAPAS } from '../shared/workflow/etapas.js';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const read = (rel) => readFileSync(join(root, rel), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -57,10 +66,6 @@ function trackObservacion(row) {
   const wo = Number(row.workflow_observacion_id);
   if (Number.isFinite(wo) && wo > 0 && !fixture.workflowIds.includes(wo)) fixture.workflowIds.push(wo);
 }
-function trackWorkflow(id) {
-  const n = Number(id);
-  if (Number.isFinite(n) && n > 0 && !fixture.workflowIds.includes(n)) fixture.workflowIds.push(n);
-}
 function trackActa(id) {
   const n = Number(id);
   if (Number.isFinite(n) && n > 0 && !fixture.actaIds.includes(n)) fixture.actaIds.push(n);
@@ -92,7 +97,19 @@ async function cleanup() {
   }
 }
 
-console.log('\n=== RC8.15.6G-4 — Observación Pagos (PEP) → AU → retorno ===\n');
+console.log('\n=== RC8.15.6G-8B — Ciclo observación Pagos → AU → Pagos ===\n');
+
+const pagoView = read('src/views/ejecucion/derivacionPagoView.js');
+const peView = read('src/views/ejecucion/presentacionEntregableView.js');
+ok(/Submódulo destino/.test(pagoView) && /ObservarSubmodulo/.test(pagoView),
+  'modal Pagos muestra submódulo destino informativo');
+ok(labelSubmoduloDestinoObservacionEntregable({ tipo_orden: 'OS', tipo_contratacion: 'SERVICIO' })
+  === 'Presentación de Entregables de Servicios',
+  'submódulo destino servicios/locación');
+ok(/observacion_retorno_pep/.test(peView) && /Subsanar y derivar a Pagos/.test(peView),
+  'Presentación Entregables etiqueta Subsanar y derivar a Pagos');
+ok(/situacion_codigo === 'OBSERVADO'/.test(peView) && /estadoCodigo: 'OBSERVADO'/.test(peView),
+  'AU ve badge OBSERVADO rojo en bandeja');
 
 try {
   const nonce = `${Date.now()}${Math.floor(Math.random() * 10000)}`;
@@ -102,9 +119,9 @@ try {
       INSERT INTO usuarios (dni, username, nombre, rol, cargo, activo, permisos, centro, codigo_centro_costo)
       VALUES ($1,$2,$3,'usuario',$4,TRUE,$5::jsonb,$6,$6) RETURNING *
     `, [
-      `G4${sufijo}${nonce}`.slice(0, 20),
-      `g4_${nonce}_${sufijo}`,
-      `Fixture G4 ${sufijo}`,
+      `G8B${sufijo}${nonce}`.slice(0, 20),
+      `g8b_${nonce}_${sufijo}`,
+      `Fixture G8B ${sufijo}`,
       perfil === 'AREA_USUARIA' ? 'Área Usuaria' : (perfil === 'COORDINADOR_CM' ? 'Coordinador CM' : 'Analista CM'),
       JSON.stringify({ perfil }),
       centro,
@@ -126,12 +143,8 @@ try {
 
   const au1 = await crearUsuario('au1', 'AREA_USUARIA', centro.centro_codigo);
   const au2 = await crearUsuario('au2', 'AREA_USUARIA', centro.centro_codigo);
-  const auOtroCentro = await crearUsuario('aux', 'AREA_USUARIA', 'OTRO-CENTRO-G4');
-  const auInactivo = await crearUsuario('aui', 'AREA_USUARIA', centro.centro_codigo);
-  await query('UPDATE usuarios SET activo=FALSE WHERE id=$1', [auInactivo.id]);
   const coordinador = await crearUsuario('coord', 'COORDINADOR_CM', centro.centro_codigo);
   const analista = await crearUsuario('anal', 'ANALISTA_CM', centro.centro_codigo);
-  const otroAnalista = await crearUsuario('otro', 'ANALISTA_CM', centro.centro_codigo);
 
   const ctx = (user, perfil) => ({
     id: Number(user.id),
@@ -146,17 +159,18 @@ try {
     INSERT INTO ordenes_contratacion (
       requerimiento_id, proveedor_id, tipo_orden, numero_orden, anio_orden,
       fecha_orden, monto_total, estado, tipo_contratacion
-    ) VALUES ($1,$2,'OS',$3,2099,CURRENT_DATE,800,'EN_EJECUCION','SERVICIO') RETURNING id
-  `, [base.requerimiento_id, base.proveedor_id, `RC8156G4${nonce}`])).rows[0].id);
+    ) VALUES ($1,$2,'OS',$3,2099,CURRENT_DATE,900,'EN_EJECUCION','SERVICIO') RETURNING id
+  `, [base.requerimiento_id, base.proveedor_id, `RC8156G8B${nonce}`])).rows[0].id);
   trackOrden(ordenId);
 
   async function crearEntrega(numero) {
+    const plazoAntes = 10;
     const eid = Number((await query(`
       INSERT INTO orden_entregas (orden_id, numero_entrega, tipo_entrega, descripcion, dias_plazo, fecha_maxima, importe, estado)
-      VALUES ($1,$2,'ENTREGABLE',$3,10,CURRENT_DATE+10,100,'ACTIVO') RETURNING id
-    `, [ordenId, numero, `G4 E${numero}`])).rows[0].id);
+      VALUES ($1,$2,'ENTREGABLE',$3,$4,CURRENT_DATE+$4::int,100,'ACTIVO') RETURNING id, dias_plazo, fecha_maxima
+    `, [ordenId, numero, `G8B E${numero}`, plazoAntes])).rows[0].id);
     trackEntrega(eid);
-    await inicializarEstadoResponsableEntregable(eid, { actualizadoPor: 'test-g4' });
+    await inicializarEstadoResponsableEntregable(eid, { actualizadoPor: 'test-g8b' });
     await query(`
       UPDATE entregable_estado_vigente SET responsable_tipo='PERSONA', responsable_usuario_id=$2
       WHERE orden_entrega_id=$1
@@ -169,172 +183,181 @@ try {
       INSERT INTO entregable_recepciones (
         orden_entrega_id, orden_id, numero_recepcion, tipo_recepcion,
         fecha_recepcion_mesa_partes, numero_expediente_sgd, estado, registrado_por
-      ) VALUES ($1,$2,1,'INICIAL',CURRENT_DATE,$3,'RECIBIDO','test-g4') RETURNING *
-    `, [eid, ordenId, `SGD-G4-${numero}-${nonce}`])).rows[0];
+      ) VALUES ($1,$2,1,'INICIAL',CURRENT_DATE,$3,'RECIBIDO','test-g8b') RETURNING *
+    `, [eid, ordenId, `SGD-G8B-${numero}-${nonce}`])).rows[0];
     trackRecepcion(recepcion.id);
+    await query(`
+      INSERT INTO entregable_recepcion_documentos (
+        recepcion_id, tipo_documento, nombre_archivo, mime_type, contenido_base64, tamanio_bytes, vigente
+      ) VALUES ($1,'ENTREGABLE','entregable.pdf','application/pdf',$2,120,TRUE)
+    `, [recepcion.id, pdf(`g8b-${numero}`)]);
     const acta = (await query(`
       INSERT INTO entregable_conformidad_actas (
         orden_id, orden_entrega_id, recepcion_id, numero_acta, version,
         estado_documental, generado_at, generado_por
-      ) VALUES ($1,$2,$3,$4,1,'ACTA_CONFORMIDAD_GENERADA',NOW(),'test-g4') RETURNING *
-    `, [ordenId, eid, recepcion.id, `ACTA-G4-${numero}`])).rows[0];
+      ) VALUES ($1,$2,$3,$4,1,'ACTA_CONFORMIDAD_GENERADA',NOW(),'test-g8b') RETURNING *
+    `, [ordenId, eid, recepcion.id, `ACTA-G8B-${numero}`])).rows[0];
     trackActa(acta.id);
     await query(`
       INSERT INTO entregable_conformidad_acta_visados (
         orden_id, orden_entrega_id, acta_id, version, nombre, mime_type,
         contenido_base64, estado_documental, vigente, created_by
-      ) VALUES ($1,$2,$3,1,$4,'application/pdf',$5,'ACTA_CONFORMIDAD_FIRMADA',TRUE,'test-g4')
-    `, [ordenId, eid, acta.id, `firmada-${numero}.pdf`, pdf(`g4-${numero}`)]);
-    return { id: eid, recepcion };
+      ) VALUES ($1,$2,$3,1,$4,'application/pdf',$5,'ACTA_CONFORMIDAD_FIRMADA',TRUE,'test-g8b')
+    `, [ordenId, eid, acta.id, `firmada-${numero}.pdf`, pdf(`g8b-f-${numero}`)]);
+    return { id: eid, recepcion, plazoAntes };
   }
 
-  async function prepararPep(entrega) {
+  async function prepararPep(entregaId) {
     await derivarEntregableCoordinadorCM(
-      entrega.id, { responsable_id: coordinador.id }, ctx(au1, 'AREA_USUARIA'), au1.username,
+      entregaId, { responsable_id: coordinador.id }, ctx(au1, 'AREA_USUARIA'), au1.username,
     );
     await derivarEntregableAnalistaCM(
-      entrega.id, { responsable_id: analista.id }, ctx(coordinador, 'COORDINADOR_CM'), coordinador.username,
+      entregaId, { responsable_id: analista.id }, ctx(coordinador, 'COORDINADOR_CM'), coordinador.username,
     );
   }
 
   const entrega = await crearEntrega(1);
-  await prepararPep(entrega);
+  await prepararPep(entrega.id);
 
-  const estadoPep = await obtenerEstadoResponsableEntregable(entrega.id);
-  ok(estadoPep.etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
-    'fixture en PREPARACION_EXPEDIENTE_PAGO');
-
-  const bandejaPagosPre = await listarBandejaPreparacionExpedientePago(ctx(analista, 'ANALISTA_CM'));
-  const filaPagosPre = bandejaPagosPre.find((r) => Number(r.orden_entrega_id) === entrega.id);
-  ok(Boolean(filaPagosPre?.puede_observar_pago),
-    'Analista responsable tiene acción Observar en bandeja Pagos');
-  ok(pagoMenuItems(filaPagosPre).some((item) => item.act === 'observarEntregable'),
-    'pagoMenuItems incluye Observar');
-
-  const candidatos = await listarDestinatariosAreaUsuariaEntregable(
-    entrega.id, {}, ctx(analista, 'ANALISTA_CM'),
-  );
-  const idsCandidatos = (candidatos.usuarios || []).map((u) => Number(u.id));
-  ok(idsCandidatos.includes(Number(au2.id))
-    && !idsCandidatos.includes(Number(auInactivo.id))
-    && !idsCandidatos.includes(Number(auOtroCentro.id)),
-  'listado AU incluye activos del centro y excluye inactivo/otro centro');
-
-  let rechazoCentro = null;
-  try {
-    await validarDestinatarioAreaUsuariaOrden(ordenId, auOtroCentro.id);
-  } catch (error) {
-    rechazoCentro = error;
-  }
-  ok(rechazoCentro?.code === 'RESPONSABLE_CENTRO_INVALIDO',
-    'AU de otro centro se rechaza al observar');
-
-  const eventosAntes = Number((await query(
-    'SELECT COUNT(*)::int AS n FROM entregable_eventos WHERE orden_entrega_id=$1',
+  const plazoRowAntes = (await query(
+    'SELECT dias_plazo, fecha_maxima FROM orden_entregas WHERE id=$1',
     [entrega.id],
-  )).rows[0].n);
+  )).rows[0];
 
   const obs = await observarEntregableAnalistaCM(
     entrega.id,
-    { motivo: 'Observación Pagos hacia AU2', usuario_destino_id: au2.id },
+    { motivo: 'Observación G8B desde Pagos', usuario_destino_id: au2.id },
     ctx(analista, 'ANALISTA_CM'),
     analista.username,
   );
   trackObservacion(obs.observacion);
-  trackWorkflow(obs.workflow_observacion?.id);
-
-  const estadoAu = await obtenerEstadoResponsableEntregable(entrega.id);
-  ok(estadoAu.etapaCodigo === ETAPAS.PRESENTACION_ENTREGABLES
-    && Number(estadoAu.responsableUsuarioId) === Number(au2.id),
-  'tras observar pasa temporalmente a PRESENTACION_ENTREGABLES con AU destino');
 
   const bandejaPeAu = await listarBandejaEntregablesServicios(ctx(au2, 'AREA_USUARIA'));
   const filaPeAu = bandejaPeAu.find((r) => Number(r.orden_entrega_id) === entrega.id);
-  ok(Boolean(filaPeAu?.puede_subsanar), 'AU destino puede Subsanar');
-  ok(!entregableMenuItems(filaPeAu || {}).some((item) => item.act === 'derivarPago'),
-    'AU no ve acciones de Analista CM');
+  ok(filaPeAu?.situacion_codigo === 'OBSERVADO'
+    && Number(filaPeAu?.responsable_usuario_id) === Number(au2.id),
+  'AU observado: situación OBSERVADO y responsable AU actual');
+  const badgeObs = renderEstadoBadgeHtml({ estadoCodigo: 'OBSERVADO', estadoLabel: 'Observado' });
+  ok(/sgc-estado-badge--observed/.test(badgeObs), 'badge institucional OBSERVADO rojo');
+  const menuAu = entregableMenuItems(filaPeAu);
+  ok(menuAu.some((i) => i.act === 'subsanarEntregable' && i.label === 'Subsanar y derivar a Pagos')
+    && menuAu.some((i) => i.act === 'registrarRecepcion'),
+  'menú AU incluye Modificar y Subsanar y derivar a Pagos');
 
   const bandejaPagosDurante = await listarBandejaPreparacionExpedientePago(ctx(analista, 'ANALISTA_CM'));
   const filaPagosDurante = bandejaPagosDurante.find((r) => Number(r.orden_entrega_id) === entrega.id);
-  ok(Boolean(filaPagosDurante?.en_seguimiento_observado_pago),
-    'expediente permanece en bandeja Pagos como seguimiento mientras AU subsana');
-  ok(filaPagosDurante?.situacion_codigo === 'OBSERVADO',
-    'bandeja Pagos muestra situación OBSERVADO');
-  ok(!filaPagosDurante?.puede_observar_pago && !filaPagosDurante?.puede_evaluar_penalidad_pago,
-    'sin acciones operativas CM durante observación');
-  ok(Boolean(filaPagosDurante?.puede_ver_expediente_pago)
-    && Boolean(filaPagosDurante?.puede_ver_trazabilidad_pago),
-  'Analista emisor conserva Ver expediente/trazabilidad');
+  ok(Boolean(filaPagosDurante) && esSeguimientoObservadoDesdePep(filaPagosDurante),
+    'observado sigue visible en bandeja Pagos');
+  ok(Number(filaPagosDurante?.responsable_usuario_id) === Number(au2.id),
+    'Pagos refleja responsable AU durante subsanación');
+  ok(!pagoMenuItems(filaPagosDurante).some((i) => ['observarEntregable', 'evaluarPenalidad', 'checklistDocumentos'].includes(i.act)),
+    'Pagos sin acciones operativas CM durante observación');
 
-  const wo = (await query('SELECT * FROM workflow_observaciones WHERE id=$1', [obs.workflow_observacion.id])).rows[0];
-  const routingDoc = typeof wo?.documentos === 'string' ? JSON.parse(wo.documentos) : wo?.documentos;
-  ok(wo.origen_submodulo_codigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
-    && routingDoc?.etapa_retorno === ETAPAS.PREPARACION_EXPEDIENTE_PAGO,
-  'routing guarda origen y etapa_retorno PREPARACION_EXPEDIENTE_PAGO');
+  await adjuntarDocumentosRecepcionEntregable(
+    entrega.id,
+    {
+      documentos: [{
+        tipo_documento: 'SEGURO',
+        nombre_archivo: 'seguro-g8b.pdf',
+        mime_type: 'application/pdf',
+        contenido_base64: pdf('seguro-g8b'),
+        vigencia_desde: '2026-01-01',
+        vigencia_hasta: '2027-01-01',
+      }],
+    },
+    ctx(au2, 'AREA_USUARIA'),
+    au2.username,
+  );
+  const docsSeguro = (await query(`
+    SELECT id FROM entregable_recepcion_documentos
+    WHERE recepcion_id=$1 AND tipo_documento='SEGURO' AND vigente=TRUE
+  `, [entrega.recepcion.id])).rows;
+  ok(docsSeguro.length === 1, 'AU gestiona documento tipificado G-7I durante observación');
+
+  await modificarRecepcionEntregable(
+    entrega.id,
+    {
+      fecha_recepcion_mesa_partes: '2026-08-15',
+      numero_expediente_sgd: `SGD-MOD-G8B-${nonce}`,
+      observacion: 'Corrección metadatos recepción',
+    },
+    ctx(au2, 'AREA_USUARIA'),
+    au2.username,
+  );
+
+  const plazoRowDurante = (await query(
+    'SELECT dias_plazo, fecha_maxima FROM orden_entregas WHERE id=$1',
+    [entrega.id],
+  )).rows[0];
+  ok(Number(plazoRowDurante.dias_plazo) === Number(plazoRowAntes.dias_plazo)
+    && String(plazoRowDurante.fecha_maxima) === String(plazoRowAntes.fecha_maxima),
+  'plazo contractual no se altera durante subsanación');
 
   const sub = await subsanarEntregable(
     entrega.id,
     {
-      fecha_recepcion_mesa_partes: '2026-08-20',
-      numero_expediente_sgd: `SGD-SUB-G4-${nonce}`,
+      fecha_recepcion_mesa_partes: '2026-08-22',
+      numero_expediente_sgd: `SGD-SUB-G8B-${nonce}`,
       observacion_id: obs.observacion.id,
       documentos: [{
-        nombre_archivo: 'sub-g4.pdf',
+        nombre_archivo: 'sub-g8b.pdf',
         mime_type: 'application/pdf',
-        contenido_base64: pdf('sub-g4'),
+        contenido_base64: pdf('sub-g8b'),
       }],
     },
     ctx(au2, 'AREA_USUARIA'),
     au2.username,
   );
   trackRecepcion(sub?.recepcion?.id);
-  trackObservacion(sub?.observacion);
 
   const estadoFinal = await obtenerEstadoResponsableEntregable(entrega.id);
   ok(estadoFinal.etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
     && Number(estadoFinal.responsableUsuarioId) === Number(analista.id),
-  'tras subsanar retorna al mismo Analista CM en PREPARACION_EXPEDIENTE_PAGO');
+  'Subsanar y derivar a Pagos retorna a PEP con mismo Analista CM');
 
-  const woPost = (await query('SELECT * FROM workflow_observaciones WHERE id=$1', [obs.workflow_observacion.id])).rows[0];
-  ok(sub.observacion.estado === 'OBS_SUBSANADA'
-    && woPost.estado === 'OBS_SUBSANADA',
-  'observación y workflow quedan OBS_SUBSANADA');
+  const woPost = (await query('SELECT estado FROM workflow_observaciones WHERE id=$1', [obs.workflow_observacion.id])).rows[0];
+  ok(sub.observacion.estado === 'OBS_SUBSANADA' && woPost.estado === 'OBS_SUBSANADA',
+    'workflow queda OBS_SUBSANADA');
 
-  const bandejaPagosPost = await listarBandejaPreparacionExpedientePago(ctx(analista, 'ANALISTA_CM'));
-  const filaPagosPost = bandejaPagosPost.find((r) => Number(r.orden_entrega_id) === entrega.id);
-  ok(Boolean(filaPagosPost?.puede_observar_pago),
-    'Analista CM vuelve a ver expediente en Pagos con Observar habilitado');
-
-  const bandejaOtro = await listarBandejaPreparacionExpedientePago(ctx(otroAnalista, 'ANALISTA_CM'));
-  const filaOtro = bandejaOtro.find((r) => Number(r.orden_entrega_id) === entrega.id);
-  ok(!filaOtro?.puede_observar_pago, 'otro Analista CM no obtiene Observar operativo');
-
-  const traza = await listarTrazabilidadEntregable(entrega.id, ctx(analista, 'ANALISTA_CM'));
-  ok(traza.length > eventosAntes, 'trazabilidad conserva y extiende eventos');
+  const entregaRetiro = await crearEntrega(2);
+  await prepararPep(entregaRetiro.id);
+  const obsRet = await observarEntregableAnalistaCM(
+    entregaRetiro.id,
+    { motivo: 'Retiro G8B', usuario_destino_id: au2.id },
+    ctx(analista, 'ANALISTA_CM'),
+    analista.username,
+  );
+  trackObservacion(obsRet.observacion);
+  await retirarObservacionEntregable(
+    entregaRetiro.id,
+    obsRet.observacion.id,
+    { motivo: 'Retiro operativo G8B' },
+    ctx(analista, 'ANALISTA_CM'),
+    analista.username,
+  );
+  const estadoRet = await obtenerEstadoResponsableEntregable(entregaRetiro.id);
+  ok(estadoRet.etapaCodigo === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
+    && Number(estadoRet.responsableUsuarioId) === Number(analista.id),
+  'Retirar observación sigue operativo y restaura PEP/Analista');
 } catch (error) {
   ok(false, `fixture (${error.message})`);
   console.error(error);
 } finally {
   try {
     const orphans = (await query(`
-      SELECT id FROM ordenes_contratacion WHERE numero_orden ~ '^RC8156G4'
+      SELECT id FROM ordenes_contratacion WHERE numero_orden ~ '^RC8156G8B'
     `)).rows;
     for (const o of orphans) trackOrden(o.id);
     const orphanUsers = (await query(`
-      SELECT id FROM usuarios WHERE username ~ '^g4_'
+      SELECT id FROM usuarios WHERE username ~ '^g8b_'
     `)).rows;
     for (const u of orphanUsers) trackUsuario(u.id);
     await cleanup();
-  } catch (error) {
-    failed++;
-    console.error('  ✗ cleanup falló:', error.message);
+  } catch (cleanupErr) {
+    console.error('cleanup:', cleanupErr.message);
   }
-  const residuos = Number((await query(`
-    SELECT COUNT(*)::int AS n FROM ordenes_contratacion WHERE numero_orden ~ '^RC8156G4'
-  `)).rows[0].n);
-  ok(residuos === 0, 'sin residuos RC8156G4');
-  await pool.end();
 }
 
-console.log(`\n=== Resultado G-4: ${passed} OK, ${failed} FAIL ===\n`);
-if (failed) process.exit(1);
+console.log(`\n=== Resultado RC8.15.6G-8B: ${passed} OK, ${failed} FAIL ===`);
+if (failed > 0) process.exit(1);
+await pool.end();

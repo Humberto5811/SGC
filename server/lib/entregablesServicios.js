@@ -56,6 +56,7 @@ import {
   validarDestinatarioAreaUsuariaOrden,
 } from './ordenesContratacion.js';
 import { buildEstadoLabels } from './expedienteEstadoPersistido.js';
+import { aplicarContratoEstadoResponsableEnFila } from './enrichEstadoResponsable.js';
 import { ETAPAS, getEtapaMeta } from '../../shared/workflow/etapas.js';
 import {
   calcularPenalidadPlazosBase,
@@ -124,6 +125,25 @@ function isServicioOLocacion(tipoOrden, tipoContratacion, reqTipo) {
   if (to === 'OS') return true;
   const txt = `${String(tipoContratacion || '')} ${String(reqTipo || '')}`.toUpperCase();
   return /SERVIC|LOCAC|LOCADOR/.test(txt);
+}
+
+/** RC8.15.6G-8B — Submódulo AU destino informativo al observar desde Pagos/PE. */
+export function labelSubmoduloDestinoObservacionEntregable(entrega = {}) {
+  if (isServicioOLocacion(entrega.tipo_orden, entrega.tipo_contratacion, entrega.req_tipo)) {
+    return 'Presentación de Entregables de Servicios';
+  }
+  return 'Recepción de Bienes';
+}
+
+/** RC8.15.6G-8B — Seguimiento en bandeja Pagos mientras AU subsana observación desde PEP. */
+export function esSeguimientoObservadoDesdePep(item = {}) {
+  const etapa = String(item.estado_etapa_codigo || '').toUpperCase();
+  if (etapa !== ETAPAS.PRESENTACION_ENTREGABLES) return false;
+  const obs = item.observacion_abierta;
+  if (!obs?.id) return false;
+  const origen = String(obs.origen_submodulo_codigo || '').toUpperCase();
+  if (origen === ETAPAS.PREPARACION_EXPEDIENTE_PAGO) return true;
+  return extraerEtapaRetornoObservacion(obs) === ETAPAS.PREPARACION_EXPEDIENTE_PAGO;
 }
 
 function stripDataUrl(b64) {
@@ -517,20 +537,15 @@ export async function listarBandejaEntregablesServicios(userCtx = null, opts = {
   );
   for (const item of list) {
     const erv = estadosPorEntregable.get(Number(item.orden_entrega_id)) || null;
-    item.estado_responsable_vigente = erv;
-    item.responsable = erv?.responsableNombre
-      || erv?.responsableUsername
-      || erv?.responsableUnidad
-      || (erv?.responsableTipo === 'PENDIENTE' ? 'Pendiente' : '');
-    item.responsable_tipo = erv?.responsableTipo || 'PENDIENTE';
-    item.responsable_usuario_id = erv?.responsableUsuarioId ?? null;
+    aplicarContratoEstadoResponsableEnFila(item, erv);
+    const etapaCodigo = String(item.estado_responsable_vigente?.etapaCodigo
+      || item.estado_responsable_vigente?.estadoCodigo || '').toUpperCase();
     const responsableId = Number(item.responsable_usuario_id);
-    const autorizado = esAutorizadoGestionEntregable(userCtx, erv, item);
+    const autorizado = esAutorizadoGestionEntregable(userCtx, item.estado_responsable_vigente, item);
     const responsablePersonaActual = Number.isFinite(responsableId)
       && responsableId > 0
       && Number(userCtx?.id) === responsableId;
     const perfilesUsuario = resolveFunctionalProfiles(userCtx);
-    const etapaCodigo = String(erv?.etapaCodigo || erv?.estadoCodigo || '').toUpperCase();
     const enPresentacion = etapaCodigo === 'PRESENTACION_ENTREGABLES';
     const enRevisionCoordinador = etapaCodigo === 'REVISION_COORDINADOR_CM';
     const enRevisionAnalista = etapaCodigo === ETAPAS.REVISION_ANALISTA_CM;
@@ -557,12 +572,20 @@ export async function listarBandejaEntregablesServicios(userCtx = null, opts = {
       && enPresentacion
       && !soloLecturaEmisor
       && !tieneRecepcion;
+    const esDestinatarioObservacion = routingActivo
+      && responsablePersonaActual
+      && Number(obs?.usuario_destino_id) === Number(userCtx?.id)
+      && item.situacion_codigo === 'OBSERVADO';
+    item.observacion_retorno_pep = routingActivo
+      && String(obs?.origen_submodulo_codigo || '').toUpperCase() === ETAPAS.PREPARACION_EXPEDIENTE_PAGO;
     item.puede_modificar_entregable = autorizado
       && enPresentacion
       && !soloLecturaEmisor
       && tieneRecepcion
-      && sinObservacionAbierta
-      && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo);
+      && (
+        (sinObservacionAbierta && ['RECIBIDO', 'SUBSANADO'].includes(item.situacion_codigo))
+        || esDestinatarioObservacion
+      );
     item.puede_gestionar_conformidad = autorizado
       && enPresentacion
       && !soloLecturaEmisor
@@ -641,24 +664,9 @@ export async function listarBandejaEntregablesServicios(userCtx = null, opts = {
       item.puede_derivar_pago = false;
     }
     item.puede_ver_trazabilidad = etapaVisibleTrazabilidadEntregable(etapaCodigo)
-      && puedeAccederTrazabilidadEntregable(userCtx, erv, item, {
+      && puedeAccederTrazabilidadEntregable(userCtx, item.estado_responsable_vigente, item, {
         accesoRoutingObservacion: routingTrazabilidadIds.has(Number(item.orden_entrega_id)),
       });
-    // Etapa canónica del entregable (específica o fallback histórico).
-    if (erv) {
-      const etapaCodigoCanon = erv.etapaCodigo || erv.estadoCodigo || 'PRESENTACION_ENTREGABLES';
-      const labelsCanon = buildEstadoLabels(etapaCodigoCanon, erv.estadoCodigo || etapaCodigoCanon);
-      item.estado_etapa_codigo = etapaCodigoCanon;
-      item.estado_etapa_label = labelsCanon.etapaLabel;
-      item.etapa_label = labelsCanon.etapaLabel;
-      item.estado_responsable_vigente = {
-        ...erv,
-        etapaCodigo: etapaCodigoCanon,
-        etapaLabel: labelsCanon.etapaLabel,
-        estadoCodigo: labelsCanon.estadoCodigo,
-        estadoLabel: labelsCanon.estadoLabel,
-      };
-    }
   }
 
   const incluir = (opts.etapas?.incluir || []).map((e) => String(e).toUpperCase());
@@ -944,9 +952,13 @@ export async function evaluarPenalidadEntregable(ordenEntregaId, body = {}, user
 /** RC8.15.6F1 — Bandeja Pagos: entregables en preparación de expediente (Analista CM). */
 export async function listarBandejaPreparacionExpedientePago(userCtx = null) {
   const list = await listarBandejaEntregablesServicios(userCtx, {
-    etapas: { incluir: [ETAPAS.PREPARACION_EXPEDIENTE_PAGO], excluir: [] },
+    etapas: { incluir: [], excluir: [] },
     vista: 'pagos',
-  });
+  }).then((rows) => rows.filter((item) => {
+    const etapa = String(item.estado_etapa_codigo || '').toUpperCase();
+    if (etapa === ETAPAS.PREPARACION_EXPEDIENTE_PAGO) return true;
+    return esSeguimientoObservadoDesdePep(item);
+  }));
   const reqIds = [...new Set(list.map((item) => Number(item.requerimiento_id)).filter((id) => id > 0))];
   const centrosPorReq = new Map();
   if (reqIds.length) {
@@ -969,20 +981,35 @@ export async function listarBandejaPreparacionExpedientePago(userCtx = null) {
     item.centro = centrosPorReq.get(Number(item.requerimiento_id)) || item.centro || '';
     const responsablePersonaActual = Number.isFinite(Number(item.responsable_usuario_id))
       && Number(userCtx?.id) === Number(item.responsable_usuario_id);
-    const autorizadoPagos = esAdmin(userCtx) || responsablePersonaActual;
-    item.puede_ver_expediente_pago = autorizadoPagos;
-    item.puede_ver_trazabilidad_pago = autorizadoPagos && Boolean(item.puede_ver_trazabilidad);
-    item.puede_ver_entregable_pago = autorizadoPagos;
-    item.puede_ver_acta_pago = autorizadoPagos;
-    item.puede_checklist_pago = autorizadoPagos;
-    item.puede_observar_pago = autorizadoPagos && Boolean(item.puede_observar_analista_cm);
-    item.puede_evaluar_penalidad_pago = autorizadoPagos;
+    const enSeguimientoObservadoPago = esSeguimientoObservadoDesdePep(item);
+    item.en_seguimiento_observado_pago = enSeguimientoObservadoPago;
+    const esEmisorObservacion = esEmisorObservacionEntregable(item.observacion_abierta, userCtx);
+    const autorizadoPagos = esAdmin(userCtx) || responsablePersonaActual
+      || (enSeguimientoObservadoPago && esEmisorObservacion);
     Object.assign(
       item,
       mapPenalidadEvaluacionRow(penalidadMap.get(Number(item.orden_entrega_id)) || null),
     );
-    item.puede_calcular_penalidad_pago = autorizadoPagos
-      && String(item.estado_penalidad || item.penalidad_codigo || '').toUpperCase() === 'CORRESPONDE';
+    if (enSeguimientoObservadoPago) {
+      item.puede_ver_expediente_pago = autorizadoPagos;
+      item.puede_ver_trazabilidad_pago = autorizadoPagos && Boolean(item.puede_ver_trazabilidad);
+      item.puede_ver_entregable_pago = false;
+      item.puede_ver_acta_pago = false;
+      item.puede_checklist_pago = false;
+      item.puede_observar_pago = false;
+      item.puede_evaluar_penalidad_pago = false;
+      item.puede_calcular_penalidad_pago = false;
+    } else {
+      item.puede_ver_expediente_pago = autorizadoPagos;
+      item.puede_ver_trazabilidad_pago = autorizadoPagos && Boolean(item.puede_ver_trazabilidad);
+      item.puede_ver_entregable_pago = autorizadoPagos;
+      item.puede_ver_acta_pago = autorizadoPagos;
+      item.puede_checklist_pago = autorizadoPagos;
+      item.puede_observar_pago = autorizadoPagos && Boolean(item.puede_observar_analista_cm);
+      item.puede_evaluar_penalidad_pago = autorizadoPagos;
+      item.puede_calcular_penalidad_pago = autorizadoPagos
+        && String(item.estado_penalidad || item.penalidad_codigo || '').toUpperCase() === 'CORRESPONDE';
+    }
   }
   return list;
 }
@@ -1173,6 +1200,9 @@ export async function listarBandejaOrdenesEntregablesServicios(userCtx = null) {
       .map((id) => estadosPorEntregable.get(id))
       .filter(Boolean);
     Object.assign(item, agregarEstadoResponsableOrden(contratos));
+    if (item.estado_responsable_vigente) {
+      aplicarContratoEstadoResponsableEnFila(item, item.estado_responsable_vigente);
+    }
   }
   return list;
 }
@@ -1339,8 +1369,20 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
       ORDER BY d.id DESC
     `, [ordenEntregaId]),
     query(`
-      SELECT eo.*
+      SELECT eo.*,
+        wo.origen_submodulo_codigo,
+        wo.destino_submodulo_codigo,
+        wo.documentos AS routing_documentos,
+        wo.usuario_origen_id,
+        wo.usuario_destino_id,
+        uo.nombre AS emisor_nombre,
+        uo.username AS emisor_username,
+        ud.nombre AS destinatario_nombre,
+        ud.username AS destinatario_username
       FROM entregable_observaciones eo
+      LEFT JOIN workflow_observaciones wo ON wo.id = eo.workflow_observacion_id
+      LEFT JOIN usuarios uo ON uo.id = wo.usuario_origen_id
+      LEFT JOIN usuarios ud ON ud.id = wo.usuario_destino_id
       WHERE eo.orden_entrega_id = $1
       ORDER BY eo.observado_at DESC, eo.id DESC
     `, [ordenEntregaId]),
@@ -1373,9 +1415,19 @@ export async function getDetalleEntregableServicio(ordenEntregaId) {
     .map((d) => mapDocumentoEntregableRow({ ...d, recepcion_id: recepcionInicial.id }));
   const documentoVigente = documentosVigentesPresentacion[0] || null;
   const observaciones = observacionesRes.rows || [];
-  const observacionAbierta = observaciones.find(
+  const observacionAbiertaRaw = observaciones.find(
     (o) => o.estado === 'OBS_EMITIDA' || o.estado === 'OBS_EN_ATENCION',
   ) || null;
+  const observacionAbierta = observacionAbiertaRaw ? {
+    ...observacionAbiertaRaw,
+    etapa_retorno: extraerEtapaRetornoObservacion({
+      ...observacionAbiertaRaw,
+      documentos: observacionAbiertaRaw.routing_documentos,
+    })
+      || (String(observacionAbiertaRaw.origen_submodulo_codigo || '').toUpperCase() === ETAPAS.PREPARACION_EXPEDIENTE_PAGO
+        ? ETAPAS.PREPARACION_EXPEDIENTE_PAGO
+        : null),
+  } : null;
 
   return {
     orden_id: entrega.orden_id,
@@ -4007,11 +4059,17 @@ async function validarContextoGestionDocumentosEntregable(ordenEntregaId, userCt
     FOR UPDATE
   `, [eid]);
   if (observacionesAbiertas.length) {
-    throw httpError(
-      'El entregable tiene una observación formal abierta; debe registrar una subsanación',
-      409,
-      'ENTREGABLE_OBSERVADO',
-    );
+    try {
+      assertPuedeSubsanarEntregable(userCtx, {
+        responsable_usuario_id: estado?.responsableUsuarioId,
+      });
+    } catch (_) {
+      throw httpError(
+        'El entregable tiene una observación formal abierta; debe registrar una subsanación',
+        409,
+        'ENTREGABLE_OBSERVADO',
+      );
+    }
   }
   return { entrega, estado, recepcion };
 }

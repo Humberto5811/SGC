@@ -11,6 +11,7 @@ export const requerimientosService = {
   getById: (id) => api.get(`/requerimientos/${id}`),
   create: (body) => api.create('requerimientos', body),
   update: (id, body) => api.update('requerimientos', id, body),
+  remove: (id) => api.remove('requerimientos', id),
   aprobarEvaluacion: (id, usuario = '') =>
     api.put(`/requerimientos/${id}/aprobar-evaluacion`, { usuario }),
   observarEvaluacion: (id, body = {}) =>

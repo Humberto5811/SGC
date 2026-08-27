@@ -10,14 +10,37 @@ import {
 import {
   resolveFunctionalProfiles,
   PERFILES_FUNCIONALES_LABELS,
+  ROLES_GENERALES,
+  ROLES_GENERALES_LABELS,
+  rolGeneralFromUsuario,
 } from '../../../server/utils/userRoleCatalog.js';
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function fmtRol(rol) {
+  const g = rolGeneralFromUsuario({ rol });
+  if (ROLES_GENERALES_LABELS[g]) return ROLES_GENERALES_LABELS[g];
   const map = { admin: 'Administrador', usuario: 'Usuario', au: 'Área Usuaria', dec: 'DEC' };
   return map[rol] || rol || '—';
+}
+
+function renderRolGeneralOptions(selected) {
+  const cur = rolGeneralFromUsuario({ rol: selected });
+  return Object.values(ROLES_GENERALES).map((code) => `
+    <option value="${code}" ${cur === code ? 'selected' : ''}>${esc(ROLES_GENERALES_LABELS[code])}</option>
+  `).join('');
+}
+
+function resolverCentroIdDesdeCatalogo(centros, textoCentro) {
+  const key = String(textoCentro || '').trim().toUpperCase();
+  if (!key || !Array.isArray(centros)) return null;
+  const match = centros.find((c) => {
+    const cod = String(c.codigo || '').trim().toUpperCase();
+    const nom = String(c.nombre || '').trim().toUpperCase();
+    return cod === key || nom === key;
+  });
+  return match ? Number(match.id) : null;
 }
 
 function fmtPerfilFuncional(usuario) {
@@ -48,7 +71,11 @@ function fmtFecha(iso) {
 }
 
 const PAGE_SIZE = 50;
-const state = { rows: [], page: 1, total: 0, totalPages: 1, search: '', estadoFiltro: '', editing: null, formPermisos: emptyPermisos(), areaPick: null, permActiveMod: MODULOS[0]?.id || '' };
+const state = {
+  rows: [], page: 1, total: 0, totalPages: 1, search: '', estadoFiltro: '',
+  editing: null, formPermisos: emptyPermisos(), areaPick: null, permActiveMod: MODULOS[0]?.id || '',
+  alcanceCentroId: null, alcanceAreaIds: new Set(), alcanceSelectAll: false, alcanceAreasCatalog: [],
+};
 
 function renderPagination() {
   const tp = Math.max(1, state.totalPages);
@@ -418,14 +445,11 @@ async function openForm(id) {
             <div class="col-md-3"><label class="form-label">Correo *</label><input type="email" class="form-control form-control-sm" id="fEmail" value="${esc(u.email)}"></div>
             <div class="col-md-3"><label class="form-label">Teléfono</label><input class="form-control form-control-sm" id="fTelefono" value="${esc(u.telefono)}"></div>
             <div class="col-md-3"><label class="form-label">Cargo *</label><input class="form-control form-control-sm" id="fCargo" value="${esc(u.cargo)}"></div>
-            <div class="col-md-3"><label class="form-label">Rol sistema</label>
-              <select class="form-select form-select-sm" id="fRol">
-                <option value="usuario" ${u.rol === 'usuario' ? 'selected' : ''}>Usuario</option>
-                <option value="au" ${u.rol === 'au' ? 'selected' : ''}>Área Usuaria</option>
-                <option value="dec" ${u.rol === 'dec' ? 'selected' : ''}>DEC</option>
-                <option value="admin" ${u.rol === 'admin' ? 'selected' : ''}>Administrador</option>
+            <div class="col-md-3"><label class="form-label">Rol *</label>
+              <select class="form-select form-select-sm" id="fRolGeneral">
+                ${renderRolGeneralOptions(u.rol)}
               </select>
-              <small class="text-muted d-block mt-1">Rol técnico de compatibilidad. La función operativa se configura mediante perfil, accesos y alcance.</small></div>
+              <small class="text-muted d-block mt-1">Nivel general de actuación. El alcance de áreas se configura abajo.</small></div>
             <div class="col-md-3"><label class="form-label">Perfil funcional</label>
               <div class="form-control form-control-sm bg-light text-muted" style="cursor:default;" title="Perfil inferido automáticamente según el cargo y permisos del usuario. No editable en esta versión.">
                 <i class="bi bi-person-badge"></i> ${esc(fmtPerfilFuncional(u))}
@@ -437,7 +461,21 @@ async function openForm(id) {
             ${id ? `<div class="col-md-3"><label class="form-label">Estado contraseña</label><input class="form-control form-control-sm" readonly value="${esc(u.estado_password || '')}"></div>` : ''}
           </div>
           <hr/>
-          <label class="form-label fw-bold">Área Usuaria / Centro de Costo</label>
+          <label class="form-label fw-bold">Centro principal</label>
+          <select class="form-select form-select-sm mb-3" id="fCentroPrincipal">
+            <option value="">— Seleccione centro —</option>
+          </select>
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <label class="form-label fw-bold mb-0">Áreas / Centros de costo autorizados</label>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="fAlcanceSelectAll">
+              <label class="form-check-label small" for="fAlcanceSelectAll">Seleccionar todos</label>
+            </div>
+          </div>
+          <div id="fAlcanceAreasBox" class="border rounded p-2 mb-3" style="max-height:220px;overflow:auto;">
+            <p class="text-muted small mb-0">Seleccione un centro para listar áreas.</p>
+          </div>
+          <label class="form-label fw-bold">Área usuaria principal (legacy / registro)</label>
           <div class="input-group mb-2">
             <input class="form-control form-control-sm" id="fAreaSearch" placeholder="Código centro o descripción área (mín. 2 caracteres)...">
             <button class="btn btn-outline-primary btn-sm" type="button" id="fAreaBtn"><i class="bi bi-search"></i></button>
@@ -506,7 +544,7 @@ async function openForm(id) {
           <span class="text-muted small"> — Centro: ${esc(a.centro || a.responsable || '—')} | Código: ${esc(a.codigo_centro_costo || a.codigo_area || '—')}</span>
         </button>`).join('')}</div>` : '<p class="text-muted small">Sin resultados</p>';
       areaResults.querySelectorAll('.area-pick').forEach((b) => {
-        b.onclick = () => {
+        b.onclick = async () => {
           state.areaPick = {
             id_area: Number(b.dataset.id),
             codigo_centro_costo: b.dataset.codigo,
@@ -518,6 +556,17 @@ async function openForm(id) {
           modal.querySelector('#fCodCentro').value = b.dataset.codigo;
           areaResults.innerHTML = '';
           modal.querySelector('#fAreaSearch').value = '';
+          const respCentros = await usuariosService.listCentros().catch(() => ({ data: [] }));
+          const centrosCat = respCentros.data || [];
+          const centroMatch = resolverCentroIdDesdeCatalogo(centrosCat, b.dataset.centro);
+          if (centroMatch) {
+            state.alcanceCentroId = centroMatch;
+            modal.querySelector('#fCentroPrincipal').value = String(centroMatch);
+            const ar = await usuariosService.listAreasCentro(centroMatch);
+            state.alcanceAreasCatalog = ar.data || [];
+            if (state.areaPick?.id_area) state.alcanceAreaIds.add(Number(state.areaPick.id_area));
+            await renderAlcanceAreasBox();
+          }
         };
       });
     } catch (err) {
@@ -532,23 +581,128 @@ async function openForm(id) {
     areaTimer = setTimeout(buscarArea, 350);
   };
 
-  let prevRol = modal.querySelector('#fRol').value;
-  modal.querySelector('#fRol').onchange = () => {
-    syncPermFromPanel(modal);
-    const newRol = modal.querySelector('#fRol').value;
-    if (!confirm('¿Aplicar permisos predeterminados del rol seleccionado? Esto reemplazará la configuración actual de accesos.')) {
-      modal.querySelector('#fRol').value = prevRol;
+  state.alcanceCentroId = null;
+  state.alcanceAreaIds = new Set();
+  state.alcanceSelectAll = false;
+  state.alcanceAreasCatalog = [];
+
+  if (id) {
+    try {
+      const alc = await usuariosService.getAlcance(id);
+      state.alcanceCentroId = alc?.centro_principal_id || null;
+      state.alcanceSelectAll = !!alc?.seleccionar_todos;
+      state.alcanceAreaIds = new Set((alc?.area_ids || []).map(Number));
+    } catch (_) { /* legacy sin alcance explícito */ }
+  }
+
+  async function renderAlcanceAreasBox() {
+    const box = modal.querySelector('#fAlcanceAreasBox');
+    const rolGen = modal.querySelector('#fRolGeneral')?.value;
+    if (rolGen === ROLES_GENERALES.ADMINISTRADOR) {
+      box.innerHTML = '<p class="text-muted small mb-0">Administrador: acceso global institucional.</p>';
       return;
     }
-    prevRol = newRol;
-    state.formPermisos = permisosFromRol(newRol);
-    refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
+    if (!state.alcanceCentroId) {
+      box.innerHTML = '<p class="text-muted small mb-0">Seleccione un centro para listar áreas.</p>';
+      return;
+    }
+    if (!state.alcanceAreasCatalog.length) {
+      box.innerHTML = '<p class="text-muted small mb-0">Sin áreas para el centro seleccionado.</p>';
+      return;
+    }
+    box.innerHTML = state.alcanceAreasCatalog.map((a) => {
+      const checked = state.alcanceSelectAll || state.alcanceAreaIds.has(Number(a.id));
+      const disabled = state.alcanceSelectAll ? 'disabled' : '';
+      return `
+        <div class="form-check">
+          <input class="form-check-input alcance-area-chk" type="checkbox"
+            id="alcArea${a.id}" data-id="${a.id}" ${checked ? 'checked' : ''} ${disabled}>
+          <label class="form-check-label small" for="alcArea${a.id}">
+            ${esc(a.nombre)} <span class="text-muted">(${esc(a.codigo_centro_costo || a.codigo || '—')})</span>
+          </label>
+        </div>`;
+    }).join('');
+    box.querySelectorAll('.alcance-area-chk').forEach((chk) => {
+      chk.onchange = () => {
+        const aid = Number(chk.dataset.id);
+        if (chk.checked) state.alcanceAreaIds.add(aid);
+        else state.alcanceAreaIds.delete(aid);
+      };
+    });
+  }
+
+  async function loadCentrosAlcance() {
+    const sel = modal.querySelector('#fCentroPrincipal');
+    try {
+      const resp = await usuariosService.listCentros();
+      const centros = resp.data || [];
+      if (!state.alcanceCentroId) {
+        state.alcanceCentroId = resolverCentroIdDesdeCatalogo(centros, u.centro)
+          || resolverCentroIdDesdeCatalogo(centros, state.areaPick?.centro);
+      }
+      sel.innerHTML = '<option value="">— Seleccione centro —</option>' + centros.map((c) => `
+        <option value="${c.id}" ${Number(state.alcanceCentroId) === Number(c.id) ? 'selected' : ''}>
+          ${esc(c.codigo || c.nombre || c.id)}${c.nombre && c.codigo && c.nombre !== c.codigo ? ` — ${esc(c.nombre)}` : ''}
+        </option>`).join('');
+      if (state.alcanceCentroId) {
+        sel.value = String(state.alcanceCentroId);
+        const ar = await usuariosService.listAreasCentro(state.alcanceCentroId);
+        state.alcanceAreasCatalog = ar.data || [];
+      }
+      await renderAlcanceAreasBox();
+      modal.querySelector('#fAlcanceSelectAll').checked = state.alcanceSelectAll;
+    } catch (e) {
+      sel.innerHTML = `<option value="">Error: ${esc(e.message)}</option>`;
+    }
+  }
+
+  modal.querySelector('#fCentroPrincipal').onchange = async () => {
+    state.alcanceCentroId = Number(modal.querySelector('#fCentroPrincipal').value) || null;
+    state.alcanceAreaIds = new Set();
+    state.alcanceSelectAll = false;
+    modal.querySelector('#fAlcanceSelectAll').checked = false;
+    if (state.alcanceCentroId) {
+      const ar = await usuariosService.listAreasCentro(state.alcanceCentroId);
+      state.alcanceAreasCatalog = ar.data || [];
+    } else {
+      state.alcanceAreasCatalog = [];
+    }
+    await renderAlcanceAreasBox();
   };
 
+  modal.querySelector('#fAlcanceSelectAll').onchange = async () => {
+    state.alcanceSelectAll = modal.querySelector('#fAlcanceSelectAll').checked;
+    if (state.alcanceSelectAll && state.alcanceCentroId) {
+      state.alcanceAreaIds = new Set(state.alcanceAreasCatalog.map((a) => Number(a.id)));
+    }
+    await renderAlcanceAreasBox();
+  };
+
+  let prevRolGeneral = modal.querySelector('#fRolGeneral').value;
+  modal.querySelector('#fRolGeneral').addEventListener('change', async () => {
+    await renderAlcanceAreasBox();
+    syncPermFromPanel(modal);
+    const newRol = modal.querySelector('#fRolGeneral').value;
+    if (newRol === ROLES_GENERALES.ADMINISTRADOR) {
+      prevRolGeneral = newRol;
+      return;
+    }
+    if (!confirm('¿Aplicar permisos predeterminados del rol seleccionado? Esto reemplazará la configuración actual de accesos.')) {
+      modal.querySelector('#fRolGeneral').value = prevRolGeneral;
+      await renderAlcanceAreasBox();
+      return;
+    }
+    prevRolGeneral = newRol;
+    state.formPermisos = permisosFromRol('usuario');
+    refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
+  });
+
   if (!id) {
-    state.formPermisos = permisosFromRol(modal.querySelector('#fRol').value);
+    state.formPermisos = permisosFromRol('usuario');
     refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
   }
+
+  await loadCentrosAlcance();
 
   modal.querySelector('#saveUsuForm').onclick = async () => {
     syncPermFromPanel(modal);
@@ -562,7 +716,8 @@ async function openForm(id) {
       email: modal.querySelector('#fEmail').value.trim(),
       telefono: modal.querySelector('#fTelefono').value.trim(),
       cargo: modal.querySelector('#fCargo').value.trim(),
-      rol: modal.querySelector('#fRol').value,
+      rol: modal.querySelector('#fRolGeneral').value === ROLES_GENERALES.ADMINISTRADOR ? 'admin' : 'usuario',
+      rol_general: modal.querySelector('#fRolGeneral').value,
       estado: modal.querySelector('#fEstado').value,
       permisos,
       idArea: state.areaPick?.id_area || u.idArea || null,
@@ -581,13 +736,29 @@ async function openForm(id) {
     if (!body.email || !body.nombres || !body.apellidos || !body.cargo) {
       return alert('Complete los campos obligatorios: correo, nombres, apellidos y cargo');
     }
-    if (!body.descripcion_area && !body.idArea) return alert('Seleccione el área usuaria');
+    if (!body.descripcion_area && !body.idArea) return alert('Seleccione el área usuaria principal');
+    const rolGeneral = modal.querySelector('#fRolGeneral').value;
+    state.alcanceCentroId = Number(modal.querySelector('#fCentroPrincipal').value) || null;
+    if (rolGeneral !== ROLES_GENERALES.ADMINISTRADOR && !state.alcanceCentroId) {
+      return alert('Primero seleccione el centro');
+    }
+    if (rolGeneral !== ROLES_GENERALES.ADMINISTRADOR && !state.alcanceSelectAll && !state.alcanceAreaIds.size) {
+      return alert('Seleccione al menos un área autorizada o marque Seleccionar todos');
+    }
     const saveBtn = modal.querySelector('#saveUsuForm');
     const feedback = modal.querySelector('#usuSaveFeedback');
     try {
       saveBtn.disabled = true;
       if (id) {
         await usuariosService.update(id, body);
+        await usuariosService.saveAlcance(id, {
+          rol_general: rolGeneral,
+          centro_principal_id: state.alcanceCentroId,
+          centro_codigo: modal.querySelector('#fCentro').value.trim(),
+          area_ids: [...state.alcanceAreaIds],
+          seleccionar_todos: state.alcanceSelectAll,
+          usuario_operacion: body.usuario_operacion,
+        });
         const permResp = await usuariosService.getPermisos(id);
         const permisosGuardados = permResp?.permisos || permResp;
         state.formPermisos = normalizePermisos(permisosGuardados, body.rol, { explicit: true });
@@ -616,6 +787,17 @@ async function openForm(id) {
         loadList();
       } else {
         const resp = await usuariosService.create(body);
+        const newId = resp.user?.id || resp.id;
+        if (newId) {
+          await usuariosService.saveAlcance(newId, {
+            rol_general: rolGeneral,
+            centro_principal_id: state.alcanceCentroId,
+            centro_codigo: modal.querySelector('#fCentro').value.trim(),
+            area_ids: [...state.alcanceAreaIds],
+            seleccionar_todos: state.alcanceSelectAll,
+            usuario_operacion: body.usuario_operacion,
+          });
+        }
         close();
         loadList();
         if (resp.credenciales?.mensaje) showCredentialsModal(resp.credenciales.mensaje, resp.credenciales.username);

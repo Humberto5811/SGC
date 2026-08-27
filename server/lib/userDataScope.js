@@ -156,6 +156,70 @@ async function resolveCentroIdsByCodigo(codigo) {
   return rows.map((r) => r.id);
 }
 
+async function resolveExplicitAlcanceScope(user, asigs, explicit) {
+  const centroIds = uniqNums(asigs.filter((a) => a.tipo === 'CENTRO').map((a) => a.centro_id));
+  let areaIds = uniqNums(asigs.filter((a) => a.tipo === 'CENTRO_COSTO').map((a) => a.area_id));
+  let ccCodigos = uniqStr(asigs.filter((a) => a.tipo === 'CENTRO_COSTO').map((a) => a.codigo_centro_costo));
+
+  let resolvedCentroIds = uniqNums([...centroIds, user.centro_pk, user.area_centro_id]);
+  if (!resolvedCentroIds.length && user.centro) {
+    resolvedCentroIds = await resolveCentroIdsByCodigo(user.centro);
+  }
+  const centroCodigos = uniqStr([user.centro_codigo, user.centro]);
+
+  if (centroIds.length || explicit === SCOPE_TYPES.CENTRO) {
+    const ids = centroIds.length ? centroIds : resolvedCentroIds;
+    const areas = await resolveAreasByCentroIds(ids);
+    return {
+      scopeType: SCOPE_TYPES.CENTRO,
+      centroIds: ids,
+      centroCodigos,
+      centroCostoIds: areas.areaIds,
+      centroCostoCodigos: uniqStr(areas.ccCodigos),
+      areaIds: areas.areaIds,
+      areaNombres: areas.areaNombres,
+      isInstitutional: false,
+      skipOrgFilter: false,
+      userId: user.id,
+      cargo: user.cargo,
+      rol: user.rol,
+      explicitAlcance: true,
+    };
+  }
+
+  if (explicit === SCOPE_TYPES.CENTRO_COSTO && !areaIds.length) {
+    areaIds = uniqNums([user.area_id, user.area_pk]);
+    ccCodigos = uniqStr([user.codigo_centro_costo, user.area_codigo]);
+  }
+
+  if (!areaIds.length) {
+    areaIds = uniqNums([user.area_id, user.area_pk]);
+    ccCodigos = uniqStr([user.codigo_centro_costo, user.area_codigo, ...ccCodigos]);
+  }
+
+  return {
+    scopeType: SCOPE_TYPES.PERSONALIZADO,
+    centroIds: resolvedCentroIds,
+    centroCodigos,
+    centroCostoIds: areaIds,
+    centroCostoCodigos: ccCodigos,
+    areaIds,
+    areaNombres: user.area_nombre ? [user.area_nombre] : [],
+    isInstitutional: false,
+    skipOrgFilter: false,
+    userId: user.id,
+    cargo: user.cargo,
+    rol: user.rol,
+    explicitAlcance: true,
+  };
+}
+
+function hasAlcanceExplicito(explicit, asigs) {
+  if (asigs?.length) return true;
+  return [SCOPE_TYPES.PERSONALIZADO, SCOPE_TYPES.CENTRO, SCOPE_TYPES.CENTRO_COSTO]
+    .includes(explicit);
+}
+
 async function resolveAreasByCentroIds(centroIds) {
   const ids = uniqNums(centroIds);
   if (!ids.length) return { areaIds: [], ccCodigos: [], areaNombres: [] };
@@ -229,27 +293,15 @@ export async function resolveUserDataScope(opts = {}) {
     };
   }
 
-  // 6) PERSONALIZADO
+  // 6) Alcance explícito (multiárea / seleccionar todos) — prioridad sobre inferencia por cargo
+  const asigsExplicit = await loadAsignacionesVigentes(user.id);
+  if (hasAlcanceExplicito(explicit, asigsExplicit)) {
+    return resolveExplicitAlcanceScope(user, asigsExplicit, explicit);
+  }
+
+  // 6b) PERSONALIZADO legacy (solo alcance_datos sin filas — compat)
   if (explicit === SCOPE_TYPES.PERSONALIZADO) {
-    const asigs = await loadAsignacionesVigentes(user.id);
-    const centroIds = uniqNums(asigs.filter((a) => a.tipo === 'CENTRO').map((a) => a.centro_id));
-    const areaIds = uniqNums(asigs.filter((a) => a.tipo === 'CENTRO_COSTO').map((a) => a.area_id));
-    const ccCodigos = uniqStr(asigs.filter((a) => a.tipo === 'CENTRO_COSTO').map((a) => a.codigo_centro_costo));
-    const fromCentros = await resolveAreasByCentroIds(centroIds);
-    return {
-      scopeType: SCOPE_TYPES.PERSONALIZADO,
-      centroIds,
-      centroCodigos: [],
-      centroCostoIds: uniqNums([...areaIds, ...fromCentros.areaIds]),
-      centroCostoCodigos: uniqStr([...ccCodigos, ...fromCentros.ccCodigos]),
-      areaIds: uniqNums([...areaIds, ...fromCentros.areaIds]),
-      areaNombres: fromCentros.areaNombres,
-      isInstitutional: false,
-      skipOrgFilter: false,
-      userId: user.id,
-      cargo: user.cargo,
-      rol: user.rol,
-    };
+    return resolveExplicitAlcanceScope(user, asigsExplicit, explicit);
   }
 
   // Resolver centro del usuario
@@ -259,7 +311,7 @@ export async function resolveUserDataScope(opts = {}) {
   }
   const centroCodigos = uniqStr([user.centro_codigo, user.centro]);
 
-  // 4) Director / Coordinador administrativo de centro → CENTRO
+  // 4) Director / Coordinador administrativo de centro → CENTRO (legacy sin alcance explícito)
   const forceCentro = explicit === SCOPE_TYPES.CENTRO || isDirectorOCoordinadorCentro(user.cargo);
   if (forceCentro) {
     const areas = await resolveAreasByCentroIds(centroIds);
@@ -284,8 +336,8 @@ export async function resolveUserDataScope(opts = {}) {
   const ccCodigos = uniqStr([user.codigo_centro_costo, user.area_codigo]);
   const areaNombreRaw = user.area_nombre ? [user.area_nombre] : [];
 
-  // Asignaciones adicionales vigentes (multi-CC)
-  const asigs = await loadAsignacionesVigentes(user.id);
+  // Asignaciones adicionales vigentes (multi-CC) — legacy incremental
+  const asigs = asigsExplicit;
   for (const a of asigs) {
     if (a.tipo === 'CENTRO_COSTO') {
       if (a.area_id) areaIds.push(a.area_id);
