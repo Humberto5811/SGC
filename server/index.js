@@ -23,6 +23,7 @@ import adjuntosRouter from './routes/adjuntos.js';
 import programacionRouter from './routes/programacion.js';
 import usuariosRouter from './routes/usuarios.js';
 import proveedoresMaestroRouter from './routes/proveedoresMaestro.js';
+import comprasHistoricasRouter from './routes/comprasHistoricas.js';
 import {
   metasImportRouter, areasImportRouter, ordenesImportRouter, configuracionImportRouter,
 } from './routes/registroDatosImports.js';
@@ -354,6 +355,7 @@ app.use('/api/ordenes', crudRouter({
   columns: ['numero', 'tipo', 'proveedor', 'ruc', 'monto', 'fecha', 'estado'],
   searchCols: ['numero', 'proveedor', 'ruc'],
 }));
+app.use('/api/compras-historicas', comprasHistoricasRouter);
 app.use('/api/siaf', crudRouter({
   table: 'siaf',
   columns: ['expediente', 'ciclo', 'fase', 'meta', 'clasificador', 'fuente_financ', 'monto', 'fecha', 'estado'],
