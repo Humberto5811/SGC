@@ -29,12 +29,17 @@ import { MODELO_LOCADORES } from '../glosasRequerimientos/formatoLocadoresModelo
 import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showSubsanacionDirigidaModal, bindTrazabilidadButtons } from './reqShared.js';
 import {
   renderFilterBarHtml, readFilterParams, enrichReqRow,
-  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
-  renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  renderSummaryCardsHtml, updateSummaryCards,
+  bindActionMenus, bindBandejaToolbar,
   buildExportRowData, updateBandejaAdjCount,
   sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
-import { registroMenuItems, registroHiddenActions } from '../../utils/bandejaActions.js';
+import { resolveBandejaAcciones } from '../../utils/bandejaAccionesResolver.js';
+import {
+  wrapBandejaExpedienteTable,
+  renderBandejaExpedienteRowCells,
+  renderBandejaExpedienteActionCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { estaEnRegistroAccionable } from '../../utils/estadoAccionesExpediente.js';
 import { loadRegistroBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
@@ -244,15 +249,18 @@ async function loadList(sortOverride = {}, resetPage = false) {
       cont.innerHTML = '<div class="alert alert-light border">Aún no hay requerimientos registrados.</div>';
       return;
     }
-    cont.innerHTML = wrapBandejaTable({
+    cont.innerHTML = wrapBandejaExpedienteTable({
       containerId: 'reqList',
       prefix: 'req',
       sortState: registroListSort,
-      bodyHtml: rows.map((r) => `
+      bodyHtml: rows.map((r) => {
+        const acc = resolveBandejaAcciones({ modulo: 'REGISTRO_REQUERIMIENTO', row: r, escFn: esc });
+        return `
         <tr data-req-id="${r.id}">
-          ${renderTraceRowCells(r, { prefix: 'req', escFn: esc })}
-          ${renderActionMenuCell(r.id, registroMenuItems(r), registroHiddenActions(r, esc))}
-        </tr>`).join(''),
+          ${renderBandejaExpedienteRowCells(r, { escFn: esc })}
+          ${renderBandejaExpedienteActionCell(r.id, acc.menuItems, acc.hiddenActionsHtml)}
+        </tr>`;
+      }).join(''),
     });
     bindTrazabilidadButtons(cont);
     bindActionMenus(cont, {

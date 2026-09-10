@@ -5,14 +5,19 @@ import { reqShared, addObservacion, todasObservaciones, historialHtml, showObser
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento } from './registroRequerimientoView.js';
 import {
   renderFilterBarHtml, readFilterParams, enrichReqRow,
-  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
-  renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  renderSummaryCardsHtml, updateSummaryCards,
+  bindActionMenus, bindBandejaToolbar,
   isEstadoObservado,
   sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
+import { resolveBandejaAcciones } from '../../utils/bandejaAccionesResolver.js';
+import {
+  wrapBandejaExpedienteTable,
+  renderBandejaExpedienteRowCells,
+  renderBandejaExpedienteActionCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { loadEvaluacionBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
-import { evalMenuItems, evalHiddenActions } from '../../utils/bandejaActions.js';
 import { estaEnEvaluacionAccionable, estaAprobadoEnEvaluacion } from '../../utils/estadoAccionesExpediente.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
@@ -68,15 +73,18 @@ async function loadEvaluacionList(sortOverride = {}, resetPage = false) {
       return;
     }
 
-    cont.innerHTML = wrapBandejaTable({
+    cont.innerHTML = wrapBandejaExpedienteTable({
       containerId: 'evalList',
       prefix: 'eval',
       sortState: listSort,
-      bodyHtml: rows.map((r) => `
+      bodyHtml: rows.map((r) => {
+        const acc = resolveBandejaAcciones({ modulo: 'EVALUACION_REQUERIMIENTO', row: r, escFn: esc });
+        return `
         <tr data-req-id="${r.id}">
-          ${renderTraceRowCells(r, { prefix: 'eval', escFn: esc })}
-          ${renderActionMenuCell(r.id, evalMenuItems(r), evalHiddenActions(r, esc))}
-        </tr>`).join(''),
+          ${renderBandejaExpedienteRowCells(r, { escFn: esc })}
+          ${renderBandejaExpedienteActionCell(r.id, acc.menuItems, acc.hiddenActionsHtml)}
+        </tr>`;
+      }).join(''),
     });
 
     bindTrazabilidadButtons(cont);

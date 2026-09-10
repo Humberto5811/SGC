@@ -10,6 +10,7 @@ import {
   REQUERIMIENTO_BANDEJA_FROM,
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
 } from './bandejaRequerimientoSql.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 const ESTADOS_BANDEJA_DEC = `(
   'Aprobado', 'Aprobado DEC', 'Observado DEC', 'Observado Programación',
@@ -61,8 +62,11 @@ export async function listarBandejaDEC(page, pageSize, queryParams = {}) {
     LIMIT $${limitIdx} OFFSET $${offsetIdx}
   `, params);
 
+  const data = await enrichRequerimientoRowsWithCcp(rows);
+  await enrichEstadoResponsableForBandeja(data, 'id');
+
   return {
-    data: await enrichRequerimientoRowsWithCcp(rows),
+    data,
     total,
     page,
     pageSize,

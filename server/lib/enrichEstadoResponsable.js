@@ -16,6 +16,7 @@
 import { resolveEstadoResponsableBatch } from './resolvedorEstadoResponsable.js';
 import { getEstadoResponsableCanonico } from './estadoResponsableCanonico.js';
 import { buildEstadoLabels } from './expedienteEstadoPersistido.js';
+import { applyBandejaExpedienteContrato } from './bandejaExpedienteContrato.js';
 
 /**
  * Enriquece cada fila con estado_responsable_vigente usando true batch (sin N+1).
@@ -56,6 +57,7 @@ export async function enrichEstadoResponsableForBandeja(rows, idField = 'requeri
       if (Number.isFinite(rid) && resolved.has(rid)) {
         row.requerimiento_id = row.requerimiento_id || rid;
         row.estado_responsable_vigente = resolved.get(rid);
+        applyBandejaExpedienteContrato(row);
       } else if (Number.isFinite(rid)) {
         // ID conocido pero sin fila ERV real → missing explícito (no inventar).
         if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
@@ -67,6 +69,7 @@ export async function enrichEstadoResponsableForBandeja(rows, idField = 'requeri
           responsableTipo: 'PENDIENTE',
           responsableFuente: 'sin_vigente',
         };
+        applyBandejaExpedienteContrato(row);
       }
       // Sin ID resoluble: no forzar canonicalMissing (evita falsos "Estado no disponible").
     }

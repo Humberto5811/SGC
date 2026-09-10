@@ -159,15 +159,13 @@ router.get('/listar-con-detalles', async (req, res, next) => {
 
     const result = await query(dataSql, params);
     const roleLabels = Object.values(ETAPAS).map((v) => v.responsable);
-    const rows = (await enrichRequerimientoRowsWithCcp(result.rows || [])).map((row) => {
-      // Columna Responsable: persona creadora, no el rol de etapa ("Usuario AU")
-      const persona = resolveResponsablePersonaDisplay(row, roleLabels);
-      return {
-        ...row,
-        responsable_actual: persona,
-        responsableActual: persona,
-      };
-    });
+    const rows = await enrichRequerimientoRowsWithCcp(result.rows || []);
+    const { enrichEstadoResponsableForBandeja } = await import('../lib/enrichEstadoResponsable.js');
+    await enrichEstadoResponsableForBandeja(rows, 'id');
+    for (const row of rows) {
+      row.creador_display = resolveResponsablePersonaDisplay(row, roleLabels);
+      row.creadorDisplay = row.creador_display;
+    }
 
     res.json({
       data: rows,

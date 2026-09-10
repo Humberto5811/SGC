@@ -4,6 +4,7 @@
  * Sin ERV / canonicalMissing: NUNCA reinfiere por evidencia ni legacy.
  */
 import { getEstadoCatalogEntry } from './estadoCatalogo.js';
+import { calcDiasEnEstado } from '../../utils/trazabilidad.js';
 
 export const TIPO_RESPONSABLE_UI = Object.freeze({
   PERSONA: 'PERSONA',
@@ -237,5 +238,22 @@ export function adaptEstadoResponsable(row = {}) {
   };
 }
 
+export function calcDiasEnEstadoVigente(row = {}) {
+  const bc = row.bandeja_contrato;
+  if (bc?.fecha_estado_vigente) {
+    return calcDiasEnEstado(bc.fecha_estado_vigente);
+  }
+  const adapted = adaptEstadoResponsable(row);
+  if (adapted.actualizadoAt) return calcDiasEnEstado(adapted.actualizadoAt);
+  if (row.dias_en_estado != null) return Number(row.dias_en_estado) || 0;
+  return calcDiasEnEstado(row.fecha_estado_actual || row.fechaEstadoActual);
+}
+
 export { ESTADO_NO_DISPONIBLE, PENDIENTE_LABEL };
-export default { adaptEstadoResponsable, TIPO_RESPONSABLE_UI, PENDIENTE_LABEL, ESTADO_NO_DISPONIBLE };
+export default {
+  adaptEstadoResponsable,
+  TIPO_RESPONSABLE_UI,
+  PENDIENTE_LABEL,
+  ESTADO_NO_DISPONIBLE,
+  calcDiasEnEstadoVigente,
+};

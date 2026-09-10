@@ -8,14 +8,20 @@ import { reqShared, todasObservaciones, historialHtml, showObservacionDirigidaMo
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 import {
   renderFilterBarHtml, readFilterParams,
-  renderSummaryCardsHtml, updateSummaryCards, wrapBandejaTable,
-  renderTraceRowCells, renderActionMenuCell, bindActionMenus, bindBandejaToolbar,
+  renderSummaryCardsHtml, updateSummaryCards,
+  bindActionMenus, bindBandejaToolbar,
   sortBandejaRows, bindSortHandlers, mergeSortParams,
 } from '../../utils/trazabilidad.js';
-import { decMenuItems, decHiddenActions, estaEnDecAccionable } from '../../utils/bandejaActions.js';
+import { resolveBandejaAcciones } from '../../utils/bandejaAccionesResolver.js';
+import {
+  wrapBandejaExpedienteTable,
+  renderBandejaExpedienteRowCells,
+  renderBandejaExpedienteActionCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
+import { estaEnDecAccionable } from '../../utils/bandejaActions.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -66,15 +72,18 @@ async function loadDecList(sortOverride = {}, resetPage = false) {
       return;
     }
 
-    cont.innerHTML = wrapBandejaTable({
+    cont.innerHTML = wrapBandejaExpedienteTable({
       containerId: 'decList',
       prefix: 'dec',
       sortState: listSort,
-      bodyHtml: rows.map((r) => `
+      bodyHtml: rows.map((r) => {
+        const acc = resolveBandejaAcciones({ modulo: 'DEC', row: r, escFn: esc });
+        return `
         <tr data-req-id="${r.id}">
-          ${renderTraceRowCells(r, { prefix: 'dec', escFn: esc })}
-          ${renderActionMenuCell(r.id, decMenuItems(r), decHiddenActions(r))}
-        </tr>`).join(''),
+          ${renderBandejaExpedienteRowCells(r, { escFn: esc })}
+          ${renderBandejaExpedienteActionCell(r.id, acc.menuItems, acc.hiddenActionsHtml)}
+        </tr>`;
+      }).join(''),
     });
 
     bindTrazabilidadButtons(cont);

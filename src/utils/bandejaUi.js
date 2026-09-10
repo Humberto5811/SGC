@@ -348,10 +348,16 @@ function bandejaSortValue(row, field) {
     case 'tipo': return String(row.tipo || '');
     case 'sigamef': return getSigamefRaw(row);
     case 'denominacion': return getRowDescripcionRaw(row);
-    case 'estado': return String(row.estado || row.estado_actual || row.estadoActual || '');
+    case 'estado':
+      return String(row.estado_label_vigente || row.bandeja_contrato?.estado?.label || row.estado || row.estado_actual || row.estadoActual || '');
+    case 'etapa':
+      return String(row.etapa_label_vigente || row.bandeja_contrato?.etapa?.label || '');
     case 'responsable':
-      // RC8.4F — priorizar responsableActual (contrato) sobre responsable_actual BD
-      return String(row.responsableActual || row.responsable_actual || '');
+      return String(
+        row.responsable_display || row.responsableDisplay
+        || row.bandeja_contrato?.responsable?.nombre
+        || row.responsableActual || row.responsable_actual || '',
+      );
     case 'dias':
       return Number(row.dias_en_estado ?? calcDiasEnEstado(row.fecha_estado_actual || row.fechaEstadoActual) ?? 0);
     case 'created_at':
