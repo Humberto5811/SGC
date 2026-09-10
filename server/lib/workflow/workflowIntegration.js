@@ -118,28 +118,47 @@ export function buildObservacionDomainMutator({
   origenSubmodulo = 'Evaluación de Requerimiento',
   documentos = [],
   origen = 'EVALUACION',
+  usuarioDestinoId = null,
+  usuarioOrigenId = null,
+  responsableRecomendadoId = null,
+  reasignacionManual = false,
 } = {}) {
   return async function observacionMutator(client, { expediente_id, row }) {
     const now = new Date().toISOString();
     const expedienteId = Number(expediente_id);
+    const uidDest = usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))
+      ? Number(usuarioDestinoId)
+      : null;
+    const uidOrig = usuarioOrigenId != null && Number.isFinite(Number(usuarioOrigenId))
+      ? Number(usuarioOrigenId)
+      : null;
+    const destinoCodigo = destinoSubmodulo === 'Registro de Requerimiento'
+      ? 'REGISTRO_REQUERIMIENTO'
+      : String(destinoSubmodulo || '').slice(0, 80);
 
     // 1. Insertar observación canónica en workflow_observaciones (mismo tx).
     const { rows } = await client.query(
       `INSERT INTO workflow_observaciones
          (expediente_id, origen, estado, emitida_por, responsable_subsanacion,
-          motivo, documentos, dias_plazo, emitida_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          motivo, documentos, dias_plazo, emitida_at,
+          origen_submodulo_codigo, destino_submodulo_codigo,
+          usuario_origen_id, usuario_destino_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
         expedienteId,
         String(origen || 'EVALUACION'),
         'OBS_EMITIDA',
         String(usuarioEmisor || 'SISTEMA'),
-        String(responsableSubsanacion || ''),
+        String(responsableSubsanacion || destinoPersona || ''),
         String(motivo || ''),
         JSON.stringify(Array.isArray(documentos) ? documentos : []),
         5,
         now,
+        String(origenSubmodulo || '').slice(0, 80),
+        destinoCodigo,
+        uidOrig,
+        uidDest,
       ],
     );
     const observacionId = rows[0]?.id || null;
@@ -162,8 +181,11 @@ export function buildObservacionDomainMutator({
       origen: 'GERENTE',
       origen_submodulo: String(origenSubmodulo || 'Evaluación de Requerimiento'),
       destino_submodulo: String(destinoSubmodulo || 'Registro de Requerimiento'),
-      destino_etapa: String(destinoEtapa || 'REGISTRADO'),
+      destino_etapa: String(destinoEtapa || 'REGISTRO'),
       destino_persona: String(destinoPersona || responsableSubsanacion || ''),
+      usuario_destino_id: uidDest,
+      responsable_recomendado_id: responsableRecomendadoId,
+      reasignacion_manual: reasignacionManual === true,
     });
 
     // 3. Persistir payload actualizado con el MISMO tx.

@@ -4,6 +4,7 @@
  */
 import { esc, calcDiasEnEstado, diasLabel, fmtDateTime } from './trazabilidad.js';
 import { renderEstadoBadgeHtml } from '../ui/workflow/EstadoBadge.js';
+import { renderEtapaBadgeHtml } from '../ui/workflow/EtapaBadge.js';
 import { renderResponsableBadgeHtml } from '../ui/workflow/ResponsableBadge.js';
 import { adaptEstadoResponsable } from '../ui/workflow/adaptEstadoResponsable.js';
 import {
@@ -32,15 +33,25 @@ export function bandejaExpedienteStandardStyles() {
     }
     .sgc-bandeja-standard .req-list-table tbody tr { height: 36px; max-height: 40px; }
     .sgc-bandeja-standard .req-col-fecha { width: 92px; white-space: nowrap; font-size: 0.75rem; color: #495057; }
-    .sgc-bandeja-standard .req-col-etapa { width: 118px; max-width: 140px; }
-    .sgc-bandeja-standard .req-col-estado-cell { width: 150px; max-width: 180px; }
-    .sgc-bandeja-standard .req-etapa-text {
-      display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      font-size: 0.72rem; color: #495057;
+    .sgc-bandeja-standard .req-col-etapa { width: 150px; max-width: 150px; }
+    .sgc-bandeja-standard .req-col-estado-cell { width: 155px; max-width: 155px; }
+    .sgc-bandeja-standard .req-col-resp { width: 175px; max-width: 175px; }
+    .sgc-bandeja-standard .req-col-dias { width: 58px; max-width: 60px; }
+    .sgc-bandeja-standard .req-col-acc { width: 42px; max-width: 45px; }
+    .sgc-bandeja-standard .sgc-etapa-badge,
+    .sgc-bandeja-standard .sgc-estado-badge,
+    .sgc-bandeja-standard .sgc-responsable-badge {
+      max-width: 100%;
+      min-height: 24px;
+      max-height: 26px;
     }
+    .sgc-bandeja-standard .sgc-etapa-badge__text { max-width: 138px; }
+    .sgc-bandeja-standard .sgc-estado-badge__text { max-width: 143px; }
+    .sgc-bandeja-standard .sgc-responsable-badge__text { max-width: 163px; }
+    .sgc-bandeja-standard .sgc-etapa-badge__text,
     .sgc-bandeja-standard .sgc-estado-badge__text,
     .sgc-bandeja-standard .sgc-responsable-badge__text {
-      max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       display: inline-block; vertical-align: bottom;
     }
   `;
@@ -132,6 +143,10 @@ export function renderBandejaExpedienteRowCells(row, opts = {}) {
     icono: visual.icono,
     tooltip: visual.tooltip,
   });
+  const etapaHtml = renderEtapaBadgeHtml({
+    etapaLabel: visual.etapaLabel,
+    etapaCodigo: visual.etapaCodigo,
+  });
   const respHtml = renderResponsableBadgeHtml({
     responsableTipo: visual.responsableTipo,
     responsableNombre: visual.responsableNombre,
@@ -148,7 +163,7 @@ export function renderBandejaExpedienteRowCells(row, opts = {}) {
     <td class="req-col-tipo">${tipoBadgeHtml(row.tipo, escFn)}</td>
     <td class="req-col-desc"><span class="req-desc-text" title="${escFn(descFull)}">${escFn(descShort || '—')}</span></td>
     <td class="req-col-centro"><span class="req-centro-text" title="${escFn(row.centro_nombre || row.centro || '—')}">${escFn(row.centro_nombre || row.centro || '—')}</span></td>
-    <td class="req-col-etapa"><span class="req-etapa-text" title="${escFn(visual.etapaLabel)}">${escFn(visual.etapaLabel)}</span></td>
+    <td class="req-col-etapa">${etapaHtml}</td>
     <td class="req-col-estado-cell">${estadoHtml}</td>
     <td class="req-col-resp">${respHtml}</td>
     <td class="req-col-dias text-center">${diasBadgeCompact(visual.dias)}</td>`;

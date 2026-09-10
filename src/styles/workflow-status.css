@@ -142,6 +142,38 @@
   border-color: var(--sgc-status-unknown-border);
 }
 
+.sgc-etapa-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sgc-workflow-gap);
+  max-width: 100%;
+  min-height: var(--sgc-workflow-min-height);
+  padding: var(--sgc-workflow-padding-y) var(--sgc-workflow-padding-x);
+  border-radius: var(--sgc-workflow-radius);
+  border: 1px solid var(--sgc-resp-border);
+  background: var(--sgc-resp-bg);
+  color: var(--sgc-etapa-text);
+  font-family: var(--sgc-workflow-font-family);
+  font-size: var(--sgc-workflow-font-size);
+  font-weight: var(--sgc-workflow-font-weight-resp);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.sgc-etapa-badge__icon {
+  font-size: var(--sgc-workflow-icon-size);
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.sgc-etapa-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .sgc-responsable-badge {
   display: inline-flex;
   align-items: center;

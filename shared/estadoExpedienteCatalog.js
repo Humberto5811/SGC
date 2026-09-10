@@ -31,6 +31,18 @@ export const SITUACIONES = Object.freeze({
 
 /** @type {ReadonlyArray<{ codigo: string, label: string, etapa: string, prioridad: number, scope: string, familia: string, tipos: string[], terminal?: boolean, reversible?: boolean, aliases?: string[], descripcion?: string, reserved?: boolean }>} */
 const ESTADOS_DEF = [
+  // —— Estado transversal piloto RC8.17.2B (Registro / Evaluación) ——
+  {
+    codigo: 'EN_TRAMITE',
+    label: 'En trámite',
+    etapa: '',
+    prioridad: 90,
+    scope: SCOPE.GLOBAL,
+    familia: 'situacion_transversal',
+    tipos: ['todos'],
+    descripcion: 'Situación transversal visible en bandeja; no reemplaza eventos de trazabilidad',
+  },
+
   // —— Globales flujo común ——
   // Estado inicial canónico al crear requerimiento (bienes / servicios / locación).
   // Aliases cubren la columna negocio `estado = 'Registrado'` y códigos históricos.

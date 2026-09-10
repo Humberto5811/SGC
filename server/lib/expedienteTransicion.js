@@ -154,18 +154,83 @@ export async function transicionarExpediente({
 
     const etapaDestino = transicion.etapa_destino;
     const cambiaUbicacion = !!transicion.cambia_ubicacion;
-    const etapaEfectiva = cambiaUbicacion ? etapaDestino : etapaOrigen;
-    const metaEtapa = getEtapaMeta(etapaEfectiva) || getEtapaMeta('REGISTRO');
+    let etapaEfectiva = cambiaUbicacion ? etapaDestino : etapaOrigen;
+    let metaEtapa = getEtapaMeta(etapaEfectiva) || getEtapaMeta('REGISTRO');
     const labels = buildEstadoLabels(
       etapaEfectiva,
       cambiaUbicacion ? etapaEfectiva : (row.estado || etapaEfectiva),
     );
 
-    const resp = resolverResponsableSincero({
+    let resp = resolverResponsableSincero({
       usuarioDestinoId,
       unidadDestino: unidadDestino || transicion.responsable_destino || metaEtapa.responsableLabel,
       etapaCodigo: etapaEfectiva,
     });
+
+    // RC8.17.2B-F1 — piloto Registro/Evaluación (focalizado, no global).
+    let usuarioDestinoEfectivo = usuarioDestinoId;
+    let metaTransicion = { ...(metadata || {}) };
+    if (eventoCodigo === 'REQUERIMIENTO_REGISTRADO') {
+      const { applyPilotCreacion, getPilotEstadoLabels, isPilotEvento } = await import('./pilotRegistroEvaluacion.js');
+      const pilot = await applyPilotCreacion({
+        resp,
+        usuarioOrigenId,
+        usuarioDestinoId,
+        actorRol,
+        row,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        etapaCodigo: etapaEfectiva,
+        client: tx,
+      });
+      resp = pilot.resp;
+      if (pilot.usuarioDestinoId != null) usuarioDestinoEfectivo = pilot.usuarioDestinoId;
+      if (isPilotEvento(eventoCodigo)) {
+        const pilotLabels = getPilotEstadoLabels();
+        labels.estadoCodigo = pilotLabels.estadoCodigo;
+        labels.estadoLabel = pilotLabels.estadoLabel;
+      }
+    } else if (eventoCodigo === 'REQUERIMIENTO_ENVIADO_EVALUACION') {
+      const { applyPilotEnvioEvaluacion, getPilotEstadoLabels, isPilotEvento } = await import('./pilotRegistroEvaluacion.js');
+      const pilot = await applyPilotEnvioEvaluacion({
+        resp,
+        usuarioDestinoId,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        requerimientoId: rid,
+        row,
+        etapaCodigo: etapaEfectiva,
+        client: tx,
+      });
+      resp = pilot.resp;
+      if (pilot.resp?.responsableUsuarioId != null) {
+        usuarioDestinoEfectivo = pilot.resp.responsableUsuarioId;
+      }
+      if (pilot.ambiguedad) {
+        metaTransicion.pilot_director_ambiguo = pilot.ambiguedad;
+      }
+      if (isPilotEvento(eventoCodigo)) {
+        const pilotLabels = getPilotEstadoLabels();
+        labels.estadoCodigo = pilotLabels.estadoCodigo;
+        labels.estadoLabel = pilotLabels.estadoLabel;
+      }
+    } else if (eventoCodigo === 'EVALUACION_OBSERVADA') {
+      const { applyPilotObservacionEvaluacionRegistro } = await import('./pilotRegistroEvaluacion.js');
+      const pilotObs = applyPilotObservacionEvaluacionRegistro({
+        resp,
+        usuarioDestinoId,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        metadata: metaTransicion,
+        etapaEfectiva,
+        labels,
+      });
+      resp = pilotObs.resp;
+      etapaEfectiva = pilotObs.etapaEfectiva;
+      metaEtapa = getEtapaMeta(etapaEfectiva) || metaEtapa;
+      Object.assign(labels, pilotObs.labels);
+      metaTransicion = { ...metaTransicion, ...pilotObs.metaExtra };
+      if (pilotObs.usuarioDestinoEfectivo != null) {
+        usuarioDestinoEfectivo = pilotObs.usuarioDestinoEfectivo;
+      }
+    }
 
     // 1. Mutación de dominio PRIMERO (misma tx) — si falla, nada se confirma
     let domainResults = null;
@@ -221,7 +286,7 @@ export async function transicionarExpediente({
         evento: eventoCodigo,
         motivo: motivo || null,
         etapa_origen: etapaOrigen,
-        ...(metadata || {}),
+        ...metaTransicion,
       },
       origenEscritura,
     });
@@ -232,14 +297,15 @@ export async function transicionarExpediente({
     }
 
     // 5. Legacy sync
-    const estadoNegocio = cambiaUbicacion
+    const pilotObsReg = metaTransicion.pilot_observacion_destino_registro === true;
+    const estadoNegocio = (cambiaUbicacion || pilotObsReg)
       ? (getEstadoNegocioFromEtapa(mapEtapaDestinoBD(etapaEfectiva)) || labels.estadoLabel)
       : null;
-    if (cambiaUbicacion || usuarioDestinoId != null || unidadDestino) {
+    if (cambiaUbicacion || pilotObsReg || usuarioDestinoEfectivo != null || unidadDestino) {
       await syncLegacyRequerimiento(tx, {
         requerimientoId: rid,
         etapaCodigo: etapaEfectiva,
-        estadoNegocio: cambiaUbicacion ? estadoNegocio : null,
+        estadoNegocio: (cambiaUbicacion || pilotObsReg) ? estadoNegocio : null,
         responsableTipo: resp.responsableTipo,
         responsableUsuarioId: resp.responsableUsuarioId,
         responsableUnidad: resp.responsableUnidad,

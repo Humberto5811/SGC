@@ -65,9 +65,40 @@ export function bandejaGlobalStyles() {
       border: 1px solid #e9ecef; border-radius: 8px; background: #fff;
       padding: 0.65rem 1rem; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.06);
     }
+    .sgc-kpi-card--compact {
+      padding: 0.35rem 0.45rem; border-radius: 6px; min-height: 52px;
+      display: flex; flex-direction: column; justify-content: center;
+    }
     .sgc-kpi-card .kpi-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: .04em; color: #6c757d; }
+    .sgc-kpi-card--compact .kpi-label { font-size: 0.62rem; letter-spacing: .03em; line-height: 1.1; margin-bottom: 1px; }
     .sgc-kpi-card .kpi-value { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+    .sgc-kpi-card--compact .kpi-value { font-size: 1.05rem; line-height: 1.1; }
     .sgc-search-bar { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 0.75rem; }
+    .sgc-search-bar--compact {
+      padding: 0.35rem 0.5rem; margin-bottom: 0.5rem !important;
+    }
+    .sgc-search-bar--compact .form-label { font-size: 0.65rem; margin-bottom: 0.1rem; line-height: 1; }
+    .sgc-search-bar--compact .form-control,
+    .sgc-search-bar--compact .form-select { height: 32px; padding: 0.2rem 0.45rem; font-size: 0.78rem; }
+    .sgc-search-bar--compact .btn { height: 32px; padding: 0.2rem 0.55rem; font-size: 0.78rem; white-space: nowrap; }
+    .sgc-filter-row--compact { display: flex; flex-wrap: nowrap; align-items: flex-end; gap: 0.35rem; }
+    .sgc-filter-row--compact .sgc-filter-field { flex: 0 0 auto; min-width: 0; }
+    .sgc-filter-row--compact .sgc-filter-field--buscar { flex: 1 1 180px; min-width: 120px; }
+    .sgc-filter-row--compact .sgc-filter-field--estado { width: 118px; }
+    .sgc-filter-row--compact .sgc-filter-field--resp { width: 118px; }
+    .sgc-filter-row--compact .sgc-filter-field--area { width: 118px; }
+    .sgc-filter-row--compact .sgc-filter-field--fecha { width: 118px; }
+    .sgc-filter-row--compact .sgc-filter-actions { display: flex; gap: 0.35rem; flex: 0 0 auto; }
+    @media (max-width: 1199.98px) {
+      .sgc-filter-row--compact { flex-wrap: wrap; }
+      .sgc-filter-row--compact .sgc-filter-field--buscar { flex: 1 1 100%; }
+    }
+    @media (max-width: 767.98px) {
+      .sgc-filter-row--compact .sgc-filter-field,
+      .sgc-filter-row--compact .sgc-filter-field--buscar { flex: 1 1 100%; width: 100%; }
+      .sgc-filter-row--compact .sgc-filter-actions { width: 100%; }
+      .sgc-filter-row--compact .sgc-filter-actions .btn { flex: 1 1 auto; }
+    }
     .req-col-timeline { width: 42px; text-align: center; }
     .req-col-req { width: 100px; }
     .req-col-tipo { width: 120px; }
@@ -206,14 +237,32 @@ export function trazaIconHtml(id) {
   return `<button type="button" class="btn btn-link btn-sm p-0 req-traza text-secondary" data-id="${id}" title="Ver timeline" onclick="event.stopPropagation()"><i class="bi bi-clock-history"></i></button>`;
 }
 
-export function renderSummaryCardsHtml(containerId = 'trazaSummary') {
+const KPI_LABELS_DEFAULT = Object.freeze([
+  { key: 'total', label: 'Total Expedientes', valueClass: 'text-dark' },
+  { key: 'enProceso', label: 'En Proceso', valueClass: 'text-primary' },
+  { key: 'observados', label: 'Observados', valueClass: 'text-danger' },
+  { key: 'retrasados', label: 'Retrasados', valueClass: 'text-orange' },
+  { key: 'finalizados', label: 'Finalizados', valueClass: 'text-success' },
+]);
+
+const KPI_LABELS_REGISTRO = Object.freeze([
+  { key: 'total', label: 'Total', valueClass: 'text-dark' },
+  { key: 'enProceso', label: 'En trámite', valueClass: 'text-primary' },
+  { key: 'observados', label: 'Obs. sin subsanar', valueClass: 'text-danger' },
+  { key: 'retrasados', label: 'Retrasados', valueClass: 'text-orange' },
+  { key: 'finalizados', label: 'Finalizados', valueClass: 'text-success' },
+]);
+
+export function renderSummaryCardsHtml(containerId = 'trazaSummary', opts = {}) {
+  const compact = !!opts.compact;
+  const labels = opts.registroCompact ? KPI_LABELS_REGISTRO : KPI_LABELS_DEFAULT;
+  const rowClass = compact ? 'row g-1 mb-2 traza-summary-cards traza-summary-cards--compact' : 'row g-2 mb-3 traza-summary-cards';
+  const cardClass = compact ? 'sgc-kpi-card sgc-kpi-card--compact' : 'sgc-kpi-card';
+  const colClass = compact ? 'col' : 'col-6 col-md';
   return `
-    <div id="${containerId}" class="row g-2 mb-3 traza-summary-cards">
-      <div class="col-6 col-md"><div class="sgc-kpi-card"><div class="kpi-label">Total Expedientes</div><div class="kpi-value text-dark" data-traza-kpi="total">0</div></div></div>
-      <div class="col-6 col-md"><div class="sgc-kpi-card"><div class="kpi-label">En Proceso</div><div class="kpi-value text-primary" data-traza-kpi="enProceso">0</div></div></div>
-      <div class="col-6 col-md"><div class="sgc-kpi-card"><div class="kpi-label">Observados</div><div class="kpi-value text-danger" data-traza-kpi="observados">0</div></div></div>
-      <div class="col-6 col-md"><div class="sgc-kpi-card"><div class="kpi-label">Retrasados</div><div class="kpi-value text-orange" data-traza-kpi="retrasados">0</div></div></div>
-      <div class="col-6 col-md"><div class="sgc-kpi-card"><div class="kpi-label">Finalizados</div><div class="kpi-value text-success" data-traza-kpi="finalizados">0</div></div></div>
+    <div id="${containerId}" class="${rowClass}">
+      ${labels.map(({ key, label, valueClass }) => `
+      <div class="${colClass}"><div class="${cardClass}"><div class="kpi-label">${label}</div><div class="kpi-value ${valueClass}" data-traza-kpi="${key}">0</div></div></div>`).join('')}
     </div>`;
 }
 
@@ -230,6 +279,44 @@ export function updateSummaryCards(rows, containerId = 'trazaSummary') {
 export function renderFilterBarHtml(prefix = 'req', opts = {}) {
   const execBtn = opts.hideExecutive ? '' : `
           <button type="button" class="btn btn-sm btn-outline-dark flex-grow-1" id="${prefix}VistaEjecutiva" title="Vista compacta"><i class="bi bi-layout-text-window"></i> Vista Ejecutiva</button>`;
+  if (opts.compact) {
+    return `
+    <div class="sgc-search-bar sgc-search-bar--compact mb-2">
+      <div class="sgc-filter-row--compact">
+        <div class="sgc-filter-field sgc-filter-field--buscar">
+          <label class="form-label" for="${prefix}FiltroBuscar">Buscar</label>
+          <input type="text" class="form-control form-control-sm" id="${prefix}FiltroBuscar" placeholder="REQ, descripción, SIGAMEF…">
+        </div>
+        <div class="sgc-filter-field sgc-filter-field--estado">
+          <label class="form-label" for="${prefix}FiltroEstado">Estado</label>
+          <select class="form-select form-select-sm" id="${prefix}FiltroEstado">
+            <option value="">Todos</option>
+            ${Object.entries(ETAPA_LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
+          </select>
+        </div>
+        <div class="sgc-filter-field sgc-filter-field--resp">
+          <label class="form-label" for="${prefix}FiltroResponsable">Responsable</label>
+          <input type="text" class="form-control form-control-sm" id="${prefix}FiltroResponsable" placeholder="Nombre o rol">
+        </div>
+        <div class="sgc-filter-field sgc-filter-field--area">
+          <label class="form-label" for="${prefix}FiltroArea">Área Usuaria</label>
+          <input type="text" class="form-control form-control-sm" id="${prefix}FiltroArea" placeholder="Facultad…">
+        </div>
+        <div class="sgc-filter-field sgc-filter-field--fecha">
+          <label class="form-label" for="${prefix}FiltroFechaDesde">Desde</label>
+          <input type="date" class="form-control form-control-sm" id="${prefix}FiltroFechaDesde">
+        </div>
+        <div class="sgc-filter-field sgc-filter-field--fecha">
+          <label class="form-label" for="${prefix}FiltroFechaHasta">Hasta</label>
+          <input type="date" class="form-control form-control-sm" id="${prefix}FiltroFechaHasta">
+        </div>
+        <div class="sgc-filter-actions">
+          <button type="button" class="btn btn-sm btn-primary" id="${prefix}FiltroBtn" title="Filtrar"><i class="bi bi-funnel"></i> Filtrar</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="${prefix}FiltroLimpiar" title="Limpiar"><i class="bi bi-x-lg"></i> Limpiar</button>${execBtn}
+        </div>
+      </div>
+    </div>`;
+  }
   return `
     <div class="sgc-search-bar mb-3">
       <div class="row g-2 align-items-end">

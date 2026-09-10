@@ -119,6 +119,7 @@ export async function ejecutarRegistroCrear(requerimientoId, usuario = 'Sistema'
     metadata: {
       tipo_contratacion: row?.tipo || 'BIEN',
       observacion: 'Registro inicial del requerimiento',
+      usuario_destino_id: req?.user?.id ?? null,
     },
     legacyHandler: async () => {
       const facade = getRegistroMigrationFacade();

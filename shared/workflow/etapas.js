@@ -38,13 +38,13 @@ const TODOS = Object.freeze(['BIEN', 'SERVICIO', 'LOCACION', 'VIATICO_PASAJE_AER
 /** Meta por etapa: label, submódulo, responsable y tipos permitidos. */
 const ETAPA_META_DEF = Object.freeze({
   REGISTRO: Object.freeze({
-    codigo: 'REGISTRO', label: 'Registro',
+    codigo: 'REGISTRO', label: 'Registro de Requerimientos',
     submoduloCodigo: 'REGISTRO_REQUERIMIENTO', submoduloLabel: 'Registro de Requerimiento',
     responsableCodigo: 'USUARIO_AU', responsableLabel: 'Usuario AU',
     tipos: TODOS, terminal: false,
   }),
   EVALUACION: Object.freeze({
-    codigo: 'EVALUACION', label: 'Evaluación',
+    codigo: 'EVALUACION', label: 'Evaluación de Requerimientos',
     submoduloCodigo: 'EVALUACION_REQUERIMIENTO', submoduloLabel: 'Evaluación de Requerimiento',
     responsableCodigo: 'DIRECTOR_GERENTE', responsableLabel: 'Director / Gerente',
     tipos: TODOS, terminal: false,

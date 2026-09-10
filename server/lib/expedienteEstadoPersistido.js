@@ -375,15 +375,19 @@ export async function materializarExpedienteEstadoVigenteSiAusente(
   }
 
   const meta = getEtapaMeta('REGISTRO');
+  const { resolveUsuarioIdDesdeActor } = await import('./pilotRegistroEvaluacion.js');
+  const creadorId = await resolveUsuarioIdDesdeActor({ actorRol, row }, client);
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const tr = await transicionarExpediente({
     requerimientoId: rid,
     evento: eventoInicial,
+    usuarioDestinoId: creadorId,
     unidadDestino: row.responsable_actual || meta?.responsableLabel || 'Usuario AU',
     motivo: 'Materialización canónica expediente_estado_vigente',
     metadata: {
       client_request_id: `materializar-erv:${rid}:${eventoInicial}`,
       via: 'materializarExpedienteEstadoVigenteSiAusente',
+      usuario_destino_id: creadorId,
     },
     actorRol,
     client,

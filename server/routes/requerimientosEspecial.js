@@ -237,6 +237,7 @@ async function guardRequirementAccessOrRoAcceso(req, res, next) {
 // Guard de alcance en operaciones por id (especiales)
 router.use('/:requerimientoId/trazabilidad', guardRequirementAccessOrRoAcceso);
 router.use('/:requerimientoId/solicitar-aprobacion', guardRequirementAccess);
+router.use('/:requerimientoId/candidatos-observacion-destino', guardRequirementAccess);
 router.use('/:requerimientoId/observar', guardRequirementAccess);
 router.use('/:requerimientoId/subsanar', guardRequirementAccess);
 router.use('/:requerimientoId/aprobar-evaluacion', guardRequirementAccess);
@@ -261,12 +262,22 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
     }
 
     // Fase 1A — transición B: REGISTRO → EVALUACION
+    const { resolveDirectorEvaluacionParaRequerimiento } = await import('../lib/pilotRegistroEvaluacion.js');
+    const directorEval = await resolveDirectorEvaluacionParaRequerimiento(
+      requerimientoId,
+      reqCheck.rows[0],
+    );
     const result = await runWorkflowTransition({
       moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
       eventoCodigo: 'REQUERIMIENTO_ENVIADO_EVALUACION',
       expedienteId: requerimientoId,
       req,
-      metadata: { tipo_contratacion: req.body?.tipo_contratacion || 'BIEN' },
+      metadata: {
+        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+        usuario_destino_id: directorEval.usuarioId,
+        unidad_destino: ETAPAS.EVALUACION.responsable,
+        pilot_director_ambiguo: directorEval.ambiguo ? directorEval : undefined,
+      },
       legacyHandler: async () => {
         let payload = {};
         try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
@@ -287,11 +298,14 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
             const tr = await transicionarExpediente({
               requerimientoId,
               evento: 'REQUERIMIENTO_ENVIADO_EVALUACION',
+              usuarioDestinoId: directorEval.usuarioId,
               unidadDestino: ETAPAS.EVALUACION.responsable,
               motivo: 'Solicitud de aprobación enviada a evaluación',
               metadata: {
                 client_request_id: req.body?.client_request_id || `reg-derivar:${requerimientoId}`,
                 via: 'requerimientos/derivar:legacy',
+                usuario_destino_id: directorEval.usuarioId,
+                pilot_director_ambiguo: directorEval.ambiguo ? directorEval : undefined,
               },
               actorRol: usuario || 'Usuario AU',
             });
@@ -328,14 +342,43 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/requerimientos/:requerimientoId/candidatos-observacion-destino
+router.get('/:requerimientoId/candidatos-observacion-destino', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { listarCandidatosObservacionDestino } = await import('../lib/candidatosObservacionDestino.js');
+    const data = await listarCandidatosObservacionDestino({
+      requerimientoId,
+      destinoSubmodulo: req.query.destino_submodulo || req.query.destinoSubmodulo || '',
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message });
+    next(err);
+  }
+});
+
 // PUT /api/requerimientos/:requerimientoId/observar
 router.put('/:requerimientoId/observar', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
     const {
       motivo, usuario, destino_submodulo, destino_etapa, destino_persona,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
       origen_submodulo, accion, observacion_id, observacion_padre_id, observacionPadreId,
     } = req.body || {};
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : null;
+    const reasignacionManual = reasignacionManualBody === true
+      || (usuarioDestinoId && responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
 
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
@@ -359,6 +402,7 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
     // Idempotencia estable: client_request_id si llega; si no, fallback
     // expediente+evento+actor+motivo_hash+ciclo (sin timestamp aleatorio).
     const responsableSubsanacion = destino_persona || req.body?.responsable_subsanacion || '';
+    const destinoEtapaCanon = destino_etapa === 'REGISTRADO' ? 'REGISTRO' : (destino_etapa || 'REGISTRO');
     const result = await runWorkflowTransition({
       moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
       eventoCodigo: 'EVALUACION_OBSERVADA',
@@ -369,7 +413,12 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
         client_request_id: req.body?.client_request_id || null,
         motivo,
         ciclo_observacion: req.body?.ciclo_observacion ?? null,
-        // responsable de subsanación: actualiza responsable_actual sin mover etapa.
+        destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
+        destino_etapa: destinoEtapaCanon,
+        destino_persona: responsableSubsanacion,
+        usuario_destino_id: usuarioDestinoId,
+        responsable_recomendado_id: responsableRecomendadoId,
+        reasignacion_manual: reasignacionManual,
         responsable_destino: responsableSubsanacion,
       },
       // En el camino motor, el domainMutator ejecuta DENTRO de la misma transacción:
@@ -384,11 +433,15 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
         usuarioEmisor: usuario || (req.user && (req.user.username || req.user.dni)) || 'SISTEMA',
         responsableSubsanacion,
         destinoSubmodulo: destino_submodulo || 'Registro de Requerimiento',
-        destinoEtapa: destino_etapa || 'REGISTRADO',
-        destinoPersona,
+        destinoEtapa: destinoEtapaCanon,
+        destinoPersona: destino_persona || responsableSubsanacion || '',
         origenSubmodulo: origen_submodulo || 'Evaluación de Requerimiento',
         documentos: req.body?.documentos_subsanacion || [],
         origen: 'EVALUACION',
+        usuarioDestinoId,
+        usuarioOrigenId: req.user?.id ?? null,
+        responsableRecomendadoId,
+        reasignacionManual,
       }),
       legacyHandler: async () => {
         let payload = {};
@@ -419,11 +472,18 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
         const tr = await transicionarExpediente({
           requerimientoId,
           evento: 'EVALUACION_OBSERVADA',
+          usuarioDestinoId,
           unidadDestino: ETAPAS.REGISTRADO?.responsable || ETAPAS.REGISTRO?.responsable || 'Usuario AU',
           motivo,
           metadata: {
             client_request_id: req.body?.client_request_id || `eval-obs:${requerimientoId}`,
             via: 'requerimientos/observar:legacy',
+            destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
+            destino_etapa: destinoEtapaCanon,
+            destino_persona: responsableSubsanacion,
+            usuario_destino_id: usuarioDestinoId,
+            responsable_recomendado_id: responsableRecomendadoId,
+            reasignacion_manual: reasignacionManual,
           },
           actorRol: usuario || 'Gerente',
         });

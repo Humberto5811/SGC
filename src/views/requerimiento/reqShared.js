@@ -211,13 +211,17 @@ function buildDestinoSelectorsHtml(id, defaultSubmodulo = '') {
       </div>
       <div class="col-md-6">
         <label class="form-label small fw-semibold mb-1">Persona destino</label>
+        <input type="hidden" id="${id}_destUid" value="">
+        <input type="hidden" id="${id}_destRecomendadoId" value="">
+        <input type="hidden" id="${id}_destPersonaNombre" value="">
         <div class="input-group input-group-sm mb-1">
-          <input type="text" id="${id}_buscarUsr" class="form-control" placeholder="Buscar en Usuarios y Permisos…" />
-          <button type="button" id="${id}_btnBuscarUsr" class="btn btn-outline-primary" title="Buscar usuario"><i class="bi bi-search"></i></button>
+          <input type="text" id="${id}_buscarUsr" class="form-control" placeholder="Buscar persona…" autocomplete="off" />
+          <button type="button" id="${id}_btnBuscarUsr" class="btn btn-outline-primary" title="Buscar"><i class="bi bi-search"></i></button>
         </div>
+        <div id="${id}_usrSugerido" class="mb-1"></div>
         <div id="${id}_usrResults" class="mb-1" style="display:none"></div>
-        <select id="${id}_destPer" class="form-select form-select-sm"></select>
-        <input type="text" id="${id}_destPerOtro" class="form-control form-control-sm mt-1" placeholder="O escriba otro nombre…">
+        <select id="${id}_destPer" class="form-select form-select-sm d-none"></select>
+        <input type="text" id="${id}_destPerOtro" class="form-control form-control-sm mt-1 d-none" placeholder="O escriba otro nombre…">
       </div>
     </div>`;
 }
@@ -227,29 +231,116 @@ function formatUsuarioNombre(u) {
   return String(u.nombre || [u.apellidos, u.nombres].filter(Boolean).join(' ').trim() || u.username || u.dni || '').trim();
 }
 
-function wireDestinoSelectors(id) {
+function renderCandidatoPickBtn(c, { destacado = false } = {}) {
+  const det = [c.username, c.cargo].filter(Boolean).join(' · ');
+  const cls = destacado ? 'list-group-item-primary' : '';
+  const badge = c.etiqueta ? `<span class="badge bg-secondary ms-1">${esc(c.etiqueta)}</span>` : '';
+  return `<button type="button" class="list-group-item list-group-item-action py-1 px-2 usr-pick ${cls}"
+    data-uid="${esc(String(c.id))}" data-nom="${esc(c.nombre || '')}">
+    <strong>${destacado ? '★ ' : ''}${esc(c.nombre || '')}</strong>${badge}
+    ${det ? `<br><span class="text-muted small">${esc(det)}</span>` : ''}
+  </button>`;
+}
+
+function wireDestinoSelectors(id, opts = {}) {
+  const requerimientoId = opts.requerimientoId || null;
   const subEl = document.getElementById(`${id}_destSub`);
   const perEl = document.getElementById(`${id}_destPer`);
   const otroEl = document.getElementById(`${id}_destPerOtro`);
   const buscarEl = document.getElementById(`${id}_buscarUsr`);
   const btnBuscar = document.getElementById(`${id}_btnBuscarUsr`);
   const resultsEl = document.getElementById(`${id}_usrResults`);
-  const refreshPersonas = () => {
+  const sugeridoEl = document.getElementById(`${id}_usrSugerido`);
+  const uidEl = document.getElementById(`${id}_destUid`);
+  const recomEl = document.getElementById(`${id}_destRecomendadoId`);
+  const nombreEl = document.getElementById(`${id}_destPersonaNombre`);
+
+  let seleccion = { id: null, nombre: '' };
+
+  const seleccionarCandidato = (uid, nombre) => {
+    if (!uid) return;
+    seleccion = { id: Number(uid), nombre: String(nombre || '').trim() };
+    uidEl.value = String(seleccion.id);
+    nombreEl.value = seleccion.nombre;
+    buscarEl.value = seleccion.nombre;
+    resultsEl.style.display = 'none';
+    sugeridoEl.querySelectorAll('.usr-pick, .usr-pick-rec').forEach((b) => {
+      b.classList.toggle('active', String(b.dataset.uid) === String(uid));
+    });
+  };
+
+  const refreshPersonasLegacy = () => {
+    perEl.classList.remove('d-none');
+    otroEl.classList.remove('d-none');
+    sugeridoEl.innerHTML = '';
     const label = subEl.value;
     const personas = getPersonasForSubmodulo(label);
     perEl.innerHTML = personas.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('')
       + '<option value="__otro__">Otro…</option>';
   };
-  const seleccionarUsuario = (nombre) => {
-    if (!nombre) return;
-    perEl.value = '__otro__';
-    otroEl.value = nombre;
+
+  const cargarCandidatos = async (q = '') => {
+    if (!requerimientoId) {
+      refreshPersonasLegacy();
+      return;
+    }
+    sugeridoEl.innerHTML = '<div class="text-muted small">Cargando candidatos…</div>';
     resultsEl.style.display = 'none';
-    resultsEl.innerHTML = '';
-    buscarEl.value = nombre;
+    try {
+      const params = new URLSearchParams({
+        destino_submodulo: subEl.value || '',
+      });
+      if (q.trim().length >= 2) params.set('q', q.trim());
+      const resp = await api.get(`/requerimientos/${requerimientoId}/candidatos-observacion-destino?${params}`);
+      const data = resp?.data || resp;
+      if (!data?.soportado) {
+        refreshPersonasLegacy();
+        return;
+      }
+      perEl.classList.add('d-none');
+      otroEl.classList.add('d-none');
+      recomEl.value = data.recomendado?.id ? String(data.recomendado.id) : '';
+
+      let html = '';
+      if (data.recomendado_inactivo) {
+        html += `<div class="text-muted small mb-1">Responsable anterior: <strong>${esc(data.recomendado_inactivo.nombre)}</strong> (${esc(data.recomendado_inactivo.username || '')}) — inactivo</div>`;
+      }
+      if (data.recomendado) {
+        html += `<div class="small text-muted mb-1">Sugerido</div>`;
+        html += `<div class="list-group list-group-flush border rounded mb-1">${renderCandidatoPickBtn(data.recomendado, { destacado: true })}</div>`;
+        if (!seleccion.id) seleccionarCandidato(data.recomendado.id, data.recomendado.nombre);
+      }
+      if (data.candidatos?.length) {
+        html += `<div class="small text-muted mb-1">Otros usuarios elegibles</div>`;
+        html += `<div class="list-group list-group-flush border rounded" style="max-height:120px;overflow-y:auto">${data.candidatos.map((c) => renderCandidatoPickBtn(c)).join('')}</div>`;
+      }
+      if (!data.recomendado && !data.candidatos?.length) {
+        html = '<div class="text-muted small border rounded p-2">Sin personas elegibles para este destino.</div>';
+      }
+      sugeridoEl.innerHTML = html;
+      sugeridoEl.querySelectorAll('.usr-pick').forEach((b) => {
+        b.onclick = () => seleccionarCandidato(b.dataset.uid, b.dataset.nom);
+      });
+
+      if (q.trim().length >= 2) {
+        const filtrados = [...(data.recomendado ? [data.recomendado] : []), ...(data.candidatos || [])]
+          .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+        if (!filtrados.length) {
+          resultsEl.style.display = 'block';
+          resultsEl.innerHTML = '<div class="text-muted small p-2 border rounded">Sin coincidencias.</div>';
+        }
+      }
+    } catch (e) {
+      sugeridoEl.innerHTML = `<div class="alert alert-danger py-1 px-2 small mb-0">${esc(e.message)}</div>`;
+    }
   };
+
   const buscarUsuarios = async () => {
     const q = (buscarEl.value || '').trim();
+    if (requerimientoId) {
+      await cargarCandidatos(q);
+      return;
+    }
     if (q.length < 2) {
       alert('Ingrese al menos 2 caracteres para buscar.');
       return;
@@ -265,36 +356,52 @@ function wireDestinoSelectors(id) {
       }
       resultsEl.innerHTML = `<div class="list-group list-group-flush border rounded" style="max-height:140px;overflow-y:auto">${rows.map((u) => {
         const nom = formatUsuarioNombre(u);
-        const det = [u.dni, u.cargo, u.descripcion_area || u.descripcionArea].filter(Boolean).join(' · ');
-        return `<button type="button" class="list-group-item list-group-item-action py-1 px-2 usr-pick" data-nom="${esc(nom)}">
-          <strong>${esc(nom)}</strong>${det ? `<br><span class="text-muted small">${esc(det)}</span>` : ''}
-        </button>`;
+        return renderCandidatoPickBtn({ id: u.id, nombre: nom, username: u.username, cargo: u.cargo });
       }).join('')}</div>`;
       resultsEl.querySelectorAll('.usr-pick').forEach((b) => {
-        b.onclick = () => seleccionarUsuario(b.dataset.nom);
+        b.onclick = () => seleccionarCandidato(b.dataset.uid, b.dataset.nom);
       });
     } catch (e) {
       resultsEl.innerHTML = `<div class="alert alert-danger py-1 px-2 small mb-0">${esc(e.message)}</div>`;
     }
   };
-  subEl.onchange = refreshPersonas;
+
+  subEl.onchange = () => { seleccion = { id: null, nombre: '' }; uidEl.value = ''; cargarCandidatos(); };
   btnBuscar.onclick = buscarUsuarios;
   buscarEl.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarUsuarios(); } };
-  refreshPersonas();
+  cargarCandidatos();
+
   return () => {
     const sub = getSubmoduloByLabel(subEl.value);
-    let persona = perEl.value;
-    if (persona === '__otro__' || otroEl.value.trim()) {
-      persona = otroEl.value.trim() || persona;
+    let persona = seleccion.nombre || nombreEl.value.trim();
+    let uid = seleccion.id || (uidEl.value ? Number(uidEl.value) : null);
+
+    if (!requerimientoId) {
+      persona = perEl.value;
+      if (persona === '__otro__' || otroEl.value.trim()) {
+        persona = otroEl.value.trim() || persona;
+      }
+      uid = null;
     }
+
     if (!persona || persona === '__otro__') {
       alert('Indique la persona destino de la observación.');
       return null;
     }
+    if (requerimientoId && (!uid || !Number.isFinite(uid))) {
+      alert('Seleccione una persona elegible de la lista.');
+      return null;
+    }
+
+    const etapaCode = sub?.code === 'REGISTRADO' ? 'REGISTRO' : (sub?.code || '');
+    const recomendadoId = recomEl.value ? Number(recomEl.value) : null;
     return {
       destino_submodulo: subEl.value,
-      destino_etapa: sub?.code || '',
+      destino_etapa: etapaCode,
       destino_persona: persona,
+      usuario_destino_id: uid,
+      responsable_recomendado_id: recomendadoId,
+      reasignacion_manual: uid && recomendadoId && uid !== recomendadoId,
     };
   };
 }
@@ -331,7 +438,7 @@ export function showObservacionDirigidaModal(opts = {}) {
   wrap.innerHTML = html;
   const el = document.getElementById(id);
   const modal = new bootstrap.Modal(el);
-  const readDestino = wireDestinoSelectors(id);
+  const readDestino = wireDestinoSelectors(id, { requerimientoId: opts.requerimientoId || null });
   return new Promise((resolve) => {
     let resolved = false;
     document.getElementById(`${id}_ok`).onclick = () => {
@@ -388,7 +495,7 @@ export function showSubsanacionDirigidaModal(opts = {}) {
   wrap.innerHTML = html;
   const el = document.getElementById(id);
   const modal = new bootstrap.Modal(el);
-  const readDestino = wireDestinoSelectors(id);
+  const readDestino = wireDestinoSelectors(id, { requerimientoId: opts.requerimientoId || null });
   if (opts.requerimientoId) {
     const panel = document.getElementById(`${id}_adjPanel`);
     if (panel) panel.id = `${id}_adjPanel`;

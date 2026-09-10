@@ -194,6 +194,7 @@ export async function openModalObservaciones(req, opts = {}) {
         historyHtml: historialHtml(obs),
         origenSubmodulo: opts.submoduloLabel || '',
         defaultDestinoSubmodulo: opts.defaultDestinoObservacion || 'Registro de Requerimiento',
+        requerimientoId: row.id,
       });
       if (!data) { modal.show(); return; }
       try {

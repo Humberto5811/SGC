@@ -33,6 +33,7 @@ import {
   bindActionMenus, bindBandejaToolbar,
   buildExportRowData, updateBandejaAdjCount,
   sortBandejaRows, bindSortHandlers, mergeSortParams,
+  bandejaTableStyles,
 } from '../../utils/trazabilidad.js';
 import { resolveBandejaAcciones } from '../../utils/bandejaAccionesResolver.js';
 import {
@@ -184,36 +185,38 @@ function totalEntregas() {
 // =========================================================================
 // PANTALLA DE SELECCIÓN
 // =========================================================================
+function renderNuevoDropdownItems() {
+  return FORMATOS.map((f) => `
+    <li>
+      <button type="button" class="dropdown-item d-flex align-items-center gap-2 req-nuevo-item ${f.enabled ? '' : 'disabled text-muted'}"
+              data-tipo="${f.tipo}" data-enabled="${f.enabled}" ${f.enabled ? '' : 'disabled aria-disabled="true"'}>
+        <i class="bi ${f.icon} text-${f.color}"></i>
+        <span class="flex-grow-1">${f.label.replace('Formato de ', '')}</span>
+        <span class="badge ${f.enabled ? 'bg-success' : 'bg-secondary'}" style="font-size:0.6rem;">${f.enabled ? 'Disponible' : 'En preparación'}</span>
+      </button>
+    </li>`).join('');
+}
+
 function renderSelect() {
-  const cards = FORMATOS.map((f) => `
-    <div class="col-auto mb-2">
-      <div class="card shadow-sm fmt-card ${f.enabled ? '' : 'opacity-75'}" data-tipo="${f.tipo}" data-enabled="${f.enabled}"
-           style="cursor:${f.enabled ? 'pointer' : 'not-allowed'}; width: 130px;">
-        <div class="card-body text-center p-2">
-          <div class="h4 text-${f.color} mb-1"><i class="bi ${f.icon}"></i></div>
-          <span class="badge ${f.enabled ? 'bg-success' : 'bg-secondary'}" style="font-size: 0.65rem;">${f.enabled ? 'Disponible' : 'En preparación'}</span>
-          <div class="small fw-bold mt-1">${f.label.replace('Formato de ', '')}</div>
+  return `
+    <style>${bandejaTableStyles()}</style>
+    <div class="container-fluid sgc-registro-compact">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+        <h3 class="mb-0 fs-5"><i class="bi bi-pencil-square"></i> Registro de Requerimientos</h3>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+          <div class="dropdown">
+            <button type="button" class="btn btn-sm btn-success dropdown-toggle" id="reqNuevoBtn" data-bs-toggle="dropdown" aria-expanded="false">
+              <i class="bi bi-plus-lg"></i> Nuevo
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm" aria-labelledby="reqNuevoBtn">
+              ${renderNuevoDropdownItems()}
+            </ul>
+          </div>
+          <button id="reqExport" class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-excel"></i> Exportar reporte</button>
         </div>
       </div>
-    </div>
-  `).join('');
-
-  return `
-    <div class="container-fluid">
-      <div class="mb-3">
-        <h3 class="mb-1"><i class="bi bi-pencil-square"></i> Registro de Requerimientos</h3>
-        <p class="text-muted mb-0">Seleccione el tipo de formato para iniciar el registro del requerimiento.</p>
-      </div>
-      <div class="d-flex flex-wrap gap-2 align-items-center mb-4" style="overflow-x: auto; white-space: nowrap;">
-        ${cards}
-      </div>
-      <hr/>
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <h5 class="mb-0"><i class="bi bi-list-check"></i> Requerimientos registrados</h5>
-        <button id="reqExport" class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-excel"></i> Exportar reporte</button>
-      </div>
-      ${renderSummaryCardsHtml('reqTrazaSummary')}
-      ${renderFilterBarHtml('req', { hideExecutive: true })}
+      ${renderSummaryCardsHtml('reqTrazaSummary', { compact: true, registroCompact: true })}
+      ${renderFilterBarHtml('req', { hideExecutive: true, compact: true })}
       <div id="reqList"><div class="text-muted">Cargando…</div></div>
     </div>
   `;
@@ -335,13 +338,14 @@ function exportarReporte() {
 }
 
 function attachSelect() {
-  document.querySelectorAll('.fmt-card').forEach((card) => {
-    card.onclick = () => {
-      if (card.dataset.enabled !== 'true') {
+  document.querySelectorAll('.req-nuevo-item').forEach((item) => {
+    item.onclick = (ev) => {
+      ev.preventDefault();
+      if (item.dataset.enabled !== 'true') {
         alert('Este formato estará disponible próximamente. Por ahora puede registrar el Formato de Bienes.');
         return;
       }
-      newRequerimiento(card.dataset.tipo);
+      newRequerimiento(item.dataset.tipo);
     };
   });
   const rl = document.getElementById('reqExport');

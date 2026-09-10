@@ -11,12 +11,6 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
-function iconForTipo(tipo) {
-  if (tipo === TIPO_RESPONSABLE_UI.PERSONA) return 'bi-person';
-  if (tipo === TIPO_RESPONSABLE_UI.UNIDAD) return 'bi-building';
-  return 'bi-person-dash';
-}
-
 /**
  * @param {object} data — adaptEstadoResponsable() o campos de responsable
  */
@@ -45,8 +39,7 @@ export function renderResponsableBadgeHtml(data = {}) {
   } else {
     text = data.responsableDisplay || text;
   }
-  const icon = iconForTipo(tipo);
-  return `<span class="sgc-responsable-badge" data-responsable-tipo="${esc(tipo)}" title="${esc(text)}" aria-label="Responsable: ${esc(text)}"><i class="bi ${icon} sgc-responsable-badge__icon" aria-hidden="true"></i><span class="sgc-responsable-badge__text">${esc(text)}</span></span>`;
+  return `<span class="sgc-responsable-badge" data-responsable-tipo="${esc(tipo)}" title="${esc(text)}" aria-label="Responsable: ${esc(text)}"><span class="sgc-responsable-badge__text">${esc(text)}</span></span>`;
 }
 
 export function renderResponsableBadgeFromRow(row) {

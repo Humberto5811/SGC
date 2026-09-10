@@ -202,9 +202,12 @@ export async function executeTransition(context = {}, flags = {}, client = null)
     // RC8.6A.1 — dueño único de persistencia: transicionarExpediente (misma tx).
     // El motor solo validó permiso/catálogo; no escribe estado/asignación por su cuenta.
     const { transicionarExpediente } = await import('../expedienteTransicion.js');
-    const uidDest = context.usuario_destino_id
+    let uidDest = context.usuario_destino_id
       ?? context.metadata?.usuario_destino_id
       ?? null;
+    if (!uidDest && evento === 'REQUERIMIENTO_REGISTRADO' && actorNormalizado.id) {
+      uidDest = actorNormalizado.id;
+    }
     const unidadDest = context.unidad_destino
       || context.metadata?.unidad_destino
       || null;
