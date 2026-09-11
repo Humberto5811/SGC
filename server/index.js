@@ -24,8 +24,10 @@ import programacionRouter from './routes/programacion.js';
 import usuariosRouter from './routes/usuarios.js';
 import proveedoresMaestroRouter from './routes/proveedoresMaestro.js';
 import requerimientosEspecialRouter from './routes/requerimientosEspecial.js';
+import bandejaConfiableRouter from './routes/bandejaConfiable.js';
 import { ejecutarRegistroCrear, ejecutarRegistroEditar } from './lib/registroMigrationFacade.js';
 import { trazaFromObservacionEntry } from './lib/observacionDestino.js';
+import { sincronizarVista } from './lib/sincronizador.js';
 
 function extractObservacionTrazabilidad(payloadStr, estadoAnterior, estadoNuevo) {
   try {
@@ -333,6 +335,10 @@ app.use('/api/logotipos', crudRouter({
   searchCols: ['nombre', 'tipo'],
 }));
 
+// ==================== NUEVA RUTA: BANDEJA CONFIABLE ====================
+// Esta ruta consulta SOLO desde vista_requerimiento_actual (garantizado consistente)
+app.use('/api/bandeja', bandejaConfiableRouter);
+
 // Rutas especiales para requerimientos ANTES del CRUD genérico
 app.use('/api/requerimientos', requerimientosEspecialRouter);
 
@@ -348,9 +354,13 @@ app.use('/api/requerimientos', crudRouter({
   orderBy: 'id DESC',
   afterCreate: async (row, body) => {
     await ejecutarRegistroCrear(row.id, body.usuario_modificacion || 'Sistema');
+    // Sincronizar vista después de crear
+    await sincronizarVista(row.id, async (sql, params) => pool.query(sql, params));
   },
   afterUpdate: async (row, prev, body) => {
     await ejecutarRegistroEditar({ row, prev, body, extractObservacionTrazabilidad });
+    // Sincronizar vista después de actualizar
+    await sincronizarVista(row.id, async (sql, params) => pool.query(sql, params));
   },
 }));
 
@@ -387,7 +397,9 @@ async function start() {
   }
   app.listen(PORT, () => {
     console.log(`[api] Servidor SGC escuchando en http://localhost:${PORT}`);
-    console.log('[api] Invitaciones: validación cronograma v2 (consultas dentro del plazo de cotización)');
+    console.log('[api] ✓ Workflow Orchestrator activo');
+    console.log('[api] ✓ Bandeja confiable en /api/bandeja');
+    console.log('[api] ✓ Vista materializada sincronizada');
   });
 }
 
