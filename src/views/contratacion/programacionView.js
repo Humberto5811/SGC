@@ -5,6 +5,8 @@ import { authService } from '../../services/authService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { estadoBadge, todasObservaciones, historialHtml, showTextModal, verHistorialObservaciones } from '../requerimiento/reqShared.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
+import { getUserDisplayName } from '../../utils/userDisplay.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -111,10 +113,22 @@ async function loadProgramacionList() {
 }
 
 async function aprobarProgramacion(id) {
-  if (!confirm('Confirmar aprobacion desde Programacion? Estado: Aprobado Programacion.')) return;
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'PROGRAMACION_APROBADA',
+    title: 'Aprobar y derivar a Coordinación CM',
+    message: 'Seleccione la persona responsable en Coordinación CM.',
+    buttonText: 'Confirmar aprobación',
+  });
+  if (!seleccion) return;
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    const res = await contratacionesService.aprobarProgramacion(id, user.dni || 'sistema');
+    const res = await contratacionesService.aprobarProgramacion(id, {
+      usuario: getUserDisplayName(user),
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
+    });
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadProgramacionList();
   } catch (e) {

@@ -183,15 +183,12 @@ export async function ejecutarRegistroEditar(ctx) {
         return tr.expediente;
       }
       if (/^aprobado$/i.test(nuevo.trim()) || /aprobado.*evaluaci/i.test(nuevo)) {
-        const tr = await transicionarExpediente({
-          requerimientoId: row.id,
-          evento: 'EVALUACION_APROBADA',
-          unidadDestino: ETAPAS.DEC.responsable,
-          motivo: observacion || 'Aprobado en evaluación',
-          metadata: { client_request_id: `facade-edit-aprobar:${row.id}`, via: 'registroMigrationFacade' },
-          actorRol: usuario,
-        });
-        return tr.expediente;
+        const err = new Error(
+          'La aprobación en evaluación debe usar PUT /requerimientos/:id/aprobar-evaluacion con persona responsable en DEC',
+        );
+        err.code = 'EVAL_APROBAR_USAR_RUTA_CANONICA';
+        err.status = 400;
+        throw err;
       }
       // Sin evento canónico: solo historial (RC8.6A.2 — no escritura de estado).
       return registrarMovimiento({

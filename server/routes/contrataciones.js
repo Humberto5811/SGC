@@ -27,7 +27,7 @@ import {
   COORDINADOR_ACTOS,
 } from '../lib/actosPreparatorios.js';
 import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
-import { listarBandejaDEC } from '../lib/decBandeja.js';
+import { listarBandejaDEC, WHERE_BANDEJA_DEC } from '../lib/decBandeja.js';
 import {
   REQUERIMIENTO_BANDEJA_FROM,
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
@@ -154,12 +154,96 @@ router.get('/dec', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/** RC8.17.3B — candidatos PERSONA para observación DEC (sin guard org-scope de requerimientos). */
+router.get('/dec/candidatos-observacion-destino/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const rid = parseInt(requerimientoId, 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      return res.status(400).json({ ok: false, error: 'requerimientoId inválido' });
+    }
+    const { rows } = await query(
+      `SELECT r.id ${REQUERIMIENTO_BANDEJA_FROM} WHERE r.id = $1 AND ${WHERE_BANDEJA_DEC}`,
+      [rid],
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Expediente no encontrado en bandeja DEC' });
+    }
+    const destinoSubmodulo = req.query.destino_submodulo || req.query.destinoSubmodulo || '';
+    const { listarCandidatosObservacionDestino, esDestinoObservacionDecSoportado } =
+      await import('../lib/candidatosObservacionDestino.js');
+    if (destinoSubmodulo && !esDestinoObservacionDecSoportado(destinoSubmodulo)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Destino no permitido desde DEC (solo Registro, Evaluación o Programación)',
+      });
+    }
+    const data = await listarCandidatosObservacionDestino({
+      requerimientoId: rid,
+      destinoSubmodulo,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
 router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { usuario } = req.body || {};
-    const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+    const {
+      usuario,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
+    } = req.body || {};
+    const reqCheck = await query('SELECT id, payload, estado_actual FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
+
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    if (!usuarioDestinoId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Debe seleccionar la persona responsable en Programación',
+      });
+    }
+
+    const { assertUsuarioDestinoTransicionElegible } = await import('../lib/workflowTransicionResponsable.js');
+    let elegible;
+    try {
+      elegible = await assertUsuarioDestinoTransicionElegible(
+        requerimientoId,
+        'DEC_APROBADO',
+        usuarioDestinoId,
+        reqCheck.rows[0],
+      );
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+      }
+      throw err;
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : (elegible.recomendado?.id ?? null);
+    const reasignacionManual = reasignacionManualBody === true
+      || (responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
+    const metaDerivacion = {
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+      etapa_origen: 'DEC',
+      etapa_destino: 'PROGRAMACION',
+      evento: 'DEC_APROBADO',
+    };
 
     // Fase 1B — DEC_APROBADO: DEC → PROGRAMACION.
     const result = await runWorkflowTransition({
@@ -171,6 +255,8 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
         tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
         client_request_id: req.body?.client_request_id || null,
         observacion: 'DEC aprobado — derivado a Programación',
+        ...metaDerivacion,
+        unidad_destino: ETAPAS.PROGRAMACION.responsable,
       },
       domainMutator: buildTramo1bPayloadMutator({
         accionHistorial: 'historial_dec',
@@ -187,11 +273,13 @@ router.put('/dec/aprobar/:requerimientoId', async (req, res, next) => {
         const tr = await transicionarExpediente({
           requerimientoId,
           evento: 'DEC_APROBADO',
+          usuarioDestinoId,
           unidadDestino: ETAPAS.PROGRAMACION.responsable,
           motivo: 'Aprobado por DEC — derivado a Programación',
           metadata: {
             client_request_id: req.body?.client_request_id || `dec-aprobar:${requerimientoId}`,
             via: 'dec/aprobar:legacyHandler',
+            ...metaDerivacion,
           },
           actorRol: usuario || 'DEC',
           domainMutator: async (tx) => {
@@ -216,6 +304,9 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
     const { requerimientoId } = req.params;
     const {
       motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
       accion, observacion_id, observacion_padre_id, observacionPadreId,
     } = req.body || {};
 
@@ -236,33 +327,88 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
 
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
 
+    const {
+      mapDestinoSubmoduloAEtapaObservacion,
+      esDestinoObservacionDecSoportado,
+      assertUsuarioDestinoObservacionElegible,
+    } = await import('../lib/candidatosObservacionDestino.js');
+
+    const destinoSub = destino_submodulo || 'Registro de Requerimiento';
+    const etapaDestObs = String(
+      destino_etapa
+      || mapDestinoSubmoduloAEtapaObservacion(destinoSub)
+      || submoduloLabelToEtapa(destinoSub)
+      || 'REGISTRO',
+    ).toUpperCase().replace('REGISTRADO', 'REGISTRO');
+
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : (/^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null);
+
+    if (esDestinoObservacionDecSoportado(destinoSub)) {
+      if (!usuarioDestinoId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Debe seleccionar la persona responsable de la subsanación',
+        });
+      }
+      try {
+        await assertUsuarioDestinoObservacionElegible(
+          requerimientoId,
+          destinoSub,
+          usuarioDestinoId,
+          reqCheck.rows[0],
+        );
+      } catch (err) {
+        if (err.status) {
+          return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+        }
+        throw err;
+      }
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : null;
+    const reasignacionManual = reasignacionManualBody === true
+      || (usuarioDestinoId && responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
     emitirObservacion(payload, {
       motivo,
       gerente: usuario || 'dec',
       origen: 'DEC',
       origen_submodulo: origen_submodulo || 'DEC',
-      destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
-      destino_etapa: destino_etapa || 'REGISTRADO',
+      destino_submodulo: destinoSub,
+      destino_etapa: etapaDestObs,
       destino_persona: destino_persona || '',
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      reasignacion_manual: reasignacionManual,
       observacion_padre_id: observacion_padre_id || observacionPadreId || null,
     });
 
-    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
-    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
-    const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
+    const responsable = resolveResponsableFromDestino(destinoSub, destino_persona, etapaDestObs);
+    const metaObs = {
+      client_request_id: req.body?.client_request_id || `dec-obs:${requerimientoId}`,
+      via: 'dec/observar',
+      etapa_origen: 'DEC',
+      etapa_destino: etapaDestObs,
+      evento: 'DEC_OBSERVADA',
+      quien_subsana: destino_persona || responsable,
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+    };
 
     const tr = await transicionarExpediente({
       requerimientoId,
       evento: 'DEC_OBSERVADA',
-      usuarioDestinoId: uid,
-      unidadDestino: uid ? null : (responsable || null),
-      motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-      metadata: {
-        client_request_id: req.body?.client_request_id || `dec-obs:${requerimientoId}`,
-        via: 'dec/observar',
-        etapa_destino: etapaDestObs,
-        quien_subsana: destino_persona || responsable,
-      },
+      usuarioDestinoId,
+      unidadDestino: usuarioDestinoId ? null : (responsable || null),
+      motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo: destinoSub }),
+      metadata: metaObs,
       actorRol: usuario || 'DEC',
       domainMutator: async (tx) => {
         await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
@@ -290,12 +436,60 @@ router.get('/programacion', async (req, res, next) => {
 router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { usuario } = req.body || {};
+    const {
+      usuario,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
+    } = req.body || {};
     const reqCheck = await query(
-      `SELECT id, payload, estado FROM requerimientos WHERE id = $1 AND estado IN ('Aprobado DEC', 'En Programación')`,
+      `SELECT id, payload, estado, estado_actual FROM requerimientos WHERE id = $1 AND estado IN ('Aprobado DEC', 'En Programación')`,
       [requerimientoId],
     );
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado o estado inválido' });
+
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    if (!usuarioDestinoId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Debe seleccionar la persona responsable en Coordinación CM',
+      });
+    }
+
+    const { assertUsuarioDestinoTransicionElegible } = await import('../lib/workflowTransicionResponsable.js');
+    let elegible;
+    try {
+      elegible = await assertUsuarioDestinoTransicionElegible(
+        requerimientoId,
+        'PROGRAMACION_APROBADA',
+        usuarioDestinoId,
+        reqCheck.rows[0],
+      );
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+      }
+      throw err;
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : (elegible.recomendado?.id ?? null);
+    const reasignacionManual = reasignacionManualBody === true
+      || (responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
+    const metaDerivacion = {
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+      etapa_origen: 'PROGRAMACION',
+      etapa_destino: 'COORDINACION_CM',
+      evento: 'PROGRAMACION_APROBADA',
+    };
 
     // Fase 1B — Guards mínimos de Programación (igual para legacy y motor).
     const { rows: pedidos } = await query(
@@ -320,6 +514,8 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
         tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
         client_request_id: req.body?.client_request_id || null,
         observacion: 'Programación aprobada — derivado a Coordinación CM',
+        ...metaDerivacion,
+        unidad_destino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
       },
       domainMutator: buildTramo1bPayloadMutator({
         accionHistorial: 'historial_programacion',
@@ -336,11 +532,13 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
         const tr = await transicionarExpediente({
           requerimientoId,
           evento: 'PROGRAMACION_APROBADA',
-          unidadDestino: ETAPAS.ACTOS_PREPARATORIOS?.responsable || 'Coordinador de Contratos Menores',
+          usuarioDestinoId,
+          unidadDestino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
           motivo: 'Aprobado en Programación — derivado a Coordinación CM',
           metadata: {
             client_request_id: req.body?.client_request_id || `prog-aprobar:${requerimientoId}`,
             via: 'programacion/aprobar:legacyHandler',
+            ...metaDerivacion,
           },
           actorRol: usuario || 'Programación',
           domainMutator: async (tx) => {
@@ -507,12 +705,67 @@ router.put('/actos/derivar/:requerimientoId', async (req, res, next) => {
 router.put('/actos/aprobar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { responsable_destino, usuario } = req.body || {};
-    if (!responsable_destino) return res.status(400).json({ success: false, error: 'Responsable destino en Invitaciones requerido' });
+    const {
+      responsable_destino,
+      usuario,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
+    } = req.body || {};
+
+    const reqCheck = await query(
+      'SELECT id, payload, estado, estado_actual FROM requerimientos WHERE id = $1',
+      [requerimientoId],
+    );
+    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
+
+    let usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    if (!usuarioDestinoId && responsable_destino && /^\d+$/.test(String(responsable_destino).trim())) {
+      usuarioDestinoId = Number(responsable_destino);
+    }
+    if (!usuarioDestinoId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Debe seleccionar la persona responsable en Invitaciones',
+      });
+    }
+
+    const { assertUsuarioDestinoTransicionElegible } = await import('../lib/workflowTransicionResponsable.js');
+    let elegible;
+    try {
+      elegible = await assertUsuarioDestinoTransicionElegible(
+        requerimientoId,
+        'COORDINACION_CM_APROBADA',
+        usuarioDestinoId,
+        reqCheck.rows[0],
+      );
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+      }
+      throw err;
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : (elegible.recomendado?.id ?? null);
+    const reasignacionManual = reasignacionManualBody === true
+      || (responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
+    const metaDerivacion = {
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+      etapa_origen: 'COORDINACION_CM',
+      etapa_destino: 'INVITACIONES',
+      evento: 'COORDINACION_CM_APROBADA',
+    };
 
     // Fase 1B — COORDINACION_CM_APROBADA: COORDINACION_CM → INVITACIONES.
-    // Puede provenir del endpoint propio de actos (aprobación) o del asistente de
-    // rutas de contrataciones. El destino se genera en el motor (INVITACIONES).
     const result = await runWorkflowTransition({
       moduleFlag: 'WORKFLOW_ENGINE_COORDINACION_CM',
       eventoCodigo: 'COORDINACION_CM_APROBADA',
@@ -521,8 +774,8 @@ router.put('/actos/aprobar/:requerimientoId', async (req, res, next) => {
       metadata: {
         tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
         client_request_id: req.body?.client_request_id || null,
-        responsable_destino,
-        observacion: `Coordinación CM aprobada — derivado a Invitaciones (resp: ${responsable_destino})`,
+        ...metaDerivacion,
+        observacion: 'Coordinación CM aprobada — derivado a Invitaciones',
       },
       domainMutator: buildTramo1bPayloadMutator({
         accionHistorial: 'historial_actos',
@@ -530,7 +783,7 @@ router.put('/actos/aprobar/:requerimientoId', async (req, res, next) => {
         camposExtras: {
           tipo: 'aprobacion_invitaciones',
           usuario: usuario || 'Coordinador de Contratos Menores',
-          entrada: { responsable_destino },
+          entrada: { responsable_destino: usuarioDestinoId },
           // La vista de Invitaciones detecta el ingreso vía historial_invitaciones.
           arraysExtras: {
             historial_invitaciones: {
@@ -541,7 +794,12 @@ router.put('/actos/aprobar/:requerimientoId', async (req, res, next) => {
         },
       }),
       legacyHandler: async () => {
-        const updated = await aprobarActosInvitaciones(requerimientoId, { responsableDestino: responsable_destino, usuario });
+        const updated = await aprobarActosInvitaciones(requerimientoId, {
+          responsableDestino: usuarioDestinoId,
+          usuario,
+          usuarioDestinoId,
+          ...metaDerivacion,
+        });
         return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado, estado_actual: updated.estado_actual } };
       },
     });

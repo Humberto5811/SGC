@@ -4,7 +4,7 @@ import { permissionsService } from '../../services/permissionsService.js';
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { loadDECBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
-import { reqShared, todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from '../requerimiento/reqShared.js';
+import { bindTrazabilidadButtons } from '../requerimiento/reqShared.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos } from '../requerimiento/registroRequerimientoView.js';
 import {
   renderFilterBarHtml, readFilterParams,
@@ -22,6 +22,7 @@ import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDet
 import { handleBandejaObservaciones } from '../../components/modalObservaciones.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import { estaEnDecAccionable } from '../../utils/bandejaActions.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -32,6 +33,31 @@ let lastRows = [];
 let listFilters = {};
 let listSort = { sort: 'created_at', dir: 'desc' };
 const decPagination = usePagination('dec', loadDECBandeja, { defaultPageSize: 25 });
+
+/** Único flujo de observación DEC (menú Acciones → obs / botones .dec-observar). */
+function openDecObservaciones(id, rows) {
+  return handleBandejaObservaciones(id, rows, {
+    submoduloLabel: 'DEC',
+    puedeObservar: () => true,
+    destinosPermitidosObservacion: [
+      'Registro de Requerimiento',
+      'Evaluación de Requerimiento',
+      'Programación',
+    ],
+    candidatosApiPath: (reqId) => `/contrataciones/dec/candidatos-observacion-destino/${reqId}`,
+    onObservar: async (reqId, data) => {
+      const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
+      await contratacionesService.observarDEC(reqId, data.motivo || '', getUserDisplayName(user), {
+        ...data,
+        origen_submodulo: data.origen_submodulo || 'DEC',
+      });
+    },
+    onAdjuntos: (rid) => manageAdjuntos(rid, true),
+    onReload: () => loadDecList(),
+    bandejaPrefix: 'dec',
+    defaultDestinoObservacion: 'Registro de Requerimiento',
+  });
+}
 
 function renderDecView() {
   return `
@@ -92,21 +118,7 @@ async function loadDecList(sortOverride = {}, resetPage = false) {
         const req = rows.find((x) => String(x.id) === String(id));
         if (req) openDetailPanel(req, { onAdjuntos: (rid) => manageAdjuntos(rid, true) });
       },
-      obs: (id) => handleBandejaObservaciones(id, rows, {
-        submoduloLabel: 'DEC',
-        puedeObservar: () => true,
-        onObservar: async (reqId, data) => {
-          const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-          await contratacionesService.observarDEC(reqId, data.motivo || '', getUserDisplayName(user), {
-            ...data,
-            origen_submodulo: data.origen_submodulo || 'DEC',
-          });
-        },
-        onAdjuntos: (rid) => manageAdjuntos(rid, true),
-        onReload: () => loadDecList(),
-        bandejaPrefix: 'dec',
-        defaultDestinoObservacion: 'Registro de Requerimiento',
-      }),
+      obs: (id) => openDecObservaciones(id, rows),
     });
     bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
     cont.querySelectorAll('.dec-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
@@ -130,42 +142,28 @@ async function aprobarDec(id) {
     alert('Este expediente no está pendiente de aprobación en DEC.');
     return;
   }
-  if (!confirm('Confirmar aprobacion desde DEC? El expediente pasara a Programacion.')) return;
+
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'DEC_APROBADO',
+    title: 'Aprobar y derivar a Programación',
+    message: 'Seleccione la persona responsable en Programación. Etapa destino: Programación, estado: En trámite.',
+    buttonText: 'Confirmar aprobación',
+  });
+  if (!seleccion) return;
+
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    const res = await contratacionesService.aprobarDEC(id, getUserDisplayName(user));
+    const res = await contratacionesService.aprobarDEC(id, {
+      usuario: getUserDisplayName(user),
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
+    });
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadDecList();
   } catch (e) {
     alert('Error al aprobar: ' + e.message);
-  }
-}
-
-async function observarDec(id) {
-  const req = (lastRows || []).find((x) => String(x.id) === String(id));
-  if (!req) return;
-  const allObs = todasObservaciones(req);
-  const data = await showObservacionDirigidaModal({
-    title: 'Observar requerimiento desde DEC',
-    historyHtml: historialHtml(allObs),
-    origenSubmodulo: 'DEC',
-    defaultDestinoSubmodulo: 'Registro de Requerimiento',
-    placeholder: 'Indique el motivo de la observacion...',
-    buttonText: 'Observar',
-    buttonClass: 'btn-danger',
-  });
-  if (!data) return;
-  try {
-    const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    await contratacionesService.observarDEC(id, data.motivo, getUserDisplayName(user), {
-      destino_submodulo: data.destino_submodulo,
-      destino_etapa: data.destino_etapa,
-      destino_persona: data.destino_persona,
-      origen_submodulo: data.origen_submodulo || 'DEC',
-    });
-    loadDecList();
-  } catch (e) {
-    alert('Error al observar: ' + e.message);
   }
 }
 

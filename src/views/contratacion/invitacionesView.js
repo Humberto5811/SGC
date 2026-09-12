@@ -12,8 +12,11 @@ import { invitacionesMenuItems, invitacionesHiddenActions } from '../../utils/ba
 import { loadInvitacionesBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
-import { estadoModernBadge, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
-import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
+import {
+  renderBandejaCanonicoEstadoRespCells,
+  renderBandejaCanonicoDiasCell,
+  getBandejaCanonicoFechaAsignacion,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 import { showSolicitudCotizacionModal, showInvitarProveedoresModal } from '../../utils/invitacionesModals.js';
 import {
@@ -174,17 +177,8 @@ function renderInvBandejaRowCells(r, opts = {}) {
   const paqBadge = r.codigo_paquete
     ? `<span class="badge bg-success">${escFn(r.codigo_paquete)}</span>`
     : '<span class="text-muted small">Sin paquete</span>';
-  const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
+  const fechaAsig = getBandejaCanonicoFechaAsignacion(r);
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
-  const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  // RC8.7 — EstadoBadge + ResponsableBadge desde estado_responsable_vigente únicamente.
-  const estadoBadgeHtml = r.estado_responsable_vigente
-    ? renderBadgeEstadoVigenteHtml({
-      ...r,
-      estado_vigente: r.estado_responsable_vigente.estadoCodigo || r.estado_responsable_vigente.estado_codigo,
-      estado_vigente_label: r.estado_responsable_vigente.estadoLabel || r.estado_responsable_vigente.estado_label,
-    }, escFn)
-    : estadoModernBadge(r);
   const pedidos = resolvePedidoSigamef(r);
   const scCode = r.codigo_solicitud || r.codigoSolicitud || '';
 
@@ -199,10 +193,9 @@ function renderInvBandejaRowCells(r, opts = {}) {
     <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
     <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
-    <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td class="small">${renderResponsableCellHtml(r, escFn)}</td>
+    ${renderBandejaCanonicoEstadoRespCells(r)}
     <td class="small text-muted">${escFn(fechaFmt)}</td>
-    <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
+    <td class="text-center">${renderBandejaCanonicoDiasCell(r, escFn)}</td>`;
 }
 
 function renderInvExtraCells(r) {

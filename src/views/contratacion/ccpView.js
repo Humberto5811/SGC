@@ -5,10 +5,15 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
 import {
-  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
+  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
 } from '../../utils/bandejaUi.js';
+import {
+  renderBandejaCanonicoEstadoCell,
+  renderBandejaCanonicoResponsableCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { ccpMenuItems } from '../../utils/bandejaActions.js';
 import { openCcpCodigoModal } from '../../utils/ccpCodigoModal.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import {
   createViewLifecycle,
@@ -140,8 +145,8 @@ function renderRow(row) {
       </td>
       <td><strong>${esc(row.solicitud_codigo || '—')}</strong></td>
       <td>${esc(centro)}</td>
-      <td>${renderEstadoCell(row)}</td>
-      <td class="small">${renderResponsableCellHtml(row, esc)}</td>
+      <td>${renderBandejaCanonicoEstadoCell(row)}</td>
+      <td class="small">${renderBandejaCanonicoResponsableCell(row)}</td>
       <td class="small fw-semibold text-break" style="max-width:140px">${ccpTxt}</td>
       ${menu}
     </tr>`;
@@ -341,10 +346,20 @@ async function actionDerivarOrdenes(rid) {
     return;
   }
   const codigo = row?.requerimiento_codigo || rid;
-  if (!window.confirm(`¿Derivar ${codigo} a Registro de Órdenes?`)) return;
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: rid,
+    eventoCodigo: 'CCP_REGISTRADA',
+    title: 'Derivar a Registro de Órdenes',
+    message: 'Seleccione la persona responsable en Registro de Órdenes. Etapa destino: Registro de Órdenes, estado: En trámite.',
+    buttonText: 'Confirmar derivación',
+  });
+  if (!seleccion) return;
   try {
     const resp = await contratacionesService.derivarCcpARegistroOrdenes(rid, {
       client_request_id: `ccp-derivar-ui:${rid}:${Date.now()}`,
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
     });
     if (resp?.idempotente) {
       showAlert('info', 'El expediente ya fue derivado.');

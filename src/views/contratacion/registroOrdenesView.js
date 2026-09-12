@@ -6,8 +6,9 @@ import { ordenesContratacionService } from '../../services/ordenesContratacionSe
 import { entregablesServiciosService } from '../../services/entregablesServiciosService.js';
 import { bandejaTableStyles, getResponsableVigenteLabel, getEstadoVigenteLabel } from '../../utils/trazabilidad.js';
 import {
-  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus, renderResponsableCellHtml,
+  renderActionMenuCell, bindActionMenus, closeBandejaActionMenus,
 } from '../../utils/bandejaUi.js';
+import { renderBandejaCanonicoResponsableCell } from '../../utils/bandejaExpedienteColumns.js';
 import { renderEstadoBadgeFromRow } from '../../ui/workflow/EstadoBadge.js';
 import {
   registroOrdenesMenuItems, splitMenuItemsPorBandeja, fmtMonto, fmtFecha, fmtFechaHora,
@@ -330,7 +331,7 @@ function renderRowCcp(row) {
     <td title="${tipCod}">${esc(row.codigo_sigamef || '—')}</td>
     <td class="ro-col-wide" title="${tipDesc}">${esc(row.item_descripcion || '—')}</td>
     <td class="ro-wrap" title="${esc(estadoVigente)}">${renderEstado(row)}${checklistHtml}</td>
-    <td class="ro-wrap">${renderResponsableCellHtml(row, esc)}</td>
+    <td class="ro-wrap">${renderBandejaCanonicoResponsableCell(row)}</td>
     ${menu}
   </tr>`;
 }
@@ -357,7 +358,7 @@ function renderRowOrden(row) {
     <td>${row.orden_id ? esc(row.plazo_total_orden_label || '—') : '—'}</td>
     <td>${fmtFecha(row.fecha_notificacion || row.fecha_envio_proveedor)}</td>
     <td class="ro-wrap" title="${esc(estadoVigente)}">${renderEstado(row)}${checklistHtml}</td>
-    <td class="ro-wrap">${renderResponsableCellHtml(row, esc)}</td>
+    <td class="ro-wrap">${renderBandejaCanonicoResponsableCell(row)}</td>
     ${menu}
   </tr>`;
 }

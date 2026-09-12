@@ -5,7 +5,7 @@
  */
 import { getEtapaMeta } from '../../shared/workflow/etapas.js';
 import { TIPO_RESPONSABLE } from '../../shared/resolvedorEstadoResponsable.js';
-import { hasFunctionalProfile, PERFILES_FUNCIONALES } from '../utils/userRoleCatalog.js';
+import { hasFunctionalProfile, isAdminSecurityRole, PERFILES_FUNCIONALES } from '../utils/userRoleCatalog.js';
 import { resolverCentroDesdeRequerimiento, normalizarCodigoCentro } from './recepcionBienesAlcance.js';
 import { FUENTE_RESPONSABLE } from './expedienteEstadoPersistido.js';
 import { esDestinoRegistroRequerimiento } from './candidatosObservacionDestino.js';
@@ -38,6 +38,174 @@ async function queryClient(client, text, params) {
   if (client?.query) return client.query(text, params);
   const { query } = await import('../db.js');
   return query(text, params);
+}
+
+const USUARIOS_CENTRO_SQL = `SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol, u.permisos,
+            u.centro, u.codigo_centro_costo, u.activo
+     FROM usuarios u
+     WHERE u.activo = TRUE
+       AND (
+         UPPER(REPLACE(REPLACE(COALESCE(u.centro, ''), ' ', ''), '.', '')) = $1
+         OR UPPER(REPLACE(REPLACE(COALESCE(u.codigo_centro_costo, ''), ' ', ''), '.', '')) = $1
+       )`;
+
+function mapCandidatoDirector(u, extra = {}) {
+  return {
+    id: Number(u.id),
+    username: u.username || u.dni || '',
+    nombre: nombreUsuario(u),
+    cargo: u.cargo || '',
+    activo: u.activo !== false,
+    centro: u.centro || u.codigo_centro_costo || '',
+    ...extra,
+  };
+}
+
+export function esDirectorEvaluacionElegible(u = {}) {
+  if (u.activo === false) return false;
+  if (isAdminSecurityRole(u)) return false;
+  return hasFunctionalProfile(
+    { id: u.id, rol: u.rol, cargo: u.cargo, permisos: u.permisos },
+    PERFILES_FUNCIONALES.DIRECTOR_CENTRO,
+  );
+}
+
+function filtrarDirectoresEvaluacion(usuarios = []) {
+  return usuarios.filter(esDirectorEvaluacionElegible);
+}
+
+function matchesSearchDirector(c, q) {
+  const needle = String(q || '').trim().toLowerCase();
+  if (needle.length < 2) return true;
+  return [c.nombre, c.username, c.cargo].some((p) => String(p || '').toLowerCase().includes(needle));
+}
+
+async function cargarUsuariosActivosCentro(codigoCentro, client = null) {
+  const { rows } = await queryClient(client, USUARIOS_CENTRO_SQL, [codigoCentro]);
+  return rows;
+}
+
+async function resolverContextoCentroRequerimiento(requerimientoId, row = null, client = null) {
+  let reqRow = row;
+  if (!reqRow) {
+    const { rows } = await queryClient(client, 'SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+    reqRow = rows[0] || null;
+  }
+  if (!reqRow) {
+    return { error: 'requerimiento_no_encontrado', reqRow: null, codigoCentro: null, centro: null };
+  }
+  try {
+    const centro = resolverCentroDesdeRequerimiento(reqRow);
+    const codigoCentro = normalizarCodigoCentro(centro.centro_codigo);
+    if (!codigoCentro) {
+      return { error: 'centro_vacio', reqRow, codigoCentro: null, centro };
+    }
+    return { reqRow, codigoCentro, centro, error: null };
+  } catch (err) {
+    return { error: err?.code || 'centro_no_resuelto', reqRow, codigoCentro: null, centro: null };
+  }
+}
+
+/**
+ * Lista candidatos PERSONA elegibles para derivación Registro → Evaluación.
+ */
+export async function listarCandidatosDerivacionEvaluacion(
+  requerimientoId,
+  { search = '' } = {},
+  row = null,
+  client = null,
+) {
+  const ctx = await resolverContextoCentroRequerimiento(requerimientoId, row, client);
+  if (ctx.error) {
+    return {
+      soportado: true,
+      destino: 'Evaluación de Requerimiento',
+      destino_etapa: 'EVALUACION',
+      centro: ctx.centro ? { codigo: ctx.codigoCentro, nombre: ctx.centro?.centro_nombre } : null,
+      error: ctx.error,
+      recomendado: null,
+      candidatos: [],
+    };
+  }
+
+  const usuarios = await cargarUsuariosActivosCentro(ctx.codigoCentro, client);
+  const elegibles = filtrarDirectoresEvaluacion(usuarios).map((u) => mapCandidatoDirector(u));
+  const auto = await resolveDirectorEvaluacionParaRequerimiento(requerimientoId, ctx.reqRow, client);
+
+  let recomendado = null;
+  if (auto.usuarioId) {
+    const found = elegibles.find((c) => c.id === auto.usuarioId);
+    if (found) {
+      recomendado = {
+        ...found,
+        etiqueta: 'Director recomendado',
+        recomendado: true,
+        fuente: 'resolucion_automatica',
+      };
+    }
+  }
+
+  let otros = elegibles.filter((c) => !recomendado || c.id !== recomendado.id);
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    otros = otros.filter((c) => matchesSearchDirector(c, q));
+    if (recomendado && !matchesSearchDirector(recomendado, q)) {
+      recomendado = null;
+    }
+  }
+  otros.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+
+  const metaEval = getEtapaMeta('EVALUACION');
+  return {
+    soportado: true,
+    destino: 'Evaluación de Requerimiento',
+    destino_etapa: 'EVALUACION',
+    destino_submodulo_codigo: metaEval?.submoduloCodigo || 'EVALUACION_REQUERIMIENTO',
+    centro: {
+      codigo: ctx.codigoCentro,
+      nombre: ctx.centro?.centro_nombre || ctx.codigoCentro,
+    },
+    recomendado,
+    candidatos: otros,
+    resolucion_automatica: auto.usuarioId
+      ? { usuarioId: auto.usuarioId, ambiguo: false }
+      : { usuarioId: null, ambiguo: auto.ambiguo, motivo: auto.motivo, candidatos: auto.candidatos },
+  };
+}
+
+export async function assertUsuarioDestinoEvaluacionElegible(
+  requerimientoId,
+  usuarioId,
+  row = null,
+  client = null,
+) {
+  const uid = Number(usuarioId);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    const err = new Error('usuario_destino_id inválido');
+    err.status = 400;
+    throw err;
+  }
+  const lista = await listarCandidatosDerivacionEvaluacion(requerimientoId, {}, row, client);
+  const todos = [...(lista.recomendado ? [lista.recomendado] : []), ...(lista.candidatos || [])];
+  const found = todos.find((c) => c.id === uid);
+  if (!found) {
+    const err = new Error('Usuario destino no elegible para Evaluación');
+    err.status = 422;
+    err.code = 'RESPONSABLE_EVALUACION_INVALIDO';
+    throw err;
+  }
+  return { ok: true, candidato: found, recomendado: lista.recomendado, lista };
+}
+
+function buildMetaSeleccionEvaluacion(usuarioDestinoId, metadata = {}) {
+  const sel = Number(usuarioDestinoId);
+  const recRaw = metadata.responsable_recomendado_id ?? null;
+  const rec = recRaw != null && Number.isFinite(Number(recRaw)) ? Number(recRaw) : null;
+  return {
+    responsable_seleccionado_id: sel,
+    responsable_recomendado_id: rec,
+    reasignacion_manual: metadata.reasignacion_manual === true || (rec != null && rec !== sel),
+  };
 }
 
 /**
@@ -117,23 +285,8 @@ export async function resolveDirectorEvaluacionParaRequerimiento(
     };
   }
 
-  const { rows: usuarios } = await queryClient(
-    client,
-    `SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol, u.permisos,
-            u.centro, u.codigo_centro_costo
-     FROM usuarios u
-     WHERE u.activo = TRUE
-       AND (
-         UPPER(REPLACE(REPLACE(COALESCE(u.centro, ''), ' ', ''), '.', '')) = $1
-         OR UPPER(REPLACE(REPLACE(COALESCE(u.codigo_centro_costo, ''), ' ', ''), '.', '')) = $1
-       )`,
-    [codigoCentro],
-  );
-
-  const candidatos = usuarios.filter((u) => hasFunctionalProfile(
-    { id: u.id, rol: u.rol, cargo: u.cargo, permisos: u.permisos },
-    PERFILES_FUNCIONALES.DIRECTOR_CENTRO,
-  ));
+  const usuarios = await cargarUsuariosActivosCentro(codigoCentro, client);
+  const candidatos = filtrarDirectoresEvaluacion(usuarios);
 
   if (candidatos.length === 1) {
     const u = candidatos[0];
@@ -206,19 +359,22 @@ export async function applyPilotEnvioEvaluacion({
   row = null,
   etapaCodigo = 'EVALUACION',
   client = null,
+  metadata = {},
 } = {}) {
   const meta = getEtapaMeta(etapaCodigo) || getEtapaMeta('EVALUACION');
   const unidadCtx = unidadDestino || meta?.responsableLabel || 'Director / Gerente';
 
   if (usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))) {
+    const sel = Number(usuarioDestinoId);
     return {
       resp: {
         responsableTipo: TIPO_RESPONSABLE.PERSONA,
-        responsableUsuarioId: Number(usuarioDestinoId),
+        responsableUsuarioId: sel,
         responsableUnidad: unidadCtx,
         responsableFuente: FUENTE_RESPONSABLE.ASIGNACION_EXPLICITA,
       },
       ambiguedad: null,
+      metaExtra: buildMetaSeleccionEvaluacion(sel, metadata),
     };
   }
 
@@ -233,6 +389,11 @@ export async function applyPilotEnvioEvaluacion({
       },
       ambiguedad: null,
       director,
+      metaExtra: buildMetaSeleccionEvaluacion(director.usuarioId, {
+        ...metadata,
+        responsable_recomendado_id: director.usuarioId,
+        reasignacion_manual: false,
+      }),
     };
   }
 
@@ -245,7 +406,7 @@ export async function applyPilotEnvioEvaluacion({
     });
   }
 
-  return { resp, ambiguedad: director.ambiguo ? director : null };
+  return { resp, ambiguedad: director.ambiguo ? director : null, metaExtra: {} };
 }
 
 export function isObservacionDestinoRegistro(metadata = {}) {
@@ -260,6 +421,87 @@ export function isObservacionDestinoRegistro(metadata = {}) {
  * Piloto: Evaluación observa → destino Registro.
  * Etapa REGISTRO, estado OBSERVADO, responsable PERSONA seleccionada.
  */
+const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze(['EVALUACION', 'REGISTRO']);
+
+export function resolveDestinoEtapaSubsanacion(metadata = {}) {
+  const raw = metadata.destino_etapa || metadata.destinoEtapa || '';
+  const etapa = String(raw || '').trim().toUpperCase();
+  if (etapa === 'REGISTRADO') return 'REGISTRO';
+  return etapa || null;
+}
+
+/**
+ * Piloto: subsanación en Registro retorna a la etapa emisora (p. ej. Evaluación).
+ * Etapa destino, EN_TRAMITE, responsable PERSONA del observador original.
+ */
+export async function applyPilotObservacionSubsanada({
+  resp,
+  usuarioDestinoId = null,
+  unidadDestino = null,
+  metadata = {},
+  etapaEfectiva = 'REGISTRO',
+  labels = {},
+  row = null,
+  requerimientoId = null,
+  client = null,
+} = {}) {
+  const destinoEtapa = resolveDestinoEtapaSubsanacion(metadata);
+  if (!destinoEtapa || !PILOT_SUBSANACION_RETORNO_ETAPAS.includes(destinoEtapa)) {
+    return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
+  }
+  if (destinoEtapa === etapaEfectiva) {
+    return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
+  }
+  // Alcance focalizado: Registro subsana → Evaluación (no DEC/CM/Programación).
+  if (destinoEtapa !== 'EVALUACION' || etapaEfectiva !== 'REGISTRO') {
+    return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
+  }
+
+  const metaEval = getEtapaMeta('EVALUACION');
+  let uid = usuarioDestinoId ?? metadata.usuario_destino_id ?? null;
+  if (uid != null && Number.isFinite(Number(uid))) uid = Number(uid);
+  else uid = null;
+
+  const personaHint = metadata.destino_persona || metadata.destinoPersona || '';
+  if (!uid && personaHint) {
+    uid = await resolveUsuarioIdDesdeActor({ actorRol: personaHint, row }, client);
+  }
+  if (!uid && requerimientoId) {
+    const director = await resolveDirectorEvaluacionParaRequerimiento(requerimientoId, row, client);
+    if (!director.ambiguo && director.usuarioId) uid = director.usuarioId;
+  }
+
+  let newResp = resp;
+  if (uid) {
+    newResp = {
+      responsableTipo: TIPO_RESPONSABLE.PERSONA,
+      responsableUsuarioId: uid,
+      responsableUnidad: unidadDestino || metaEval?.responsableLabel || 'Director / Gerente',
+      responsableFuente: FUENTE_RESPONSABLE.ASIGNACION_EXPLICITA,
+    };
+  }
+
+  const newLabels = {
+    ...labels,
+    etapaCodigo: 'EVALUACION',
+    etapaLabel: metaEval?.label || 'Evaluación de Requerimiento',
+    estadoCodigo: ESTADO_PILOT_EN_TRAMITE,
+    estadoLabel: LABEL_PILOT_EN_TRAMITE,
+  };
+
+  return {
+    resp: newResp,
+    etapaEfectiva: 'EVALUACION',
+    labels: newLabels,
+    metaExtra: {
+      pilot_observacion_subsanada_retorno: true,
+      destino_etapa: destinoEtapa,
+      responsable_seleccionado_id: uid,
+    },
+    usuarioDestinoEfectivo: uid,
+  };
+}
+
 export function applyPilotObservacionEvaluacionRegistro({
   resp,
   usuarioDestinoId = null,
@@ -320,8 +562,13 @@ export default {
   getPilotEstadoLabels,
   resolveUsuarioIdDesdeActor,
   resolveDirectorEvaluacionParaRequerimiento,
+  listarCandidatosDerivacionEvaluacion,
+  assertUsuarioDestinoEvaluacionElegible,
+  esDirectorEvaluacionElegible,
   applyPilotCreacion,
   applyPilotEnvioEvaluacion,
   isObservacionDestinoRegistro,
+  resolveDestinoEtapaSubsanacion,
+  applyPilotObservacionSubsanada,
   applyPilotObservacionEvaluacionRegistro,
 };

@@ -19,6 +19,7 @@ import {
 } from './workflow/workflowRepository.js';
 import { insertWorkflowEvento, appendMovimiento, buildMovimientoEntry } from './workflow/workflowHistory.js';
 import { getEstadoNegocioFromEtapa } from './trazabilidad.js';
+import { isEventoTransicionPersona } from './workflowTransicionResponsable.js';
 import {
   resolverResponsableSincero,
   buildEstadoLabels,
@@ -75,6 +76,20 @@ export async function transicionarExpediente({
   if (!eventoCodigo) {
     const err = new Error('evento obligatorio');
     err.code = 'INVALID_EVENTO';
+    throw err;
+  }
+
+  let usuarioDestinoIdNorm = usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))
+    ? Number(usuarioDestinoId)
+    : null;
+  if (usuarioDestinoIdNorm == null && metadata?.usuario_destino_id != null
+    && Number.isFinite(Number(metadata.usuario_destino_id))) {
+    usuarioDestinoIdNorm = Number(metadata.usuario_destino_id);
+  }
+  if (isEventoTransicionPersona(eventoCodigo) && !usuarioDestinoIdNorm) {
+    const err = new Error(`La transición ${eventoCodigo} requiere usuario_destino_id (persona responsable)`);
+    err.code = 'TRANSICION_SIN_PERSONA';
+    err.status = 400;
     throw err;
   }
 
@@ -162,20 +177,20 @@ export async function transicionarExpediente({
     );
 
     let resp = resolverResponsableSincero({
-      usuarioDestinoId,
+      usuarioDestinoId: usuarioDestinoIdNorm,
       unidadDestino: unidadDestino || transicion.responsable_destino || metaEtapa.responsableLabel,
       etapaCodigo: etapaEfectiva,
     });
 
     // RC8.17.2B-F1 — piloto Registro/Evaluación (focalizado, no global).
-    let usuarioDestinoEfectivo = usuarioDestinoId;
+    let usuarioDestinoEfectivo = usuarioDestinoIdNorm;
     let metaTransicion = { ...(metadata || {}) };
     if (eventoCodigo === 'REQUERIMIENTO_REGISTRADO') {
       const { applyPilotCreacion, getPilotEstadoLabels, isPilotEvento } = await import('./pilotRegistroEvaluacion.js');
       const pilot = await applyPilotCreacion({
         resp,
         usuarioOrigenId,
-        usuarioDestinoId,
+        usuarioDestinoId: usuarioDestinoIdNorm,
         actorRol,
         row,
         unidadDestino: unidadDestino || metaEtapa.responsableLabel,
@@ -193,16 +208,20 @@ export async function transicionarExpediente({
       const { applyPilotEnvioEvaluacion, getPilotEstadoLabels, isPilotEvento } = await import('./pilotRegistroEvaluacion.js');
       const pilot = await applyPilotEnvioEvaluacion({
         resp,
-        usuarioDestinoId,
+        usuarioDestinoId: usuarioDestinoIdNorm,
         unidadDestino: unidadDestino || metaEtapa.responsableLabel,
         requerimientoId: rid,
         row,
         etapaCodigo: etapaEfectiva,
         client: tx,
+        metadata: metaTransicion,
       });
       resp = pilot.resp;
       if (pilot.resp?.responsableUsuarioId != null) {
         usuarioDestinoEfectivo = pilot.resp.responsableUsuarioId;
+      }
+      if (pilot.metaExtra && typeof pilot.metaExtra === 'object') {
+        Object.assign(metaTransicion, pilot.metaExtra);
       }
       if (pilot.ambiguedad) {
         metaTransicion.pilot_director_ambiguo = pilot.ambiguedad;
@@ -212,11 +231,43 @@ export async function transicionarExpediente({
         labels.estadoCodigo = pilotLabels.estadoCodigo;
         labels.estadoLabel = pilotLabels.estadoLabel;
       }
+    } else if (isEventoTransicionPersona(eventoCodigo)) {
+      const { applyPilotTransicionPersona, getPilotEstadoLabelsForEvento } =
+        await import('./workflowTransicionResponsable.js');
+      metaTransicion.etapa_origen = etapaOrigen;
+      metaTransicion.etapa_destino = etapaDestino;
+      metaTransicion.evento = eventoCodigo;
+      const pilot = await applyPilotTransicionPersona({
+        resp,
+        usuarioDestinoId: usuarioDestinoIdNorm,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        requerimientoId: rid,
+        row,
+        etapaCodigo: etapaEfectiva,
+        eventoCodigo,
+        client: tx,
+        metadata: metaTransicion,
+      });
+      resp = pilot.resp;
+      if (pilot.resp?.responsableUsuarioId != null) {
+        usuarioDestinoEfectivo = pilot.resp.responsableUsuarioId;
+      }
+      if (pilot.metaExtra && typeof pilot.metaExtra === 'object') {
+        Object.assign(metaTransicion, pilot.metaExtra);
+      }
+      if (pilot.ambiguedad?.ambiguo) {
+        metaTransicion.pilot_responsable_ambiguo = pilot.ambiguedad;
+      }
+      const pilotLabels = getPilotEstadoLabelsForEvento(eventoCodigo);
+      if (pilotLabels) {
+        labels.estadoCodigo = pilotLabels.estadoCodigo;
+        labels.estadoLabel = pilotLabels.estadoLabel;
+      }
     } else if (eventoCodigo === 'EVALUACION_OBSERVADA') {
       const { applyPilotObservacionEvaluacionRegistro } = await import('./pilotRegistroEvaluacion.js');
       const pilotObs = applyPilotObservacionEvaluacionRegistro({
         resp,
-        usuarioDestinoId,
+        usuarioDestinoId: usuarioDestinoIdNorm,
         unidadDestino: unidadDestino || metaEtapa.responsableLabel,
         metadata: metaTransicion,
         etapaEfectiva,
@@ -229,6 +280,50 @@ export async function transicionarExpediente({
       metaTransicion = { ...metaTransicion, ...pilotObs.metaExtra };
       if (pilotObs.usuarioDestinoEfectivo != null) {
         usuarioDestinoEfectivo = pilotObs.usuarioDestinoEfectivo;
+      }
+    } else if (eventoCodigo === 'DEC_OBSERVADA') {
+      const { applyPilotObservacionDecDestino } = await import('./workflowTransicionResponsable.js');
+      metaTransicion.etapa_origen = etapaOrigen;
+      metaTransicion.etapa_destino = metaTransicion.etapa_destino
+        || metaTransicion.destino_etapa
+        || etapaDestino;
+      metaTransicion.evento = eventoCodigo;
+      const pilotObs = applyPilotObservacionDecDestino({
+        resp,
+        usuarioDestinoId: usuarioDestinoIdNorm,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        metadata: metaTransicion,
+        etapaEfectiva,
+        labels,
+      });
+      resp = pilotObs.resp;
+      etapaEfectiva = pilotObs.etapaEfectiva;
+      metaEtapa = getEtapaMeta(etapaEfectiva) || metaEtapa;
+      Object.assign(labels, pilotObs.labels);
+      metaTransicion = { ...metaTransicion, ...pilotObs.metaExtra };
+      if (pilotObs.usuarioDestinoEfectivo != null) {
+        usuarioDestinoEfectivo = pilotObs.usuarioDestinoEfectivo;
+      }
+    } else if (eventoCodigo === 'OBSERVACION_SUBSANADA') {
+      const { applyPilotObservacionSubsanada } = await import('./pilotRegistroEvaluacion.js');
+      const pilotSub = await applyPilotObservacionSubsanada({
+        resp,
+        usuarioDestinoId: usuarioDestinoIdNorm,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        metadata: metaTransicion,
+        etapaEfectiva,
+        labels,
+        row,
+        requerimientoId: rid,
+        client: tx,
+      });
+      resp = pilotSub.resp;
+      etapaEfectiva = pilotSub.etapaEfectiva;
+      metaEtapa = getEtapaMeta(etapaEfectiva) || metaEtapa;
+      Object.assign(labels, pilotSub.labels);
+      metaTransicion = { ...metaTransicion, ...pilotSub.metaExtra };
+      if (pilotSub.usuarioDestinoEfectivo != null) {
+        usuarioDestinoEfectivo = pilotSub.usuarioDestinoEfectivo;
       }
     }
 
@@ -298,14 +393,16 @@ export async function transicionarExpediente({
 
     // 5. Legacy sync
     const pilotObsReg = metaTransicion.pilot_observacion_destino_registro === true;
-    const estadoNegocio = (cambiaUbicacion || pilotObsReg)
+    const pilotObsSub = metaTransicion.pilot_observacion_subsanada_retorno === true;
+    const pilotCambiaUbicacion = cambiaUbicacion || pilotObsReg || pilotObsSub;
+    const estadoNegocio = pilotCambiaUbicacion
       ? (getEstadoNegocioFromEtapa(mapEtapaDestinoBD(etapaEfectiva)) || labels.estadoLabel)
       : null;
-    if (cambiaUbicacion || pilotObsReg || usuarioDestinoEfectivo != null || unidadDestino) {
+    if (pilotCambiaUbicacion || usuarioDestinoEfectivo != null || unidadDestino) {
       await syncLegacyRequerimiento(tx, {
         requerimientoId: rid,
         etapaCodigo: etapaEfectiva,
-        estadoNegocio: (cambiaUbicacion || pilotObsReg) ? estadoNegocio : null,
+        estadoNegocio: pilotCambiaUbicacion ? estadoNegocio : null,
         responsableTipo: resp.responsableTipo,
         responsableUsuarioId: resp.responsableUsuarioId,
         responsableUnidad: resp.responsableUnidad,
@@ -324,7 +421,7 @@ export async function transicionarExpediente({
       tipo_contratacion: tipo || 'BIEN',
       evento_codigo: eventoCodigo,
       etapa_origen: etapaOrigen,
-      etapa_destino: etapaDestino,
+      etapa_destino: etapaEfectiva,
       actor_id: usuarioOrigenId != null ? Number(usuarioOrigenId) : null,
       actor_rol: actorRol || 'SISTEMA',
       responsable_destino: resp.responsableUsuarioId
@@ -351,7 +448,7 @@ export async function transicionarExpediente({
         ? String(resp.responsableUsuarioId)
         : (resp.responsableUnidad || 'Pendiente de asignación'),
       observacion: motivo || `Evento ${eventoCodigo}`,
-      subModuloDestino: cambiaUbicacion ? metaEtapa.submoduloCodigo : '',
+      subModuloDestino: pilotCambiaUbicacion ? metaEtapa.submoduloCodigo : '',
     });
     await appendMovimiento(tx, rid, entry);
 

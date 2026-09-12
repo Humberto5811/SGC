@@ -2,6 +2,7 @@
 import { authService } from '../../services/authService.js';
 import { requerimientosService } from '../../services/requerimientosService.js';
 import { reqShared, addObservacion, todasObservaciones, historialHtml, showObservacionDirigidaModal, bindTrazabilidadButtons, verHistorialObservaciones } from './reqShared.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 import { printRequerimiento, manageAdjuntos, cargarContadorAdjuntos, openRequerimiento } from './registroRequerimientoView.js';
 import {
   renderFilterBarHtml, readFilterParams, enrichReqRow,
@@ -194,10 +195,24 @@ async function approveRequerimiento(id) {
     alert('Este requerimiento ya no puede aprobarse desde Evaluación.');
     return;
   }
-  if (!confirm('¿Aprobar este requerimiento?')) return;
+
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'EVALUACION_APROBADA',
+    title: 'Aprobar y derivar a DEC',
+    message: 'Seleccione la persona responsable en DEC. Etapa destino: DEC, estado: En trámite.',
+    buttonText: 'Confirmar aprobación',
+  });
+  if (!seleccion) return;
+
   try {
     const user = (authService.getCurrentUser && authService.getCurrentUser()) || {};
-    const res = await requerimientosService.aprobarEvaluacion(id, getUserDisplayName(user));
+    const res = await requerimientosService.aprobarEvaluacion(id, {
+      usuario: getUserDisplayName(user),
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
+    });
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadEvaluacionList();
   } catch (e) {

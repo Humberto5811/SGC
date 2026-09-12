@@ -19,11 +19,16 @@ import { handleBandejaObservaciones } from '../../components/modalObservaciones.
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import {
   isCoordinadorActos, isExpedientePoolCoordinador, isExpedienteAsignadoAMi,
-  showAsignarAnalistaModal, showAprobarInvitacionesModal, showActosDestinoModal,
+  showAsignarAnalistaModal, showActosDestinoModal,
   showDerivarAnalistaModal,
   actosBandejaStyles,
 } from '../../utils/actosModals.js';
-import { estadoModernBadge, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
+import {
+  renderBandejaCanonicoEstadoRespCells,
+  renderBandejaCanonicoDiasCell,
+  getBandejaCanonicoFechaAsignacion,
+} from '../../utils/bandejaExpedienteColumns.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 import { resolvePedidoSigamef } from '../../utils/bandejaHelpers.js';
 
 function esc(s) {
@@ -78,10 +83,8 @@ function renderCmBandejaRowCells(r, opts = {}) {
   const paqBadge = r.codigo_paquete
     ? `<span class="badge bg-success">${escFn(r.codigo_paquete)}</span>`
     : '<span class="text-muted small">Sin paquete</span>';
-  const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
+  const fechaAsig = getBandejaCanonicoFechaAsignacion(r);
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
-  const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const estadoBadgeHtml = estadoModernBadge(r, 'Coordinación CM');
   const pedidos = resolvePedidoSigamef(r);
 
   return `
@@ -94,10 +97,9 @@ function renderCmBandejaRowCells(r, opts = {}) {
     <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
     <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
-    <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td class="small">${renderResponsableCellHtml(r, escFn)}</td>
+    ${renderBandejaCanonicoEstadoRespCells(r)}
     <td class="small text-muted">${escFn(fechaFmt)}</td>
-    <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>`;
+    <td class="text-center">${renderBandejaCanonicoDiasCell(r, escFn)}</td>`;
 }
 
 function getCurrentUser() {
@@ -417,11 +419,22 @@ async function derivarActos(id) {
 }
 
 async function aprobarActosInv(id) {
-  const data = await showAprobarInvitacionesModal();
-  if (!data) return;
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'COORDINACION_CM_APROBADA',
+    title: 'Aprobar y derivar a Invitaciones',
+    message: 'Seleccione la persona responsable en Invitaciones. Etapa destino: Invitaciones, estado: En trámite.',
+    buttonText: 'Confirmar envío',
+  });
+  if (!seleccion) return;
   try {
     const userName = getUserDisplayName(getCurrentUser());
-    await contratacionesService.aprobarActosInvitaciones(id, data.responsable_destino, userName);
+    await contratacionesService.aprobarActosInvitaciones(id, {
+      usuario: userName,
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
+    });
     alert('Expediente enviado a Invitaciones.');
     loadActosList();
   } catch (e) {

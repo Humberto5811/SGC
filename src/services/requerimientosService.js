@@ -12,8 +12,8 @@ export const requerimientosService = {
   create: (body) => api.create('requerimientos', body),
   update: (id, body) => api.update('requerimientos', id, body),
   remove: (id) => api.remove('requerimientos', id),
-  aprobarEvaluacion: (id, usuario = '') =>
-    api.put(`/requerimientos/${id}/aprobar-evaluacion`, { usuario }),
+  aprobarEvaluacion: (id, body = {}) =>
+    api.put(`/requerimientos/${id}/aprobar-evaluacion`, body),
   observarEvaluacion: (id, body = {}) =>
     api.put(`/requerimientos/${id}/observar`, body),
   subsanarConDestino: (id, body) =>

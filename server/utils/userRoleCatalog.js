@@ -364,6 +364,14 @@ export function resolveFunctionalProfiles(usuario) {
     }
   }
 
+  // --- 2b) LEGACY: rol de seguridad DEC (p.ej. cargo "Analista DEC" no pasa legacyIsDec) ---
+  if (
+    normalizeSecurityRole(usuario.rol) === ROLES_SEGURIDAD_LEGACY.DEC
+    && !perfiles.includes(PERFILES_FUNCIONALES.DEC)
+  ) {
+    perfiles.push(PERFILES_FUNCIONALES.DEC);
+  }
+
   // --- 3) Default: AREA_USUARIA ---
   if (!perfiles.length) {
     perfiles.push(PERFILES_FUNCIONALES.AREA_USUARIA);

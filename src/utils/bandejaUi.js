@@ -9,6 +9,7 @@ import { renderEstadoVisualHtml } from './estadoVisualPresenter.js';
 import { renderResponsableBadgeFromRow } from '../ui/workflow/ResponsableBadge.js';
 import { renderEstadoResponsableCellHtml } from '../ui/workflow/EstadoResponsableCell.js';
 import { getEtapaDisplayLabel } from '../ui/workflow/getEtapaDisplayLabel.js';
+import { calcDiasEnEstadoVigente } from '../ui/workflow/adaptEstadoResponsable.js';
 import { resolveModuloFromPrefix } from './observacionesUi.js';
 
 export { getEtapaDisplayLabel } from '../ui/workflow/getEtapaDisplayLabel.js';
@@ -224,7 +225,7 @@ export function estadoModernBadge(row, moduloLabel = null) {
 }
 
 export function diasBadgeHtml(row) {
-  const dias = row.dias_en_estado ?? row.diasEnEstado ?? calcDiasEnEstado(row.fecha_estado_actual || row.fechaEstadoActual);
+  const dias = calcDiasEnEstadoVigente(row);
   let bg = '#198754';
   if (dias > 10) bg = '#dc3545';
   else if (dias > 5) bg = '#fd7e14';

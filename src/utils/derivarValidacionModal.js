@@ -4,6 +4,7 @@
 import { contratacionesService } from '../services/contratacionesService.js';
 import { authService } from '../services/authService.js';
 import { getUserDisplayName } from './userDisplay.js';
+import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
 
 const API_BASE = '/api';
 
@@ -116,7 +117,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
   const body = document.getElementById(`${id}_body`);
   const btnEnviar = document.getElementById(`${id}_enviar`);
   let submodulos = [];
-  let usuarios = [];
+  let previewData = null;
 
   try {
     const [prevResp, subResp] = await Promise.all([
@@ -124,6 +125,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
       contratacionesService.getValidacionSubmodulos(),
     ]);
     const preview = prevResp.data;
+    previewData = preview;
     // Obs 05_02 — desde Recepción solo destino Validaciones (no Registro/Evaluación).
     submodulos = (subResp.data || []).filter((s) => String(s.code || '').toUpperCase() === 'VALIDACIONES');
     if (!submodulos.length) {
@@ -149,10 +151,10 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
           </select>
         </div>
         <div class="col-md-6">
-          <label class="form-label fw-semibold">Responsable de validación</label>
-          <select class="form-select form-select-sm" id="${id}_resp" disabled>
-            <option value="">Cargando…</option>
-          </select>
+          <div class="form-label fw-semibold">Responsable de validación</div>
+          <div class="small text-muted border rounded p-2 bg-white">
+            Se seleccionará al confirmar (recomendado primero; puede elegir otra persona elegible).
+          </div>
         </div>
         <div class="col-12">
           <label class="form-label fw-semibold">Observación ${opts.requireObservacion ? '(obligatoria)' : '(opcional al devolver)'}</label>
@@ -164,54 +166,41 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
     bindDocButtons(body);
 
     const selSub = document.getElementById(`${id}_sub`);
-    const selResp = document.getElementById(`${id}_resp`);
     const errBox = document.getElementById(`${id}_err`);
-
-    async function loadUsuariosSubmodulo() {
-      selResp.innerHTML = '<option value="">Cargando…</option>';
-      selResp.disabled = true;
-      btnEnviar.disabled = true;
-      if (!selSub.value) {
-        selResp.innerHTML = '<option value="">Seleccione área usuaria primero…</option>';
-        return;
-      }
-      try {
-        const uResp = await contratacionesService.listValidacionUsuarios(selSub.value);
-        usuarios = uResp.data || [];
-        selResp.innerHTML = usuarios.length
-          ? '<option value="">Seleccione responsable…</option>' + usuarios.map((u) =>
-            `<option value="${u.id}">${esc(u.nombre)}${u.cargo ? ` — ${esc(u.cargo)}` : ''}</option>`).join('')
-          : '<option value="">Sin usuarios con permiso en este submódulo</option>';
-        selResp.disabled = !usuarios.length;
-      } catch (err) {
-        errBox.textContent = err.message;
-        errBox.classList.remove('d-none');
-      }
-    }
-
-    selSub.onchange = () => { loadUsuariosSubmodulo(); };
-    await loadUsuariosSubmodulo();
-
-    selResp.onchange = () => { btnEnviar.disabled = !selResp.value; };
+    btnEnviar.disabled = false;
 
     btnEnviar.onclick = async () => {
       const sub = submodulos.find((s) => s.code === selSub.value);
-      const u = usuarios.find((x) => String(x.id) === String(selResp.value));
       const obs = String(document.getElementById(`${id}_obs`)?.value || '').trim();
-      if (!sub || !u) return;
+      if (!sub) return;
       if (opts.requireObservacion && !obs) {
         errBox.textContent = 'Indique la observación para devolver al Área Usuaria';
         errBox.classList.remove('d-none');
         return;
       }
+      const rid = previewData?.requerimiento_id;
+      if (!rid) {
+        errBox.textContent = 'No se encontró el requerimiento del expediente';
+        errBox.classList.remove('d-none');
+        return;
+      }
+      const seleccion = await showWorkflowTransicionModal({
+        requerimientoId: rid,
+        eventoCodigo: 'COTIZACIONES_DERIVADAS_VALIDACION',
+        title: 'Enviar a Validaciones',
+        message: 'Seleccione la persona responsable en Validaciones. Etapa destino: Validación Usuario, estado: En trámite.',
+        buttonText: 'Confirmar envío',
+      });
+      if (!seleccion) return;
       btnEnviar.disabled = true;
       errBox.classList.add('d-none');
       try {
         await contratacionesService.derivarValidacion(cotId, {
           submodulo: sub.code,
           submodulo_label: sub.label,
-          responsable_id: u.id,
-          responsable_nombre: u.nombre,
+          usuario_destino_id: seleccion.usuario_destino_id,
+          responsable_recomendado_id: seleccion.responsable_recomendado_id,
+          reasignacion_manual: seleccion.reasignacion_manual,
           observacion: obs,
           usuario: getUserDisplayName(authService.getCurrentUser()),
         });

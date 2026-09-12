@@ -194,6 +194,12 @@ export async function openModalObservaciones(req, opts = {}) {
         historyHtml: historialHtml(obs),
         origenSubmodulo: opts.submoduloLabel || '',
         defaultDestinoSubmodulo: opts.defaultDestinoObservacion || 'Registro de Requerimiento',
+        destinosPermitidos: opts.destinosPermitidosObservacion || null,
+        candidatosApiPath: opts.candidatosApiPath
+          ? (typeof opts.candidatosApiPath === 'function'
+            ? opts.candidatosApiPath
+            : () => opts.candidatosApiPath)
+          : null,
         requerimientoId: row.id,
       });
       if (!data) { modal.show(); return; }

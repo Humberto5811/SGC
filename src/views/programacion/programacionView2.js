@@ -13,7 +13,10 @@ import {
   bandejaTableStyles,
   sortBandejaRows, bindSortHandlers, mergeSortParams, sortableTh,
 } from '../../utils/trazabilidad.js';
-import { estadoModernBadge, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
+import { renderEstadoBadgeHtml } from '../../ui/workflow/EstadoBadge.js';
+import { renderResponsableBadgeHtml } from '../../ui/workflow/ResponsableBadge.js';
+import { adaptEstadoResponsable, calcDiasEnEstadoVigente } from '../../ui/workflow/adaptEstadoResponsable.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
 import { loadProgramacionBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
@@ -207,10 +210,12 @@ function renderProgramacionRowCells(r, opts = {}) {
     : (pedCnt > 0
       ? `<span class="badge bg-success">${pedCnt} pedido${pedCnt === 1 ? '' : 's'}</span>`
       : '<span class="text-muted small">—</span>');
-  const fechaAsig = r.fecha_estado_actual || r.fechaEstadoActual || '';
+  const fechaAsig = r.fecha_estado_vigente || r.fecha_estado_actual || r.fechaEstadoActual || '';
   const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
-  const dias = r.dias_en_estado ?? r.diasEnEstado ?? 0;
-  const estadoBadgeHtml = estadoModernBadge(r, 'Programación');
+  const adapted = adaptEstadoResponsable(r);
+  const dias = calcDiasEnEstadoVigente(r);
+  const estadoBadgeHtml = renderEstadoBadgeHtml(adapted);
+  const respHtml = renderResponsableBadgeHtml(adapted);
   const nombreItem = descripcionesBien || r.denominacion || '—';
 
   return `
@@ -224,7 +229,7 @@ function renderProgramacionRowCells(r, opts = {}) {
     <td class="actos-col-area">${esc(r.area || '—')}</td>
     <td class="actos-col-cmn small">${esc(r.cmn || '—')}</td>
     <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
-    <td class="small">${renderResponsableCellHtml(r, esc)}</td>
+    <td class="req-col-resp">${respHtml}</td>
     <td class="small text-muted">${esc(fechaFmt)}</td>
     <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>
     <td class="text-center">${renderPedidosAdjuntosCell(pedCnt, r.id)}</td>`;
@@ -572,10 +577,23 @@ async function openEditCmnModal(id) {
 }
 
 async function aprobarProgramacion(id) {
-  if (!confirm('¿Confirmar aprobación? El expediente pasará a Coordinación CM (Programado).')) return;
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'PROGRAMACION_APROBADA',
+    title: 'Aprobar y derivar a Coordinación CM',
+    message: 'Seleccione la persona responsable en Coordinación CM. Etapa destino: Coordinación CM, estado: En trámite.',
+    buttonText: 'Confirmar aprobación',
+  });
+  if (!seleccion) return;
+
   try {
     const user = authService.getCurrentUser() || {};
-    const res = await contratacionesService.aprobarProgramacion(id, getUserDisplayName(user));
+    const res = await contratacionesService.aprobarProgramacion(id, {
+      usuario: getUserDisplayName(user),
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
+    });
     if (res && res.success === false) throw new Error('No se pudo aprobar');
     loadBandeja();
   } catch (e) {

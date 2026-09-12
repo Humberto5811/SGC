@@ -820,7 +820,11 @@ export async function registrarSubsanacionDerivacion({
 
   const etapaDestinoLabel = submoduloLabelToEtapa(destinoSubmodulo) || String(destinoEtapa || '').toUpperCase();
   const responsableDestino = resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, etapaDestinoLabel || etapaCanon);
-  const uid = /^\d+$/.test(String(destinoPersona || '').trim()) ? Number(destinoPersona) : null;
+  const { resolveUsuarioIdDesdeActor } = await import('./pilotRegistroEvaluacion.js');
+  let uid = /^\d+$/.test(String(destinoPersona || '').trim()) ? Number(destinoPersona) : null;
+  if (!uid && destinoPersona) {
+    uid = await resolveUsuarioIdDesdeActor({ actorRol: destinoPersona, row }, null);
+  }
 
   let evento = 'OBSERVACION_SUBSANADA';
   if (etapaCanon === 'COORDINACION_CM') evento = 'COORDINACION_CM_SUBSANADA';
@@ -837,6 +841,7 @@ export async function registrarSubsanacionDerivacion({
       origen_submodulo: origenSubmodulo,
       destino_submodulo: destinoSubmodulo || '',
       destino_etapa: etapaDestinoLabel || '',
+      destino_persona: destinoPersona || '',
       via: 'registrarSubsanacionDerivacion',
     },
     actorRol: usuario || 'Sistema',

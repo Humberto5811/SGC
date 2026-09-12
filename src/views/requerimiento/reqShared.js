@@ -199,8 +199,12 @@ export async function addSubsanacion(req, texto, usuario, destino = {}) {
   });
 }
 
-function buildDestinoSelectorsHtml(id, defaultSubmodulo = '') {
-  const opts = SUBMODULOS_DESTINO.map((s) =>
+function buildDestinoSelectorsHtml(id, defaultSubmodulo = '', destinosPermitidos = null) {
+  let subs = SUBMODULOS_DESTINO;
+  if (Array.isArray(destinosPermitidos) && destinosPermitidos.length) {
+    subs = SUBMODULOS_DESTINO.filter((s) => destinosPermitidos.includes(s.label));
+  }
+  const opts = subs.map((s) =>
     `<option value="${esc(s.label)}" data-code="${esc(s.code)}" ${s.label === defaultSubmodulo ? 'selected' : ''}>${esc(s.label)}</option>`,
   ).join('');
   return `
@@ -291,7 +295,10 @@ function wireDestinoSelectors(id, opts = {}) {
         destino_submodulo: subEl.value || '',
       });
       if (q.trim().length >= 2) params.set('q', q.trim());
-      const resp = await api.get(`/requerimientos/${requerimientoId}/candidatos-observacion-destino?${params}`);
+      const apiPath = typeof opts.candidatosApiPath === 'function'
+        ? opts.candidatosApiPath(requerimientoId)
+        : (opts.candidatosApiPath || `/requerimientos/${requerimientoId}/candidatos-observacion-destino`);
+      const resp = await api.get(`${apiPath}?${params}`);
       const data = resp?.data || resp;
       if (!data?.soportado) {
         refreshPersonasLegacy();
@@ -406,11 +413,113 @@ function wireDestinoSelectors(id, opts = {}) {
   };
 }
 
+function buildResponsableEvaluacionPickerHtml(id) {
+  return `
+    <div class="border rounded p-2 bg-light mb-2">
+      <label class="form-label small fw-semibold mb-1">Responsable en Evaluación</label>
+      <input type="hidden" id="${id}_destUid" value="">
+      <input type="hidden" id="${id}_destRecomendadoId" value="">
+      <input type="hidden" id="${id}_destPersonaNombre" value="">
+      <div class="input-group input-group-sm mb-1">
+        <input type="text" id="${id}_buscarUsr" class="form-control" placeholder="Buscar director…" autocomplete="off" />
+        <button type="button" id="${id}_btnBuscarUsr" class="btn btn-outline-primary" title="Buscar"><i class="bi bi-search"></i></button>
+      </div>
+      <div id="${id}_usrSugerido" class="mb-1"></div>
+    </div>`;
+}
+
+function wireResponsableEvaluacionPicker(id, requerimientoId) {
+  const buscarEl = document.getElementById(`${id}_buscarUsr`);
+  const btnBuscar = document.getElementById(`${id}_btnBuscarUsr`);
+  const sugeridoEl = document.getElementById(`${id}_usrSugerido`);
+  const uidEl = document.getElementById(`${id}_destUid`);
+  const recomEl = document.getElementById(`${id}_destRecomendadoId`);
+  const nombreEl = document.getElementById(`${id}_destPersonaNombre`);
+  let seleccion = { id: null, nombre: '' };
+
+  const seleccionarCandidato = (uid, nombre) => {
+    if (!uid) return;
+    seleccion = { id: Number(uid), nombre: String(nombre || '').trim() };
+    uidEl.value = String(seleccion.id);
+    nombreEl.value = seleccion.nombre;
+    buscarEl.value = seleccion.nombre;
+    sugeridoEl.querySelectorAll('.usr-pick').forEach((b) => {
+      b.classList.toggle('active', String(b.dataset.uid) === String(uid));
+    });
+  };
+
+  const cargarCandidatos = async (q = '') => {
+    sugeridoEl.innerHTML = '<div class="text-muted small">Cargando candidatos…</div>';
+    try {
+      const params = new URLSearchParams();
+      if (q.trim().length >= 2) params.set('q', q.trim());
+      const qs = params.toString();
+      const resp = await api.get(`/requerimientos/${requerimientoId}/candidatos-derivacion-evaluacion${qs ? `?${qs}` : ''}`);
+      const data = resp?.data || resp;
+      recomEl.value = data.recomendado?.id ? String(data.recomendado.id) : '';
+
+      let html = '';
+      if (data.recomendado) {
+        html += `<div class="small text-muted mb-1">Recomendado</div>`;
+        html += `<div class="list-group list-group-flush border rounded mb-1">${renderCandidatoPickBtn(data.recomendado, { destacado: true })}</div>`;
+        if (!seleccion.id) seleccionarCandidato(data.recomendado.id, data.recomendado.nombre);
+      }
+      if (data.candidatos?.length) {
+        html += `<div class="small text-muted mb-1">Otros directores elegibles</div>`;
+        html += `<div class="list-group list-group-flush border rounded" style="max-height:140px;overflow-y:auto">${data.candidatos.map((c) => renderCandidatoPickBtn(c)).join('')}</div>`;
+      }
+      if (!data.recomendado && !data.candidatos?.length) {
+        html = '<div class="text-muted small border rounded p-2">Sin directores elegibles para este centro.</div>';
+      }
+      sugeridoEl.innerHTML = html;
+      sugeridoEl.querySelectorAll('.usr-pick').forEach((b) => {
+        b.onclick = () => seleccionarCandidato(b.dataset.uid, b.dataset.nom);
+      });
+    } catch (e) {
+      sugeridoEl.innerHTML = `<div class="alert alert-danger py-1 px-2 small mb-0">${esc(e.message)}</div>`;
+    }
+  };
+
+  btnBuscar.onclick = () => cargarCandidatos(buscarEl.value || '');
+  buscarEl.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); cargarCandidatos(buscarEl.value || ''); } };
+  cargarCandidatos();
+
+  return () => {
+    if (!seleccion.id || !Number.isFinite(seleccion.id)) {
+      alert('Seleccione la persona responsable en Evaluación.');
+      return null;
+    }
+    const recomendadoId = recomEl.value ? Number(recomEl.value) : null;
+    return {
+      usuario_destino_id: seleccion.id,
+      responsable_recomendado_id: recomendadoId,
+      reasignacion_manual: !!(recomendadoId && seleccion.id !== recomendadoId),
+    };
+  };
+}
+
+/** RC8.17.2B-F2.2 — delega al modal compartido RC8.17.3. */
+export function showDerivacionEvaluacionModal(opts = {}) {
+  return import('../../components/workflowTransicionModal.js').then(({ showWorkflowTransicionModal }) =>
+    showWorkflowTransicionModal({
+      requerimientoId: opts.requerimientoId,
+      eventoCodigo: 'REQUERIMIENTO_ENVIADO_EVALUACION',
+      title: opts.title || 'Derivar a Evaluación',
+      message: opts.message,
+      buttonText: opts.buttonText || 'Confirmar derivación',
+    }),
+  );
+}
+
 /** Modal de observación con selección de submódulo y persona destino. */
 export function showObservacionDirigidaModal(opts = {}) {
   const id = 'modObsDir_' + Date.now();
   const hist = opts.historyHtml || '';
-  const destHtml = buildDestinoSelectorsHtml(id, opts.defaultDestinoSubmodulo || 'Registro de Requerimiento');
+  const destHtml = buildDestinoSelectorsHtml(
+    id,
+    opts.defaultDestinoSubmodulo || 'Registro de Requerimiento',
+    opts.destinosPermitidos || null,
+  );
   const html = `
     <div class="modal fade" id="${id}" tabindex="-1">
       <div class="modal-dialog modal-lg">
@@ -438,7 +547,10 @@ export function showObservacionDirigidaModal(opts = {}) {
   wrap.innerHTML = html;
   const el = document.getElementById(id);
   const modal = new bootstrap.Modal(el);
-  const readDestino = wireDestinoSelectors(id, { requerimientoId: opts.requerimientoId || null });
+  const readDestino = wireDestinoSelectors(id, {
+    requerimientoId: opts.requerimientoId || null,
+    candidatosApiPath: opts.candidatosApiPath || null,
+  });
   return new Promise((resolve) => {
     let resolved = false;
     document.getElementById(`${id}_ok`).onclick = () => {

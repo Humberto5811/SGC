@@ -27,6 +27,7 @@ import { MODELO } from '../glosasRequerimientos/formatoBienesModelo.js';
 import { MODELO_SERVICIOS } from '../glosasRequerimientos/formatoServiciosModelo.js';
 import { MODELO_LOCADORES } from '../glosasRequerimientos/formatoLocadoresModelo.js';
 import { reqShared, estadoBadge, ultimaObservacion, todasObservaciones, historialHtml, addSubsanacion, showSubsanacionDirigidaModal, bindTrazabilidadButtons } from './reqShared.js';
+import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 import {
   renderFilterBarHtml, readFilterParams, enrichReqRow,
   renderSummaryCardsHtml, updateSummaryCards,
@@ -2542,13 +2543,22 @@ async function solicitarAprobacion(requerimientoId) {
     alert('Este requerimiento ya no puede aprobarse desde Registro.');
     return;
   }
-  if (!confirm('¿Aprobar y enviar este requerimiento a Evaluación de Requerimientos?')) {
-    return;
-  }
+
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId,
+    eventoCodigo: 'REQUERIMIENTO_ENVIADO_EVALUACION',
+    title: 'Derivar a Evaluación de Requerimientos',
+    message: 'Seleccione la persona responsable en Evaluación. Se muestra primero el director recomendado del centro.',
+    buttonText: 'Confirmar derivación',
+  });
+  if (!seleccion) return;
 
   try {
     const res = await api.put(`/requerimientos/${requerimientoId}/solicitar-aprobacion`, {
       usuario: getUserDisplayName(authService.getCurrentUser()),
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
     });
     if (res && res.success) {
       alert('Requerimiento enviado a Evaluación de Requerimientos correctamente.');

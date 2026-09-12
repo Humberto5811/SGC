@@ -1298,12 +1298,39 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     submodulo_label,
     responsable_id,
     responsable_nombre,
+    usuario_destino_id: usuarioDestinoIdBody,
+    responsable_recomendado_id: responsableRecomendadoIdBody,
+    reasignacion_manual: reasignacionManualBody,
     observacion,
   } = body || {};
-  if (!submodulo || !responsable_id || !responsable_nombre) {
-    throw new Error('Submódulo y responsable son obligatorios');
+  let responsableId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+    ? Number(usuarioDestinoIdBody)
+    : parseInt(responsable_id, 10);
+  if (!submodulo || !Number.isFinite(responsableId) || responsableId <= 0) {
+    throw new Error('Submódulo y responsable PERSONA son obligatorios');
+  }
+  let responsableNombre = String(responsable_nombre || '').trim();
+  if (!responsableNombre) {
+    const { rows: uRows } = await query(`
+      SELECT COALESCE(NULLIF(TRIM(CONCAT(apellidos, ' ', nombres)), ''), nombre, username, dni) AS nombre
+      FROM usuarios WHERE id = $1 AND activo = TRUE LIMIT 1
+    `, [responsableId]);
+    responsableNombre = String(uRows[0]?.nombre || '').trim();
+  }
+  if (!responsableNombre) {
+    throw new Error('Responsable PERSONA no encontrado o inactivo');
   }
   const cot = await loadCotizacionFull(cotizacionId);
+  const rid = cot.requerimiento_id;
+  if (rid) {
+    const { assertUsuarioDestinoTransicionElegible } = await import('./workflowTransicionResponsable.js');
+    await assertUsuarioDestinoTransicionElegible(
+      rid,
+      'COTIZACIONES_DERIVADAS_VALIDACION',
+      responsableId,
+      { id: rid, tipo: cot.solicitud_tipo, estado_actual: 'RECEPCION_COTIZACIONES' },
+    );
+  }
   if (String(cot.estado) !== 'COTIZACION_PRESENTADA') throw new Error('La cotización no está presentada');
 
   // Locadores no pasan por Validaciones (Recepción → CCP).
@@ -1374,8 +1401,8 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     derivacion: {
       submodulo: sub.code,
       submodulo_label: sub.label,
-      responsable_id: parseInt(responsable_id, 10),
-      responsable_nombre,
+      responsable_id: responsableId,
+      responsable_nombre: responsableNombre,
       documentos_tecnicos: documentos,
       derivado_por: usuarioOperador,
       derivado_at: new Date().toISOString(),
@@ -1394,7 +1421,7 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
   const histEntry = {
     tipo: esReapertura ? 'validacion_reapertura' : 'derivacion_validacion',
     submodulo: sub.code,
-    responsable: responsable_nombre,
+    responsable: responsableNombre,
     usuario: usuarioOperador,
     observacion: obsTexto || undefined,
     estado_anterior: estadoActual || 'PENDIENTE',
@@ -1416,7 +1443,7 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     RETURNING *
   `, [
     cotizacionId,
-    responsable_nombre,
+    responsableNombre,
     JSON.stringify(informe),
     JSON.stringify([histEntry]),
     estadosPermitidos.map((e) => String(e).toUpperCase()),
@@ -1452,8 +1479,8 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
       solicitudId: updated.solicitud_id,
       origenCotizacionId: updated.id,
       sub,
-      responsable_id,
-      responsable_nombre,
+      responsable_id: responsableId,
+      responsable_nombre: responsableNombre,
       usuarioOperador,
       histEntry,
     });
@@ -1465,8 +1492,8 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     requerimiento_id: updated.requerimiento_id,
     evento: esReapertura ? 'VALIDACION_DEVUELTA_AU' : 'COTIZACION_ENVIADA_VALIDACION_AU',
     detalle: esReapertura
-      ? `Validación observada/devuelta a AU — ${responsable_nombre}${obsTexto ? `: ${obsTexto.slice(0, 160)}` : ''}`
-      : `Cotización enviada a validación AU — ${sub.label} → ${responsable_nombre}`,
+      ? `Validación observada/devuelta a AU — ${responsableNombre}${obsTexto ? `: ${obsTexto.slice(0, 160)}` : ''}`
+      : `Cotización enviada a validación AU — ${sub.label} → ${responsableNombre}`,
     usuario: usuarioOperador,
   });
 
@@ -1475,11 +1502,11 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     evento: esReapertura ? 'VALIDACION_DEVUELTA' : 'COTIZACIONES_DERIVADAS_VALIDACION',
     usuario: usuarioOperador,
     observacion: esReapertura
-      ? (obsTexto || `Validación devuelta a Área Usuaria — ${responsable_nombre}`)
-      : `Cotización enviada a validación AU — ${responsable_nombre}`,
+      ? (obsTexto || `Validación devuelta a Área Usuaria — ${responsableNombre}`)
+      : `Cotización enviada a validación AU — ${responsableNombre}`,
     etapaEjecutor: 'RECEPCION_COTIZACIONES',
-    responsable: responsable_nombre,
-    usuarioDestinoId: Number.isFinite(parseInt(responsable_id, 10)) ? parseInt(responsable_id, 10) : null,
+    responsable: responsableNombre,
+    usuarioDestinoId: responsableId,
   });
 
   return mapCotizacionRow({
@@ -1964,10 +1991,29 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
   if (!formulario_07a?.items?.length) throw new Error('Complete el formulario de validación');
   if (!pdf_firmado?.base64) throw new Error('Adjunte el PDF firmado de la validación');
 
-  const respDestId = parseInt(responsable_destino_id, 10);
-  const respDestNombre = String(responsable_destino_nombre || '').trim();
-  if (!Number.isFinite(respDestId) || !respDestNombre) {
-    throw new Error('Seleccione el usuario responsable del submódulo destino');
+  const respDestId = parseInt(body?.usuario_destino_id || responsable_destino_id, 10);
+  let respDestNombre = String(responsable_destino_nombre || body?.responsable_nombre || '').trim();
+  if (!Number.isFinite(respDestId) || respDestId <= 0) {
+    throw new Error('Debe seleccionar la persona responsable del submódulo destino');
+  }
+  if (estadoVal === 'APTO' && cot.requerimiento_id) {
+    const { assertUsuarioDestinoTransicionElegible } = await import('./workflowTransicionResponsable.js');
+    await assertUsuarioDestinoTransicionElegible(
+      cot.requerimiento_id,
+      'VALIDACION_COMPLETADA',
+      respDestId,
+      { id: cot.requerimiento_id, tipo: cot.solicitud_tipo, estado_actual: 'VALIDACION_USUARIO' },
+    );
+  }
+  if (!respDestNombre) {
+    const { rows: uRows } = await query(`
+      SELECT COALESCE(NULLIF(TRIM(CONCAT(apellidos, ' ', nombres)), ''), nombre, username, dni) AS nombre
+      FROM usuarios WHERE id = $1 AND activo = TRUE LIMIT 1
+    `, [respDestId]);
+    respDestNombre = String(uRows[0]?.nombre || '').trim();
+  }
+  if (!respDestNombre) {
+    throw new Error('Responsable PERSONA no encontrado o inactivo');
   }
 
   const obsMatriz = filasMatriz

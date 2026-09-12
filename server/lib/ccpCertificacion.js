@@ -1354,6 +1354,9 @@ export async function evaluarPuedeDerivarRegistroOrdenes(requerimientoId) {
 export async function derivarCcpARegistroOrdenes(requerimientoId, {
   usuario = '',
   usuarioId = null,
+  usuarioDestinoId: usuarioDestinoIdParam = null,
+  responsable_recomendado_id: responsableRecomendadoId = null,
+  reasignacion_manual: reasignacionManual = false,
   rol = '',
   motivo = '',
   clientRequestId = null,
@@ -1374,26 +1377,15 @@ export async function derivarCcpARegistroOrdenes(requerimientoId, {
     throw httpError(eval_.motivo || 'No se puede derivar', 409, 'CCP_DERIVAR_BLOQUEADO');
   }
 
-  // Obs45 — preservar analista CCP (asignación activa o actor) como responsable en RO.
-  let usuarioDestinoId = null;
-  const uidActor = usuarioId != null && Number.isFinite(Number(usuarioId))
-    ? Number(usuarioId)
+  // RC8.17.6 — responsable PERSONA seleccionado en modal compartido.
+  const usuarioDestinoId = usuarioDestinoIdParam != null && Number.isFinite(Number(usuarioDestinoIdParam))
+    ? Number(usuarioDestinoIdParam)
     : null;
-  const { rows: asgCcp } = await query(`
-    SELECT usuario_id
-    FROM expediente_asignaciones
-    WHERE requerimiento_id = $1
-      AND activo = TRUE
-      AND UPPER(COALESCE(etapa_codigo, '')) = 'CCP'
-      AND usuario_id IS NOT NULL
-    ORDER BY id DESC
-    LIMIT 1
-  `, [id]);
-  if (asgCcp[0]?.usuario_id != null) {
-    usuarioDestinoId = Number(asgCcp[0].usuario_id);
-  } else if (uidActor) {
-    usuarioDestinoId = uidActor;
+  if (!usuarioDestinoId) {
+    throw httpError('Debe seleccionar la persona responsable en Registro de Órdenes', 400, 'CCP_DERIVAR_SIN_PERSONA');
   }
+  const { assertUsuarioDestinoTransicionElegible } = await import('./workflowTransicionResponsable.js');
+  await assertUsuarioDestinoTransicionElegible(id, 'CCP_REGISTRADA', usuarioDestinoId, { id, estado_actual: 'CCP' });
 
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const result = await transicionarExpediente({
@@ -1408,6 +1400,10 @@ export async function derivarCcpARegistroOrdenes(requerimientoId, {
       client_request_id: clientRequestId || `ccp-derivar-orden:${id}:${eval_.codigo_ccp}`,
       codigo_ccp: eval_.codigo_ccp,
       actor: String(usuario || '').slice(0, 150),
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
     },
     domainMutator: async (tx) => {
       await tx.query(`

@@ -288,6 +288,9 @@ router.post('/:id/derivar-ordenes', async (req, res, next) => {
     const result = await derivarCcpARegistroOrdenes(rid, {
       usuario,
       usuarioId: userId,
+      usuarioDestinoId: req.body?.usuario_destino_id,
+      responsable_recomendado_id: req.body?.responsable_recomendado_id,
+      reasignacion_manual: req.body?.reasignacion_manual,
       rol,
       motivo: req.body?.motivo || '',
       clientRequestId: req.body?.client_request_id

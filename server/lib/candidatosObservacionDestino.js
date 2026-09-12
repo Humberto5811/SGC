@@ -8,10 +8,28 @@ import { getEtapaMeta } from '../../shared/workflow/etapas.js';
 import { hasFunctionalProfile, PERFILES_FUNCIONALES } from '../utils/userRoleCatalog.js';
 import { getActividadesForSubmodulo, normalizePermisos } from './permissionsCatalog.js';
 import { resolverCentroDesdeRequerimiento, normalizarCodigoCentro } from './recepcionBienesAlcance.js';
+import { listarCandidatosDerivacionEvaluacion } from './pilotRegistroEvaluacion.js';
+import { listarCandidatosPorPerfil } from './workflowTransicionResponsable.js';
 
 const DESTINO_REGISTRO_LABELS = Object.freeze([
   'Registro de Requerimiento',
   'Registro de Requerimientos',
+]);
+
+const DESTINO_EVALUACION_LABELS = Object.freeze([
+  'Evaluación de Requerimiento',
+  'Evaluacion de Requerimiento',
+]);
+
+const DESTINO_PROGRAMACION_LABELS = Object.freeze([
+  'Programación',
+  'Programacion',
+]);
+
+export const DESTINOS_OBSERVACION_DEC = Object.freeze([
+  ...DESTINO_REGISTRO_LABELS,
+  ...DESTINO_EVALUACION_LABELS,
+  ...DESTINO_PROGRAMACION_LABELS,
 ]);
 
 const ACTIVIDADES_REG_ELEGIBLES = Object.freeze(['VER', 'CREAR', 'EDITAR', 'OBSERVAR', 'DERIVAR']);
@@ -33,6 +51,29 @@ export function esDestinoRegistroRequerimiento(destinoSubmodulo = '') {
   const s = String(destinoSubmodulo || '').trim();
   return DESTINO_REGISTRO_LABELS.some((l) => l.toLowerCase() === s.toLowerCase())
     || /^registro de requerimiento/i.test(s);
+}
+
+export function esDestinoEvaluacionRequerimiento(destinoSubmodulo = '') {
+  const s = String(destinoSubmodulo || '').trim().toLowerCase();
+  return DESTINO_EVALUACION_LABELS.some((l) => l.toLowerCase() === s)
+    || /^evaluaci[oó]n de requerimiento/i.test(s);
+}
+
+export function esDestinoProgramacion(destinoSubmodulo = '') {
+  const s = String(destinoSubmodulo || '').trim().toLowerCase();
+  return DESTINO_PROGRAMACION_LABELS.some((l) => l.toLowerCase() === s)
+    || s === 'programacion' || s === 'programación';
+}
+
+export function mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo = '') {
+  if (esDestinoRegistroRequerimiento(destinoSubmodulo)) return 'REGISTRO';
+  if (esDestinoEvaluacionRequerimiento(destinoSubmodulo)) return 'EVALUACION';
+  if (esDestinoProgramacion(destinoSubmodulo)) return 'PROGRAMACION';
+  return null;
+}
+
+export function esDestinoObservacionDecSoportado(destinoSubmodulo = '') {
+  return mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo) != null;
 }
 
 export function esElegibleRegistroRequerimiento(usuarioRow, centroCodigo) {
@@ -163,7 +204,9 @@ export async function listarCandidatosObservacionDestino({
     throw err;
   }
 
-  if (!esDestinoRegistroRequerimiento(destinoSubmodulo)) {
+  const etapaDest = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo);
+
+  if (!etapaDest) {
     return {
       destino: String(destinoSubmodulo || ''),
       soportado: false,
@@ -180,6 +223,58 @@ export async function listarCandidatosObservacionDestino({
     throw err;
   }
   const row = reqRows[0];
+
+  if (etapaDest === 'EVALUACION') {
+    const data = await listarCandidatosDerivacionEvaluacion(rid, { search }, row, client);
+    const meta = getEtapaMeta('EVALUACION');
+    return {
+      destino: destinoSubmodulo,
+      destino_etapa: 'EVALUACION',
+      destino_submodulo_codigo: meta?.submoduloCodigo || 'EVALUACION_REQUERIMIENTO',
+      soportado: true,
+      perfil_responsable: PERFILES_FUNCIONALES.DIRECTOR_CENTRO,
+      recomendado: data.recomendado,
+      recomendado_inactivo: null,
+      candidatos: data.candidatos || [],
+      centro: data.centro || null,
+      resolucion_automatica: data.resolucion_automatica,
+    };
+  }
+
+  if (etapaDest === 'PROGRAMACION') {
+    const meta = getEtapaMeta('PROGRAMACION');
+    const base = await listarCandidatosPorPerfil({
+      perfil: PERFILES_FUNCIONALES.PROGRAMACION,
+      submoduloCodigo: meta?.submoduloCodigo || 'PROGRAMACION',
+      alcanceTransversal: true,
+      search,
+      client,
+    });
+    return {
+      destino: destinoSubmodulo,
+      destino_etapa: 'PROGRAMACION',
+      destino_submodulo_codigo: meta?.submoduloCodigo || 'PROGRAMACION',
+      soportado: true,
+      perfil_responsable: PERFILES_FUNCIONALES.PROGRAMACION,
+      alcance: 'TRANSVERSAL',
+      recomendado: base.recomendado,
+      recomendado_inactivo: null,
+      candidatos: base.candidatos || [],
+      resolucion_automatica: base.resolucion_automatica,
+    };
+  }
+
+  // REGISTRO — lógica piloto existente
+  if (!esDestinoRegistroRequerimiento(destinoSubmodulo)) {
+    return {
+      destino: String(destinoSubmodulo || ''),
+      soportado: false,
+      recomendado: null,
+      recomendado_inactivo: null,
+      candidatos: [],
+    };
+  }
+
   let centro;
   try {
     centro = resolverCentroDesdeRequerimiento(row);
@@ -265,9 +360,45 @@ export async function listarCandidatosObservacionDestino({
   };
 }
 
+export async function assertUsuarioDestinoObservacionElegible(
+  requerimientoId,
+  destinoSubmodulo,
+  usuarioId,
+  row = null,
+  client = null,
+) {
+  const lista = await listarCandidatosObservacionDestino({
+    requerimientoId,
+    destinoSubmodulo,
+    client,
+  });
+  if (!lista.soportado) {
+    const err = new Error('Destino de observación no soportado');
+    err.status = 422;
+    err.code = 'DESTINO_OBSERVACION_INVALIDO';
+    throw err;
+  }
+  const uid = Number(usuarioId);
+  const todos = [...(lista.recomendado ? [lista.recomendado] : []), ...(lista.candidatos || [])];
+  const found = todos.find((c) => c.id === uid);
+  if (!found) {
+    const err = new Error('Usuario destino no elegible para la observación');
+    err.status = 422;
+    err.code = 'RESPONSABLE_OBSERVACION_INVALIDO';
+    throw err;
+  }
+  return { ok: true, candidato: found, recomendado: lista.recomendado, lista };
+}
+
 export default {
+  DESTINOS_OBSERVACION_DEC,
   esDestinoRegistroRequerimiento,
+  esDestinoEvaluacionRequerimiento,
+  esDestinoProgramacion,
+  mapDestinoSubmoduloAEtapaObservacion,
+  esDestinoObservacionDecSoportado,
   esElegibleRegistroRequerimiento,
   resolveRecomendadoRegistro,
   listarCandidatosObservacionDestino,
+  assertUsuarioDestinoObservacionElegible,
 };

@@ -1996,15 +1996,40 @@ export async function derivarCuadroACcp(cuadroId, body = {}, usuario = '') {
     if (sinAdj || !items.length) throw new Error('El cuadro debe estar adjudicado antes de derivar');
   }
 
-  const respId = parseInt(body.responsable_destino_id || body.responsable_id || body.responsable_ccp_id, 10);
-  const respNombre = String(
+  const respId = parseInt(body.usuario_destino_id || body.responsable_destino_id || body.responsable_id || body.responsable_ccp_id, 10);
+  let respNombre = String(
     body.responsable_destino_nombre || body.responsable_nombre || body.responsable_ccp_nombre || '',
   ).trim();
   if (!Number.isFinite(respId) || respId <= 0) {
-    throw new Error('Seleccione el usuario responsable de CCP');
+    throw new Error('Debe seleccionar la persona responsable de CCP');
   }
   if (!respNombre) {
-    throw new Error('Nombre del responsable CCP es obligatorio');
+    const { rows: uRows } = await query(`
+      SELECT COALESCE(NULLIF(TRIM(CONCAT(apellidos, ' ', nombres)), ''), nombre, username, dni) AS nombre
+      FROM usuarios WHERE id = $1 AND activo = TRUE LIMIT 1
+    `, [respId]);
+    respNombre = String(uRows[0]?.nombre || '').trim();
+  }
+  if (!respNombre) {
+    throw new Error('Responsable PERSONA no encontrado o inactivo');
+  }
+
+  const { rows: reqRows } = await query(`
+    SELECT r.id, r.tipo, r.estado_actual
+    FROM solicitud_requerimientos sr
+    JOIN requerimientos r ON r.id = sr.requerimiento_id
+    WHERE sr.solicitud_id = $1
+    ORDER BY r.id
+    LIMIT 1
+  `, [cur.solicitud_id]);
+  if (reqRows[0]?.id) {
+    const { assertUsuarioDestinoTransicionElegible } = await import('./workflowTransicionResponsable.js');
+    await assertUsuarioDestinoTransicionElegible(
+      reqRows[0].id,
+      'CUADRO_APROBADO_DEC',
+      respId,
+      reqRows[0],
+    );
   }
 
   const observacion = String(body.observacion_derivacion || body.observacion || '').trim();

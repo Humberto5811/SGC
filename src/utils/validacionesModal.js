@@ -19,6 +19,7 @@ import {
   bindMatrizUi,
 } from './validacionMatrizUi.js';
 import { buildValidationReportData } from './validacionReportData.js';
+import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
 
 export { canDerivarValidacion, buildExpedienteLineaCompacta, formatFaltantesHtml, resolverDestinoCliente };
 
@@ -858,69 +859,101 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
 
     const form = state.formulario;
     const cotizacionId = state.cotizacionId || state.cotId;
+
+    const ejecutarDerivacion = async (dest) => {
+      state.derivando = true;
+      showFooterMsg('<span class="spinner-border spinner-border-sm me-1"></span> Derivando expediente…', false);
+      const footerInfo = footerMsg();
+      if (footerInfo) {
+        footerInfo.classList.remove('alert-danger', 'alert-success');
+        footerInfo.classList.add('alert-info');
+      }
+      try {
+        const resp = await contratacionesService.enviarValidacion(cotizacionId, {
+          formulario_07a: form,
+          matriz_v2: state.matriz_v2,
+          pdf_firmado: state.pdfAdjunto || state.documentoFirmado,
+          resultado: form.resultado_global || state.resultado,
+          observacion: form.observacion_global || state.observaciones,
+          usuario: state.usuarioActual,
+          destino_submodulo: dest.destino_submodulo || dest.destino || check.destino?.code,
+          usuario_destino_id: dest.usuario_destino_id || dest.responsable_destino_id || dest.responsable_id,
+          responsable_destino_id: dest.usuario_destino_id || dest.responsable_destino_id || dest.responsable_id,
+          responsable_destino_nombre: dest.responsable_nombre || dest.responsable_destino_nombre,
+          responsable_recomendado_id: dest.responsable_recomendado_id,
+          reasignacion_manual: dest.reasignacion_manual,
+          observacion_derivacion: dest.observacion_derivacion,
+        }, esAdmin);
+
+        const cot = resp.cotizacion || resp;
+        if (cot?.idempotente || cot?.ya_derivado) {
+          showFooterMsg('El expediente ya fue derivado anteriormente.', true);
+          showOk(id, 'El expediente ya fue derivado anteriormente.');
+        } else {
+          const label = cot?.destino_salida?.estado_bandeja
+            || resp.destino?.label
+            || check.destino?.label
+            || 'Expediente derivado';
+          showFooterMsg(`Validación registrada. ${esc(label)}.`, false);
+          showOk(id, `Validación registrada. ${label}.`);
+        }
+
+        state.derivado = true;
+        state.estadoValidacion = cot?.validacion_estado || check.destino?.estado || 'APTO';
+        state.responsableActual = dest.responsable_destino_nombre || dest.responsable_nombre || '';
+        state.detalle = {
+          ...state.detalle,
+          puede_editar: false,
+          puede_derivar: false,
+          ya_derivado: true,
+          validacion_estado: state.estadoValidacion,
+          destino_salida: cot?.destino_salida || check.destino,
+          estado_bandeja: cot?.destino_salida?.estado_bandeja || check.destino?.label,
+        };
+        setFooterEnabled(false);
+        syncDerivarBtn();
+        paintPdf();
+        if (onDone) onDone();
+      } catch (err) {
+        console.error('[Validaciones] Error backend al derivar:', err);
+        showFooterMsg(esc(err.message || 'Error al derivar'), true);
+        showErr(id, err.message || 'Error al derivar');
+        throw err;
+      } finally {
+        state.derivando = false;
+      }
+    };
+
     try {
+      const destCode = String(check.destino?.code || '').toUpperCase();
+      if (destCode === 'CUADRO_COMPARATIVO') {
+        const rid = state.requerimientoId;
+        if (!rid) {
+          throw new Error('No se encontró el requerimiento del expediente');
+        }
+        const seleccion = await showWorkflowTransicionModal({
+          requerimientoId: rid,
+          eventoCodigo: 'VALIDACION_COMPLETADA',
+          title: 'Derivar a Cuadro Comparativo',
+          message: 'Seleccione la persona responsable en Cuadro Comparativo. Etapa destino: Cuadro Comparativo, estado: En trámite.',
+          buttonText: 'Confirmar derivación',
+        });
+        if (!seleccion) return;
+        await ejecutarDerivacion({
+          destino_submodulo: destCode,
+          usuario_destino_id: seleccion.usuario_destino_id,
+          responsable_recomendado_id: seleccion.responsable_recomendado_id,
+          reasignacion_manual: seleccion.reasignacion_manual,
+          responsable_nombre: seleccion.responsable_nombre,
+        });
+        return;
+      }
+
       await showDestinoDerivacionPanel(el, {
         resultado: form.resultado_global || state.resultado,
         cumple: form.cumple || state.cumple,
         onConfirm: async (dest) => {
-          state.derivando = true;
-          showFooterMsg('<span class="spinner-border spinner-border-sm me-1"></span> Derivando expediente…', false);
-          const footerInfo = footerMsg();
-          if (footerInfo) {
-            footerInfo.classList.remove('alert-danger', 'alert-success');
-            footerInfo.classList.add('alert-info');
-          }
-          try {
-            const resp = await contratacionesService.enviarValidacion(cotizacionId, {
-              formulario_07a: form,
-              matriz_v2: state.matriz_v2,
-              pdf_firmado: state.pdfAdjunto || state.documentoFirmado,
-              resultado: form.resultado_global || state.resultado,
-              observacion: form.observacion_global || state.observaciones,
-              usuario: state.usuarioActual,
-              destino_submodulo: dest.destino_submodulo || dest.destino,
-              responsable_destino_id: dest.responsable_destino_id || dest.responsable_id,
-              responsable_destino_nombre: dest.responsable_destino_nombre || dest.responsable_nombre,
-              observacion_derivacion: dest.observacion_derivacion,
-            }, esAdmin);
-
-            const cot = resp.cotizacion || resp;
-            if (cot?.idempotente || cot?.ya_derivado) {
-              showFooterMsg('El expediente ya fue derivado anteriormente.', true);
-              showOk(id, 'El expediente ya fue derivado anteriormente.');
-            } else {
-              const label = cot?.destino_salida?.estado_bandeja
-                || resp.destino?.label
-                || check.destino?.label
-                || 'Expediente derivado';
-              showFooterMsg(`Validación registrada. ${esc(label)}.`, false);
-              showOk(id, `Validación registrada. ${label}.`);
-            }
-
-            state.derivado = true;
-            state.estadoValidacion = cot?.validacion_estado || check.destino?.estado || 'APTO';
-            state.responsableActual = dest.responsable_destino_nombre || dest.responsable_nombre || '';
-            state.detalle = {
-              ...state.detalle,
-              puede_editar: false,
-              puede_derivar: false,
-              ya_derivado: true,
-              validacion_estado: state.estadoValidacion,
-              destino_salida: cot?.destino_salida || check.destino,
-              estado_bandeja: cot?.destino_salida?.estado_bandeja || check.destino?.label,
-            };
-            setFooterEnabled(false);
-            syncDerivarBtn();
-            paintPdf();
-            if (onDone) onDone();
-          } catch (err) {
-            console.error('[Validaciones] Error backend al derivar:', err);
-            showFooterMsg(esc(err.message || 'Error al derivar'), true);
-            showErr(id, err.message || 'Error al derivar');
-            throw err;
-          } finally {
-            state.derivando = false;
-          }
+          await ejecutarDerivacion(dest);
         },
       });
     } catch (err) {

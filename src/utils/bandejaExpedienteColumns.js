@@ -194,3 +194,68 @@ export function wrapBandejaExpedienteTable({
 export function renderBandejaExpedienteActionCell(id, menuItems, hiddenActionsHtml = '') {
   return renderActionMenuCell(id, menuItems, hiddenActionsHtml);
 }
+
+/** RC8.17.5 — Contrato canónico compartido para bandejas con columnas propias. */
+export { resolveContratoVisual };
+
+export function getBandejaCanonicoFechaAsignacion(row = {}) {
+  return row.bandeja_contrato?.fecha_estado_vigente
+    || row.fecha_estado_vigente
+    || row.fecha_estado_actual
+    || row.fechaEstadoActual
+    || null;
+}
+
+export function renderBandejaCanonicoEtapaCell(row = {}) {
+  const v = resolveContratoVisual(row);
+  return renderEtapaBadgeHtml({ etapaLabel: v.etapaLabel, etapaCodigo: v.etapaCodigo });
+}
+
+export function renderBandejaCanonicoEstadoCell(row = {}) {
+  const v = resolveContratoVisual(row);
+  return renderEstadoBadgeHtml({
+    estadoCodigo: v.estadoCodigo,
+    estadoLabel: v.estadoLabel,
+    categoria: v.categoria,
+    icono: v.icono,
+    tooltip: v.tooltip,
+  });
+}
+
+export function renderBandejaCanonicoResponsableCell(row = {}) {
+  const v = resolveContratoVisual(row);
+  return renderResponsableBadgeHtml({
+    responsableTipo: v.responsableTipo,
+    responsableNombre: v.responsableNombre,
+    responsableUsername: v.responsableUsername,
+    responsableUsuarioId: v.responsableUsuarioId,
+    responsableUnidad: v.responsableUnidad,
+    responsableDisplay: v.responsableNombre,
+  });
+}
+
+export function renderBandejaCanonicoDiasCell(row = {}, escFn = esc) {
+  const v = resolveContratoVisual(row);
+  const d = Number(v.dias) || 0;
+  let bg = '#198754';
+  if (d > 10) bg = '#dc3545';
+  else if (d > 5) bg = '#fd7e14';
+  else if (d > 2) bg = '#ffc107';
+  const fg = d > 2 && d <= 5 ? '#212529' : '#fff';
+  return `<span class="badge badge-dias-mod" style="background:${bg};color:${fg};" title="Días en estado vigente">${escFn(diasLabel(d))}</span>`;
+}
+
+/** Etapa + Estado + Responsable (3 celdas). */
+export function renderBandejaCanonicoEtapaEstadoRespCells(row = {}) {
+  return `
+    <td class="req-col-etapa">${renderBandejaCanonicoEtapaCell(row)}</td>
+    <td class="req-col-estado-cell">${renderBandejaCanonicoEstadoCell(row)}</td>
+    <td class="req-col-resp">${renderBandejaCanonicoResponsableCell(row)}</td>`;
+}
+
+/** Estado + Responsable (2 celdas) — tablas sin columna Etapa. */
+export function renderBandejaCanonicoEstadoRespCells(row = {}) {
+  return `
+    <td class="req-col-estado-cell">${renderBandejaCanonicoEstadoCell(row)}</td>
+    <td class="req-col-resp">${renderBandejaCanonicoResponsableCell(row)}</td>`;
+}

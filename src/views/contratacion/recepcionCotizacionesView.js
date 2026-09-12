@@ -29,8 +29,8 @@ import {
   closeBandejaActionMenus,
   renderActionMenuCell,
   bindActionMenus,
-  renderResponsableCellHtml,
 } from '../../utils/bandejaUi.js';
+import { renderBandejaCanonicoResponsableCell } from '../../utils/bandejaExpedienteColumns.js';
 import { recepcionExpedienteMenuItems } from '../../utils/bandejaActions.js';
 import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
 import {
@@ -597,7 +597,7 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
       <td>${badgeEstadoBandejaRecepcion(exp)}</td>
-      <td class="small">${renderResponsableCellHtml(exp, esc)}</td>
+      <td class="small">${renderBandejaCanonicoResponsableCell(exp)}</td>
       ${renderActionMenuCell(sid, recepcionExpedienteMenuItems(exp), '')}
     </tr>`;
 }

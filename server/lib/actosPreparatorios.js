@@ -520,7 +520,13 @@ export async function derivarActos(requerimientoId, body) {
   return result.expediente;
 }
 
-export async function aprobarActosInvitaciones(requerimientoId, { responsableDestino, usuario }) {
+export async function aprobarActosInvitaciones(requerimientoId, {
+  responsableDestino,
+  usuario,
+  usuarioDestinoId: usuarioDestinoIdParam = null,
+  responsable_recomendado_id: responsableRecomendadoId = null,
+  reasignacion_manual: reasignacionManual = false,
+} = {}) {
   const loaded = await ensureEtapaCoordinacionCm(requerimientoId, usuario);
   if (!loaded) throw new Error('Requerimiento no encontrado');
   if (!expedienteEnActos(loaded.row) && !['ACTOS_PREPARATORIOS', 'COORDINACION_CM'].includes(String(loaded.row.estado_actual || '').toUpperCase())) {
@@ -543,18 +549,27 @@ export async function aprobarActosInvitaciones(requerimientoId, { responsableDes
   autoCerrarObservacionesEmisorAlContinuar(loaded.payload, SUBMODULO_COORDINACION_CM, usuario || CARGO_ANALISTA_ACTOS);
 
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
-  const uid = /^\d+$/.test(String(responsableDestino || '').trim())
-    ? Number(responsableDestino)
-    : null;
+  const uid = usuarioDestinoIdParam != null && Number.isFinite(Number(usuarioDestinoIdParam))
+    ? Number(usuarioDestinoIdParam)
+    : (/^\d+$/.test(String(responsableDestino || '').trim()) ? Number(responsableDestino) : null);
+  if (!uid) throw new Error('Debe seleccionar la persona responsable en Invitaciones');
+
   const result = await transicionarExpediente({
     requerimientoId,
     evento: 'COORDINACION_CM_APROBADA',
     usuarioDestinoId: uid,
-    unidadDestino: uid ? null : (responsableDestino || ETAPAS.INVITACIONES.responsable || null),
+    unidadDestino: ETAPAS.INVITACIONES?.responsable || null,
     motivo: `Aprobado en ${SUBMODULO_COORDINACION_CM} — derivado a Invitaciones`,
     metadata: {
       client_request_id: `actos-aprobar:${requerimientoId}`,
       via: 'aprobarActosInvitaciones',
+      usuario_destino_id: uid,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: uid,
+      reasignacion_manual: reasignacionManual,
+      etapa_origen: 'COORDINACION_CM',
+      etapa_destino: 'INVITACIONES',
+      evento: 'COORDINACION_CM_APROBADA',
     },
     actorRol: usuario || CARGO_ANALISTA_ACTOS,
     domainMutator: async (tx) => {

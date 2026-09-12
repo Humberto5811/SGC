@@ -3,6 +3,7 @@
  */
 import { contratacionesService } from '../services/contratacionesService.js';
 import { api } from '../services/apiService.js';
+import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
 import {
   renderMatrizBienesHtml,
   renderResumenProveedores,
@@ -1585,6 +1586,20 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     el.querySelector('#ccBtnCcpDerivar')?.addEventListener('click', () => derivarCcpAction());
   }
 
+  async function resolveCuadroRequerimientoId() {
+    let reqId = matriz?.requerimientos?.[0]?.id
+      || matriz?.meta?.requerimiento_id
+      || matriz?.items?.[0]?.requerimiento_id
+      || null;
+    if (!reqId && solicitudId) {
+      try {
+        const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId);
+        reqId = (expResp.data || expResp)?.requerimientos?.[0]?.id || null;
+      } catch (_) { /* keep */ }
+    }
+    return reqId;
+  }
+
   async function derivarCcpAction() {
     if (!cuadro?.id) return;
     const gates = evaluarGatesCcpCliente(cuadro);
@@ -1595,22 +1610,42 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
     if (!['APROBADO_DEC', 'PENDIENTE_CCP'].includes(est)) {
       return alert('El cuadro debe estar APROBADO_DEC o PENDIENTE_CCP.');
     }
-    // Derivar CCP sin paso «Generar CCP» (no pertenece a este flujo).
-    await showDerivarCcpPanel({
-      onConfirm: async (dest) => {
-        const resp = await contratacionesService.derivarCuadroACcp(cuadro.id, dest);
-        const data = resp.data || resp;
-        cuadro = data.cuadro || { ...cuadro, estado: 'DERIVADO_CCP' };
-        const badge = el.querySelector('#ccEstadoBadge');
-        if (badge && cuadro) {
-          applyBadgeEstadoCuadroEl(badge, cuadro);
-        }
-        refreshMatrizHost(el, matriz, false);
-        syncUiLocks();
-        alert(`CCP derivado. Responsable: ${data.responsable?.nombre || dest.responsable_nombre || '—'}`);
-        if (typeof onSaved === 'function') onSaved();
-      },
+    const reqId = await resolveCuadroRequerimientoId();
+    if (!reqId) {
+      return alert('No se encontró el requerimiento del expediente.');
+    }
+    const seleccion = await showWorkflowTransicionModal({
+      requerimientoId: reqId,
+      eventoCodigo: 'CUADRO_APROBADO_DEC',
+      title: 'Derivar a CCP',
+      message: 'Seleccione la persona responsable en CCP. Etapa destino: CCP, estado: En trámite.',
+      buttonText: 'Continuar',
     });
+    if (!seleccion) return;
+    const observacion = window.prompt('Observación de la derivación a CCP (obligatoria):');
+    if (!observacion || String(observacion).trim().length < 3) {
+      return alert('La observación es obligatoria para derivar a CCP (mínimo 3 caracteres).');
+    }
+    try {
+      const resp = await contratacionesService.derivarCuadroACcp(cuadro.id, {
+        usuario_destino_id: seleccion.usuario_destino_id,
+        responsable_recomendado_id: seleccion.responsable_recomendado_id,
+        reasignacion_manual: seleccion.reasignacion_manual,
+        observacion: String(observacion).trim(),
+      });
+      const data = resp.data || resp;
+      cuadro = data.cuadro || { ...cuadro, estado: 'DERIVADO_CCP' };
+      const badge = el.querySelector('#ccEstadoBadge');
+      if (badge && cuadro) {
+        applyBadgeEstadoCuadroEl(badge, cuadro);
+      }
+      refreshMatrizHost(el, matriz, false);
+      syncUiLocks();
+      alert(`CCP derivado. Responsable: ${data.responsable?.nombre || seleccion.responsable_nombre || '—'}`);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (err) {
+      alert(err.message || 'No se pudo derivar a CCP');
+    }
   }
 
   const btnGenCcp = el.querySelector('#ccBtnGenerarCcp');

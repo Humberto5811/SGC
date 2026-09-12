@@ -7,8 +7,9 @@ export const contratacionesService = {
     const q = new URLSearchParams(params).toString();
     return api.get(`/contrataciones/dec${q ? `?${q}` : ''}`);
   },
-  async aprobarDEC(id, usuario = '') {
-    return api.put(`/contrataciones/dec/aprobar/${id}`, { usuario });
+  async aprobarDEC(id, body = {}) {
+    const payload = typeof body === 'string' ? { usuario: body } : body;
+    return api.put(`/contrataciones/dec/aprobar/${id}`, payload);
   },
   async observarDEC(id, motivo, usuario = '', destino = {}) {
     return api.put(`/contrataciones/dec/observar/${id}`, { motivo, usuario, ...destino });
@@ -19,8 +20,9 @@ export const contratacionesService = {
     const q = new URLSearchParams(params).toString();
     return api.get(`/contrataciones/programacion${q ? `?${q}` : ''}`);
   },
-  async aprobarProgramacion(id, usuario = '') {
-    return api.put(`/contrataciones/programacion/aprobar/${id}`, { usuario });
+  async aprobarProgramacion(id, body = {}) {
+    const payload = typeof body === 'string' ? { usuario: body } : body;
+    return api.put(`/contrataciones/programacion/aprobar/${id}`, payload);
   },
   async observarProgramacion(id, motivo, usuario = '', destino = {}) {
     return api.put(`/contrataciones/programacion/observar/${id}`, { motivo, usuario, ...destino });
@@ -47,8 +49,11 @@ export const contratacionesService = {
   async derivarActos(id, body = {}) {
     return api.put(`/contrataciones/actos/derivar/${id}`, body);
   },
-  async aprobarActosInvitaciones(id, responsableDestino, usuario = '') {
-    return api.put(`/contrataciones/actos/aprobar/${id}`, { responsable_destino: responsableDestino, usuario });
+  async aprobarActosInvitaciones(id, body = {}) {
+    const payload = typeof body === 'string' || typeof body === 'number'
+      ? { responsable_destino: body, usuario: arguments[2] || '' }
+      : body;
+    return api.put(`/contrataciones/actos/aprobar/${id}`, payload);
   },
 
   // Invitaciones

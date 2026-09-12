@@ -48,6 +48,19 @@ function authUserId(req) {
   return req.user?.id || req.headers['x-user-id'] || null;
 }
 
+function resolveTransicionActor(req, { usuarioDisplay = '' } = {}) {
+  const rawId = req.user?.id ?? authUserId(req);
+  const usuarioOrigenId = rawId != null && Number.isFinite(Number(rawId)) ? Number(rawId) : null;
+  const actorRol = String(req.user?.rol || req.headers['x-user-rol'] || 'SISTEMA').slice(0, 60);
+  const actorNombre = String(
+    usuarioDisplay
+    || req.user?.nombre
+    || req.headers['x-user-name']
+    || '',
+  ).trim();
+  return { usuarioOrigenId, actorRol, actorNombre };
+}
+
 async function guardRequirementAccess(req, res, next) {
   try {
     const reqId = req.params.requerimientoId || req.params.id;
@@ -237,6 +250,8 @@ async function guardRequirementAccessOrRoAcceso(req, res, next) {
 // Guard de alcance en operaciones por id (especiales)
 router.use('/:requerimientoId/trazabilidad', guardRequirementAccessOrRoAcceso);
 router.use('/:requerimientoId/solicitar-aprobacion', guardRequirementAccess);
+router.use('/:requerimientoId/candidatos-transicion', guardRequirementAccess);
+router.use('/:requerimientoId/candidatos-derivacion-evaluacion', guardRequirementAccess);
 router.use('/:requerimientoId/candidatos-observacion-destino', guardRequirementAccess);
 router.use('/:requerimientoId/observar', guardRequirementAccess);
 router.use('/:requerimientoId/subsanar', guardRequirementAccess);
@@ -255,18 +270,59 @@ router.get('/:requerimientoId/trazabilidad', async (req, res, next) => {
 router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { usuario } = req.body || {};
+    const {
+      usuario,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
+    } = req.body || {};
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck?.rowCount) {
       return res.status(404).json({ success: false, error: 'Requerimiento no encontrado' });
     }
 
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    if (!usuarioDestinoId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Debe seleccionar la persona responsable en Evaluación',
+      });
+    }
+
+    const {
+      assertUsuarioDestinoEvaluacionElegible,
+    } = await import('../lib/pilotRegistroEvaluacion.js');
+    let elegible;
+    try {
+      elegible = await assertUsuarioDestinoEvaluacionElegible(
+        requerimientoId,
+        usuarioDestinoId,
+        reqCheck.rows[0],
+      );
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+      }
+      throw err;
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : (elegible.recomendado?.id ?? null);
+    const reasignacionManual = reasignacionManualBody === true
+      || (responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
+    const metaDerivacion = {
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+    };
+
     // Fase 1A — transición B: REGISTRO → EVALUACION
-    const { resolveDirectorEvaluacionParaRequerimiento } = await import('../lib/pilotRegistroEvaluacion.js');
-    const directorEval = await resolveDirectorEvaluacionParaRequerimiento(
-      requerimientoId,
-      reqCheck.rows[0],
-    );
     const result = await runWorkflowTransition({
       moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
       eventoCodigo: 'REQUERIMIENTO_ENVIADO_EVALUACION',
@@ -274,9 +330,8 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
       req,
       metadata: {
         tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
-        usuario_destino_id: directorEval.usuarioId,
+        ...metaDerivacion,
         unidad_destino: ETAPAS.EVALUACION.responsable,
-        pilot_director_ambiguo: directorEval.ambiguo ? directorEval : undefined,
       },
       legacyHandler: async () => {
         let payload = {};
@@ -298,14 +353,13 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
             const tr = await transicionarExpediente({
               requerimientoId,
               evento: 'REQUERIMIENTO_ENVIADO_EVALUACION',
-              usuarioDestinoId: directorEval.usuarioId,
+              usuarioDestinoId,
               unidadDestino: ETAPAS.EVALUACION.responsable,
               motivo: 'Solicitud de aprobación enviada a evaluación',
               metadata: {
                 client_request_id: req.body?.client_request_id || `reg-derivar:${requerimientoId}`,
                 via: 'requerimientos/derivar:legacy',
-                usuario_destino_id: directorEval.usuarioId,
-                pilot_director_ambiguo: directorEval.ambiguo ? directorEval : undefined,
+                ...metaDerivacion,
               },
               actorRol: usuario || 'Usuario AU',
             });
@@ -340,6 +394,40 @@ router.put('/:requerimientoId/solicitar-aprobacion', async (req, res, next) => {
     // Camino legacy: resultado exacto anterior.
     return res.json({ success: true, requerimiento: result.requerimiento });
   } catch (err) { next(err); }
+});
+
+// GET /api/requerimientos/:requerimientoId/candidatos-transicion?evento=...
+router.get('/:requerimientoId/candidatos-transicion', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const evento = req.query.evento || req.query.evento_codigo || '';
+    if (!evento) {
+      return res.status(400).json({ ok: false, error: 'Parámetro evento requerido' });
+    }
+    const { listarCandidatosTransicion } = await import('../lib/workflowTransicionResponsable.js');
+    const data = await listarCandidatosTransicion(requerimientoId, evento, {
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+// GET /api/requerimientos/:requerimientoId/candidatos-derivacion-evaluacion
+router.get('/:requerimientoId/candidatos-derivacion-evaluacion', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { listarCandidatosDerivacionEvaluacion } = await import('../lib/pilotRegistroEvaluacion.js');
+    const data = await listarCandidatosDerivacionEvaluacion(requerimientoId, {
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message });
+    next(err);
+  }
 });
 
 // GET /api/requerimientos/:requerimientoId/candidatos-observacion-destino
@@ -585,66 +673,103 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
 router.put('/:requerimientoId/aprobar-evaluacion', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
-    const { usuario } = req.body || {};
+    const {
+      usuario,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
+    } = req.body || {};
 
     const reqCheck = await query('SELECT id, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
 
-    // Fase 1A — transición C: EVALUACION → DEC
-    const result = await runWorkflowTransition({
-      moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
-      eventoCodigo: 'EVALUACION_APROBADA',
-      expedienteId: requerimientoId,
-      req,
-      metadata: { tipo_contratacion: req.body?.tipo_contratacion || 'BIEN' },
-      legacyHandler: async () => {
-        let payload = {};
-        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-        if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-        payload.historial_evaluacion.push({
-          tipo: 'aprobacion',
-          usuario: usuario || '',
-          fecha: new Date().toISOString(),
-        });
-        autoCerrarObservacionesEmisorAlContinuar(payload, 'Evaluación de Requerimiento', usuario || 'Gerente');
-        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
-
-        const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
-        const tr = await transicionarExpediente({
-          requerimientoId,
-          evento: 'EVALUACION_APROBADA',
-          unidadDestino: ETAPAS.DEC.responsable,
-          motivo: 'Aprobado en evaluación — derivado a DEC',
-          metadata: {
-            client_request_id: req.body?.client_request_id || `eval-aprobar:${requerimientoId}`,
-            via: 'requerimientos/aprobar-evaluacion:legacy',
-          },
-          actorRol: usuario || 'Gerente',
-        });
-        const updated = tr.expediente;
-
-        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
-      },
-    });
-
-    if (result.ok !== true) {
-      return res.status(result.error ? 409 : 200).json({ success: false, error: result.error || 'Transición no permitida' });
-    }
-
-    if (result.evento) {
-      return res.json({
-        success: true,
-        requerimiento: {
-          id: result.data?.id ?? Number(requerimientoId),
-          codigo: result.data?.codigo ?? null,
-          estado: result.data?.estado ?? null,
-        },
-        workflow: result.workflow || undefined,
-        evento: result.evento,
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    if (!usuarioDestinoId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Debe seleccionar la persona responsable en DEC',
       });
     }
-    return res.json({ success: true, requerimiento: result.requerimiento });
-  } catch (err) { next(err); }
+
+    const { assertUsuarioDestinoTransicionElegible } = await import('../lib/workflowTransicionResponsable.js');
+    let elegible;
+    try {
+      elegible = await assertUsuarioDestinoTransicionElegible(
+        requerimientoId,
+        'EVALUACION_APROBADA',
+        usuarioDestinoId,
+        reqCheck.rows[0],
+      );
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+      }
+      throw err;
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : (elegible.recomendado?.id ?? null);
+    const reasignacionManual = reasignacionManualBody === true
+      || (responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
+    const metaDerivacion = {
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+      etapa_origen: 'EVALUACION',
+      etapa_destino: 'DEC',
+      evento: 'EVALUACION_APROBADA',
+    };
+
+    const { usuarioOrigenId, actorRol, actorNombre } = resolveTransicionActor(req, { usuarioDisplay: usuario });
+    if (!usuarioOrigenId) {
+      return res.status(401).json({ success: false, error: 'No autenticado' });
+    }
+
+    let payload = {};
+    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
+    payload.historial_evaluacion.push({
+      tipo: 'aprobacion',
+      usuario: actorNombre || usuario || '',
+      fecha: new Date().toISOString(),
+    });
+    autoCerrarObservacionesEmisorAlContinuar(payload, 'Evaluación de Requerimiento', actorNombre || usuario || 'Gerente');
+    await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+
+    const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
+    const tr = await transicionarExpediente({
+      requerimientoId,
+      evento: 'EVALUACION_APROBADA',
+      usuarioOrigenId,
+      usuarioDestinoId,
+      unidadDestino: ETAPAS.DEC.responsable,
+      motivo: 'Aprobado en evaluación — derivado a DEC',
+      metadata: {
+        client_request_id: req.body?.client_request_id || `eval-aprobar:${requerimientoId}`,
+        via: 'requerimientos/aprobar-evaluacion',
+        actor_nombre: actorNombre || usuario || '',
+        ...metaDerivacion,
+      },
+      actorRol,
+    });
+    const updated = tr.expediente;
+
+    return res.json({
+      success: true,
+      requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado },
+    });
+  } catch (err) {
+    if (err.status === 400 || err.code === 'TRANSICION_SIN_PERSONA') {
+      return res.status(400).json({ success: false, error: err.message, code: err.code });
+    }
+    next(err);
+  }
 });
 
 // DELETE /api/requerimientos/:id — RC8.15.6G-8D1 (prioridad sobre CRUD genérico)
