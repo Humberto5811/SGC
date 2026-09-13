@@ -100,6 +100,7 @@ try {
     await transicionarExpediente({
       requerimientoId: rid,
       evento: 'EVALUACION_OBSERVADA',
+      usuarioOrigenId: directorId,
       usuarioDestinoId: auId,
       unidadDestino: 'Usuario AU',
       motivo: 'Observación de prueba RC8176C',
@@ -112,6 +113,17 @@ try {
       },
       actorRol: 'mgrande',
     });
+
+    await query(`
+      INSERT INTO workflow_observaciones (
+        expediente_id, origen, estado, emitida_por, responsable_subsanacion,
+        motivo, documentos, dias_plazo, emitida_at,
+        origen_submodulo_codigo, destino_submodulo_codigo,
+        usuario_origen_id, usuario_destino_id
+      ) VALUES ($1, 'EVALUACION', 'OBS_EMITIDA', 'mgrande', 'wvasquez',
+        'Observación de prueba RC8176C', '[]'::jsonb, 5, NOW(),
+        'Evaluación de Requerimiento', 'REGISTRO_REQUERIMIENTO', $2, $3)
+    `, [rid, directorId, auId]);
 
     const despuesObs = await getExpedienteContratoUnificado(rid);
     ok(despuesObs.etapa?.codigo === 'REGISTRO', 'tras observación etapa REGISTRO');
@@ -136,14 +148,21 @@ try {
     ok(subs.destinoPersona === 'mgrande', 'payload subsanación persona observador mgrande');
     await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [rid, JSON.stringify(payload)]);
 
+    const { rows: auUser } = await query(
+      'SELECT username FROM usuarios WHERE id = $1 LIMIT 1',
+      [auId],
+    );
+    const subsanadorUsername = auUser[0]?.username || 'wvasquez';
+
     await registrarSubsanacionDerivacion({
       requerimientoId: rid,
-      usuario: 'wvasquez',
+      usuario: subsanadorUsername,
       textoSubsanacion: 'Subsanación RC8176C',
       origenSubmodulo: 'Registro de Requerimiento',
       destinoSubmodulo: subs.destinoSubmodulo,
       destinoEtapa: subs.destinoEtapa,
-      destinoPersona: subs.destinoPersona,
+      // Simula hint erróneo (id del subsanador) — el emisor canónico debe prevalecer.
+      destinoPersona: String(auId),
     });
 
     const c = await getExpedienteContratoUnificado(rid);
@@ -152,11 +171,13 @@ try {
     ok(c.responsable?.tipo === 'PERSONA', 'responsable final PERSONA');
     ok(Number(c.responsable?.usuario_id || c.responsable?.id) === Number(directorId),
       'responsable final observador original (mgrande)');
+    ok(c.etapa?.codigo === 'EVALUACION', 'después de subsanar etapa EVALUACION');
+    ok(c.estado?.codigo === 'EN_TRAMITE', 'después de subsanar estado EN_TRAMITE');
     fail(String(c.estado?.codigo || '').includes('COORDINACION'), 'no COORDINACION_CM');
     fail(String(c.estado?.label || '').includes('C.C.'), 'label no C.C. en Coordinación CM');
 
     const { rows: ev } = await query(`
-      SELECT evento_codigo, etapa_origen, etapa_destino, metadata
+      SELECT evento_codigo, etapa_origen, etapa_destino, actor_id, metadata
       FROM workflow_eventos
       WHERE expediente_id = $1 AND evento_codigo = 'OBSERVACION_SUBSANADA'
       ORDER BY id DESC LIMIT 1
@@ -164,10 +185,12 @@ try {
     ok(ev.length === 1, 'evento OBSERVACION_SUBSANADA registrado');
     ok(ev[0].etapa_origen === 'REGISTRO', 'evento origen REGISTRO');
     ok(ev[0].etapa_destino === 'EVALUACION', 'evento destino EVALUACION');
+    ok(Number(ev[0].actor_id) === Number(auId), 'actor del evento = subsanador (wvasquez/AU)');
     ok(ev[0].metadata?.via === 'registrarSubsanacionDerivacion', 'metadata.via trazabilidad canónica');
     ok(ev[0].metadata?.dueno_persistencia === DUENO_PERSISTENCIA_ESTADO
       || ev[0].metadata?.rc86a === true, 'evento vía transicionarExpediente');
   } finally {
+    await query('DELETE FROM workflow_observaciones WHERE expediente_id = $1', [rid]);
     await query('DELETE FROM expediente_asignaciones WHERE requerimiento_id = $1', [rid]);
     await query('DELETE FROM expediente_estado_vigente WHERE requerimiento_id = $1', [rid]);
     await query('DELETE FROM workflow_eventos WHERE expediente_id = $1', [rid]);

@@ -209,6 +209,75 @@ function buildMetaSeleccionEvaluacion(usuarioDestinoId, metadata = {}) {
 }
 
 /**
+ * Emisor canónico de la observación vigente (Director/Gerente que observó).
+ * Prioriza workflow_observaciones.usuario_origen_id sobre hints de payload.
+ */
+export async function resolveEmisorObservacionRetorno(
+  requerimientoId,
+  client = null,
+  opts = {},
+) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  const observacionId = opts.observacionId ?? opts.observacion_id ?? null;
+  if (observacionId != null && String(observacionId).trim() !== '') {
+    const obsKey = String(observacionId).trim();
+    if (/^\d+$/.test(obsKey)) {
+      const { rows: woOne } = await queryClient(
+        client,
+        `SELECT usuario_origen_id, emitida_por
+         FROM workflow_observaciones
+         WHERE expediente_id = $1 AND id = $2
+         LIMIT 1`,
+        [rid, Number(obsKey)],
+      );
+      if (woOne[0]?.usuario_origen_id) return Number(woOne[0].usuario_origen_id);
+      if (woOne[0]?.emitida_por) {
+        const uid = await resolveUsuarioIdDesdeActor({ actorRol: woOne[0].emitida_por }, client);
+        if (uid) return uid;
+      }
+    }
+  }
+
+  const { rows: woRows } = await queryClient(
+    client,
+    `SELECT usuario_origen_id, emitida_por
+     FROM workflow_observaciones
+     WHERE expediente_id = $1
+       AND usuario_origen_id IS NOT NULL
+     ORDER BY emitida_at DESC NULLS LAST, id DESC
+     LIMIT 1`,
+    [rid],
+  );
+  const woUid = woRows[0]?.usuario_origen_id;
+  if (woUid != null && Number.isFinite(Number(woUid))) return Number(woUid);
+
+  const { rows: reqRows } = await queryClient(
+    client,
+    'SELECT payload FROM requerimientos WHERE id = $1',
+    [rid],
+  );
+  if (!reqRows.length) return null;
+  let payload = {};
+  try { payload = JSON.parse(reqRows[0].payload || '{}'); } catch (_) { payload = {}; }
+  const list = Array.isArray(payload.observaciones) ? payload.observaciones : [];
+  let obs = null;
+  if (observacionId != null) {
+    const key = String(observacionId);
+    obs = list.find((o) => o && (String(o.id) === key || String(o.observacion_id) === key));
+  }
+  if (!obs) obs = [...list].reverse().find((o) => o && !o.cerrada) || list[list.length - 1];
+  if (!obs) return null;
+  if (obs.usuario_origen_id != null && Number.isFinite(Number(obs.usuario_origen_id))) {
+    return Number(obs.usuario_origen_id);
+  }
+  const hint = String(obs.gerente || obs.usuarioOrigen || obs.usuario || '').trim();
+  if (!hint || /^gerente$/i.test(hint)) return null;
+  return resolveUsuarioIdDesdeActor({ actorRol: hint }, client);
+}
+
+/**
  * Resuelve ID de usuario desde actor autenticado o username legacy.
  */
 export async function resolveUsuarioIdDesdeActor(
@@ -421,7 +490,7 @@ export function isObservacionDestinoRegistro(metadata = {}) {
  * Piloto: Evaluación observa → destino Registro.
  * Etapa REGISTRO, estado OBSERVADO, responsable PERSONA seleccionada.
  */
-const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze(['EVALUACION', 'REGISTRO']);
+const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze(['EVALUACION', 'REGISTRO', 'DEC']);
 
 export function resolveDestinoEtapaSubsanacion(metadata = {}) {
   const raw = metadata.destino_etapa || metadata.destinoEtapa || '';
@@ -452,19 +521,76 @@ export async function applyPilotObservacionSubsanada({
   if (destinoEtapa === etapaEfectiva) {
     return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
   }
-  // Alcance focalizado: Registro subsana → Evaluación (no DEC/CM/Programación).
+  const obsId = metadata.observacion_id ?? metadata.observacionId ?? null;
+
+  // Registro subsana → DEC (observación emitida desde DEC).
+  if (etapaEfectiva === 'REGISTRO' && destinoEtapa === 'DEC') {
+    const metaDec = getEtapaMeta('DEC');
+    let uidDec = null;
+    if (requerimientoId) {
+      uidDec = await resolveEmisorObservacionRetorno(requerimientoId, client, { observacionId: obsId });
+    }
+    if (!uidDec) {
+      const raw = metadata.responsable_emisor_id ?? usuarioDestinoId ?? metadata.usuario_destino_id ?? null;
+      if (raw != null && Number.isFinite(Number(raw))) uidDec = Number(raw);
+    }
+    if (!uidDec && metadata.destino_persona) {
+      uidDec = await resolveUsuarioIdDesdeActor({ actorRol: metadata.destino_persona }, client);
+    }
+
+    let newRespDec = resp;
+    if (uidDec) {
+      newRespDec = {
+        responsableTipo: TIPO_RESPONSABLE.PERSONA,
+        responsableUsuarioId: uidDec,
+        responsableUnidad: unidadDestino || metaDec?.responsableLabel || 'DEC',
+        responsableFuente: FUENTE_RESPONSABLE.ASIGNACION_EXPLICITA,
+      };
+    }
+
+    const newLabelsDec = {
+      ...labels,
+      etapaCodigo: 'DEC',
+      etapaLabel: metaDec?.label || 'DEC',
+      estadoCodigo: ESTADO_PILOT_EN_TRAMITE,
+      estadoLabel: LABEL_PILOT_EN_TRAMITE,
+    };
+
+    return {
+      resp: newRespDec,
+      etapaEfectiva: 'DEC',
+      labels: newLabelsDec,
+      metaExtra: {
+        pilot_observacion_subsanada_retorno_dec: true,
+        destino_etapa: 'DEC',
+        responsable_emisor_id: uidDec,
+        responsable_seleccionado_id: uidDec,
+        observacion_id: obsId,
+      },
+      usuarioDestinoEfectivo: uidDec,
+    };
+  }
+
+  // Alcance focalizado: Registro subsana → Evaluación.
   if (destinoEtapa !== 'EVALUACION' || etapaEfectiva !== 'REGISTRO') {
     return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
   }
 
   const metaEval = getEtapaMeta('EVALUACION');
-  let uid = usuarioDestinoId ?? metadata.usuario_destino_id ?? null;
-  if (uid != null && Number.isFinite(Number(uid))) uid = Number(uid);
-  else uid = null;
+  let uid = null;
+
+  if (requerimientoId) {
+    const emisorCanon = await resolveEmisorObservacionRetorno(requerimientoId, client, { observacionId: obsId });
+    if (emisorCanon) uid = emisorCanon;
+  }
+  if (!uid) {
+    const raw = metadata.responsable_emisor_id ?? usuarioDestinoId ?? metadata.usuario_destino_id ?? null;
+    if (raw != null && Number.isFinite(Number(raw))) uid = Number(raw);
+  }
 
   const personaHint = metadata.destino_persona || metadata.destinoPersona || '';
   if (!uid && personaHint) {
-    uid = await resolveUsuarioIdDesdeActor({ actorRol: personaHint, row }, client);
+    uid = await resolveUsuarioIdDesdeActor({ actorRol: personaHint }, client);
   }
   if (!uid && requerimientoId) {
     const director = await resolveDirectorEvaluacionParaRequerimiento(requerimientoId, row, client);
@@ -496,6 +622,7 @@ export async function applyPilotObservacionSubsanada({
     metaExtra: {
       pilot_observacion_subsanada_retorno: true,
       destino_etapa: destinoEtapa,
+      responsable_emisor_id: uid,
       responsable_seleccionado_id: uid,
     },
     usuarioDestinoEfectivo: uid,
@@ -561,6 +688,7 @@ export default {
   isPilotEvento,
   getPilotEstadoLabels,
   resolveUsuarioIdDesdeActor,
+  resolveEmisorObservacionRetorno,
   resolveDirectorEvaluacionParaRequerimiento,
   listarCandidatosDerivacionEvaluacion,
   assertUsuarioDestinoEvaluacionElegible,

@@ -137,6 +137,7 @@ export async function openModalObservaciones(req, opts = {}) {
         buttonText: 'Subsanar y reenviar',
         buttonClass: 'btn-primary',
         requerimientoId: row.id,
+        observacionId: pending?.id || pending?.observacion_id || null,
         onAdjuntos: opts.onAdjuntos,
       });
       if (!data) { modal.show(); return; }
@@ -247,6 +248,8 @@ export async function handleBandejaObservaciones(id, rows, config = {}) {
     onAdjuntos: config.onAdjuntos,
     onReload: config.onReload,
     defaultDestinoObservacion: config.defaultDestinoObservacion,
+    destinosPermitidosObservacion: config.destinosPermitidosObservacion,
+    candidatosApiPath: config.candidatosApiPath,
   });
 }
 

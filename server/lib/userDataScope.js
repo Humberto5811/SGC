@@ -435,6 +435,21 @@ export async function canAccessRequirement(userId, requerimientoId, action = 'VE
   }
 
   const id = parseInt(requerimientoId, 10);
+  const uid = parseInt(userId, 10);
+  if (Number.isFinite(id) && Number.isFinite(uid)) {
+    const { rows: respVigente } = await query(
+      `SELECT 1 FROM expediente_estado_vigente
+       WHERE requerimiento_id = $1
+         AND UPPER(TRIM(COALESCE(responsable_tipo, ''))) = 'PERSONA'
+         AND responsable_usuario_id = $2
+       LIMIT 1`,
+      [id, uid],
+    );
+    if (respVigente.length) {
+      return { ok: true, scope, via: 'responsable_vigente_expediente' };
+    }
+  }
+
   const { clause, params } = buildRequerimientoScopeSql(scope, 2);
   const sql = `
     SELECT r.id

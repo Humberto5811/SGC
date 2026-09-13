@@ -35,6 +35,27 @@ const auBad = esElegibleRegistroRequerimiento({
 }, 'CNCC');
 ok(!auBad, 'usuario inactivo no es elegible');
 
+const wvLike = esElegibleRegistroRequerimiento({
+  id: 249,
+  activo: true,
+  centro: 'CNCC',
+  codigo_centro_costo: '01.06.06.01.01',
+  rol: 'coordinador',
+  cargo: 'COORDINADOR AU',
+  permisos: { modulos: [], submodulos: [], actividades: [], actividadesPorSubmodulo: {} },
+}, 'CNCC');
+ok(wvLike, 'coordinador AU con permisos vacíos es elegible (wvasquez-like)');
+
+const directorNoAu = esElegibleRegistroRequerimiento({
+  id: 530,
+  activo: true,
+  centro: 'CNCC',
+  rol: 'director',
+  cargo: 'DIRECTOR AU',
+  permisos: { modulos: ['REQUERIMIENTOS'], submodulos: ['REGISTRO_REQUERIMIENTO'], actividades: ['VER'], actividadesPorSubmodulo: { REGISTRO_REQUERIMIENTO: ['VER'] } },
+}, 'CNCC');
+ok(!directorNoAu, 'director centro sin perfil AU no es elegible Registro');
+
 const pilotObs = applyPilotObservacionEvaluacionRegistro({
   resp: { responsableTipo: TIPO_RESPONSABLE.UNIDAD, responsableUsuarioId: null },
   usuarioDestinoId: 249,
@@ -100,6 +121,24 @@ try {
     const vasq = todos.find((c) => String(c.username || '').toLowerCase().includes('vasq')
       || String(c.nombre || '').toLowerCase().includes('vasq'));
     ok(!!vasq || todos.length > 0, 'búsqueda vasq devuelve candidatos elegibles');
+
+    const { rows: req16 } = await query(`SELECT id FROM requerimientos WHERE codigo='REQ-00016' LIMIT 1`);
+    if (req16.length) {
+      const lista16 = await listarCandidatosObservacionDestino({
+        requerimientoId: req16[0].id,
+        destinoSubmodulo: 'Registro de Requerimiento',
+        search: 'wvasq',
+      });
+      ok(lista16.soportado === true, 'REQ-00016 destino REGISTRO soportado');
+      const todos16 = [...(lista16.recomendado ? [lista16.recomendado] : []), ...(lista16.candidatos || [])];
+      const wv = todos16.find((c) => String(c.username || '').toLowerCase() === 'wvasquez');
+      ok(!!wv, 'REQ-00016 candidatos incluyen wvasquez');
+      const evalLista = await listarCandidatosObservacionDestino({
+        requerimientoId: req16[0].id,
+        destinoSubmodulo: 'Evaluación de Requerimiento',
+      });
+      ok(evalLista.soportado === true, 'destino Evaluación sigue soportado');
+    }
   } finally {
     await query('DELETE FROM expediente_asignaciones WHERE requerimiento_id=$1', [rid]);
     await query('DELETE FROM requerimientos WHERE id=$1', [rid]);

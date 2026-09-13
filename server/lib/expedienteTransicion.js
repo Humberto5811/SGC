@@ -393,7 +393,8 @@ export async function transicionarExpediente({
 
     // 5. Legacy sync
     const pilotObsReg = metaTransicion.pilot_observacion_destino_registro === true;
-    const pilotObsSub = metaTransicion.pilot_observacion_subsanada_retorno === true;
+    const pilotObsSub = metaTransicion.pilot_observacion_subsanada_retorno === true
+      || metaTransicion.pilot_observacion_subsanada_retorno_dec === true;
     const pilotCambiaUbicacion = cambiaUbicacion || pilotObsReg || pilotObsSub;
     const estadoNegocio = pilotCambiaUbicacion
       ? (getEstadoNegocioFromEtapa(mapEtapaDestinoBD(etapaEfectiva)) || labels.estadoLabel)

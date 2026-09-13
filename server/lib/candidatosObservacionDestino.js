@@ -9,7 +9,14 @@ import { hasFunctionalProfile, PERFILES_FUNCIONALES } from '../utils/userRoleCat
 import { getActividadesForSubmodulo, normalizePermisos } from './permissionsCatalog.js';
 import { resolverCentroDesdeRequerimiento, normalizarCodigoCentro } from './recepcionBienesAlcance.js';
 import { listarCandidatosDerivacionEvaluacion } from './pilotRegistroEvaluacion.js';
-import { listarCandidatosPorPerfil } from './workflowTransicionResponsable.js';
+import {
+  listarCandidatosPorPerfil,
+  resolveUnidadAdquisicionesKeys,
+  esElegibleDirectorUnidadAdquisiciones,
+  esCuentaLegacyDecSemilla,
+  esUsuarioElegibleParaPerfil,
+} from './workflowTransicionResponsable.js';
+import { resolveEmisorObservacionRetorno } from './pilotRegistroEvaluacion.js';
 
 const DESTINO_REGISTRO_LABELS = Object.freeze([
   'Registro de Requerimiento',
@@ -65,15 +72,43 @@ export function esDestinoProgramacion(destinoSubmodulo = '') {
     || s === 'programacion' || s === 'programación';
 }
 
+export function esDestinoDecSubmodulo(destinoSubmodulo = '') {
+  const s = String(destinoSubmodulo || '').trim().toUpperCase();
+  return s === 'DEC' || /^dependencia encargada/i.test(String(destinoSubmodulo || ''));
+}
+
 export function mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo = '') {
   if (esDestinoRegistroRequerimiento(destinoSubmodulo)) return 'REGISTRO';
   if (esDestinoEvaluacionRequerimiento(destinoSubmodulo)) return 'EVALUACION';
   if (esDestinoProgramacion(destinoSubmodulo)) return 'PROGRAMACION';
+  if (esDestinoDecSubmodulo(destinoSubmodulo)) return 'DEC';
   return null;
 }
 
 export function esDestinoObservacionDecSoportado(destinoSubmodulo = '') {
   return mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo) != null;
+}
+
+function permisosRegistroParaElegibilidad(usuarioRow) {
+  const permisos = normalizePermisos(usuarioRow.permisos, usuarioRow.rol);
+  const acts = getActividadesForSubmodulo(permisos, 'REGISTRO_REQUERIMIENTO');
+  if (acts.some((a) => ACTIVIDADES_REG_ELEGIBLES.includes(String(a).toUpperCase()))) {
+    return permisos;
+  }
+  // Legacy AU (p. ej. rol coordinador + permisos JSON vacío): perfil funcional AU sin submódulo Registro en rol.
+  const perfilAu = hasFunctionalProfile(
+    {
+      id: usuarioRow.id,
+      rol: usuarioRow.rol,
+      cargo: usuarioRow.cargo,
+      permisos: usuarioRow.permisos,
+    },
+    PERFILES_FUNCIONALES.AREA_USUARIA,
+  );
+  if (perfilAu) {
+    return normalizePermisos(null, 'au');
+  }
+  return permisos;
 }
 
 export function esElegibleRegistroRequerimiento(usuarioRow, centroCodigo) {
@@ -89,7 +124,7 @@ export function esElegibleRegistroRequerimiento(usuarioRow, centroCodigo) {
     PERFILES_FUNCIONALES.AREA_USUARIA,
   );
   if (!perfilAu) return false;
-  const permisos = normalizePermisos(usuarioRow.permisos, usuarioRow.rol);
+  const permisos = permisosRegistroParaElegibilidad(usuarioRow);
   const acts = getActividadesForSubmodulo(permisos, 'REGISTRO_REQUERIMIENTO');
   return acts.some((a) => ACTIVIDADES_REG_ELEGIBLES.includes(String(a).toUpperCase()));
 }
@@ -188,6 +223,102 @@ export async function resolveRecomendadoRegistro(requerimientoId, client = null)
   return null;
 }
 
+/** Participante histórico más reciente en etapa EVALUACION (asignaciones / evento envío). */
+export async function resolveRecomendadoEvaluacion(requerimientoId, client = null) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  const { rows: asig } = await queryFn(
+    client,
+    `SELECT a.usuario_id, u.id, u.username, u.apellidos, u.nombres, u.nombre, u.dni,
+            u.cargo, u.rol, u.permisos, u.centro, u.codigo_centro_costo, u.activo, a.asignado_at
+     FROM expediente_asignaciones a
+     JOIN usuarios u ON u.id = a.usuario_id
+     WHERE a.requerimiento_id = $1
+       AND UPPER(TRIM(a.etapa_codigo)) = 'EVALUACION'
+       AND UPPER(TRIM(a.tipo_responsable)) = 'PERSONA'
+       AND a.usuario_id IS NOT NULL
+     ORDER BY a.asignado_at DESC NULLS LAST, a.id DESC
+     LIMIT 1`,
+    [rid],
+  );
+  if (asig.length) {
+    return mapCandidato(asig[0], { fuente: 'asignacion_evaluacion', asignado_at: asig[0].asignado_at });
+  }
+
+  const { rows: ev } = await queryFn(
+    client,
+    `SELECT we.metadata, we.actor_id AS usuario_id, u.id, u.username, u.apellidos, u.nombres,
+            u.nombre, u.dni, u.cargo, u.rol, u.permisos, u.centro, u.codigo_centro_costo, u.activo
+     FROM workflow_eventos we
+     LEFT JOIN usuarios u ON u.id = COALESCE(
+       NULLIF((we.metadata->>'usuario_destino_id')::int, 0),
+       NULLIF((we.metadata->>'responsable_seleccionado_id')::int, 0),
+       we.actor_id
+     )
+     WHERE we.expediente_id = $1
+       AND UPPER(TRIM(we.evento_codigo)) = 'REQUERIMIENTO_ENVIADO_EVALUACION'
+     ORDER BY we.id DESC
+     LIMIT 1`,
+    [rid],
+  );
+  if (ev.length && ev[0].id) {
+    return mapCandidato(ev[0], { fuente: 'evento_envio_evaluacion' });
+  }
+
+  return null;
+}
+
+function aplicarRecomendadoHistorico({
+  recomendadoRaw,
+  elegibles,
+  esElegibleFn,
+  centroCodigo = null,
+}) {
+  let recomendado = null;
+  let recomendadoInactivo = null;
+  if (!recomendadoRaw?.id) {
+    return { recomendado, recomendadoInactivo };
+  }
+  const enElegibles = elegibles.find((c) => c.id === recomendadoRaw.id);
+  const cand = enElegibles || recomendadoRaw;
+  const rowCheck = {
+    ...recomendadoRaw,
+    activo: cand.activo,
+    permisos: recomendadoRaw.permisos,
+    rol: recomendadoRaw.rol,
+    centro: recomendadoRaw.centro,
+    codigo_centro_costo: recomendadoRaw.codigo_centro_costo,
+  };
+  if (cand.activo !== false && esElegibleFn(rowCheck, centroCodigo)) {
+    recomendado = {
+      ...(enElegibles || mapCandidato(recomendadoRaw)),
+      etiqueta: 'Participante anterior',
+      recomendado: true,
+      fuente: recomendadoRaw.fuente,
+    };
+  } else if (cand.activo === false) {
+    recomendadoInactivo = {
+      ...mapCandidato(recomendadoRaw),
+      etiqueta: 'Participante anterior (inactivo)',
+      seleccionable: false,
+    };
+  }
+  return { recomendado, recomendadoInactivo };
+}
+
+function filtrarListaCandidatosObservacion({ recomendado, candidatos, search }) {
+  const q = String(search || '').trim();
+  let rec = recomendado;
+  let otros = candidatos.filter((c) => !rec || c.id !== rec.id);
+  if (q.length >= 2) {
+    otros = otros.filter((c) => matchesSearch(c, q));
+    if (rec && !matchesSearch(rec, q)) rec = null;
+  }
+  otros.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  return { recomendado: rec, candidatos: otros };
+}
+
 /**
  * @returns {Promise<{ destino: string, recomendado: object|null, recomendado_inactivo: object|null, candidatos: object[] }>}
  */
@@ -225,17 +356,53 @@ export async function listarCandidatosObservacionDestino({
   const row = reqRows[0];
 
   if (etapaDest === 'EVALUACION') {
-    const data = await listarCandidatosDerivacionEvaluacion(rid, { search }, row, client);
+    const data = await listarCandidatosDerivacionEvaluacion(rid, { search: '' }, row, client);
     const meta = getEtapaMeta('EVALUACION');
+    let centroCodigo = null;
+    try {
+      centroCodigo = normalizarCodigoCentro(resolverCentroDesdeRequerimiento(row).centro_codigo);
+    } catch (_) { /* sin centro */ }
+
+    const elegibles = [
+      ...(data.recomendado ? [data.recomendado] : []),
+      ...(data.candidatos || []),
+    ].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+
+    const { esDirectorEvaluacionElegible } = await import('./pilotRegistroEvaluacion.js');
+    const historico = await resolveRecomendadoEvaluacion(rid, client);
+    const { recomendado: recHist, recomendadoInactivo } = aplicarRecomendadoHistorico({
+      recomendadoRaw: historico,
+      elegibles,
+      esElegibleFn: (u) => esDirectorEvaluacionElegible(u) && (
+        !centroCodigo || usuarioPerteneceCentro(u, centroCodigo)
+      ),
+      centroCodigo,
+    });
+
+    let recomendado = recHist || data.recomendado;
+    let candidatos = elegibles.filter((c) => !recomendado || c.id !== recomendado.id);
+    if (recomendado && recHist && data.recomendado && data.recomendado.id !== recHist.id) {
+      candidatos = [
+        ...candidatos.filter((c) => c.id !== data.recomendado.id),
+        data.recomendado,
+      ].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+    }
+
+    const filtrado = filtrarListaCandidatosObservacion({
+      recomendado,
+      candidatos,
+      search,
+    });
+
     return {
       destino: destinoSubmodulo,
       destino_etapa: 'EVALUACION',
       destino_submodulo_codigo: meta?.submoduloCodigo || 'EVALUACION_REQUERIMIENTO',
       soportado: true,
       perfil_responsable: PERFILES_FUNCIONALES.DIRECTOR_CENTRO,
-      recomendado: data.recomendado,
-      recomendado_inactivo: null,
-      candidatos: data.candidatos || [],
+      recomendado: filtrado.recomendado,
+      recomendado_inactivo: recomendadoInactivo,
+      candidatos: filtrado.candidatos,
       centro: data.centro || null,
       resolucion_automatica: data.resolucion_automatica,
     };
@@ -309,43 +476,20 @@ export async function listarCandidatosObservacionDestino({
     .map((u) => mapCandidato(u));
 
   const recomendadoRaw = await resolveRecomendadoRegistro(rid, client);
-  let recomendado = null;
-  let recomendadoInactivo = null;
+  const { recomendado, recomendadoInactivo } = aplicarRecomendadoHistorico({
+    recomendadoRaw,
+    elegibles,
+    esElegibleFn: esElegibleRegistroRequerimiento,
+    centroCodigo,
+  });
 
-  if (recomendadoRaw?.id) {
-    const enElegibles = elegibles.find((c) => c.id === recomendadoRaw.id);
-    const cand = enElegibles || recomendadoRaw;
-    if (cand.activo && esElegibleRegistroRequerimiento(
-      { ...cand, permisos: recomendadoRaw.permisos, rol: recomendadoRaw.rol },
-      centroCodigo,
-    )) {
-      recomendado = {
-        ...cand,
-        etiqueta: 'Responsable anterior',
-        recomendado: true,
-        fuente: recomendadoRaw.fuente,
-      };
-    } else if (!cand.activo) {
-      recomendadoInactivo = {
-        ...cand,
-        etiqueta: 'Responsable anterior (inactivo)',
-        seleccionable: false,
-      };
-    }
-  }
-
-  const q = String(search || '').trim();
-  let otros = elegibles.filter((c) => !recomendado || c.id !== recomendado.id);
-  if (q.length >= 2) {
-    otros = otros.filter((c) => matchesSearch(c, q));
-    if (recomendado && matchesSearch(recomendado, q)) {
-      // recomendado stays visible via separate field
-    } else if (recomendado && q.length >= 2 && !matchesSearch(recomendado, q)) {
-      recomendado = null;
-    }
-  }
-
-  otros.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const filtrado = filtrarListaCandidatosObservacion({
+    recomendado,
+    candidatos: elegibles,
+    search,
+  });
+  const otros = filtrado.candidatos;
+  const recomendadoFinal = filtrado.recomendado;
 
   const meta = getEtapaMeta('REGISTRO');
   return {
@@ -354,10 +498,215 @@ export async function listarCandidatosObservacionDestino({
     destino_submodulo_codigo: meta?.submoduloCodigo || 'REGISTRO_REQUERIMIENTO',
     soportado: true,
     centro: { codigo: centroCodigo, nombre: centro.centro_nombre || centroCodigo },
-    recomendado,
+    recomendado: recomendadoFinal,
     recomendado_inactivo: recomendadoInactivo,
     candidatos: otros,
   };
+}
+
+async function loadUsuarioRow(usuarioId, client) {
+  const uid = Number(usuarioId);
+  if (!Number.isFinite(uid)) return null;
+  const { rows } = await queryFn(
+    client,
+    `SELECT id, dni, username, apellidos, nombres, nombre, cargo, rol, permisos, centro, codigo_centro_costo, activo
+     FROM usuarios WHERE id = $1`,
+    [uid],
+  );
+  return rows[0] || null;
+}
+
+export async function esElegiblePersonaDec(usuarioRow = {}, client = null) {
+  if (!usuarioRow?.activo) return false;
+  if (esCuentaLegacyDecSemilla(usuarioRow)) return false;
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  if (esElegibleDirectorUnidadAdquisiciones(usuarioRow, uadKeys)) return true;
+  return esUsuarioElegibleParaPerfil(usuarioRow, PERFILES_FUNCIONALES.DEC, 'DEC');
+}
+
+/** Personas activas elegibles para recibir trabajo en DEC (Director UAD + perfil DEC operativo). */
+export async function listarPersonasElegiblesDec({ search = '' } = {}, client = null) {
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const codigos = [...uadKeys.codigos];
+  const ccParam = `${uadKeys.costPrefix}%`;
+
+  const { rows: usuarios } = await queryFn(
+    client,
+    `SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol,
+            u.permisos, u.centro, u.codigo_centro_costo, u.activo
+     FROM usuarios u
+     WHERE u.activo = TRUE
+       AND (
+         UPPER(REPLACE(REPLACE(COALESCE(u.centro, ''), ' ', ''), '.', '')) = ANY($1::text[])
+         OR UPPER(REPLACE(REPLACE(COALESCE(u.codigo_centro_costo, ''), ' ', ''), '.', '')) LIKE $2
+       )`,
+    [codigos, ccParam],
+  );
+
+  const directors = usuarios
+    .filter((u) => esElegibleDirectorUnidadAdquisiciones(u, uadKeys))
+    .map((u) => mapCandidato(u));
+
+  const perfilDec = await listarCandidatosPorPerfil({
+    perfil: PERFILES_FUNCIONALES.DEC,
+    submoduloCodigo: 'DEC',
+    alcanceTransversal: true,
+    search: '',
+    client,
+  });
+  const decPerfil = [...(perfilDec.recomendado ? [perfilDec.recomendado] : []), ...(perfilDec.candidatos || [])]
+    .filter((c) => {
+      const row = usuarios.find((u) => Number(u.id) === Number(c.id)) || c;
+      return !esCuentaLegacyDecSemilla(row);
+    })
+    .map((c) => mapCandidato(c));
+
+  const merged = [...directors, ...decPerfil].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    return merged.filter((c) => matchesSearch(c, q));
+  }
+  return merged;
+}
+
+/**
+ * Candidatos PERSONA para subsanación (retorno al emisor de la observación abierta).
+ */
+export async function listarCandidatosSubsanacionDestino({
+  requerimientoId,
+  destinoSubmodulo = '',
+  observacionId = null,
+  search = '',
+  client = null,
+} = {}) {
+  const etapaDest = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo);
+  if (!etapaDest) {
+    return {
+      destino: String(destinoSubmodulo || ''),
+      soportado: false,
+      recomendado: null,
+      recomendado_inactivo: null,
+      candidatos: [],
+    };
+  }
+
+  const emisorId = await resolveEmisorObservacionRetorno(requerimientoId, client, { observacionId });
+  const emisorRow = emisorId ? await loadUsuarioRow(emisorId, client) : null;
+
+  if (etapaDest === 'DEC') {
+    const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+    const elegibles = await listarPersonasElegiblesDec({ search: '' }, client);
+    const emisorCand = emisorRow
+      ? { ...mapCandidato(emisorRow, { fuente: 'emisor_observacion' }), permisos: emisorRow.permisos, rol: emisorRow.rol }
+      : null;
+    const { recomendado, recomendadoInactivo } = aplicarRecomendadoHistorico({
+      recomendadoRaw: emisorCand,
+      elegibles,
+      esElegibleFn: (u) => esElegibleDirectorUnidadAdquisiciones(u, uadKeys)
+        || (esUsuarioElegibleParaPerfil(u, PERFILES_FUNCIONALES.DEC, 'DEC') && !esCuentaLegacyDecSemilla(u)),
+      centroCodigo: null,
+    });
+    const filtrado = filtrarListaCandidatosObservacion({
+      recomendado,
+      candidatos: elegibles,
+      search,
+    });
+    const meta = getEtapaMeta('DEC');
+    return {
+      destino: destinoSubmodulo,
+      destino_etapa: 'DEC',
+      destino_submodulo_codigo: meta?.submoduloCodigo || 'DEC',
+      soportado: true,
+      recomendado: filtrado.recomendado,
+      recomendado_inactivo: recomendadoInactivo,
+      candidatos: filtrado.candidatos,
+      emisor_observacion_id: emisorId,
+    };
+  }
+
+  const base = await listarCandidatosObservacionDestino({
+    requerimientoId,
+    destinoSubmodulo,
+    search: '',
+    client,
+  });
+  if (!base.soportado) return { ...base, emisor_observacion_id: emisorId };
+
+  const elegibles = [...(base.recomendado ? [base.recomendado] : []), ...(base.candidatos || [])]
+    .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+
+  const esElegibleFn = etapaDest === 'REGISTRO'
+    ? (u, cc) => esElegibleRegistroRequerimiento(u, cc)
+    : () => true;
+
+  let centroCodigo = null;
+  if (etapaDest === 'REGISTRO') {
+    const { rows: reqRows } = await queryFn(client, 'SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
+    try {
+      centroCodigo = normalizarCodigoCentro(resolverCentroDesdeRequerimiento(reqRows[0]).centro_codigo);
+    } catch (_) { /* noop */ }
+  }
+
+  const emisorCand = emisorRow
+    ? { ...mapCandidato(emisorRow, { fuente: 'emisor_observacion' }), permisos: emisorRow.permisos, rol: emisorRow.rol }
+    : null;
+  const { recomendado, recomendadoInactivo } = aplicarRecomendadoHistorico({
+    recomendadoRaw: emisorCand,
+    elegibles,
+    esElegibleFn: (u) => esElegibleFn(u, centroCodigo),
+    centroCodigo,
+  });
+
+  let recomendadoFinal = recomendado || base.recomendado;
+  let candidatos = elegibles.filter((c) => !recomendadoFinal || c.id !== recomendadoFinal.id);
+  if (recomendadoFinal && base.recomendado && base.recomendado.id !== recomendadoFinal.id) {
+    candidatos = [...candidatos, base.recomendado].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+  }
+
+  const filtrado = filtrarListaCandidatosObservacion({
+    recomendado: recomendadoFinal,
+    candidatos,
+    search,
+  });
+
+  return {
+    ...base,
+    recomendado: filtrado.recomendado,
+    recomendado_inactivo: recomendadoInactivo || base.recomendado_inactivo,
+    candidatos: filtrado.candidatos,
+    emisor_observacion_id: emisorId,
+  };
+}
+
+export async function assertUsuarioDestinoSubsanacionElegible(
+  requerimientoId,
+  destinoSubmodulo,
+  usuarioId,
+  observacionId = null,
+  client = null,
+) {
+  const lista = await listarCandidatosSubsanacionDestino({
+    requerimientoId,
+    destinoSubmodulo,
+    observacionId,
+    client,
+  });
+  if (!lista.soportado) {
+    const err = new Error('Destino de subsanación no soportado');
+    err.status = 422;
+    err.code = 'DESTINO_SUBSANACION_INVALIDO';
+    throw err;
+  }
+  const uid = Number(usuarioId);
+  const todos = [...(lista.recomendado ? [lista.recomendado] : []), ...(lista.candidatos || [])];
+  const found = todos.find((c) => c.id === uid);
+  if (!found) {
+    const err = new Error('Usuario destino no elegible para la subsanación');
+    err.status = 422;
+    err.code = 'RESPONSABLE_SUBSANACION_INVALIDO';
+    throw err;
+  }
+  return { ok: true, candidato: found, recomendado: lista.recomendado, lista };
 }
 
 export async function assertUsuarioDestinoObservacionElegible(
@@ -399,6 +748,12 @@ export default {
   esDestinoObservacionDecSoportado,
   esElegibleRegistroRequerimiento,
   resolveRecomendadoRegistro,
+  resolveRecomendadoEvaluacion,
   listarCandidatosObservacionDestino,
+  listarCandidatosSubsanacionDestino,
+  listarPersonasElegiblesDec,
+  assertUsuarioDestinoSubsanacionElegible,
   assertUsuarioDestinoObservacionElegible,
+  esDestinoDecSubmodulo,
+  esElegiblePersonaDec,
 };

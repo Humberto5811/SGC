@@ -295,12 +295,20 @@ function wireDestinoSelectors(id, opts = {}) {
         destino_submodulo: subEl.value || '',
       });
       if (q.trim().length >= 2) params.set('q', q.trim());
+      if (opts.observacionId) params.set('observacion_id', String(opts.observacionId));
+      const defaultPath = opts.modoSubsanacion
+        ? `/requerimientos/${requerimientoId}/candidatos-subsanacion-destino`
+        : `/requerimientos/${requerimientoId}/candidatos-observacion-destino`;
       const apiPath = typeof opts.candidatosApiPath === 'function'
         ? opts.candidatosApiPath(requerimientoId)
-        : (opts.candidatosApiPath || `/requerimientos/${requerimientoId}/candidatos-observacion-destino`);
+        : (opts.candidatosApiPath || defaultPath);
       const resp = await api.get(`${apiPath}?${params}`);
       const data = resp?.data || resp;
       if (!data?.soportado) {
+        if (requerimientoId) {
+          sugeridoEl.innerHTML = '<div class="text-muted small border rounded p-2">Sin personas elegibles canónicas para este destino.</div>';
+          return;
+        }
         refreshPersonasLegacy();
         return;
       }
@@ -607,7 +615,12 @@ export function showSubsanacionDirigidaModal(opts = {}) {
   wrap.innerHTML = html;
   const el = document.getElementById(id);
   const modal = new bootstrap.Modal(el);
-  const readDestino = wireDestinoSelectors(id, { requerimientoId: opts.requerimientoId || null });
+  const readDestino = wireDestinoSelectors(id, {
+    requerimientoId: opts.requerimientoId || null,
+    observacionId: opts.observacionId || null,
+    modoSubsanacion: true,
+    candidatosApiPath: opts.candidatosApiPath || null,
+  });
   if (opts.requerimientoId) {
     const panel = document.getElementById(`${id}_adjPanel`);
     if (panel) panel.id = `${id}_adjPanel`;

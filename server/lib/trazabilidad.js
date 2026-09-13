@@ -809,6 +809,7 @@ export async function registrarSubsanacionDerivacion({
   destinoSubmodulo = '',
   destinoEtapa = '',
   destinoPersona = '',
+  observacionId = null,
 }) {
   const { rows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) throw new Error('Requerimiento no encontrado');
@@ -820,10 +821,18 @@ export async function registrarSubsanacionDerivacion({
 
   const etapaDestinoLabel = submoduloLabelToEtapa(destinoSubmodulo) || String(destinoEtapa || '').toUpperCase();
   const responsableDestino = resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, etapaDestinoLabel || etapaCanon);
-  const { resolveUsuarioIdDesdeActor } = await import('./pilotRegistroEvaluacion.js');
-  let uid = /^\d+$/.test(String(destinoPersona || '').trim()) ? Number(destinoPersona) : null;
+  const { resolveUsuarioIdDesdeActor, resolveEmisorObservacionRetorno } = await import('./pilotRegistroEvaluacion.js');
+  let uid = await resolveEmisorObservacionRetorno(requerimientoId, null, { observacionId });
+  if (!uid && /^\d+$/.test(String(destinoPersona || '').trim())) {
+    uid = Number(destinoPersona);
+  }
   if (!uid && destinoPersona) {
-    uid = await resolveUsuarioIdDesdeActor({ actorRol: destinoPersona, row }, null);
+    uid = await resolveUsuarioIdDesdeActor({ actorRol: destinoPersona }, null);
+  }
+
+  let actorUid = /^\d+$/.test(String(usuario || '').trim()) ? Number(usuario) : null;
+  if (!actorUid && usuario) {
+    actorUid = await resolveUsuarioIdDesdeActor({ actorRol: usuario }, null);
   }
 
   let evento = 'OBSERVACION_SUBSANADA';
@@ -833,6 +842,7 @@ export async function registrarSubsanacionDerivacion({
   const result = await transicionarExpediente({
     requerimientoId,
     evento,
+    usuarioOrigenId: actorUid,
     usuarioDestinoId: uid,
     unidadDestino: uid ? null : (responsableDestino || null),
     motivo: textoSubsanacion || 'Subsanación registrada',
@@ -842,6 +852,9 @@ export async function registrarSubsanacionDerivacion({
       destino_submodulo: destinoSubmodulo || '',
       destino_etapa: etapaDestinoLabel || '',
       destino_persona: destinoPersona || '',
+      responsable_emisor_id: uid,
+      observacion_id: observacionId,
+      usuario_destino_id: uid,
       via: 'registrarSubsanacionDerivacion',
     },
     actorRol: usuario || 'Sistema',

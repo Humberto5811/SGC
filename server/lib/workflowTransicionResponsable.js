@@ -8,13 +8,18 @@ import { TIPO_RESPONSABLE } from '../../shared/resolvedorEstadoResponsable.js';
 import {
   hasFunctionalProfile,
   isAdminSecurityRole,
+  normalizeSecurityRole,
+  normalizeTextoInstitucional,
   PERFILES_FUNCIONALES,
   PERFILES_TRANSVERSALES,
+  ROLES_GENERALES,
+  ROLES_SEGURIDAD_LEGACY,
+  rolGeneralFromUsuario,
 } from '../utils/userRoleCatalog.js';
 import { getActividadesForSubmodulo, normalizePermisos } from './permissionsCatalog.js';
 import { resolverCentroDesdeRequerimiento, normalizarCodigoCentro } from './recepcionBienesAlcance.js';
 import { FUENTE_RESPONSABLE } from './expedienteEstadoPersistido.js';
-import { tipoDeRequerimiento } from './workflow/workflowRepository.js';
+import { etapaDeRequerimiento, tipoDeRequerimiento } from './workflow/workflowRepository.js';
 import {
   listarCandidatosDerivacionEvaluacion,
   assertUsuarioDestinoEvaluacionElegible,
@@ -125,10 +130,168 @@ function usuarioPerteneceCentro(u, centroCodigo) {
   return uc === c || ucc === c;
 }
 
+/** Prefijo estructural de centro de costo UAD (01.04.01.*). */
+const UAD_COST_CENTER_PREFIX = '010401';
+
+function normalizarCentroCosto(valor) {
+  return String(valor || '').trim().replace(/\./g, '').toUpperCase();
+}
+
+function esCentroCatalogoUnidadAdquisiciones(codigo, nombre = '') {
+  const cod = normalizarCodigoCentro(codigo);
+  if (cod === 'OA') return true;
+  const nom = normalizeTextoInstitucional(nombre);
+  return nom.includes('unidad de adquisiciones')
+    || nom.includes('dependencia encargada de las contrataciones');
+}
+
+/**
+ * Claves organizacionales de la Unidad de Adquisiciones (DEC).
+ * Prioriza catálogo `centros`; respaldo código OA institucional.
+ */
+export async function resolveUnidadAdquisicionesKeys(client = null) {
+  const { rows } = await queryClient(
+    client,
+    `SELECT codigo, nombre FROM centros WHERE COALESCE(estado, 'Activo') = 'Activo'`,
+  );
+  const codigos = new Set();
+  for (const r of rows) {
+    if (esCentroCatalogoUnidadAdquisiciones(r.codigo, r.nombre)) {
+      const c = normalizarCodigoCentro(r.codigo);
+      if (c) codigos.add(c);
+    }
+  }
+  if (!codigos.size) codigos.add('OA');
+  return { codigos, costPrefix: UAD_COST_CENTER_PREFIX };
+}
+
+export function esCuentaLegacyDecSemilla(usuarioRow = {}) {
+  const user = normalizeTextoInstitucional(usuarioRow.username || usuarioRow.dni || '');
+  return user === 'dec' && normalizeSecurityRole(usuarioRow.rol) === ROLES_SEGURIDAD_LEGACY.DEC;
+}
+
+export function esDirectorRolGeneral(usuarioRow = {}) {
+  if (rolGeneralFromUsuario(usuarioRow) === ROLES_GENERALES.DIRECTOR) return true;
+  return normalizeTextoInstitucional(usuarioRow.rol) === 'director';
+}
+
+export function usuarioPerteneceUnidadAdquisiciones(usuarioRow, uadKeys) {
+  const keys = uadKeys || { codigos: new Set(['OA']), costPrefix: UAD_COST_CENTER_PREFIX };
+  const uc = normalizarCodigoCentro(usuarioRow.centro);
+  if (keys.codigos.has(uc)) return true;
+  const cc = normalizarCentroCosto(usuarioRow.codigo_centro_costo);
+  return cc.length > 0 && cc.startsWith(keys.costPrefix);
+}
+
+export function esElegibleDirectorUnidadAdquisiciones(usuarioRow, uadKeys) {
+  if (!usuarioRow?.activo) return false;
+  if (isAdminSecurityRole(usuarioRow)) return false;
+  if (esCuentaLegacyDecSemilla(usuarioRow)) return false;
+  if (!esDirectorRolGeneral(usuarioRow)) return false;
+  return usuarioPerteneceUnidadAdquisiciones(usuarioRow, uadKeys);
+}
+
+/**
+ * RC8.17 — Evaluación → DEC: Director activo de la Unidad de Adquisiciones (PERSONA).
+ */
+export async function listarCandidatosDerivacionDec(
+  requerimientoId,
+  { search = '' } = {},
+  row = null,
+  client = null,
+) {
+  const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(
+    requerimientoId,
+    'EVALUACION_APROBADA',
+    row,
+    client,
+  );
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const codigos = [...uadKeys.codigos];
+  const ccParam = `${uadKeys.costPrefix}%`;
+
+  const { rows: usuarios } = await queryClient(
+    client,
+    `SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol,
+            u.permisos, u.centro, u.codigo_centro_costo, u.activo
+     FROM usuarios u
+     WHERE u.activo = TRUE
+       AND (
+         UPPER(REPLACE(REPLACE(COALESCE(u.centro, ''), ' ', ''), '.', '')) = ANY($1::text[])
+         OR UPPER(REPLACE(REPLACE(COALESCE(u.codigo_centro_costo, ''), ' ', ''), '.', '')) LIKE $2
+       )`,
+    [codigos, ccParam],
+  );
+
+  let elegibles = usuarios
+    .filter((u) => esElegibleDirectorUnidadAdquisiciones(u, uadKeys))
+    .map((u) => mapCandidato(u));
+
+  let recomendado = null;
+  if (elegibles.length === 1) {
+    recomendado = {
+      ...elegibles[0],
+      etiqueta: 'Director — Unidad de Adquisiciones',
+      recomendado: true,
+      fuente: 'resolucion_automatica',
+    };
+    elegibles = [];
+  } else if (elegibles.length > 1) {
+    elegibles.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  }
+
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    elegibles = elegibles.filter((c) => matchesSearch(c, q));
+    if (recomendado && !matchesSearch(recomendado, q)) recomendado = null;
+  }
+
+  return {
+    soportado: true,
+    evento_codigo: 'EVALUACION_APROBADA',
+    etapa_origen: etapaOrigen,
+    etapa_destino: transicion.etapa_destino,
+    etapa_destino_label: metaDestino.label || transicion.etapa_destino,
+    destinos: [{
+      etapa_codigo: transicion.etapa_destino,
+      etapa_label: metaDestino.label || transicion.etapa_destino,
+      evento_codigo: 'EVALUACION_APROBADA',
+      unica: true,
+    }],
+    perfil_responsable: 'DIRECTOR_UAD',
+    alcance: 'UNIDAD_ADQUISICIONES',
+    centro: { codigos: [...uadKeys.codigos] },
+    recomendado,
+    candidatos: elegibles,
+    resolucion_automatica: recomendado
+      ? { usuarioId: recomendado.id, ambiguo: false }
+      : { usuarioId: null, ambiguo: elegibles.length !== 1, candidatos: elegibles.length },
+  };
+}
+
 async function loadReqRow(requerimientoId, row, client) {
-  if (row) return row;
+  const hasLegacyEtapa = row?.estado_actual != null && String(row.estado_actual).trim() !== ''
+    || row?.estadoActual != null && String(row.estadoActual).trim() !== '';
+  const hasTipo = row?.tipo != null && String(row.tipo).trim() !== '';
+  if (row && hasLegacyEtapa && hasTipo) return row;
   const { rows } = await queryClient(client, 'SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
-  return rows[0] || null;
+  return rows[0] || row || null;
+}
+
+/** Etapa origen para validación workflow: ERV prevalece; legacy solo si no hay ERV. */
+export async function resolveEtapaOrigenCanonicaWorkflow(requerimientoId, reqRow, client = null) {
+  const rid = parseInt(requerimientoId, 10);
+  if (Number.isFinite(rid) && rid > 0) {
+    const { rows: ervRows } = await queryClient(
+      client,
+      `SELECT etapa_codigo FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
+      [rid],
+    );
+    const ervEtapa = ervRows[0]?.etapa_codigo;
+    if (ervEtapa) return String(ervEtapa).toUpperCase();
+  }
+  const legacy = etapaDeRequerimiento(reqRow) || String(reqRow?.estado_actual || reqRow?.estadoActual || '').trim();
+  return String(legacy || 'REGISTRO').toUpperCase();
 }
 
 export async function resolveTransicionWorkflow(requerimientoId, eventoCodigo, row = null, client = null) {
@@ -139,7 +302,7 @@ export async function resolveTransicionWorkflow(requerimientoId, eventoCodigo, r
     throw err;
   }
   const tipo = tipoDeRequerimiento(reqRow);
-  const etapaOrigen = String(reqRow.estado_actual || reqRow.estadoActual || 'REGISTRO').toUpperCase();
+  const etapaOrigen = await resolveEtapaOrigenCanonicaWorkflow(requerimientoId, reqRow, client);
   const transicion = getTransition({
     tipoContratacion: tipo,
     etapaOrigen,
@@ -254,6 +417,10 @@ export async function listarCandidatosTransicion(
 ) {
   const ev = String(eventoCodigo || '').toUpperCase();
 
+  if (ev === 'EVALUACION_APROBADA') {
+    return listarCandidatosDerivacionDec(requerimientoId, { search }, row, client);
+  }
+
   if (ev === 'REQUERIMIENTO_ENVIADO_EVALUACION') {
     const data = await listarCandidatosDerivacionEvaluacion(requerimientoId, { search }, row, client);
     const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(requerimientoId, ev, row, client);
@@ -340,6 +507,19 @@ export async function assertUsuarioDestinoTransicionElegible(
   const ev = String(eventoCodigo || '').toUpperCase();
   if (ev === 'REQUERIMIENTO_ENVIADO_EVALUACION') {
     return assertUsuarioDestinoEvaluacionElegible(requerimientoId, usuarioId, row, client);
+  }
+  if (ev === 'EVALUACION_APROBADA') {
+    const lista = await listarCandidatosDerivacionDec(requerimientoId, {}, row, client);
+    const uid = Number(usuarioId);
+    const todos = [...(lista.recomendado ? [lista.recomendado] : []), ...(lista.candidatos || [])];
+    const found = todos.find((c) => c.id === uid);
+    if (!found) {
+      const err = new Error('Usuario destino no elegible para DEC (Director UAD)');
+      err.status = 422;
+      err.code = 'RESPONSABLE_TRANSICION_INVALIDO';
+      throw err;
+    }
+    return { ok: true, candidato: found, recomendado: lista.recomendado, lista };
   }
 
   const lista = await listarCandidatosTransicion(requerimientoId, ev, {}, row, client);
@@ -490,9 +670,16 @@ export default {
   isPerfilAlcanceTransversal,
   esUsuarioElegibleParaPerfil,
   resolveTransicionWorkflow,
+  resolveEtapaOrigenCanonicaWorkflow,
   getPilotEstadoLabelsForEvento,
   buildMetadataSeleccionResponsable,
   listarCandidatosTransicion,
+  listarCandidatosDerivacionDec,
+  resolveUnidadAdquisicionesKeys,
+  esElegibleDirectorUnidadAdquisiciones,
+  esCuentaLegacyDecSemilla,
+  esDirectorRolGeneral,
+  usuarioPerteneceUnidadAdquisiciones,
   listarCandidatosPorPerfil,
   assertUsuarioDestinoTransicionElegible,
   applyPilotTransicionPersona,

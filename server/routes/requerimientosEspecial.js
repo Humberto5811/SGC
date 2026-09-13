@@ -254,6 +254,7 @@ router.use('/:requerimientoId/candidatos-transicion', guardRequirementAccess);
 router.use('/:requerimientoId/candidatos-derivacion-evaluacion', guardRequirementAccess);
 router.use('/:requerimientoId/candidatos-observacion-destino', guardRequirementAccess);
 router.use('/:requerimientoId/observar', guardRequirementAccess);
+router.use('/:requerimientoId/candidatos-subsanacion-destino', guardRequirementAccess);
 router.use('/:requerimientoId/subsanar', guardRequirementAccess);
 router.use('/:requerimientoId/aprobar-evaluacion', guardRequirementAccess);
 
@@ -601,6 +602,24 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/requerimientos/:requerimientoId/candidatos-subsanacion-destino
+router.get('/:requerimientoId/candidatos-subsanacion-destino', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { listarCandidatosSubsanacionDestino } = await import('../lib/candidatosObservacionDestino.js');
+    const data = await listarCandidatosSubsanacionDestino({
+      requerimientoId,
+      destinoSubmodulo: req.query.destino_submodulo || req.query.destinoSubmodulo || '',
+      observacionId: req.query.observacion_id || req.query.observacionId || null,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
 // PUT /api/requerimientos/:requerimientoId/subsanar
 router.put('/:requerimientoId/subsanar', async (req, res, next) => {
   try {
@@ -608,8 +627,30 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
     const {
       respuesta, usuario, origen_submodulo, destino_submodulo, destino_etapa, destino_persona,
       observacion_id,
+      usuario_destino_id: usuarioDestinoIdBody,
     } = req.body || {};
     if (!respuesta) return res.status(400).json({ success: false, error: 'Subsanación requerida' });
+
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : (/^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null);
+    const destinoSub = destino_submodulo || '';
+    if (usuarioDestinoId && destinoSub) {
+      const { assertUsuarioDestinoSubsanacionElegible } = await import('../lib/candidatosObservacionDestino.js');
+      try {
+        await assertUsuarioDestinoSubsanacionElegible(
+          requerimientoId,
+          destinoSub,
+          usuarioDestinoId,
+          observacion_id,
+        );
+      } catch (err) {
+        if (err.status) {
+          return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+        }
+        throw err;
+      }
+    }
 
     const reqCheck = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
     if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado' });
@@ -622,6 +663,9 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
       respuesta,
       origen_submodulo: origen_submodulo || 'Registro de Requerimiento',
       usuario: usuario || 'Usuario AU',
+      destino_submodulo: destino_submodulo || '',
+      destino_etapa: destino_etapa || '',
+      destino_persona: usuarioDestinoId ? String(usuarioDestinoId) : (destino_persona || ''),
     };
 
     let updated;
@@ -641,7 +685,8 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
             origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
             destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
             destinoEtapa: destinoEtapa || destino_etapa || '',
-            destinoPersona: destinoPersona || destino_persona || '',
+            destinoPersona: usuarioDestinoId ? String(usuarioDestinoId) : (destinoPersona || destino_persona || ''),
+            observacionId: observacion_id,
           });
         },
       });
@@ -661,7 +706,8 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
         origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
         destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
         destinoEtapa: destinoEtapa || destino_etapa || '',
-        destinoPersona: destinoPersona || destino_persona || '',
+        destinoPersona: usuarioDestinoId ? String(usuarioDestinoId) : (destinoPersona || destino_persona || ''),
+        observacionId: observacion_id,
       });
     }
 

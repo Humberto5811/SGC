@@ -45,30 +45,56 @@ const mockClient = (usuarios = []) => ({
   },
 });
 
-const decUser = {
-  id: 501,
+const lespinozaLike = {
+  id: 549,
   username: 'lespinoza',
   apellidos: 'ESPINOZA',
-  nombres: 'LUIS',
-  cargo: 'ANALISTA DEC',
-  rol: 'dec',
-  centro: 'INST',
+  nombres: 'LUIGI',
+  cargo: 'DIRECTOR UAD',
+  rol: 'director',
+  centro: 'OA',
+  codigo_centro_costo: '01.04.01.02.01',
   activo: true,
-  permisos: { submodulos: ['DEC'], actividades: ['VER', 'APROBAR'], actividadesPorSubmodulo: { DEC: ['VER', 'APROBAR'] } },
+  permisos: {},
 };
-const admin = { id: 1, username: 'admin', rol: 'admin', activo: true, permisos: {}, centro: 'INST' };
+const decSeed = {
+  id: 3,
+  username: 'dec',
+  nombre: 'Usuario DEC',
+  rol: 'dec',
+  centro: '',
+  activo: true,
+  permisos: { submodulos: ['DEC'], actividades: ['VER'], actividadesPorSubmodulo: { DEC: ['VER'] } },
+};
+const admin = { id: 1, username: 'admin', rol: 'admin', activo: true, permisos: {}, centro: 'OA' };
+
+const mockClientEvalDec = (usuarios = []) => ({
+  query: async (sql) => {
+    if (/FROM requerimientos/i.test(sql)) {
+      return { rows: [{ id: 30, tipo: 'bienes', estado_actual: 'EVALUACION', payload: {} }] };
+    }
+    if (/FROM centros/i.test(sql)) {
+      return { rows: [{ codigo: 'OA', nombre: 'Unidad de Adquisiciones' }] };
+    }
+    if (/FROM usuarios u/i.test(sql)) {
+      return { rows: usuarios.filter((u) => u.centro === 'OA' || String(u.codigo_centro_costo || '').startsWith('01.04.01')) };
+    }
+    return { rows: [] };
+  },
+});
 
 const listaDec = await listarCandidatosTransicion(
   30,
   'EVALUACION_APROBADA',
   {},
   { id: 30, tipo: 'bienes', estado_actual: 'EVALUACION', payload: {} },
-  mockClient([decUser, admin]),
+  mockClientEvalDec([lespinozaLike, decSeed, admin]),
 );
 ok(listaDec.etapa_destino === 'DEC', 'Eval→DEC etapa destino DEC');
 const idsDec = [...(listaDec.recomendado ? [listaDec.recomendado.id] : []), ...listaDec.candidatos.map((c) => c.id)];
-ok(idsDec.includes(501), 'lista DEC incluye lespinoza');
-ok(!idsDec.includes(1), 'lista DEC excluye admin');
+ok(idsDec.includes(549), 'lista Eval→DEC incluye director UAD (lespinoza-like)');
+ok(!idsDec.includes(3), 'lista Eval→DEC excluye legacy dec');
+ok(!idsDec.includes(1), 'lista Eval→DEC excluye admin');
 
 try {
   await runMigrations();
@@ -91,7 +117,7 @@ try {
     const { rows: decRows } = await query(`
       SELECT id FROM usuarios WHERE activo = TRUE AND LOWER(username) = 'lespinoza' LIMIT 1
     `);
-    const uidDest = decRows[0]?.id || decUser.id;
+    const uidDest = decRows[0]?.id || lespinozaLike.id;
     if (!decRows[0]) {
       console.log('  ⚠ lespinoza no en BD; omitiendo integración ERV');
     } else {
