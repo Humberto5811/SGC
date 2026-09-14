@@ -14,6 +14,7 @@ import {
   ROLES_GENERALES_LABELS,
   rolGeneralFromUsuario,
 } from '../../../server/utils/userRoleCatalog.js';
+import { listEquiposUadCatalogo } from '../../../shared/equiposUad.js';
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -450,6 +451,14 @@ async function openForm(id) {
                 ${renderRolGeneralOptions(u.rol)}
               </select>
               <small class="text-muted d-block mt-1">Nivel general de actuación. El alcance de áreas se configura abajo.</small></div>
+            <div class="col-md-3"><label class="form-label">Equipo UAD</label>
+              <select class="form-select form-select-sm" id="fEquipoUad">
+                <option value="">— Sin equipo específico —</option>
+                ${listEquiposUadCatalogo().map((e) =>
+    `<option value="${esc(e.codigo)}" ${String(u.equipo_uad || '') === e.codigo ? 'selected' : ''}>${esc(e.label)}</option>`,
+  ).join('')}
+              </select>
+              <small class="text-muted d-block mt-1">Solo para personal de la Unidad de Adquisiciones.</small></div>
             <div class="col-md-3"><label class="form-label">Perfil funcional</label>
               <div class="form-control form-control-sm bg-light text-muted" style="cursor:default;" title="Perfil inferido automáticamente según el cargo y permisos del usuario. No editable en esta versión.">
                 <i class="bi bi-person-badge"></i> ${esc(fmtPerfilFuncional(u))}
@@ -716,6 +725,7 @@ async function openForm(id) {
       email: modal.querySelector('#fEmail').value.trim(),
       telefono: modal.querySelector('#fTelefono').value.trim(),
       cargo: modal.querySelector('#fCargo').value.trim(),
+      equipo_uad: modal.querySelector('#fEquipoUad')?.value?.trim() || null,
       rol: modal.querySelector('#fRolGeneral').value === ROLES_GENERALES.ADMINISTRADOR ? 'admin' : 'usuario',
       rol_general: modal.querySelector('#fRolGeneral').value,
       estado: modal.querySelector('#fEstado').value,

@@ -123,11 +123,16 @@ export function buildBandejaExpedienteContrato(row = {}) {
   const fechaVigente = resolveFechaVigente(row, erv);
   const dias = calcDiasEnEstadoDesdeFecha(fechaVigente);
 
+  const fechaIngresoProgramacion = row.fecha_ingreso_programacion
+    || row.fechaIngresoProgramacion
+    || null;
+
   return {
     requerimiento_id: row.requerimiento_id || row.id || null,
     codigo: row.codigo || '',
     fecha_referencia: row.created_at || fechaVigente || null,
     fecha_estado_vigente: fechaVigente,
+    fecha_ingreso_programacion: fechaIngresoProgramacion,
     tipo: row.tipo || '',
     descripcion: row.denominacion || '',
     centro: row.centro_nombre || row.centro || '',

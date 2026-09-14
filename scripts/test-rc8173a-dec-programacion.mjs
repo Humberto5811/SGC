@@ -42,6 +42,9 @@ const mockClient = (usuarios = []) => ({
         }],
       };
     }
+    if (/FROM centros/i.test(sql)) {
+      return { rows: [{ codigo: 'OA', nombre: 'Unidad de Adquisiciones' }] };
+    }
     if (/FROM usuarios/i.test(sql) && /activo = TRUE/i.test(sql)) {
       return { rows: usuarios };
     }
@@ -49,18 +52,19 @@ const mockClient = (usuarios = []) => ({
   },
 });
 
-const progUser = {
+const coordProg = {
   id: 602,
-  username: 'jprogramador',
+  username: 'coordprog',
   apellidos: 'PEREZ',
   nombres: 'JUAN',
-  cargo: 'PROGRAMADOR',
-  rol: 'dec',
-  centro: 'INST',
+  cargo: 'COORDINADOR-PROGRAM.',
+  rol: 'coordinador',
+  centro: 'OA',
+  codigo_centro_costo: '01.04.01.02.01',
+  equipo_uad: 'PROGRAMACION',
   activo: true,
   permisos: {
     submodulos: ['PROGRAMACION'],
-    actividades: ['VER', 'APROBAR'],
     actividadesPorSubmodulo: { PROGRAMACION: ['VER', 'APROBAR'] },
   },
 };
@@ -71,15 +75,15 @@ const lista = await listarCandidatosTransicion(
   'DEC_APROBADO',
   {},
   { id: 40, tipo: 'bienes', estado_actual: 'DEC', payload: {} },
-  mockClient([progUser, admin]),
+  mockClient([coordProg, admin]),
 );
 ok(lista.etapa_destino === 'PROGRAMACION', 'DEC→Prog etapa destino PROGRAMACION');
-ok(lista.alcance === 'TRANSVERSAL', 'PROGRAMACION alcance transversal');
+ok(lista.alcance === 'UAD_EQUIPO', 'DEC_APROBADO alcance UAD_EQUIPO');
 const ids = [...(lista.recomendado ? [lista.recomendado.id] : []), ...lista.candidatos.map((c) => c.id)];
-ok(ids.includes(602), 'lista incluye programador');
+ok(ids.includes(602), 'lista incluye coordinador equipo Programación');
 ok(!ids.includes(1), 'lista excluye admin');
 
-await assertUsuarioDestinoTransicionElegible(40, 'DEC_APROBADO', 602, { id: 40, tipo: 'bienes', estado_actual: 'DEC' }, mockClient([progUser]));
+await assertUsuarioDestinoTransicionElegible(40, 'DEC_APROBADO', 602, { id: 40, tipo: 'bienes', estado_actual: 'DEC' }, mockClient([coordProg]));
 
 try {
   await runMigrations();

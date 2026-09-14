@@ -17,6 +17,35 @@ const ESTADOS_BANDEJA_PROGRAMACION = `(
 )`;
 
 /** SQL: expedientes cuyo flujo incluye Programación (bandeja maestra de seguimiento). */
+/**
+ * RC8.17.8E — Primer ingreso histórico a Programación (sin N+1).
+ * 1) workflow_eventos hacia PROGRAMACION con cambio de ubicación.
+ * 2) MIN(asignado_at) en asignaciones PROGRAMACION.
+ */
+export const FECHA_INGRESO_PROGRAMACION_JOINS = `
+  LEFT JOIN LATERAL (
+    SELECT MIN(we.created_at) AS fecha_evento
+    FROM workflow_eventos we
+    WHERE we.expediente_id = r.id
+      AND UPPER(TRIM(COALESCE(we.etapa_destino, ''))) = 'PROGRAMACION'
+      AND (
+        COALESCE((we.metadata->>'cambia_ubicacion')::text, '') IN ('true', '1')
+        OR UPPER(TRIM(COALESCE(we.etapa_origen, ''))) IS DISTINCT FROM 'PROGRAMACION'
+        OR UPPER(TRIM(COALESCE(we.evento_codigo, ''))) = 'DEC_APROBADO'
+      )
+  ) fip_ev ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT MIN(ea.asignado_at) AS fecha_asig
+    FROM expediente_asignaciones ea
+    WHERE ea.requerimiento_id = r.id
+      AND UPPER(TRIM(COALESCE(ea.etapa_codigo, ''))) = 'PROGRAMACION'
+  ) fip_asig ON TRUE
+`;
+
+export const FECHA_INGRESO_PROGRAMACION_SELECT = `
+  COALESCE(fip_ev.fecha_evento, fip_asig.fecha_asig) AS fecha_ingreso_programacion
+`;
+
 export const WHERE_BANDEJA_PROGRAMACION = `
   (
     r.estado_actual = 'PROGRAMACION'
@@ -55,8 +84,10 @@ export async function listarBandejaProgramacion(page, pageSize, queryParams = {}
       r.payload, r.usuario_modificacion, r.created_at, r.updated_at,
       COALESCE(c.nombre, c.codigo, a.responsable, '') AS centro_nombre,
       ${REQUERIMIENTO_BANDEJA_EXTRA_SELECT},
+      ${FECHA_INGRESO_PROGRAMACION_SELECT},
       ${TRAZA_EXTRA_SELECT}
     ${REQUERIMIENTO_BANDEJA_FROM}
+    ${FECHA_INGRESO_PROGRAMACION_JOINS}
     ${where}
     ORDER BY r.created_at DESC NULLS LAST, r.id DESC
     LIMIT $${limitIdx} OFFSET $${offsetIdx}

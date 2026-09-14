@@ -183,6 +183,7 @@ export function buildObservacionDomainMutator({
       destino_submodulo: String(destinoSubmodulo || 'Registro de Requerimiento'),
       destino_etapa: String(destinoEtapa || 'REGISTRO'),
       destino_persona: String(destinoPersona || responsableSubsanacion || ''),
+      usuario_origen_id: uidOrig,
       usuario_destino_id: uidDest,
       responsable_recomendado_id: responsableRecomendadoId,
       reasignacion_manual: reasignacionManual === true,

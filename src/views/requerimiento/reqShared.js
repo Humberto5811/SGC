@@ -196,6 +196,7 @@ export async function addSubsanacion(req, texto, usuario, destino = {}) {
     destino_submodulo: destino.destino_submodulo || '',
     destino_etapa: destino.destino_etapa || '',
     destino_persona: destino.destino_persona || '',
+    usuario_destino_id: destino.usuario_destino_id,
   });
 }
 

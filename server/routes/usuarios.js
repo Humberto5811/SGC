@@ -11,6 +11,12 @@ import {
   listarCentrosCatalogo,
   listarAreasPorCentro,
 } from '../lib/areasAutorizadasUsuario.js';
+import {
+  parseEquipoUadInput,
+  listEquiposUadCatalogo,
+  labelEquipoUad,
+  normalizeEquipoUadCodigo,
+} from '../lib/equiposUadUsuario.js';
 
 const router = express.Router();
 
@@ -44,6 +50,8 @@ function mapUser(row) {
     codigo_centro_costo: row.codigo_centro_costo || '',
     centro,
     alcance_datos: row.alcance_datos || null,
+    equipo_uad: normalizeEquipoUadCodigo(row.equipo_uad),
+    equipo_uad_label: labelEquipoUad(row.equipo_uad),
     descripcionArea: row.descripcion_area || '',
     descripcion_area: row.descripcion_area || '',
     permisos,
@@ -95,6 +103,13 @@ async function requireAdmin(req, res, next) {
 }
 
 router.use(requireAdmin);
+
+// GET /api/usuarios/catalogos/equipos-uad
+router.get('/catalogos/equipos-uad', async (req, res, next) => {
+  try {
+    res.json({ data: listEquiposUadCatalogo() });
+  } catch (err) { next(err); }
+});
 
 // GET /api/usuarios/catalogos/centros
 router.get('/catalogos/centros', async (req, res, next) => {
@@ -412,13 +427,16 @@ router.post('/', async (req, res, next) => {
     const hash = await bcrypt.hash(tempPassword, 10);
     const nombre = [b.apellidos, b.nombres].filter(Boolean).join(' ').trim() || b.nombre || b.dni;
     const activo = b.estado !== 'Inactivo' && b.activo !== false;
+    const equipoUad = b.equipo_uad === undefined || b.equipo_uad === null || String(b.equipo_uad).trim() === ''
+      ? null
+      : parseEquipoUadInput(b.equipo_uad);
 
     const { rows } = await query(`
       INSERT INTO usuarios (
         dni, username, apellidos, nombres, nombre, email, telefono, cargo, rol, password_hash, activo,
         debe_cambiar_password, area_id, codigo_centro_costo, descripcion_area, centro, permisos, auditoria,
-        usuario_creacion, usuario_modificacion
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12,$13,$14,$15,$16,$17,$18,$18)
+        usuario_creacion, usuario_modificacion, equipo_uad
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12,$13,$14,$15,$16,$17,$18,$18,$19)
       RETURNING *
     `, [
       b.dni, username, b.apellidos || '', b.nombres || '', nombre, b.email || '', b.telefono || '',
@@ -427,6 +445,7 @@ router.post('/', async (req, res, next) => {
       JSON.stringify(permisos),
       JSON.stringify(pushAuditoria([], { usuario: actor, accion: 'Creó usuario' })),
       actor,
+      equipoUad,
     ]);
     const user = mapUser(rows[0]);
     const systemUrl = b.system_url || req.headers.origin || '';
@@ -468,13 +487,18 @@ router.put('/:id', async (req, res, next) => {
       });
     }
 
+    let equipoUad = prev.equipo_uad ?? null;
+    if (b.equipo_uad !== undefined) {
+      equipoUad = parseEquipoUadInput(b.equipo_uad);
+    }
+
     const { rows } = await query(`
       UPDATE usuarios SET
         dni = COALESCE($2, dni), username = COALESCE($3, username), apellidos = $4, nombres = $5, nombre = $6,
         email = $7, telefono = $8, cargo = $9, rol = COALESCE($10, rol), activo = $11,
         area_id = $12, codigo_centro_costo = $13, descripcion_area = $14, centro = $15,
         permisos = $16, auditoria = $17, usuario_modificacion = $18,
-        alcance_datos = COALESCE($19, alcance_datos), updated_at = NOW()
+        alcance_datos = COALESCE($19, alcance_datos), equipo_uad = $20, updated_at = NOW()
       WHERE id = $1 RETURNING *
     `, [
       req.params.id, b.dni, b.username ? String(b.username).trim().toLowerCase() : null,
@@ -485,6 +509,7 @@ router.put('/:id', async (req, res, next) => {
       b.centro ?? prev.centro ?? '',
       JSON.stringify(permisos), JSON.stringify(auditoria), actor,
       b.alcance_datos !== undefined ? (b.alcance_datos || null) : (prev.alcance_datos || null),
+      equipoUad,
     ]);
     res.json(mapUser(rows[0]));
   } catch (err) { next(err); }

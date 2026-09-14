@@ -13,9 +13,15 @@ import {
   bandejaTableStyles,
   sortBandejaRows, bindSortHandlers, mergeSortParams, sortableTh,
 } from '../../utils/trazabilidad.js';
+import {
+  resolveContratoVisual,
+  fmtBandejaFechaDerivado,
+  bandejaExpedienteStandardStyles,
+} from '../../utils/bandejaExpedienteColumns.js';
+import { getRowDescripcionRaw } from '../../utils/bandejaUi.js';
+import { renderEtapaBadgeHtml } from '../../ui/workflow/EtapaBadge.js';
 import { renderEstadoBadgeHtml } from '../../ui/workflow/EstadoBadge.js';
 import { renderResponsableBadgeHtml } from '../../ui/workflow/ResponsableBadge.js';
-import { adaptEstadoResponsable, calcDiasEnEstadoVigente } from '../../ui/workflow/adaptEstadoResponsable.js';
 import { showWorkflowTransicionModal } from '../../components/workflowTransicionModal.js';
 import { progMenuItems, progHiddenActions } from '../../utils/bandejaActions.js';
 import { loadProgramacionBandeja } from '../../utils/bandejaRequerimientos.js';
@@ -143,8 +149,30 @@ export function renderProgramacionView() {
         width: 100%;
         min-width: 1280px;
       }
-      .prog-bandeja-page #progBandejaWrap .actos-col-centro { min-width: 120px; max-width: 180px; }
-      .prog-bandeja-page #progBandejaWrap .actos-col-area { min-width: 120px; max-width: 180px; }
+      .prog-bandeja-page #progBandejaWrap .actos-col-centro { min-width: 100px; max-width: 150px; }
+      .prog-bandeja-page #progBandejaWrap .actos-col-desc-clamp {
+        max-width: 160px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+        line-height: 1.25;
+      }
+      .prog-bandeja-page #progBandejaWrap .actos-col-area-clamp {
+        max-width: 140px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+        line-height: 1.25;
+      }
+      .prog-bandeja-page #progBandejaWrap .req-col-etapa { width: 150px; max-width: 150px; }
+      .prog-bandeja-page #progBandejaWrap .req-col-estado-cell { width: 155px; max-width: 155px; }
+      .prog-bandeja-page #progBandejaWrap .req-col-resp { width: 175px; max-width: 175px; }
+      .prog-bandeja-page #progBandejaWrap .req-col-derivado { width: 92px; white-space: nowrap; }
+      ${bandejaExpedienteStandardStyles()}
       .prog-bandeja-page #progBandejaWrap .req-col-acc .dropdown-menu {
         z-index: 2000;
         min-width: 220px;
@@ -190,10 +218,10 @@ function programacionBandejaHeaders(sortState = null) {
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
-    ${sortableTh('Estado', 'estado', sortState)}
-    ${sortableTh('Responsable', 'responsable', sortState)}
-    ${sortableTh('Fecha Asignación', 'fecha', sortState)}
-    ${sortableTh('Días', 'dias', sortState)}
+    ${sortableTh('Etapa', 'etapa', sortState, 'req-col-etapa')}
+    ${sortableTh('Estado', 'estado', sortState, 'req-col-estado')}
+    ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
+    ${sortableTh('Derivado', 'derivado', sortState, 'req-col-derivado')}
     <th>Pedidos Adjuntos</th>
     <th class="req-col-acc"></th>`;
 }
@@ -210,13 +238,27 @@ function renderProgramacionRowCells(r, opts = {}) {
     : (pedCnt > 0
       ? `<span class="badge bg-success">${pedCnt} pedido${pedCnt === 1 ? '' : 's'}</span>`
       : '<span class="text-muted small">—</span>');
-  const fechaAsig = r.fecha_estado_vigente || r.fecha_estado_actual || r.fechaEstadoActual || '';
-  const fechaFmt = fechaAsig ? String(fechaAsig).slice(0, 16).replace('T', ' ') : '—';
-  const adapted = adaptEstadoResponsable(r);
-  const dias = calcDiasEnEstadoVigente(r);
-  const estadoBadgeHtml = renderEstadoBadgeHtml(adapted);
-  const respHtml = renderResponsableBadgeHtml(adapted);
-  const nombreItem = descripcionesBien || r.denominacion || '—';
+  const descFull = getRowDescripcionRaw({ ...r, denominacion: descripcionesBien || r.denominacion }) || descripcionesBien || r.denominacion || '—';
+  const areaFull = String(r.area || '—');
+  const visual = resolveContratoVisual(r);
+  const etapaHtml = renderEtapaBadgeHtml({ etapaLabel: visual.etapaLabel, etapaCodigo: visual.etapaCodigo });
+  const estadoHtml = renderEstadoBadgeHtml({
+    estadoCodigo: visual.estadoCodigo,
+    estadoLabel: visual.estadoLabel,
+    categoria: visual.categoria,
+    icono: visual.icono,
+    tooltip: visual.tooltip,
+  });
+  const respHtml = renderResponsableBadgeHtml({
+    responsableTipo: visual.responsableTipo,
+    responsableNombre: visual.responsableNombre,
+    responsableUsername: visual.responsableUsername,
+    responsableUsuarioId: visual.responsableUsuarioId,
+    responsableUnidad: visual.responsableUnidad,
+    responsableDisplay: visual.responsableNombre,
+  });
+  const derivadoTs = r.bandeja_contrato?.fecha_ingreso_programacion ?? r.fecha_ingreso_programacion;
+  const derivadoFmt = fmtBandejaFechaDerivado(derivadoTs);
 
   return `
     <td class="text-center"><button type="button" class="btn btn-link btn-sm p-0 req-traza text-secondary" data-id="${r.id}" onclick="event.stopPropagation()"><i class="bi bi-clock-history"></i></button></td>
@@ -224,14 +266,14 @@ function renderProgramacionRowCells(r, opts = {}) {
     <td class="actos-col-paq">${paqBadge}</td>
     <td class="actos-col-pedido small">${pedidosDisplay}</td>
     <td class="actos-col-sigamef small">${esc(codigosSigamef || '—')}</td>
-    <td class="actos-col-desc"><span class="req-desc-text" title="${esc(nombreItem)}">${esc(nombreItem)}</span></td>
+    <td class="actos-col-desc"><span class="actos-col-desc-clamp" title="${esc(descFull)}">${esc(descFull)}</span></td>
     <td class="actos-col-centro"><span class="req-centro-text" title="${esc(r.centro_nombre || r.centro || '—')}">${esc(r.centro_nombre || r.centro || '—')}</span></td>
-    <td class="actos-col-area">${esc(r.area || '—')}</td>
+    <td class="actos-col-area"><span class="actos-col-area-clamp" title="${esc(areaFull)}">${esc(areaFull)}</span></td>
     <td class="actos-col-cmn small">${esc(r.cmn || '—')}</td>
-    <td class="req-col-estado-cell">${estadoBadgeHtml}</td>
+    <td class="req-col-etapa">${etapaHtml}</td>
+    <td class="req-col-estado-cell">${estadoHtml}</td>
     <td class="req-col-resp">${respHtml}</td>
-    <td class="small text-muted">${esc(fechaFmt)}</td>
-    <td class="text-center"><span class="badge badge-dias-mod" style="background:${dias > 10 ? '#dc3545' : dias > 5 ? '#fd7e14' : '#198754'};color:#fff;">${dias}d</span></td>
+    <td class="req-col-derivado small text-muted"${derivadoFmt.title ? ` title="${esc(derivadoFmt.title)}"` : ''}>${esc(derivadoFmt.display)}</td>
     <td class="text-center">${renderPedidosAdjuntosCell(pedCnt, r.id)}</td>`;
 }
 
@@ -378,6 +420,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
       cmn: (id) => openEditCmnModal(Number(id)),
       obs: (id) => handleBandejaObservaciones(id, allRows, {
         submoduloLabel: 'Programación',
+        candidatosApiPath: (reqId) => `/contrataciones/programacion/candidatos-observacion-destino/${reqId}`,
         puedeObservar: (r) => {
           const ubic = String(r.estado_actual || r.estadoActual || '').toUpperCase();
           return ubic === 'PROGRAMACION';
@@ -386,6 +429,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
           await contratacionesService.observarProgramacion(reqId, data.motivo || '', data.usuario, {
             ...data,
             origen_submodulo: data.origen_submodulo || 'Programación',
+            usuario_destino_id: data.usuario_destino_id,
           });
         },
         onSubsanar: async (reqId, data) => {
@@ -397,6 +441,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
             destino_submodulo: data.destino_submodulo,
             destino_etapa: data.destino_etapa,
             destino_persona: data.destino_persona,
+            usuario_destino_id: data.usuario_destino_id,
           });
         },
         onAdjuntos: (rid) => manageAdjuntos(rid, true),
@@ -630,6 +675,7 @@ async function observarProgramacion(id) {
         destino_submodulo: data.destino_submodulo,
         destino_etapa: data.destino_etapa,
         destino_persona: data.destino_persona,
+        usuario_destino_id: data.usuario_destino_id,
       });
       loadBandeja();
     } catch (e) {
@@ -653,6 +699,7 @@ async function observarProgramacion(id) {
       destino_submodulo: data.destino_submodulo,
       destino_etapa: data.destino_etapa,
       destino_persona: data.destino_persona,
+      usuario_destino_id: data.usuario_destino_id,
       origen_submodulo: data.origen_submodulo || 'Programación',
     });
     loadBandeja();

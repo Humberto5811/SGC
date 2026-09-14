@@ -158,6 +158,7 @@ export async function openModalObservaciones(req, opts = {}) {
             destino_submodulo: resolveOrigenDestinoSubsanacion(pending),
             destino_etapa: data.destino_etapa,
             destino_persona: data.destino_persona,
+            usuario_destino_id: data.usuario_destino_id,
           });
         }
         await finalizeObsAction(row, opts);

@@ -9,7 +9,6 @@ import {
   ETAPAS,
 } from '../lib/trazabilidad.js';
 import { formatObservacionTraza, resolveResponsableFromDestino, submoduloLabelToEtapa } from '../lib/observacionDestino.js';
-import { appendObservacion } from '../lib/observacionesExpediente.js';
 import {
   emitirObservacion,
   procesarAccionObservacion,
@@ -26,13 +25,13 @@ import {
   aprobarActosInvitaciones,
   COORDINADOR_ACTOS,
 } from '../lib/actosPreparatorios.js';
-import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
+import { listarBandejaProgramacion, WHERE_BANDEJA_PROGRAMACION } from '../lib/programacionBandeja.js';
 import { listarBandejaDEC, WHERE_BANDEJA_DEC } from '../lib/decBandeja.js';
 import {
   REQUERIMIENTO_BANDEJA_FROM,
   REQUERIMIENTO_BANDEJA_EXTRA_SELECT,
 } from '../lib/bandejaRequerimientoSql.js';
-import { runWorkflowTransition } from '../lib/workflow/workflowIntegration.js';
+import { runWorkflowTransition, buildObservacionDomainMutator } from '../lib/workflow/workflowIntegration.js';
 import { transicionarExpediente } from '../lib/expedienteTransicion.js';
 import { getObservacionesAbiertas } from '../../shared/observacionesMotor.js';
 
@@ -181,6 +180,87 @@ router.get('/dec/candidatos-observacion-destino/:requerimientoId', async (req, r
     const data = await listarCandidatosObservacionDestino({
       requerimientoId: rid,
       destinoSubmodulo,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+/** RC8.17.8A — candidatos transición DEC (sin guard org-scope de requerimientos). */
+async function assertAccesoOperativoDecCandidatosTransicion(userId, requerimientoId) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isFinite(uid)) {
+    const err = new Error('No autenticado');
+    err.status = 401;
+    throw err;
+  }
+  const rid = parseInt(requerimientoId, 10);
+  const { rows: ervRows } = await query(
+    `SELECT responsable_tipo, responsable_usuario_id
+     FROM expediente_estado_vigente WHERE requerimiento_id = $1 LIMIT 1`,
+    [rid],
+  );
+  const erv = ervRows[0];
+  if (
+    erv
+    && String(erv.responsable_tipo || '').trim().toUpperCase() === 'PERSONA'
+    && Number(erv.responsable_usuario_id) === uid
+  ) {
+    return;
+  }
+  const { rows: urows } = await query(
+    `SELECT id, username, apellidos, nombres, cargo, rol, permisos, centro, codigo_centro_costo, activo
+     FROM usuarios WHERE id = $1 AND activo = TRUE LIMIT 1`,
+    [uid],
+  );
+  const { esElegiblePersonaDec } = await import('../lib/candidatosObservacionDestino.js');
+  if (urows[0] && (await esElegiblePersonaDec(urows[0]))) {
+    return;
+  }
+  const err = new Error('No tiene autorización para acceder a este requerimiento.');
+  err.status = 403;
+  err.code = 'REQUERIMIENTO_FUERA_DE_ALCANCE';
+  throw err;
+}
+
+router.get('/dec/candidatos-transicion/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const rid = parseInt(requerimientoId, 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      return res.status(400).json({ ok: false, error: 'requerimientoId inválido' });
+    }
+    const userId = req.user?.id || req.headers['x-user-id'] || null;
+    await assertAccesoOperativoDecCandidatosTransicion(userId, rid);
+
+    const { rows } = await query(
+      `SELECT r.id ${REQUERIMIENTO_BANDEJA_FROM} WHERE r.id = $1 AND ${WHERE_BANDEJA_DEC}`,
+      [rid],
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Expediente no encontrado en bandeja DEC' });
+    }
+
+    const evento = String(req.query.evento || req.query.evento_codigo || '').trim();
+    if (!evento) {
+      return res.status(400).json({ ok: false, error: 'Parámetro evento requerido' });
+    }
+
+    const { listarCandidatosTransicion, resolveEtapaOrigenCanonicaWorkflow } =
+      await import('../lib/workflowTransicionResponsable.js');
+    const etapaOrigen = await resolveEtapaOrigenCanonicaWorkflow(rid, null);
+    if (String(evento).toUpperCase() === 'DEC_APROBADO' && etapaOrigen !== 'DEC') {
+      return res.status(409).json({
+        ok: false,
+        error: `Transición no permitida: etapa origen ${etapaOrigen}, se esperaba DEC`,
+        code: 'ETAPA_ORIGEN_INVALIDA',
+      });
+    }
+
+    const data = await listarCandidatosTransicion(rid, evento, {
       search: req.query.q || req.query.search || '',
     });
     res.json({ ok: true, data });
@@ -374,6 +454,10 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
     const reasignacionManual = reasignacionManualBody === true
       || (usuarioDestinoId && responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
 
+    const usuarioOrigenId = req.user?.id != null && Number.isFinite(Number(req.user.id))
+      ? Number(req.user.id)
+      : null;
+
     emitirObservacion(payload, {
       motivo,
       gerente: usuario || 'dec',
@@ -382,6 +466,7 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
       destino_submodulo: destinoSub,
       destino_etapa: etapaDestObs,
       destino_persona: destino_persona || '',
+      usuario_origen_id: usuarioOrigenId,
       usuario_destino_id: usuarioDestinoId,
       responsable_recomendado_id: responsableRecomendadoId,
       reasignacion_manual: reasignacionManual,
@@ -431,6 +516,42 @@ router.get('/programacion', async (req, res, next) => {
     const result = await listarBandejaProgramacion(page, pageSize, req.query);
     res.json(result);
   } catch (err) { next(err); }
+});
+
+/** RC8.17.8F — candidatos PERSONA para observación Programación (misma regla que GET eval/DEC). */
+router.get('/programacion/candidatos-observacion-destino/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const rid = parseInt(requerimientoId, 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      return res.status(400).json({ ok: false, error: 'requerimientoId inválido' });
+    }
+    const { rows } = await query(
+      `SELECT r.id ${REQUERIMIENTO_BANDEJA_FROM} WHERE r.id = $1 AND ${WHERE_BANDEJA_PROGRAMACION}`,
+      [rid],
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Expediente no encontrado en bandeja Programación' });
+    }
+    const destinoSubmodulo = req.query.destino_submodulo || req.query.destinoSubmodulo || '';
+    const { listarCandidatosObservacionDestino, esDestinoObservacionDecSoportado } =
+      await import('../lib/candidatosObservacionDestino.js');
+    if (destinoSubmodulo && !esDestinoObservacionDecSoportado(destinoSubmodulo)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Destino no permitido desde Programación (Registro, Evaluación o Programación)',
+      });
+    }
+    const data = await listarCandidatosObservacionDestino({
+      requerimientoId: rid,
+      destinoSubmodulo,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
@@ -563,6 +684,9 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
     const { requerimientoId } = req.params;
     const {
       motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
       accion, observacion_id, observacion_padre_id, observacionPadreId,
     } = req.body || {};
 
@@ -583,41 +707,94 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
 
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
 
-    appendObservacion(payload, {
-      motivo,
-      gerente: usuario || 'Programación',
-      origen: 'PROGRAMACIÓN',
-      origen_submodulo: origen_submodulo || 'Programación',
-      destino_submodulo: destino_submodulo || '',
-      destino_etapa: destino_etapa || '',
-      destino_persona: destino_persona || '',
-      observacion_padre_id: observacion_padre_id || observacionPadreId || null,
-    });
+    const {
+      mapDestinoSubmoduloAEtapaObservacion,
+      esDestinoObservacionDecSoportado,
+      assertUsuarioDestinoObservacionElegible,
+    } = await import('../lib/candidatosObservacionDestino.js');
 
-    const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
-    const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
-    const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
+    const destinoSub = destino_submodulo || 'Registro de Requerimiento';
+    const etapaDestObs = String(
+      destino_etapa
+      || mapDestinoSubmoduloAEtapaObservacion(destinoSub)
+      || submoduloLabelToEtapa(destinoSub)
+      || 'REGISTRO',
+    ).toUpperCase().replace(/^REGISTRADO$/, 'REGISTRO');
+
+    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : (/^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null);
+
+    if (esDestinoObservacionDecSoportado(destinoSub)) {
+      if (!usuarioDestinoId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Debe seleccionar la persona responsable de la subsanación',
+        });
+      }
+      try {
+        await assertUsuarioDestinoObservacionElegible(
+          requerimientoId,
+          destinoSub,
+          usuarioDestinoId,
+          reqCheck.rows[0],
+        );
+      } catch (err) {
+        if (err.status) {
+          return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+        }
+        throw err;
+      }
+    }
+
+    const responsableRecomendadoId = responsableRecomendadoIdBody != null
+      && Number.isFinite(Number(responsableRecomendadoIdBody))
+      ? Number(responsableRecomendadoIdBody)
+      : null;
+    const reasignacionManual = reasignacionManualBody === true
+      || (usuarioDestinoId && responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
+
+    const usuarioOrigenId = req.user?.id != null && Number.isFinite(Number(req.user.id))
+      ? Number(req.user.id)
+      : null;
+
+    const responsable = resolveResponsableFromDestino(destinoSub, destino_persona, etapaDestObs);
+    const metaObs = {
+      client_request_id: req.body?.client_request_id || `prog-obs:${requerimientoId}`,
+      via: 'programacion/observar',
+      etapa_origen: 'PROGRAMACION',
+      etapa_destino: etapaDestObs,
+      evento: 'PROGRAMACION_OBSERVADA',
+      quien_subsana: destino_persona || responsable,
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      responsable_seleccionado_id: usuarioDestinoId,
+      reasignacion_manual: reasignacionManual,
+    };
 
     const tr = await transicionarExpediente({
       requerimientoId,
       evento: 'PROGRAMACION_OBSERVADA',
-      usuarioDestinoId: uid,
-      unidadDestino: uid ? null : (responsable || null),
-      motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
-      metadata: {
-        client_request_id: req.body?.client_request_id || `prog-obs:${requerimientoId}`,
-        via: 'programacion/observar',
-        etapa_destino: etapaDestObs,
-        quien_subsana: destino_persona || responsable,
-      },
+      usuarioOrigenId,
+      usuarioDestinoId,
+      unidadDestino: usuarioDestinoId ? null : (responsable || null),
+      motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo: destinoSub }),
+      metadata: metaObs,
       actorRol: usuario || 'Programación',
-      domainMutator: async (tx) => {
-        await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
-          requerimientoId,
-          JSON.stringify(payload),
-        ]);
-        return { observacion: true };
-      },
+      domainMutator: buildObservacionDomainMutator({
+        motivo,
+        usuarioEmisor: usuario || 'Programación',
+        responsableSubsanacion: destino_persona || responsable || '',
+        destinoSubmodulo: destinoSub,
+        destinoEtapa: etapaDestObs,
+        destinoPersona: destino_persona || '',
+        origenSubmodulo: origen_submodulo || 'Programación',
+        origen: 'PROGRAMACION',
+        usuarioDestinoId,
+        usuarioOrigenId,
+        responsableRecomendadoId,
+        reasignacionManual,
+      }),
     });
     const updated = tr.expediente;
 

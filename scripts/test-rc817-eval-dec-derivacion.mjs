@@ -103,22 +103,26 @@ const mockClientDecProg = (usuarios = []) => ({
     if (/FROM requerimientos/i.test(sql)) {
       return { rows: [{ id: 40, tipo: 'bienes', estado_actual: 'DEC', payload: reqRow.payload }] };
     }
+    if (/FROM centros/i.test(sql)) {
+      return { rows: [{ codigo: 'OA', nombre: 'Unidad de Adquisiciones' }] };
+    }
     if (/FROM usuarios/i.test(sql) && /activo = TRUE/i.test(sql)) return { rows: usuarios };
     return { rows: [] };
   },
 });
 const progUser = {
   id: 602,
-  username: 'jprogramador',
+  username: 'coordprog',
   apellidos: 'PEREZ',
   nombres: 'JUAN',
-  cargo: 'PROGRAMADOR',
-  rol: 'dec',
-  centro: 'INST',
+  cargo: 'COORDINADOR-PROGRAM.',
+  rol: 'coordinador',
+  centro: 'OA',
+  codigo_centro_costo: '01.04.01.02.01',
+  equipo_uad: 'PROGRAMACION',
   activo: true,
   permisos: {
     submodulos: ['PROGRAMACION'],
-    actividades: ['VER', 'APROBAR'],
     actividadesPorSubmodulo: { PROGRAMACION: ['VER', 'APROBAR'] },
   },
 };
@@ -130,12 +134,12 @@ const listaDecPerfil = await listarCandidatosTransicion(
   mockClientDecProg([progUser]),
 );
 ok(listaDecPerfil.perfil_responsable !== 'DIRECTOR_UAD', 'DEC_APROBADO no usa regla Director UAD');
-ok(listaDecPerfil.perfil_responsable === 'PROGRAMACION', 'DEC_APROBADO sigue listado por perfil Programación');
+ok(listaDecPerfil.perfil_responsable === 'COORDINADOR_EQUIPO_UAD', 'DEC_APROBADO usa Coordinador equipo UAD');
 const idsDecEvento = [
   ...(listaDecPerfil.recomendado ? [listaDecPerfil.recomendado.id] : []),
   ...(listaDecPerfil.candidatos || []).map((c) => c.id),
 ];
-ok(idsDecEvento.includes(602), 'DEC_APROBADO mantiene candidatos por perfil (programador)');
+ok(idsDecEvento.includes(602), 'DEC_APROBADO incluye coordinador equipo Programación');
 
 try {
   const { rows: lesp } = await query(`

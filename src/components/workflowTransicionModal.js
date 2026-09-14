@@ -20,7 +20,7 @@ function renderCandidatoPickBtn(c, { destacado = false } = {}) {
   </button>`;
 }
 
-function wireTransicionPicker(id, { requerimientoId, eventoCodigo }) {
+function wireTransicionPicker(id, { requerimientoId, eventoCodigo, candidatosApiPath }) {
   const buscarEl = document.getElementById(`${id}_buscarUsr`);
   const btnBuscar = document.getElementById(`${id}_btnBuscarUsr`);
   const sugeridoEl = document.getElementById(`${id}_usrSugerido`);
@@ -62,7 +62,10 @@ function wireTransicionPicker(id, { requerimientoId, eventoCodigo }) {
     try {
       const params = new URLSearchParams({ evento: eventoCodigo });
       if (q.trim().length >= 2) params.set('q', q.trim());
-      const resp = await api.get(`/requerimientos/${requerimientoId}/candidatos-transicion?${params}`);
+      const apiPath = typeof candidatosApiPath === 'function'
+        ? candidatosApiPath(requerimientoId)
+        : (candidatosApiPath || `/requerimientos/${requerimientoId}/candidatos-transicion`);
+      const resp = await api.get(`${apiPath}?${params}`);
       const data = resp?.data || resp;
       dataCache = data;
       renderEtapa(data);
@@ -119,6 +122,7 @@ function wireTransicionPicker(id, { requerimientoId, eventoCodigo }) {
  * @param {string} [opts.title]
  * @param {string} [opts.message]
  * @param {string} [opts.buttonText]
+ * @param {string|function} [opts.candidatosApiPath] — ruta GET candidatos (sin /api); default requerimientos
  */
 export function showWorkflowTransicionModal(opts = {}) {
   const id = 'modWfTrans_' + Date.now();
@@ -164,6 +168,7 @@ export function showWorkflowTransicionModal(opts = {}) {
   const readSeleccion = wireTransicionPicker(id, {
     requerimientoId: opts.requerimientoId,
     eventoCodigo: opts.eventoCodigo,
+    candidatosApiPath: opts.candidatosApiPath,
   });
 
   return new Promise((resolve) => {

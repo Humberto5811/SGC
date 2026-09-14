@@ -146,6 +146,7 @@ async function aprobarDec(id) {
   const seleccion = await showWorkflowTransicionModal({
     requerimientoId: id,
     eventoCodigo: 'DEC_APROBADO',
+    candidatosApiPath: (reqId) => `/contrataciones/dec/candidatos-transicion/${reqId}`,
     title: 'Aprobar y derivar a Programación',
     message: 'Seleccione la persona responsable en Programación. Etapa destino: Programación, estado: En trámite.',
     buttonText: 'Confirmar aprobación',

@@ -99,6 +99,7 @@ export async function observarCuadroConModalInstitucional(opts = {}) {
         destino_submodulo: data.destino_submodulo,
         destino_etapa: data.destino_etapa,
         destino_persona: data.destino_persona,
+        usuario_destino_id: data.usuario_destino_id,
       });
     },
     onReload: typeof onDone === 'function' ? onDone : undefined,

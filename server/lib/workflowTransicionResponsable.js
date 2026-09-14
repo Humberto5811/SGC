@@ -24,6 +24,8 @@ import {
   listarCandidatosDerivacionEvaluacion,
   assertUsuarioDestinoEvaluacionElegible,
 } from './pilotRegistroEvaluacion.js';
+import { EQUIPOS_UAD, labelEquipoUad, normalizeEquipoUadCodigo } from '../../shared/equiposUad.js';
+import { listarUsuariosCoordinadoresEquipoUadSubmodulo } from './equiposUadUsuario.js';
 
 export const EVENTOS_PILOT_EN_TRAMITE = Object.freeze([
   'REQUERIMIENTO_ENVIADO_EVALUACION',
@@ -83,13 +85,18 @@ async function queryClient(client, text, params) {
 }
 
 function mapCandidato(u, extra = {}) {
+  const equipoUad = normalizeEquipoUadCodigo(u.equipo_uad);
+  const uid = Number(u.id);
   return {
-    id: Number(u.id),
+    id: uid,
+    usuario_id: uid,
     username: u.username || u.dni || '',
     nombre: nombreUsuario(u),
     cargo: u.cargo || '',
     activo: u.activo !== false,
     centro: u.centro || u.codigo_centro_costo || '',
+    equipo_uad: equipoUad,
+    equipo_uad_label: labelEquipoUad(equipoUad),
     ...extra,
   };
 }
@@ -350,7 +357,7 @@ export async function listarCandidatosPorPerfil({
     const { rows } = await queryClient(
       client,
       `SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol, u.permisos,
-              u.centro, u.codigo_centro_costo, u.activo
+              u.centro, u.codigo_centro_costo, u.equipo_uad, u.activo
        FROM usuarios u WHERE u.activo = TRUE`,
     );
     usuarios = rows;
@@ -359,7 +366,7 @@ export async function listarCandidatosPorPerfil({
     const { rows } = await queryClient(
       client,
       `SELECT u.id, u.dni, u.username, u.apellidos, u.nombres, u.nombre, u.cargo, u.rol, u.permisos,
-              u.centro, u.codigo_centro_costo, u.activo
+              u.centro, u.codigo_centro_costo, u.equipo_uad, u.activo
        FROM usuarios u
        WHERE u.activo = TRUE
          AND (
@@ -405,6 +412,86 @@ export async function listarCandidatosPorPerfil({
   };
 }
 
+function empaquetarListaCoordinadoresEquipo(elegiblesRows, mapRow = mapCandidato) {
+  let elegibles = elegiblesRows.map((u) => mapRow(u));
+  if (elegibles.length === 1) {
+    return {
+      recomendado: {
+        ...elegibles[0],
+        etiqueta: 'Coordinador recomendado',
+        recomendado: true,
+        fuente: 'equipo_uad',
+      },
+      candidatos: [],
+      resolucion_automatica: { usuarioId: elegibles[0].id, ambiguo: false },
+    };
+  }
+  if (elegibles.length > 1) {
+    elegibles.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+    return {
+      recomendado: null,
+      candidatos: elegibles,
+      resolucion_automatica: { usuarioId: null, ambiguo: true, candidatos: elegibles.length },
+    };
+  }
+  return {
+    recomendado: null,
+    candidatos: [],
+    resolucion_automatica: { usuarioId: null, ambiguo: true, motivo: 'sin_candidatos', candidatos: 0 },
+  };
+}
+
+/** RC8.17.8C — DEC_APROBADO: Coordinador UAD equipo Programación + permiso PROGRAMACION. */
+export async function listarCandidatosDecAprobadoProgramacion(
+  requerimientoId,
+  { search = '' } = {},
+  row = null,
+  client = null,
+) {
+  const ev = 'DEC_APROBADO';
+  const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(
+    requerimientoId,
+    ev,
+    row,
+    client,
+  );
+  const submoduloCodigo = metaDestino.submoduloCodigo || 'PROGRAMACION';
+  const { usuarios } = await listarUsuariosCoordinadoresEquipoUadSubmodulo({
+    equipoCodigo: EQUIPOS_UAD.PROGRAMACION,
+    submoduloCodigo,
+    client,
+  });
+  let base = empaquetarListaCoordinadoresEquipo(usuarios);
+  let { recomendado, candidatos } = base;
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    candidatos = candidatos.filter((c) => matchesSearch(c, q));
+    if (recomendado && !matchesSearch(recomendado, q)) recomendado = null;
+  }
+
+  return {
+    soportado: true,
+    evento_codigo: ev,
+    etapa_origen: etapaOrigen,
+    etapa_destino: transicion.etapa_destino,
+    etapa_destino_label: metaDestino.label || transicion.etapa_destino,
+    destinos: [{
+      etapa_codigo: transicion.etapa_destino,
+      etapa_label: metaDestino.label || transicion.etapa_destino,
+      evento_codigo: ev,
+      unica: true,
+    }],
+    perfil_responsable: 'COORDINADOR_EQUIPO_UAD',
+    equipo_uad: EQUIPOS_UAD.PROGRAMACION,
+    equipo_uad_label: labelEquipoUad(EQUIPOS_UAD.PROGRAMACION),
+    alcance: 'UAD_EQUIPO',
+    centro: null,
+    recomendado,
+    candidatos,
+    resolucion_automatica: base.resolucion_automatica,
+  };
+}
+
 /**
  * Lista etapas destino + candidatos PERSONA para un evento de workflow.
  */
@@ -437,6 +524,10 @@ export async function listarCandidatosTransicion(
         unica: true,
       }],
     };
+  }
+
+  if (ev === 'DEC_APROBADO') {
+    return listarCandidatosDecAprobadoProgramacion(requerimientoId, { search }, row, client);
   }
 
   const { reqRow, transicion, etapaOrigen, metaDestino } = await resolveTransicionWorkflow(
@@ -613,7 +704,7 @@ export function applyPilotObservacionDecDestino({
 } = {}) {
   const etapaDest = String(
     metadata.etapa_destino || metadata.destino_etapa || '',
-  ).toUpperCase().replace('REGISTRADO', 'REGISTRO');
+  ).toUpperCase().replace(/^REGISTRADO$/, 'REGISTRO');
 
   if (!ETAPAS_OBSERVACION_DEC.includes(etapaDest)) {
     return {
@@ -645,6 +736,7 @@ export function applyPilotObservacionDecDestino({
     etapa_destino: etapaDest,
     evento: metadata.evento || 'DEC_OBSERVADA',
     pilot_observacion_dec_destino: true,
+    pilot_observacion_dirigida_destino: true,
   });
 
   return {
@@ -674,6 +766,7 @@ export default {
   getPilotEstadoLabelsForEvento,
   buildMetadataSeleccionResponsable,
   listarCandidatosTransicion,
+  listarCandidatosDecAprobadoProgramacion,
   listarCandidatosDerivacionDec,
   resolveUnidadAdquisicionesKeys,
   esElegibleDirectorUnidadAdquisiciones,

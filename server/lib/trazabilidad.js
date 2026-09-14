@@ -810,6 +810,7 @@ export async function registrarSubsanacionDerivacion({
   destinoEtapa = '',
   destinoPersona = '',
   observacionId = null,
+  usuarioDestinoId = null,
 }) {
   const { rows } = await query('SELECT * FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) throw new Error('Requerimiento no encontrado');
@@ -820,14 +821,37 @@ export async function registrarSubsanacionDerivacion({
       : (etapaActual === 'REGISTRADO' ? 'REGISTRO' : etapaActual);
 
   const etapaDestinoLabel = submoduloLabelToEtapa(destinoSubmodulo) || String(destinoEtapa || '').toUpperCase();
-  const responsableDestino = resolveResponsableFromDestino(destinoSubmodulo, destinoPersona, etapaDestinoLabel || etapaCanon);
-  const { resolveUsuarioIdDesdeActor, resolveEmisorObservacionRetorno } = await import('./pilotRegistroEvaluacion.js');
-  let uid = await resolveEmisorObservacionRetorno(requerimientoId, null, { observacionId });
-  if (!uid && /^\d+$/.test(String(destinoPersona || '').trim())) {
-    uid = Number(destinoPersona);
-  }
-  if (!uid && destinoPersona) {
-    uid = await resolveUsuarioIdDesdeActor({ actorRol: destinoPersona }, null);
+  const { mapDestinoSubmoduloAEtapaObservacion, assertUsuarioDestinoSubsanacionElegible } = await import('./candidatosObservacionDestino.js');
+  const {
+    resolveUsuarioDestinoRetornoSubsanacion,
+    resolveUsuarioIdDesdeActor,
+    buildErrorSubsanacionSinPersona,
+  } = await import('./pilotRegistroEvaluacion.js');
+  const etapaDest = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo)
+    || String(etapaDestinoLabel || destinoEtapa || '').toUpperCase().replace('REGISTRADO', 'REGISTRO');
+
+  let uid = await resolveUsuarioDestinoRetornoSubsanacion({
+    requerimientoId,
+    observacionId,
+    usuarioDestinoIdExplicit: usuarioDestinoId,
+    metadata: { destino_etapa: etapaDest, destino_persona: destinoPersona },
+    destinoEtapa: etapaDest,
+    destinoPersonaHint: destinoPersona,
+  });
+
+  const cambiaUbicacion = etapaDest && etapaDest !== etapaCanon;
+  const destinoSoportado = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo) != null;
+
+  if (cambiaUbicacion) {
+    if (!uid) throw buildErrorSubsanacionSinPersona();
+    if (destinoSoportado && destinoSubmodulo) {
+      await assertUsuarioDestinoSubsanacionElegible(
+        requerimientoId,
+        destinoSubmodulo,
+        uid,
+        observacionId,
+      );
+    }
   }
 
   let actorUid = /^\d+$/.test(String(usuario || '').trim()) ? Number(usuario) : null;
@@ -838,13 +862,17 @@ export async function registrarSubsanacionDerivacion({
   let evento = 'OBSERVACION_SUBSANADA';
   if (etapaCanon === 'COORDINACION_CM') evento = 'COORDINACION_CM_SUBSANADA';
 
+  const { getEtapaMeta } = await import('../../shared/workflow/etapas.js');
+  const metaDest = etapaDest ? getEtapaMeta(etapaDest) : null;
+  const unidadFallback = uid ? null : (cambiaUbicacion ? null : (metaDest?.responsableLabel || null));
+
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const result = await transicionarExpediente({
     requerimientoId,
     evento,
     usuarioOrigenId: actorUid,
     usuarioDestinoId: uid,
-    unidadDestino: uid ? null : (responsableDestino || null),
+    unidadDestino: unidadFallback,
     motivo: textoSubsanacion || 'Subsanación registrada',
     metadata: {
       client_request_id: `subsanar:${requerimientoId}:${Date.now()}`,

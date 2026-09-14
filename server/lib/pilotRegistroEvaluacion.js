@@ -208,9 +208,157 @@ function buildMetaSeleccionEvaluacion(usuarioDestinoId, metadata = {}) {
   };
 }
 
+function normalizarNombrePersona(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Compatibilidad histórica: nombre completo → usuario activo solo si hay una coincidencia.
+ */
+export async function resolveUsuarioIdDesdeNombreCompletoInequivoco(actorNombre, client = null) {
+  const norm = normalizarNombrePersona(actorNombre);
+  if (!norm || norm.length < 4) return null;
+  const { rows } = await queryClient(
+    client,
+    `SELECT id, apellidos, nombres, username
+     FROM usuarios
+     WHERE activo = TRUE`,
+  );
+  const matches = rows.filter((u) => {
+    const a = normalizarNombrePersona([u.apellidos, u.nombres].filter(Boolean).join(' '));
+    const b = normalizarNombrePersona([u.nombres, u.apellidos].filter(Boolean).join(' '));
+    return a === norm || b === norm;
+  });
+  if (matches.length === 1) return Number(matches[0].id);
+  return null;
+}
+
+async function resolveObservacionPayload(requerimientoId, observacionId, client) {
+  const { rows: reqRows } = await queryClient(
+    client,
+    'SELECT payload FROM requerimientos WHERE id = $1',
+    [requerimientoId],
+  );
+  if (!reqRows.length) return { payload: {}, obs: null };
+  let payload = {};
+  try { payload = JSON.parse(reqRows[0].payload || '{}'); } catch (_) { payload = {}; }
+  const list = Array.isArray(payload.observaciones) ? payload.observaciones : [];
+  let obs = null;
+  if (observacionId != null) {
+    const key = String(observacionId).trim();
+    obs = list.find((o) => o && (String(o.id) === key || String(o.observacion_id) === key));
+  }
+  if (!obs) obs = [...list].reverse().find((o) => o && !o.cerrada) || list[list.length - 1];
+  return { payload, obs };
+}
+
+async function resolveUltimaPersonaAsignacionEtapa(requerimientoId, etapaCodigo, client) {
+  const etapa = String(etapaCodigo || '').trim().toUpperCase();
+  if (!etapa) return null;
+  const { rows } = await queryClient(
+    client,
+    `SELECT usuario_id
+     FROM expediente_asignaciones
+     WHERE requerimiento_id = $1
+       AND etapa_codigo = $2
+       AND tipo_responsable = 'PERSONA'
+       AND usuario_id IS NOT NULL
+     ORDER BY asignado_at DESC NULLS LAST, id DESC
+     LIMIT 1`,
+    [requerimientoId, etapa],
+  );
+  const uid = rows[0]?.usuario_id;
+  return uid != null && Number.isFinite(Number(uid)) ? Number(uid) : null;
+}
+
+async function resolvePersonaDesdeEventosWorkflow(requerimientoId, etapaDestino, client) {
+  const etapa = String(etapaDestino || '').trim().toUpperCase();
+  if (!etapa) return null;
+  const { rows } = await queryClient(
+    client,
+    `SELECT metadata
+     FROM workflow_eventos
+     WHERE expediente_id = $1
+       AND etapa_destino = $2
+       AND metadata->>'usuario_destino_id' ~ '^[0-9]+$'
+     ORDER BY id DESC
+     LIMIT 1`,
+    [requerimientoId, etapa],
+  );
+  const raw = rows[0]?.metadata?.usuario_destino_id;
+  if (raw != null && Number.isFinite(Number(raw))) return Number(raw);
+  return null;
+}
+
+export function buildErrorSubsanacionSinPersona(message = 'No se pudo determinar una persona responsable válida para el retorno.') {
+  const err = new Error(message);
+  err.status = 422;
+  err.code = 'SUBSANACION_SIN_PERSONA';
+  return err;
+}
+
+/**
+ * Resuelve PERSONA destino en retorno por subsanación (prioridad RC8.17.8D).
+ */
+export async function resolveUsuarioDestinoRetornoSubsanacion({
+  requerimientoId,
+  observacionId = null,
+  usuarioDestinoIdExplicit = null,
+  metadata = {},
+  destinoEtapa = null,
+  destinoPersonaHint = '',
+  client = null,
+} = {}) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  if (usuarioDestinoIdExplicit != null && Number.isFinite(Number(usuarioDestinoIdExplicit))) {
+    return Number(usuarioDestinoIdExplicit);
+  }
+
+  const metaCandidates = [
+    metadata.usuario_destino_id,
+    metadata.responsable_seleccionado_id,
+    metadata.responsable_emisor_id,
+  ];
+  for (const raw of metaCandidates) {
+    if (raw != null && Number.isFinite(Number(raw))) return Number(raw);
+  }
+
+  const emisor = await resolveEmisorObservacionRetorno(rid, client, {
+    observacionId,
+    destinoEtapa,
+  });
+  if (emisor) return emisor;
+
+  const etapa = String(destinoEtapa || metadata.destino_etapa || metadata.destinoEtapa || '').toUpperCase();
+  if (etapa) {
+    const histAsig = await resolveUltimaPersonaAsignacionEtapa(rid, etapa, client);
+    if (histAsig) return histAsig;
+    const evUid = await resolvePersonaDesdeEventosWorkflow(rid, etapa, client);
+    if (evUid) return evUid;
+  }
+
+  const hint = String(destinoPersonaHint || metadata.destino_persona || '').trim();
+  if (/^\d+$/.test(hint)) return Number(hint);
+  if (hint) {
+    const byUser = await resolveUsuarioIdDesdeActor({ actorRol: hint }, client);
+    if (byUser) return byUser;
+    const byName = await resolveUsuarioIdDesdeNombreCompletoInequivoco(hint, client);
+    if (byName) return byName;
+  }
+
+  return null;
+}
+
 /**
  * Emisor canónico de la observación vigente (Director/Gerente que observó).
- * Prioriza workflow_observaciones.usuario_origen_id sobre hints de payload.
+ * Prioriza workflow_observaciones.usuario_origen_id y payload canónico.
  */
 export async function resolveEmisorObservacionRetorno(
   requerimientoId,
@@ -221,6 +369,12 @@ export async function resolveEmisorObservacionRetorno(
   if (!Number.isFinite(rid) || rid <= 0) return null;
 
   const observacionId = opts.observacionId ?? opts.observacion_id ?? null;
+
+  const { obs } = await resolveObservacionPayload(rid, observacionId, client);
+  if (obs?.usuario_origen_id != null && Number.isFinite(Number(obs.usuario_origen_id))) {
+    return Number(obs.usuario_origen_id);
+  }
+
   if (observacionId != null && String(observacionId).trim() !== '') {
     const obsKey = String(observacionId).trim();
     if (/^\d+$/.test(obsKey)) {
@@ -253,28 +407,21 @@ export async function resolveEmisorObservacionRetorno(
   const woUid = woRows[0]?.usuario_origen_id;
   if (woUid != null && Number.isFinite(Number(woUid))) return Number(woUid);
 
-  const { rows: reqRows } = await queryClient(
-    client,
-    'SELECT payload FROM requerimientos WHERE id = $1',
-    [rid],
-  );
-  if (!reqRows.length) return null;
-  let payload = {};
-  try { payload = JSON.parse(reqRows[0].payload || '{}'); } catch (_) { payload = {}; }
-  const list = Array.isArray(payload.observaciones) ? payload.observaciones : [];
-  let obs = null;
-  if (observacionId != null) {
-    const key = String(observacionId);
-    obs = list.find((o) => o && (String(o.id) === key || String(o.observacion_id) === key));
-  }
-  if (!obs) obs = [...list].reverse().find((o) => o && !o.cerrada) || list[list.length - 1];
   if (!obs) return null;
-  if (obs.usuario_origen_id != null && Number.isFinite(Number(obs.usuario_origen_id))) {
-    return Number(obs.usuario_origen_id);
+
+  const destinoEtapa = String(opts.destinoEtapa || obs.subsanacion_destino_etapa || obs.moduloEmisor || '').toUpperCase();
+  if (destinoEtapa) {
+    const histAsig = await resolveUltimaPersonaAsignacionEtapa(rid, destinoEtapa.replace('REGISTRADO', 'REGISTRO'), client);
+    if (histAsig) return histAsig;
+    const evUid = await resolvePersonaDesdeEventosWorkflow(rid, destinoEtapa.replace('REGISTRADO', 'REGISTRO'), client);
+    if (evUid) return evUid;
   }
+
   const hint = String(obs.gerente || obs.usuarioOrigen || obs.usuario || '').trim();
   if (!hint || /^gerente$/i.test(hint)) return null;
-  return resolveUsuarioIdDesdeActor({ actorRol: hint }, client);
+  const byUser = await resolveUsuarioIdDesdeActor({ actorRol: hint }, client);
+  if (byUser) return byUser;
+  return resolveUsuarioIdDesdeNombreCompletoInequivoco(hint, client);
 }
 
 /**
@@ -490,7 +637,17 @@ export function isObservacionDestinoRegistro(metadata = {}) {
  * Piloto: Evaluación observa → destino Registro.
  * Etapa REGISTRO, estado OBSERVADO, responsable PERSONA seleccionada.
  */
-const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze(['EVALUACION', 'REGISTRO', 'DEC']);
+const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze([
+  'EVALUACION',
+  'REGISTRO',
+  'DEC',
+  'PROGRAMACION',
+  'COORDINACION_CM',
+  'INVITACIONES',
+  'RECEPCION_COTIZACIONES',
+  'VALIDACIONES',
+  'REGISTRO_ORDEN',
+]);
 
 export function resolveDestinoEtapaSubsanacion(metadata = {}) {
   const raw = metadata.destino_etapa || metadata.destinoEtapa || '';
@@ -523,108 +680,60 @@ export async function applyPilotObservacionSubsanada({
   }
   const obsId = metadata.observacion_id ?? metadata.observacionId ?? null;
 
-  // Registro subsana → DEC (observación emitida desde DEC).
-  if (etapaEfectiva === 'REGISTRO' && destinoEtapa === 'DEC') {
-    const metaDec = getEtapaMeta('DEC');
-    let uidDec = null;
-    if (requerimientoId) {
-      uidDec = await resolveEmisorObservacionRetorno(requerimientoId, client, { observacionId: obsId });
-    }
-    if (!uidDec) {
-      const raw = metadata.responsable_emisor_id ?? usuarioDestinoId ?? metadata.usuario_destino_id ?? null;
-      if (raw != null && Number.isFinite(Number(raw))) uidDec = Number(raw);
-    }
-    if (!uidDec && metadata.destino_persona) {
-      uidDec = await resolveUsuarioIdDesdeActor({ actorRol: metadata.destino_persona }, client);
-    }
-
-    let newRespDec = resp;
-    if (uidDec) {
-      newRespDec = {
-        responsableTipo: TIPO_RESPONSABLE.PERSONA,
-        responsableUsuarioId: uidDec,
-        responsableUnidad: unidadDestino || metaDec?.responsableLabel || 'DEC',
-        responsableFuente: FUENTE_RESPONSABLE.ASIGNACION_EXPLICITA,
-      };
-    }
-
-    const newLabelsDec = {
-      ...labels,
-      etapaCodigo: 'DEC',
-      etapaLabel: metaDec?.label || 'DEC',
-      estadoCodigo: ESTADO_PILOT_EN_TRAMITE,
-      estadoLabel: LABEL_PILOT_EN_TRAMITE,
-    };
-
-    return {
-      resp: newRespDec,
-      etapaEfectiva: 'DEC',
-      labels: newLabelsDec,
-      metaExtra: {
-        pilot_observacion_subsanada_retorno_dec: true,
-        destino_etapa: 'DEC',
-        responsable_emisor_id: uidDec,
-        responsable_seleccionado_id: uidDec,
-        observacion_id: obsId,
-      },
-      usuarioDestinoEfectivo: uidDec,
-    };
-  }
-
-  // Alcance focalizado: Registro subsana → Evaluación.
-  if (destinoEtapa !== 'EVALUACION' || etapaEfectiva !== 'REGISTRO') {
-    return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
-  }
-
-  const metaEval = getEtapaMeta('EVALUACION');
   let uid = null;
-
-  if (requerimientoId) {
-    const emisorCanon = await resolveEmisorObservacionRetorno(requerimientoId, client, { observacionId: obsId });
-    if (emisorCanon) uid = emisorCanon;
-  }
-  if (!uid) {
-    const raw = metadata.responsable_emisor_id ?? usuarioDestinoId ?? metadata.usuario_destino_id ?? null;
-    if (raw != null && Number.isFinite(Number(raw))) uid = Number(raw);
-  }
-
-  const personaHint = metadata.destino_persona || metadata.destinoPersona || '';
-  if (!uid && personaHint) {
-    uid = await resolveUsuarioIdDesdeActor({ actorRol: personaHint }, client);
+  if (usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))) {
+    uid = Number(usuarioDestinoId);
   }
   if (!uid && requerimientoId) {
+    uid = await resolveUsuarioDestinoRetornoSubsanacion({
+      requerimientoId,
+      observacionId: obsId,
+      usuarioDestinoIdExplicit: usuarioDestinoId,
+      metadata,
+      destinoEtapa,
+      destinoPersonaHint: metadata.destino_persona || metadata.destinoPersona || '',
+      client,
+    });
+  }
+
+  if (!uid && destinoEtapa === 'EVALUACION' && requerimientoId) {
     const director = await resolveDirectorEvaluacionParaRequerimiento(requerimientoId, row, client);
     if (!director.ambiguo && director.usuarioId) uid = director.usuarioId;
   }
 
+  const metaDest = getEtapaMeta(destinoEtapa) || getEtapaMeta('REGISTRO');
   let newResp = resp;
   if (uid) {
     newResp = {
       responsableTipo: TIPO_RESPONSABLE.PERSONA,
       responsableUsuarioId: uid,
-      responsableUnidad: unidadDestino || metaEval?.responsableLabel || 'Director / Gerente',
+      responsableUnidad: unidadDestino || metaDest?.responsableLabel || destinoEtapa,
       responsableFuente: FUENTE_RESPONSABLE.ASIGNACION_EXPLICITA,
     };
   }
 
   const newLabels = {
     ...labels,
-    etapaCodigo: 'EVALUACION',
-    etapaLabel: metaEval?.label || 'Evaluación de Requerimiento',
+    etapaCodigo: destinoEtapa,
+    etapaLabel: metaDest?.label || destinoEtapa,
     estadoCodigo: ESTADO_PILOT_EN_TRAMITE,
     estadoLabel: LABEL_PILOT_EN_TRAMITE,
   };
 
+  const metaExtra = {
+    pilot_observacion_subsanada_retorno: true,
+    destino_etapa: destinoEtapa,
+    responsable_emisor_id: uid,
+    responsable_seleccionado_id: uid,
+    observacion_id: obsId,
+  };
+  if (destinoEtapa === 'DEC') metaExtra.pilot_observacion_subsanada_retorno_dec = true;
+
   return {
     resp: newResp,
-    etapaEfectiva: 'EVALUACION',
+    etapaEfectiva: destinoEtapa,
     labels: newLabels,
-    metaExtra: {
-      pilot_observacion_subsanada_retorno: true,
-      destino_etapa: destinoEtapa,
-      responsable_emisor_id: uid,
-      responsable_seleccionado_id: uid,
-    },
+    metaExtra,
     usuarioDestinoEfectivo: uid,
   };
 }
@@ -689,6 +798,9 @@ export default {
   getPilotEstadoLabels,
   resolveUsuarioIdDesdeActor,
   resolveEmisorObservacionRetorno,
+  resolveUsuarioDestinoRetornoSubsanacion,
+  resolveUsuarioIdDesdeNombreCompletoInequivoco,
+  buildErrorSubsanacionSinPersona,
   resolveDirectorEvaluacionParaRequerimiento,
   listarCandidatosDerivacionEvaluacion,
   assertUsuarioDestinoEvaluacionElegible,

@@ -266,6 +266,7 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
             destino_submodulo: data.destino_submodulo,
             destino_etapa: data.destino_etapa,
             destino_persona: data.destino_persona,
+            usuario_destino_id: data.usuario_destino_id,
           });
         },
         onAdjuntos: (rid) => manageAdjuntos(rid, true),
@@ -345,6 +346,7 @@ async function observarActos(id) {
         destino_submodulo: data.destino_submodulo,
         destino_etapa: data.destino_etapa,
         destino_persona: data.destino_persona,
+        usuario_destino_id: data.usuario_destino_id,
       });
       loadActosList();
     } catch (e) {

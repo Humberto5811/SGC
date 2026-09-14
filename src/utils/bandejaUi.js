@@ -466,6 +466,10 @@ function bandejaSortValue(row, field) {
       const ref = row.fecha_estado_actual || row.fechaEstadoActual || row.created_at;
       return ref ? new Date(ref).getTime() : 0;
     }
+    case 'derivado': {
+      const ref = row.bandeja_contrato?.fecha_ingreso_programacion ?? row.fecha_ingreso_programacion;
+      return ref ? new Date(ref).getTime() : 0;
+    }
     default:
       return row[field] ?? '';
   }

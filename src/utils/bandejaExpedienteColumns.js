@@ -198,6 +198,25 @@ export function renderBandejaExpedienteActionCell(id, menuItems, hiddenActionsHt
 /** RC8.17.5 — Contrato canónico compartido para bandejas con columnas propias. */
 export { resolveContratoVisual };
 
+export function fmtBandejaFechaDerivado(iso) {
+  if (!iso) return { display: '—', title: '' };
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { display: '—', title: '' };
+  return {
+    display: d.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+    title: d.toLocaleString('es-PE', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    }),
+  };
+}
+
+export function renderBandejaDerivadoProgramacionCell(row = {}, escFn = esc) {
+  const ts = row.bandeja_contrato?.fecha_ingreso_programacion ?? row.fecha_ingreso_programacion;
+  const { display, title } = fmtBandejaFechaDerivado(ts);
+  const titleAttr = title ? ` title="${escFn(title)}"` : '';
+  return `<td class="req-col-derivado small text-muted"${titleAttr}>${escFn(display)}</td>`;
+}
+
 export function getBandejaCanonicoFechaAsignacion(row = {}) {
   return row.bandeja_contrato?.fecha_estado_vigente
     || row.fecha_estado_vigente

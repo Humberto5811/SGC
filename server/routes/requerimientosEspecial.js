@@ -552,6 +552,8 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
           destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
           destino_etapa: destino_etapa || 'REGISTRADO',
           destino_persona: destino_persona || '',
+          usuario_origen_id: req.user?.id ?? null,
+          usuario_destino_id: usuarioDestinoId,
           observacion_padre_id: observacion_padre_id || observacionPadreId || null,
         });
 
@@ -685,8 +687,9 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
             origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
             destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
             destinoEtapa: destinoEtapa || destino_etapa || '',
-            destinoPersona: usuarioDestinoId ? String(usuarioDestinoId) : (destinoPersona || destino_persona || ''),
+            destinoPersona: destino_persona || destinoPersona || '',
             observacionId: observacion_id,
+            usuarioDestinoId,
           });
         },
       });
@@ -706,13 +709,19 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
         origenSubmodulo: origen_submodulo || 'Registro de Requerimiento',
         destinoSubmodulo: destinoSubmodulo || destino_submodulo || '',
         destinoEtapa: destinoEtapa || destino_etapa || '',
-        destinoPersona: usuarioDestinoId ? String(usuarioDestinoId) : (destinoPersona || destino_persona || ''),
+        destinoPersona: destino_persona || destinoPersona || '',
         observacionId: observacion_id,
+        usuarioDestinoId,
       });
     }
 
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    }
+    next(err);
+  }
 });
 
 // PUT /api/requerimientos/:requerimientoId/aprobar-evaluacion
