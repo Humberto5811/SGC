@@ -10,6 +10,7 @@ import {
   CONTRATACIONES_NUEVOS_SUBMODULOS,
   CONTRATACIONES_NUEVOS_ACTIVIDADES,
 } from '../utils/permissionsCatalog.js';
+import { esMiembroContMenoresBandejaAcceso } from '../../shared/contMenoresBandejaAccess.js';
 
 function resolveSubmoduloId(subId) {
   return SUBMODULO_ID_ALIASES[subId] || subId;
@@ -76,6 +77,12 @@ export const permissionsService = {
     const subId = resolveRouteSubmodulo(route);
     // Sin mapeo a submódulo: no abrir por defecto (evita fugas de menú Mantenimiento)
     if (!subId) return false;
+    // RC8.17.8H1 — Cont.Menores: VER bandeja por equipo UAD (sin ACTOS_PREPARATORIOS en JSON)
+    if ((routeKey === 'dec/actos' || route === 'dec/actos')
+      && String(actividad).toUpperCase() === 'VER'
+      && esMiembroContMenoresBandejaAcceso(u)) {
+      return true;
+    }
     const p = getPermisos(u);
     const can = resolveSubmoduloId(subId);
     if (!(p.submodulos || []).includes(can)) {

@@ -7,7 +7,7 @@ import { permisosFromRol } from '../utils/permissionsCatalog.js';
 export const CONTRATACIONES_SUBMENU = [
   { path: 'dec/dec', label: 'DEC', icon: 'bi-file-earmark-check', submoduloId: 'DEC' },
   { path: 'dec/programacion', label: 'Programación', icon: 'bi-calendar-check', submoduloId: 'PROGRAMACION' },
-  { path: 'dec/actos', label: 'Coordinación CM', icon: 'bi-file-earmark-text', submoduloId: 'ACTOS_PREPARATORIOS' },
+  { path: 'dec/actos', label: 'Cont.Menores', icon: 'bi-file-earmark-text', submoduloId: 'ACTOS_PREPARATORIOS' },
   { path: 'dec/invitaciones', label: 'Invitaciones', icon: 'bi-envelope', submoduloId: 'INVITACIONES' },
   { path: 'contrataciones/consultas-observaciones', label: 'Consultas y Observaciones', icon: 'bi-chat-square-text', submoduloId: 'CONSULTAS_OBSERVACIONES' },
   { path: 'contrataciones/recepcion-cotizaciones', label: 'Recepción de Cotizaciones', icon: 'bi-inbox', submoduloId: 'RECEPCION_COTIZACIONES' },

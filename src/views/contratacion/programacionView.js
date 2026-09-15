@@ -116,9 +116,10 @@ async function aprobarProgramacion(id) {
   const seleccion = await showWorkflowTransicionModal({
     requerimientoId: id,
     eventoCodigo: 'PROGRAMACION_APROBADA',
-    title: 'Aprobar y derivar a Coordinación CM',
-    message: 'Seleccione la persona responsable en Coordinación CM.',
+    title: 'Aprobar y derivar a Cont.Menores',
+    message: 'Seleccione la persona responsable en Cont. Menores.',
     buttonText: 'Confirmar aprobación',
+    candidatosApiPath: (rid) => `/contrataciones/programacion/candidatos-transicion/${rid}`,
   });
   if (!seleccion) return;
   try {

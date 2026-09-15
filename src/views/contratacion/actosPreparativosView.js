@@ -106,6 +106,21 @@ function getCurrentUser() {
   return (authService.getCurrentUser && authService.getCurrentUser()) || {};
 }
 
+const ETAPAS_UI_CONT_MENORES = new Set(['COORDINACION_CM', 'ACTOS_PREPARATORIOS']);
+
+function aplicarEtiquetaContMenoresEnFila(r) {
+  if (!r?.bandeja_contrato?.etapa) return r;
+  const cod = String(r.bandeja_contrato.etapa.codigo || '').toUpperCase();
+  if (!ETAPAS_UI_CONT_MENORES.has(cod)) return r;
+  return {
+    ...r,
+    bandeja_contrato: {
+      ...r.bandeja_contrato,
+      etapa: { ...r.bandeja_contrato.etapa, label: 'Cont.Menores' },
+    },
+  };
+}
+
 function getRowContext(r) {
   const user = getCurrentUser();
   const userName = getUserDisplayName(user);
@@ -114,7 +129,7 @@ function getRowContext(r) {
     userName,
     esCoordinador: isCoordinadorActos(user),
     esPoolCoordinador: isExpedientePoolCoordinador(r),
-    esAsignadoAMi: isExpedienteAsignadoAMi(r, userName),
+    esAsignadoAMi: isExpedienteAsignadoAMi(r, userName, user.id),
   };
 }
 
@@ -149,7 +164,7 @@ function readActosFilterParams() {
 
 function renderActosView() {
   const user = getCurrentUser();
-  const perfil = isCoordinadorActos(user) ? 'Coordinador de Contratos Menores' : 'Analista de Contratos Menores';
+  const perfil = isCoordinadorActos(user) ? 'Coordinador Cont.Menores' : 'Operador Cont.Menores';
   return `
     <div class="container-fluid actos-bandeja-page">
       <style>${bandejaTableStyles()}${actosBandejaStyles()}
@@ -158,8 +173,8 @@ function renderActosView() {
       </style>
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
-          <h3 class="mb-1"><i class="bi bi-file-earmark-ruled"></i> Coordinación CM</h3>
-          <p class="text-muted mb-0">Expedientes asignados a la Coordinación de Contratos Menores. Perfil activo: <strong>${esc(perfil)}</strong></p>
+          <h3 class="mb-1"><i class="bi bi-file-earmark-ruled"></i> Cont.Menores</h3>
+          <p class="text-muted mb-0">Expedientes en Contratos Menores. Perfil activo: <strong>${esc(perfil)}</strong></p>
         </div>
         <button id="actosReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
@@ -211,12 +226,13 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
       });
     }
     rows = filterRowsForProfile(rows, listFilters);
+    rows = rows.map((r) => aplicarEtiquetaContMenoresEnFila(r));
     rows = sortBandejaRows(rows, listSort.sort, listSort.dir);
     lastRows = rows;
     updateSummaryCards(rows, 'actosTrazaSummary');
 
     if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay expedientes en Coordinación CM para su bandeja.</div>';
+      cont.innerHTML = '<div class="alert alert-light border">No hay expedientes en Cont.Menores para su bandeja.</div>';
       return;
     }
 

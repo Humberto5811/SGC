@@ -25,8 +25,14 @@ import {
   assertUsuarioDestinoEvaluacionElegible,
 } from './pilotRegistroEvaluacion.js';
 import { EQUIPOS_UAD, labelEquipoUad, normalizeEquipoUadCodigo } from '../../shared/equiposUad.js';
-import { listarUsuariosCoordinadoresEquipoUadSubmodulo } from './equiposUadUsuario.js';
-
+import {
+  esActorProgramacionPuedeDerivar,
+  esCoordinadorEquipoUad,
+  esOperadorEquipoUad,
+  labelRolGeneralUsuario,
+  listarUsuariosCoordinadoresEquipoUadSubmodulo,
+  listarUsuariosDestinoContMenoresProgramacionAprobada,
+} from './equiposUadUsuario.js';
 export const EVENTOS_PILOT_EN_TRAMITE = Object.freeze([
   'REQUERIMIENTO_ENVIADO_EVALUACION',
   'EVALUACION_APROBADA',
@@ -87,6 +93,7 @@ async function queryClient(client, text, params) {
 function mapCandidato(u, extra = {}) {
   const equipoUad = normalizeEquipoUadCodigo(u.equipo_uad);
   const uid = Number(u.id);
+  const rolGeneral = rolGeneralFromUsuario(u);
   return {
     id: uid,
     usuario_id: uid,
@@ -97,6 +104,8 @@ function mapCandidato(u, extra = {}) {
     centro: u.centro || u.codigo_centro_costo || '',
     equipo_uad: equipoUad,
     equipo_uad_label: labelEquipoUad(equipoUad),
+    rol_general: rolGeneral,
+    rol_general_label: labelRolGeneralUsuario(u),
     ...extra,
   };
 }
@@ -412,6 +421,48 @@ export async function listarCandidatosPorPerfil({
   };
 }
 
+/** RC8.17.8H — Coordinador(es) recomendado(s) + operadores en lista de candidatos. */
+function empaquetarListaDestinoContMenores(coordinadoresRows = [], operadoresRows = [], mapRow = mapCandidato) {
+  const coords = coordinadoresRows.map((u) => mapRow(u));
+  const ops = operadoresRows.map((u) => mapRow(u));
+  coords.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  ops.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+
+  let recomendado = null;
+  const candidatos = [...ops];
+  if (coords.length >= 1) {
+    recomendado = {
+      ...coords[0],
+      etiqueta: 'Coordinador recomendado',
+      recomendado: true,
+      fuente: 'equipo_uad',
+    };
+    if (coords.length > 1) {
+      candidatos.unshift(...coords.slice(1));
+    }
+  } else {
+    candidatos.unshift(...coords);
+  }
+  candidatos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+
+  if (!recomendado && candidatos.length === 1) {
+    return {
+      recomendado: { ...candidatos[0], etiqueta: 'Responsable recomendado', recomendado: true },
+      candidatos: [],
+      resolucion_automatica: { usuarioId: candidatos[0].id, ambiguo: false },
+    };
+  }
+  return {
+    recomendado,
+    candidatos,
+    resolucion_automatica: {
+      usuarioId: recomendado?.id ?? null,
+      ambiguo: !recomendado && candidatos.length !== 1,
+      candidatos: (recomendado ? 1 : 0) + candidatos.length,
+    },
+  };
+}
+
 function empaquetarListaCoordinadoresEquipo(elegiblesRows, mapRow = mapCandidato) {
   let elegibles = elegiblesRows.map((u) => mapRow(u));
   if (elegibles.length === 1) {
@@ -492,6 +543,93 @@ export async function listarCandidatosDecAprobadoProgramacion(
   };
 }
 
+/** RC8.17.8H — PROGRAMACION_APROBADA → PERSONA Cont.Menores (elegibilidad organizacional). */
+export async function listarCandidatosProgramacionAprobadaContMenores(
+  requerimientoId,
+  { search = '' } = {},
+  row = null,
+  client = null,
+) {
+  const ev = 'PROGRAMACION_APROBADA';
+  const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(
+    requerimientoId,
+    ev,
+    row,
+    client,
+  );
+  const etapaDest = transicion.etapa_destino || 'COORDINACION_CM';
+  const { usuarios } = await listarUsuariosDestinoContMenoresProgramacionAprobada({ client });
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const coordinadores = usuarios.filter((u) => esCoordinadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
+  const operadores = usuarios.filter((u) => esOperadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
+
+  let base = empaquetarListaDestinoContMenores(coordinadores, operadores);
+  let { recomendado, candidatos } = base;
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    candidatos = candidatos.filter((c) => matchesSearch(c, q));
+    if (recomendado && !matchesSearch(recomendado, q)) recomendado = null;
+  }
+
+  return {
+    soportado: true,
+    evento_codigo: ev,
+    etapa_origen: etapaOrigen,
+    etapa_destino: etapaDest,
+    etapa_destino_label: 'Cont.Menores',
+    destinos: [{
+      etapa_codigo: etapaDest,
+      etapa_label: 'Cont.Menores',
+      evento_codigo: ev,
+      unica: true,
+    }],
+    perfil_responsable: 'EQUIPO_UAD_CONT_MENORES',
+    equipo_uad: EQUIPOS_UAD.CONT_MENORES,
+    equipo_uad_label: labelEquipoUad(EQUIPOS_UAD.CONT_MENORES),
+    alcance: 'UAD_EQUIPO',
+    centro: null,
+    recomendado,
+    candidatos,
+    resolucion_automatica: base.resolucion_automatica,
+    mensaje_sin_candidatos: 'No existen usuarios elegibles de Cont.Menores.',
+  };
+}
+
+/**
+ * Valida actor de PUT Programación → Cont.Menores (403 si no cumple).
+ */
+export async function assertActorProgramacionPuedeDerivar(user, client = null) {
+  const uid = user?.id != null ? Number(user.id) : NaN;
+  if (!Number.isFinite(uid)) {
+    const err = new Error('No autenticado');
+    err.status = 401;
+    throw err;
+  }
+  const { rows } = await queryClient(
+    client,
+    `SELECT id, username, apellidos, nombres, cargo, rol, permisos, centro, codigo_centro_costo, equipo_uad, activo
+     FROM usuarios WHERE id = $1 LIMIT 1`,
+    [uid],
+  );
+  const row = rows[0];
+  if (!row || row.activo === false) {
+    const err = new Error('Usuario inactivo o no encontrado');
+    err.status = 403;
+    err.code = 'ACTOR_PROGRAMACION_NO_AUTORIZADO';
+    throw err;
+  }
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  if (!esActorProgramacionPuedeDerivar(row, { uadKeys })) {
+    const err = new Error(
+      'No tiene permiso para derivar desde Programación (requiere equipo UAD Programación, rol Coordinador u Operador, y actividad DERIVAR).',
+    );
+    err.status = 403;
+    err.code = 'ACTOR_PROGRAMACION_NO_AUTORIZADO';
+    throw err;
+  }
+  return { ok: true, usuario: row };
+}
+
 /**
  * Lista etapas destino + candidatos PERSONA para un evento de workflow.
  */
@@ -528,6 +666,10 @@ export async function listarCandidatosTransicion(
 
   if (ev === 'DEC_APROBADO') {
     return listarCandidatosDecAprobadoProgramacion(requerimientoId, { search }, row, client);
+  }
+
+  if (ev === 'PROGRAMACION_APROBADA') {
+    return listarCandidatosProgramacionAprobadaContMenores(requerimientoId, { search }, row, client);
   }
 
   const { reqRow, transicion, etapaOrigen, metaDestino } = await resolveTransicionWorkflow(
@@ -767,6 +909,8 @@ export default {
   buildMetadataSeleccionResponsable,
   listarCandidatosTransicion,
   listarCandidatosDecAprobadoProgramacion,
+  listarCandidatosProgramacionAprobadaContMenores,
+  assertActorProgramacionPuedeDerivar,
   listarCandidatosDerivacionDec,
   resolveUnidadAdquisicionesKeys,
   esElegibleDirectorUnidadAdquisiciones,

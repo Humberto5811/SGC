@@ -8,6 +8,7 @@ import {
   listEquiposUadCatalogo,
 } from '../../shared/equiposUad.js';
 import { ROLES_GENERALES, rolGeneralFromUsuario } from '../utils/userRoleCatalog.js';
+import { EQUIPOS_UAD } from '../../shared/equiposUad.js';
 import { getActividadesForSubmodulo, normalizePermisos } from './permissionsCatalog.js';
 import { query } from '../db.js';
 import { usuarioPerteneceUnidadAdquisiciones } from './workflowTransicionResponsable.js';
@@ -51,6 +52,16 @@ function usuarioRowBasico(usuario = {}) {
   };
 }
 
+export function labelRolGeneralUsuario(usuario = {}) {
+  const rol = rolGeneralFromUsuario(usuarioRowBasico(usuario));
+  if (rol === ROLES_GENERALES.COORDINADOR) return 'Coordinador';
+  if (rol === ROLES_GENERALES.OPERADOR) return 'Operador';
+  if (rol === ROLES_GENERALES.DIRECTOR) return 'Director';
+  if (rol === ROLES_GENERALES.USUARIO) return 'Usuario';
+  if (rol === ROLES_GENERALES.ADMINISTRADOR) return 'Administrador';
+  return rol || '';
+}
+
 /**
  * @param {object} usuario
  * @param {string} equipoCodigo
@@ -90,6 +101,84 @@ export function usuarioTieneActividadOperativaSubmodulo(usuario, submoduloCodigo
   const permisos = normalizePermisos(usuario.permisos, usuario.rol);
   const acts = getActividadesForSubmodulo(permisos, submoduloCodigo);
   return acts.some((a) => ACTIVIDADES_OPERATIVAS_TRANSICION.includes(String(a).toUpperCase()));
+}
+
+export function usuarioTieneActividadSubmodulo(usuario, submoduloCodigo, actividad) {
+  if (!usuario || usuario.activo === false) return false;
+  const act = String(actividad || '').trim().toUpperCase();
+  if (!act) return false;
+  const permisos = normalizePermisos(usuario.permisos, usuario.rol);
+  const acts = getActividadesForSubmodulo(permisos, submoduloCodigo);
+  return acts.some((a) => String(a).toUpperCase() === act);
+}
+
+/**
+ * Actor Programación → Cont.Menores: UAD + equipo PROGRAMACION + COORD/OPER + DERIVAR.
+ */
+export function esActorProgramacionPuedeDerivar(usuario, opts = {}) {
+  if (!usuario || usuario.activo === false) return false;
+  if (!usuarioPerteneceEquipoUad(usuario, EQUIPOS_UAD.PROGRAMACION, opts)) return false;
+  const rol = rolGeneralFromUsuario(usuarioRowBasico(usuario));
+  if (rol !== ROLES_GENERALES.COORDINADOR && rol !== ROLES_GENERALES.OPERADOR) return false;
+  return usuarioTieneActividadSubmodulo(usuario, 'PROGRAMACION', 'DERIVAR');
+}
+
+/**
+ * Destinatario Cont.Menores con permiso operativo en submódulo (p. ej. ACTOS_PREPARATORIOS).
+ * No usar para PROGRAMACION_APROBADA — ver helper organizacional abajo.
+ */
+export function esDestinatarioContMenoresElegible(usuario, submoduloPermisosCodigo, opts = {}) {
+  if (!usuario || usuario.activo === false) return false;
+  if (!usuarioPerteneceUnidadAdquisiciones(usuario, opts.uadKeys)) return false;
+  if (!usuarioPerteneceEquipoUad(usuario, EQUIPOS_UAD.CONT_MENORES, opts)) return false;
+  const rol = rolGeneralFromUsuario(usuarioRowBasico(usuario));
+  if (rol !== ROLES_GENERALES.COORDINADOR && rol !== ROLES_GENERALES.OPERADOR) return false;
+  return usuarioTieneActividadOperativaSubmodulo(usuario, submoduloPermisosCodigo);
+}
+
+/**
+ * RC8.17.8H — Destinatario PROGRAMACION_APROBADA → Cont.Menores (solo criterios organizacionales).
+ * Recibir responsable ≠ permisos de acción en bandeja CM.
+ */
+export function esDestinatarioProgramacionAprobadaContMenoresElegible(usuario, opts = {}) {
+  if (!usuario || usuario.activo === false) return false;
+  if (!usuarioPerteneceUnidadAdquisiciones(usuario, opts.uadKeys)) return false;
+  if (!usuarioPerteneceEquipoUad(usuario, EQUIPOS_UAD.CONT_MENORES, opts)) return false;
+  const rol = rolGeneralFromUsuario(usuarioRowBasico(usuario));
+  return rol === ROLES_GENERALES.COORDINADOR || rol === ROLES_GENERALES.OPERADOR;
+}
+
+/**
+ * Pool de candidatos PERSONA Cont.Menores para derivación desde Programación (8H).
+ * @returns {Promise<{ usuarios: object[], uadKeys: object }>}
+ */
+export async function listarUsuariosDestinoContMenoresProgramacionAprobada({ client = null } = {}) {
+  const { resolveUnidadAdquisicionesKeys } = await import('./workflowTransicionResponsable.js');
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const { rows } = await queryUsuariosActivosUad(uadKeys, client);
+  const usuarios = rows.filter((u) =>
+    esDestinatarioProgramacionAprobadaContMenoresElegible(u, { uadKeys }),
+  );
+  return { usuarios, uadKeys };
+}
+
+/**
+ * @returns {Promise<{ usuarios: object[], uadKeys: object }>}
+ */
+export async function listarUsuariosDestinoEquipoUadSubmodulo({
+  equipoCodigo,
+  submoduloPermisosCodigo,
+  client = null,
+} = {}) {
+  const { resolveUnidadAdquisicionesKeys } = await import('./workflowTransicionResponsable.js');
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const { rows } = await queryUsuariosActivosUad(uadKeys, client);
+  const eq = normalizeEquipoUadCodigo(equipoCodigo);
+  const usuarios = rows.filter(
+    (u) => normalizeEquipoUadCodigo(u.equipo_uad) === eq
+      && esDestinatarioContMenoresElegible(u, submoduloPermisosCodigo, { uadKeys }),
+  );
+  return { usuarios, uadKeys };
 }
 
 /**

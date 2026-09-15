@@ -562,6 +562,30 @@ router.get('/programacion/candidatos-observacion-destino/:requerimientoId', asyn
   }
 });
 
+/** RC8.17.8H — candidatos PERSONA Cont.Menores (equipo UAD CONT_MENORES, sin exigir ACTOS_PREPARATORIOS). */
+router.get('/programacion/candidatos-transicion/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const evento = req.query.evento || req.query.evento_codigo || 'PROGRAMACION_APROBADA';
+    const { assertActorProgramacionPuedeDerivar, listarCandidatosTransicion } = await import('../lib/workflowTransicionResponsable.js');
+    await assertActorProgramacionPuedeDerivar(req.user ?? null);
+    const { rows } = await query(
+      `SELECT r.id ${REQUERIMIENTO_BANDEJA_FROM} WHERE r.id = $1 AND ${WHERE_BANDEJA_PROGRAMACION}`,
+      [requerimientoId],
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: 'Requerimiento no encontrado en bandeja Programación' });
+    }
+    const data = await listarCandidatosTransicion(requerimientoId, evento, {
+      search: req.query.q || req.query.search || '',
+    }, rows[0]);
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
 router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
@@ -571,120 +595,21 @@ router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
       responsable_recomendado_id: responsableRecomendadoIdBody,
       reasignacion_manual: reasignacionManualBody,
     } = req.body || {};
-    const reqCheck = await query(
-      `SELECT id, payload, estado, estado_actual FROM requerimientos WHERE id = $1 AND estado IN ('Aprobado DEC', 'En Programación')`,
-      [requerimientoId],
-    );
-    if (!reqCheck.rowCount) return res.status(404).json({ success: false, error: 'No encontrado o estado inválido' });
-
-    const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
-      ? Number(usuarioDestinoIdBody)
-      : null;
-    if (!usuarioDestinoId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Debe seleccionar la persona responsable en Coordinación CM',
-      });
-    }
-
-    const { assertUsuarioDestinoTransicionElegible } = await import('../lib/workflowTransicionResponsable.js');
-    let elegible;
-    try {
-      elegible = await assertUsuarioDestinoTransicionElegible(
-        requerimientoId,
-        'PROGRAMACION_APROBADA',
-        usuarioDestinoId,
-        reqCheck.rows[0],
-      );
-    } catch (err) {
-      if (err.status) {
-        return res.status(err.status).json({ success: false, error: err.message, code: err.code });
-      }
-      throw err;
-    }
-
-    const responsableRecomendadoId = responsableRecomendadoIdBody != null
-      && Number.isFinite(Number(responsableRecomendadoIdBody))
-      ? Number(responsableRecomendadoIdBody)
-      : (elegible.recomendado?.id ?? null);
-    const reasignacionManual = reasignacionManualBody === true
-      || (responsableRecomendadoId && usuarioDestinoId !== responsableRecomendadoId);
-
-    const metaDerivacion = {
-      usuario_destino_id: usuarioDestinoId,
-      responsable_recomendado_id: responsableRecomendadoId,
-      responsable_seleccionado_id: usuarioDestinoId,
-      reasignacion_manual: reasignacionManual,
-      etapa_origen: 'PROGRAMACION',
-      etapa_destino: 'COORDINACION_CM',
-      evento: 'PROGRAMACION_APROBADA',
-    };
-
-    // Fase 1B — Guards mínimos de Programación (igual para legacy y motor).
-    const { rows: pedidos } = await query(
-      'SELECT 1 FROM requerimiento_pedidos WHERE requerimiento_id = $1 LIMIT 1',
-      [requerimientoId],
-    );
-    if (!pedidos.length) return res.status(409).json({ success: false, error: 'Debe asociar al menos un pedido SIGAMEF' });
-
-    let payload = {};
-    try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-    if (getObservacionesAbiertas(payload).length > 0) {
-      return res.status(409).json({ success: false, error: 'Existen observaciones abiertas que impiden aprobar' });
-    }
-
-    // Fase 1B — PROGRAMACION_APROBADA: PROGRAMACION → COORDINACION_CM.
-    const result = await runWorkflowTransition({
-      moduleFlag: 'WORKFLOW_ENGINE_PROGRAMACION',
-      eventoCodigo: 'PROGRAMACION_APROBADA',
-      expedienteId: requerimientoId,
+    const { ejecutarProgramacionAprobadaContMenores } = await import('../lib/programacionAprobacionContMenores.js');
+    const result = await ejecutarProgramacionAprobadaContMenores({
+      requerimientoId,
       req,
-      metadata: {
-        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
-        client_request_id: req.body?.client_request_id || null,
-        observacion: 'Programación aprobada — derivado a Coordinación CM',
-        ...metaDerivacion,
-        unidad_destino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
-      },
-      domainMutator: buildTramo1bPayloadMutator({
-        accionHistorial: 'historial_programacion',
-        submoduloLabel: 'Programación',
-        camposExtras: { tipo: 'aprobacion_programacion', usuario: usuario || 'Programación' },
-      }),
-      legacyHandler: async () => {
-        let payload = {};
-        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-        if (!Array.isArray(payload.historial_programacion)) payload.historial_programacion = [];
-        payload.historial_programacion.push({ tipo: 'aprobacion_programacion', usuario: usuario || '', fecha: new Date().toISOString() });
-        autoCerrarObservacionesEmisorAlContinuar(payload, 'Programación', usuario || 'Programación');
-
-        const tr = await transicionarExpediente({
-          requerimientoId,
-          evento: 'PROGRAMACION_APROBADA',
-          usuarioDestinoId,
-          unidadDestino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
-          motivo: 'Aprobado en Programación — derivado a Coordinación CM',
-          metadata: {
-            client_request_id: req.body?.client_request_id || `prog-aprobar:${requerimientoId}`,
-            via: 'programacion/aprobar:legacyHandler',
-            ...metaDerivacion,
-          },
-          actorRol: usuario || 'Programación',
-          domainMutator: async (tx) => {
-            await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
-              requerimientoId,
-              JSON.stringify(payload),
-            ]);
-            return { historial_programacion: true };
-          },
-        });
-        const updated = tr.expediente;
-        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
-      },
+      usuario,
+      usuarioDestinoId: usuarioDestinoIdBody,
+      responsableRecomendadoId: responsableRecomendadoIdBody,
+      reasignacionManual: reasignacionManualBody === true,
+      clientRequestId: req.body?.client_request_id || null,
     });
-
     return responderTransicionMotor(res, result, requerimientoId);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.put('/programacion/observar/:requerimientoId', async (req, res, next) => {
@@ -841,10 +766,21 @@ router.get('/actos', async (req, res, next) => {
     const soloMios = req.query.solo_mios === '1' || req.query.solo_mios === 'true';
     const miEquipo = req.query.mi_equipo === '1' || req.query.mi_equipo === 'true';
     const usuarioNombre = req.headers['x-user-name'] || req.query.usuario || '';
-    const result = await listarBandejaActos(page, pageSize, req.query, {
-      soloAsignadosA: soloMios ? usuarioNombre : null,
-      soloMiEquipo: miEquipo,
-    });
+    const user = req.user ?? null;
+    const userId = user?.id != null && Number.isFinite(Number(user.id)) ? Number(user.id) : null;
+    const { esCoordinadorActosUsuario, esMiembroContMenoresBandejaAcceso } = await import('../../shared/contMenoresBandejaAccess.js');
+    const esCoord = esCoordinadorActosUsuario(user || {});
+    const esOperCm = esMiembroContMenoresBandejaAcceso(user || {}) && !esCoord;
+    const listOpts = { soloMiEquipo: miEquipo };
+    if (soloMios && userId) {
+      listOpts.soloAsignadosUsuarioId = userId;
+      listOpts.soloAsignadosA = usuarioNombre;
+    } else if (soloMios) {
+      listOpts.soloAsignadosA = usuarioNombre;
+    } else if (esOperCm && userId && !miEquipo) {
+      listOpts.restringirPersonaUsuarioId = userId;
+    }
+    const result = await listarBandejaActos(page, pageSize, req.query, listOpts);
     res.json(result);
   } catch (err) { next(err); }
 });

@@ -19,9 +19,18 @@ export function isExpedientePoolCoordinador(req) {
   return /coordinador.*contratos/i.test(resp) || resp === 'Especialista Contrataciones';
 }
 
-export function isExpedienteAsignadoAMi(req, userName) {
+export function isExpedienteAsignadoAMi(req, userName, userId = null) {
+  const uid = userId != null && Number.isFinite(Number(userId)) ? Number(userId) : null;
+  const bcUid = req?.bandeja_contrato?.responsable?.usuarioId
+    ?? req?.responsable_usuario_id
+    ?? req?.responsableUsuarioId;
+  if (uid != null && bcUid != null && Number(bcUid) === uid) return true;
+
+  const respRaw = String(req?.responsableActual || req?.responsable_actual || '').trim();
+  if (uid != null && /^\d+$/.test(respRaw) && Number(respRaw) === uid) return true;
+
   if (!userName) return false;
-  const resp = String(req?.responsableActual || req?.responsable_actual || '').toLowerCase();
+  const resp = respRaw.toLowerCase();
   const me = String(userName).toLowerCase();
   if (/coordinador.*contratos/i.test(resp)) return false;
   return resp.includes(me) || me.split(' ').filter((p) => p.length > 2).some((p) => resp.includes(p));

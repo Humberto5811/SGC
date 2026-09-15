@@ -10,7 +10,8 @@ import {
 import { buildMatrizSeguimientoPedidos } from '../lib/pedidosMatriz.js';
 import { buildMatrizConsolidacionPaquetes } from '../lib/paquetesMatriz.js';
 import { listarBandejaProgramacion } from '../lib/programacionBandeja.js';
-import { transicionarExpediente } from '../lib/expedienteTransicion.js';
+import { withTransaction } from '../lib/workflow/workflowTransaction.js';
+import { ejecutarProgramacionAprobadaContMenores } from '../lib/programacionAprobacionContMenores.js';
 
 const router = express.Router();
 
@@ -311,41 +312,71 @@ router.post('/paquetes', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/programacion/paquetes/:id/aprobar — aprobar un paquete
+// PUT /api/programacion/paquetes/:id/aprobar — aprobar un paquete (RC8.17.8H: misma PERSONA Cont.Menores)
 router.put('/paquetes/:id/aprobar', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { usuario } = req.body || {};
-    const { rows } = await query(
-      `UPDATE paquetes_programacion
-       SET estado = 'Aprobado', usuario_aprobacion = $2, fecha_aprobacion = NOW(), updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
-      [id, usuario || '']
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Paquete no encontrado' });
+    const {
+      usuario,
+      usuario_destino_id: usuarioDestinoIdBody,
+      responsable_recomendado_id: responsableRecomendadoIdBody,
+      reasignacion_manual: reasignacionManualBody,
+    } = req.body || {};
 
-    // Marcar requerimientos del paquete como "Programado"
-    const reqIds = await query(
-      'SELECT requerimiento_id FROM paquete_requerimientos WHERE paquete_id = $1',
-      [id]
-    );
-    for (const row of reqIds.rows) {
-      await transicionarExpediente({
-        requerimientoId: row.requerimiento_id,
-        evento: 'PROGRAMACION_APROBADA',
-        unidadDestino: ETAPAS.ACTOS_PREPARATORIOS?.responsable || 'Coordinador de Contratos Menores',
-        motivo: `Paquete ${id} aprobado — consolidación programada`,
-        metadata: {
-          client_request_id: `paquete-aprobar:${id}:${row.requerimiento_id}`,
-          via: 'programacion/paquetes/aprobar',
-          paquete_id: id,
-        },
-        actorRol: usuario || 'Programación',
-      });
+    const uidDest = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
+      ? Number(usuarioDestinoIdBody)
+      : null;
+    if (!uidDest) {
+      return res.status(400).json({ error: 'Debe seleccionar la persona responsable en Cont. Menores' });
     }
 
-    res.json({ ok: true, paquete: rows[0] });
-  } catch (err) { next(err); }
+    const paqCheck = await query('SELECT id, estado FROM paquetes_programacion WHERE id = $1', [id]);
+    if (!paqCheck.rows.length) return res.status(404).json({ error: 'Paquete no encontrado' });
+
+    const reqIds = (await query(
+      'SELECT requerimiento_id FROM paquete_requerimientos WHERE paquete_id = $1 ORDER BY requerimiento_id',
+      [id],
+    )).rows.map((r) => r.requerimiento_id);
+
+    if (!reqIds.length) {
+      return res.status(400).json({ error: 'El paquete no tiene requerimientos asociados.' });
+    }
+
+    await withTransaction(async (tx) => {
+      const { rows: paqRows } = await tx.query(
+        `UPDATE paquetes_programacion
+         SET estado = 'Aprobado', usuario_aprobacion = $2, fecha_aprobacion = NOW(), updated_at = NOW()
+         WHERE id = $1 RETURNING *`,
+        [id, usuario || ''],
+      );
+      if (!paqRows.length) {
+        const err = new Error('Paquete no encontrado');
+        err.status = 404;
+        throw err;
+      }
+
+      for (const rid of reqIds) {
+        await ejecutarProgramacionAprobadaContMenores({
+          requerimientoId: rid,
+          req,
+          usuario,
+          usuarioDestinoId: uidDest,
+          responsableRecomendadoId: responsableRecomendadoIdBody,
+          reasignacionManual: reasignacionManualBody === true,
+          clientRequestId: req.body?.client_request_id
+            ? `${req.body.client_request_id}:${rid}`
+            : `paquete-aprobar:${id}:${rid}`,
+        });
+      }
+      return paqRows[0];
+    });
+
+    const { rows: paqueteFinal } = await query('SELECT * FROM paquetes_programacion WHERE id = $1', [id]);
+    res.json({ ok: true, paquete: paqueteFinal[0] });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // DELETE /api/programacion/paquetes/:id — eliminar un paquete (solo si pendiente)

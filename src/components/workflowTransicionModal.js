@@ -10,7 +10,7 @@ function esc(s) {
 }
 
 function renderCandidatoPickBtn(c, { destacado = false } = {}) {
-  const det = [c.username, c.cargo].filter(Boolean).join(' · ');
+  const det = [c.rol_general_label, c.username].filter(Boolean).join(' · ');
   const cls = destacado ? 'list-group-item-primary' : '';
   const badge = c.etiqueta ? `<span class="badge bg-secondary ms-1">${esc(c.etiqueta)}</span>` : '';
   return `<button type="button" class="list-group-item list-group-item-action py-1 px-2 usr-pick ${cls}"
@@ -82,7 +82,8 @@ function wireTransicionPicker(id, { requerimientoId, eventoCodigo, candidatosApi
         html += `<div class="list-group list-group-flush border rounded" style="max-height:140px;overflow-y:auto">${data.candidatos.map((c) => renderCandidatoPickBtn(c)).join('')}</div>`;
       }
       if (!data.recomendado && !data.candidatos?.length) {
-        html = '<div class="text-muted small border rounded p-2">Sin personas elegibles para esta transición.</div>';
+        const msg = data.mensaje_sin_candidatos || 'Sin personas elegibles para esta transición.';
+        html = `<div class="text-muted small border rounded p-2">${esc(msg)}</div>`;
       }
       sugeridoEl.innerHTML = html;
       sugeridoEl.querySelectorAll('.usr-pick').forEach((b) => {

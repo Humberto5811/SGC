@@ -247,12 +247,45 @@ export async function listUsuariosPorSubmodulo(submoduloCode, search = '') {
     .map(({ permisosNorm, ...rest }) => rest);
 }
 
-const BASE_FROM = REQUERIMIENTO_BANDEJA_FROM;
+const BASE_FROM = REQUERIMIENTO_BANDEJA_FROM.replace(
+  'FROM requerimientos r',
+  `FROM requerimientos r
+  LEFT JOIN expediente_estado_vigente erv ON erv.requerimiento_id = r.id`,
+);
 
 const ETAPAS_BANDEJA_CM = `(
-  'ACTOS_PREPARATORIOS', 'INVITACIONES', 'RECEPCION_COTIZACIONES',
+  'ACTOS_PREPARATORIOS', 'COORDINACION_CM', 'INVITACIONES', 'RECEPCION_COTIZACIONES',
   'CUADRO_COMPARATIVO', 'CCP', 'EJECUCION', 'FINALIZADO', 'OBSERVADO'
 )`;
+
+/** RC8.17.8H1 — PERSONA asignada vía ERV (prioridad) + legacy id/nombre. */
+function appendFiltroPersonaContMenores(where, params, usuarioId, nombreLegacy = '') {
+  const uid = Number(usuarioId);
+  if (!Number.isFinite(uid)) return where;
+  params.push(uid);
+  const pUid = params.length;
+  let clause = ` AND (
+    (
+      UPPER(COALESCE(erv.etapa_codigo, '')) IN ('COORDINACION_CM', 'ACTOS_PREPARATORIOS')
+      AND UPPER(COALESCE(erv.responsable_tipo, '')) = 'PERSONA'
+      AND erv.responsable_usuario_id = $${pUid}
+    )
+    OR (
+      TRIM(COALESCE(r.responsable_actual, '')) = $${pUid}::text
+    )`;
+  if (nombreLegacy && String(nombreLegacy).trim()) {
+    params.push(`%${String(nombreLegacy).trim()}%`);
+    clause += `
+    OR (
+      erv.responsable_usuario_id IS NULL
+      AND r.responsable_actual ILIKE $${params.length}
+      AND r.responsable_actual NOT ILIKE '%Coordinador%Contratos%'
+    )`;
+  }
+  clause += `
+  )`;
+  return where + clause;
+}
 
 export async function listarBandejaActos(page, pageSize, queryParams = {}, options = {}) {
   // RC8.6A.2 — no bootstrap silencioso en cada listado.
@@ -272,7 +305,16 @@ export async function listarBandejaActos(page, pageSize, queryParams = {}, optio
   )`;
   if (whereExtra) where += ` AND ${whereExtra}`;
 
-  if (options.soloAsignadosA) {
+  if (options.soloAsignadosUsuarioId != null) {
+    where = appendFiltroPersonaContMenores(
+      where,
+      params,
+      options.soloAsignadosUsuarioId,
+      options.soloAsignadosA || '',
+    );
+  } else if (options.restringirPersonaUsuarioId != null) {
+    where = appendFiltroPersonaContMenores(where, params, options.restringirPersonaUsuarioId, '');
+  } else if (options.soloAsignadosA) {
     params.push(`%${options.soloAsignadosA}%`);
     where += ` AND r.responsable_actual ILIKE $${params.length}`;
     where += ` AND r.responsable_actual NOT ILIKE '%Coordinador%Contratos%'`;

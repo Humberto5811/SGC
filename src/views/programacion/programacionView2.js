@@ -625,9 +625,10 @@ async function aprobarProgramacion(id) {
   const seleccion = await showWorkflowTransicionModal({
     requerimientoId: id,
     eventoCodigo: 'PROGRAMACION_APROBADA',
-    title: 'Aprobar y derivar a Coordinación CM',
-    message: 'Seleccione la persona responsable en Coordinación CM. Etapa destino: Coordinación CM, estado: En trámite.',
+    title: 'Aprobar y derivar a Cont.Menores',
+    message: 'Seleccione la persona responsable en Cont. Menores. Etapa destino: Cont.Menores, estado: En trámite.',
     buttonText: 'Confirmar aprobación',
+    candidatosApiPath: (rid) => `/contrataciones/programacion/candidatos-transicion/${rid}`,
   });
   if (!seleccion) return;
 
@@ -1167,10 +1168,30 @@ async function openPaqueteDetail(paqueteId) {
 }
 
 async function aprobarPaquete(id) {
-  if (!confirm('¿Aprobar este paquete? Los requerimientos serán enviados a Coordinación CM.')) return;
   try {
+    const detail = await programacionService.getPaquete(id);
+    const reqs = detail?.requerimientos || detail?.data?.requerimientos || [];
+    const firstReqId = reqs[0]?.id;
+    if (!firstReqId) {
+      alert('El paquete no tiene requerimientos para derivar.');
+      return;
+    }
+    const seleccion = await showWorkflowTransicionModal({
+      requerimientoId: firstReqId,
+      eventoCodigo: 'PROGRAMACION_APROBADA',
+      title: 'Aprobar paquete y derivar a Cont.Menores',
+      message: 'Seleccione la persona responsable en Cont. Menores para todos los requerimientos del paquete.',
+      buttonText: 'Confirmar aprobación del paquete',
+      candidatosApiPath: (rid) => `/contrataciones/programacion/candidatos-transicion/${rid}`,
+    });
+    if (!seleccion) return;
     const user = authService.getCurrentUser();
-    await programacionService.aprobarPaquete(id, { usuario: user ? (user.nombre || user.dni || '') : '' });
+    await programacionService.aprobarPaquete(id, {
+      usuario: user ? (user.nombre || user.dni || '') : '',
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
+    });
     alert('✅ Paquete aprobado exitosamente.');
     if (currentTab === 'paquetes') loadPaquetesTab();
     else if (currentTab === 'pedidos') loadPedidosTab();
