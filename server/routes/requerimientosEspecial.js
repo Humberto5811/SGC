@@ -23,6 +23,11 @@ import {
 } from '../lib/registroMigrationFacade.js';
 import { runWorkflowTransition, buildObservacionDomainMutator } from '../lib/workflow/workflowIntegration.js';
 import {
+  allocateObservacionHijaId,
+  buildClientRequestIdEvalObservacion,
+  buildEvalObservacionPayloadDomainMutator,
+} from '../lib/observacionEvaluacionSubobs.js';
+import {
   resolveUserDataScope,
   buildRequerimientoScopeSql,
   assertCanAccessRequirement,
@@ -487,29 +492,70 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
 
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo de observación requerido' });
 
+    const padreIdRaw = observacion_padre_id || observacionPadreId || null;
+    const observacionPadreIdNorm = padreIdRaw ? String(padreIdRaw).trim() : null;
+    let observacionHijaId = null;
+    if (observacionPadreIdNorm) {
+      observacionHijaId = allocateObservacionHijaId(
+        payload,
+        observacionPadreIdNorm,
+        req.body?.observacion_hija_id || req.body?.observacionHijaId,
+      );
+    }
+    const clientRequestIdEval = buildClientRequestIdEvalObservacion({
+      requerimientoId,
+      observacionPadreId: observacionPadreIdNorm,
+      observacionHijaId,
+      clientRequestIdFromBody: req.body?.client_request_id,
+    });
+
     // Fase 1A.2 — transición D: observación de evaluación (NO cambia ubicación).
     // Idempotencia estable: client_request_id si llega; si no, fallback
     // expediente+evento+actor+motivo_hash+ciclo (sin timestamp aleatorio).
     const responsableSubsanacion = destino_persona || req.body?.responsable_subsanacion || '';
     const destinoEtapaCanon = destino_etapa === 'REGISTRADO' ? 'REGISTRO' : (destino_etapa || 'REGISTRO');
+    const metaObservacionBase = {
+      tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
+      client_request_id: clientRequestIdEval,
+      motivo,
+      ciclo_observacion: req.body?.ciclo_observacion ?? null,
+      destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
+      destino_etapa: destinoEtapaCanon,
+      destino_persona: responsableSubsanacion,
+      usuario_destino_id: usuarioDestinoId,
+      responsable_recomendado_id: responsableRecomendadoId,
+      reasignacion_manual: reasignacionManual,
+      responsable_destino: responsableSubsanacion,
+      ...(observacionPadreIdNorm ? {
+        observacion_padre_id: observacionPadreIdNorm,
+        observacion_id: observacionHijaId,
+        es_subobservacion: true,
+      } : {}),
+    };
+    const mutatorOpts = {
+      motivo,
+      usuarioEmisor: usuario || (req.user && (req.user.username || req.user.dni)) || 'SISTEMA',
+      responsableSubsanacion,
+      destinoSubmodulo: destino_submodulo || 'Registro de Requerimiento',
+      destinoEtapa: destinoEtapaCanon,
+      destinoPersona: destino_persona || responsableSubsanacion || '',
+      origenSubmodulo: origen_submodulo || 'Evaluación de Requerimiento',
+      documentos: req.body?.documentos_subsanacion || [],
+      origen: 'EVALUACION',
+      usuarioDestinoId,
+      usuarioOrigenId: req.user?.id ?? null,
+      responsableRecomendadoId,
+      reasignacionManual,
+      observacionPadreId: observacionPadreIdNorm,
+      observacionHijaId,
+    };
+
     const result = await runWorkflowTransition({
       moduleFlag: 'WORKFLOW_ENGINE_REGISTRO',
       eventoCodigo: 'EVALUACION_OBSERVADA',
       expedienteId: requerimientoId,
       req,
-      metadata: {
-        tipo_contratacion: req.body?.tipo_contratacion || 'BIEN',
-        client_request_id: req.body?.client_request_id || null,
-        motivo,
-        ciclo_observacion: req.body?.ciclo_observacion ?? null,
-        destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
-        destino_etapa: destinoEtapaCanon,
-        destino_persona: responsableSubsanacion,
-        usuario_destino_id: usuarioDestinoId,
-        responsable_recomendado_id: responsableRecomendadoId,
-        reasignacion_manual: reasignacionManual,
-        responsable_destino: responsableSubsanacion,
-      },
+      metadata: metaObservacionBase,
       // En el camino motor, el domainMutator ejecuta DENTRO de la misma transacción:
       //  1. inserta workflow_observaciones;
       //  2. actualiza payload.observaciones + payload.historial_evaluacion (compat,
@@ -517,34 +563,44 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
       //  3. persiste el payload con el mismo tx.
       // workflow_eventos + historial_movimientos + expediente comparten la transacción:
       // si algo falla → ROLLBACK completo.
-      domainMutator: buildObservacionDomainMutator({
-        motivo,
-        usuarioEmisor: usuario || (req.user && (req.user.username || req.user.dni)) || 'SISTEMA',
-        responsableSubsanacion,
-        destinoSubmodulo: destino_submodulo || 'Registro de Requerimiento',
-        destinoEtapa: destinoEtapaCanon,
-        destinoPersona: destino_persona || responsableSubsanacion || '',
-        origenSubmodulo: origen_submodulo || 'Evaluación de Requerimiento',
-        documentos: req.body?.documentos_subsanacion || [],
-        origen: 'EVALUACION',
-        usuarioDestinoId,
-        usuarioOrigenId: req.user?.id ?? null,
-        responsableRecomendadoId,
-        reasignacionManual,
-      }),
+      domainMutator: buildObservacionDomainMutator(mutatorOpts),
       legacyHandler: async () => {
-        let payload = {};
-        try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+        const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
+        const via = observacionPadreIdNorm
+          ? 'requerimientos/observar:subobs'
+          : 'requerimientos/observar:legacy';
 
-        if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-        payload.historial_evaluacion.push({
+        if (observacionPadreIdNorm) {
+          const tr = await transicionarExpediente({
+            requerimientoId,
+            evento: 'EVALUACION_OBSERVADA',
+            usuarioOrigenId: req.user?.id ?? null,
+            usuarioDestinoId,
+            unidadDestino: ETAPAS.REGISTRO?.responsable || ETAPAS.REGISTRADO?.responsable || 'Usuario AU',
+            motivo,
+            metadata: {
+              ...metaObservacionBase,
+              via,
+            },
+            actorRol: usuario || 'Gerente',
+            domainMutator: buildEvalObservacionPayloadDomainMutator(mutatorOpts),
+          });
+          const updated = tr.expediente;
+          return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+        }
+
+        let payloadLegacy = {};
+        try { payloadLegacy = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+
+        if (!Array.isArray(payloadLegacy.historial_evaluacion)) payloadLegacy.historial_evaluacion = [];
+        payloadLegacy.historial_evaluacion.push({
           tipo: 'observacion',
           motivo,
           usuario: usuario || '',
           fecha: new Date().toISOString(),
         });
 
-        emitirObservacion(payload, {
+        emitirObservacion(payloadLegacy, {
           motivo,
           gerente: usuario || 'Gerente',
           origen: 'GERENTE',
@@ -554,27 +610,20 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
           destino_persona: destino_persona || '',
           usuario_origen_id: req.user?.id ?? null,
           usuario_destino_id: usuarioDestinoId,
-          observacion_padre_id: observacion_padre_id || observacionPadreId || null,
         });
 
-        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payloadLegacy)]);
 
-        const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
         const tr = await transicionarExpediente({
           requerimientoId,
           evento: 'EVALUACION_OBSERVADA',
+          usuarioOrigenId: req.user?.id ?? null,
           usuarioDestinoId,
           unidadDestino: ETAPAS.REGISTRADO?.responsable || ETAPAS.REGISTRO?.responsable || 'Usuario AU',
           motivo,
           metadata: {
-            client_request_id: req.body?.client_request_id || `eval-obs:${requerimientoId}`,
-            via: 'requerimientos/observar:legacy',
-            destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
-            destino_etapa: destinoEtapaCanon,
-            destino_persona: responsableSubsanacion,
-            usuario_destino_id: usuarioDestinoId,
-            responsable_recomendado_id: responsableRecomendadoId,
-            reasignacion_manual: reasignacionManual,
+            ...metaObservacionBase,
+            via,
           },
           actorRol: usuario || 'Gerente',
         });

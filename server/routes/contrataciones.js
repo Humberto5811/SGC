@@ -407,6 +407,14 @@ router.put('/dec/observar/:requerimientoId', async (req, res, next) => {
 
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
 
+    if (observacion_padre_id || observacionPadreId) {
+      return res.status(422).json({
+        success: false,
+        code: 'SUBOBSERVACION_RUTA_EMISOR',
+        error: 'Las subobservaciones deben registrarse desde el módulo receptor de la observación padre (p. ej. Evaluación).',
+      });
+    }
+
     const {
       mapDestinoSubmoduloAEtapaObservacion,
       esDestinoObservacionDecSoportado,
@@ -706,6 +714,14 @@ router.put('/programacion/observar/:requerimientoId', async (req, res, next) => 
     }
 
     if (!motivo) return res.status(400).json({ success: false, error: 'Motivo requerido' });
+
+    if (observacion_padre_id || observacionPadreId) {
+      return res.status(422).json({
+        success: false,
+        code: 'SUBOBSERVACION_RUTA_EMISOR',
+        error: 'Las subobservaciones deben registrarse desde el módulo receptor de la observación padre.',
+      });
+    }
 
     const {
       mapDestinoSubmoduloAEtapaObservacion,

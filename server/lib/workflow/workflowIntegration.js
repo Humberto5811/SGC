@@ -16,7 +16,7 @@
 import { executeTransition } from './workflowEngine.js';
 import { leerFlags } from './workflowGuards.js';
 import { getTransition } from '../../../shared/workflow/transiciones.js';
-import { emitirObservacion } from '../observacionesWorkflow.js';
+import { buildEvalObservacionPayloadDomainMutator } from '../observacionEvaluacionSubobs.js';
 
 /**
  * Idempotency key estable.
@@ -122,83 +122,79 @@ export function buildObservacionDomainMutator({
   usuarioOrigenId = null,
   responsableRecomendadoId = null,
   reasignacionManual = false,
+  observacionPadreId = null,
+  observacionHijaId = null,
 } = {}) {
-  return async function observacionMutator(client, { expediente_id, row }) {
+  const padreId = observacionPadreId ? String(observacionPadreId).trim() : null;
+  const esSubobs = !!padreId;
+  const payloadMutator = buildEvalObservacionPayloadDomainMutator({
+    motivo,
+    usuarioEmisor,
+    responsableSubsanacion,
+    destinoSubmodulo,
+    destinoEtapa,
+    destinoPersona,
+    origenSubmodulo,
+    usuarioDestinoId,
+    usuarioOrigenId,
+    responsableRecomendadoId,
+    reasignacionManual,
+    observacionPadreId: padreId,
+    observacionHijaId,
+    incluirHistorialEvaluacion: !esSubobs,
+  });
+
+  return async function observacionMutator(client, ctx) {
     const now = new Date().toISOString();
-    const expedienteId = Number(expediente_id);
+    const expedienteId = Number(ctx.expediente_id);
     const uidDest = usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))
       ? Number(usuarioDestinoId)
       : null;
     const uidOrig = usuarioOrigenId != null && Number.isFinite(Number(usuarioOrigenId))
       ? Number(usuarioOrigenId)
       : null;
-    const destinoCodigo = destinoSubmodulo === 'Registro de Requerimiento'
-      ? 'REGISTRO_REQUERIMIENTO'
-      : String(destinoSubmodulo || '').slice(0, 80);
 
-    // 1. Insertar observación canónica en workflow_observaciones (mismo tx).
-    const { rows } = await client.query(
-      `INSERT INTO workflow_observaciones
-         (expediente_id, origen, estado, emitida_por, responsable_subsanacion,
-          motivo, documentos, dias_plazo, emitida_at,
-          origen_submodulo_codigo, destino_submodulo_codigo,
-          usuario_origen_id, usuario_destino_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       RETURNING id`,
-      [
-        expedienteId,
-        String(origen || 'EVALUACION'),
-        'OBS_EMITIDA',
-        String(usuarioEmisor || 'SISTEMA'),
-        String(responsableSubsanacion || destinoPersona || ''),
-        String(motivo || ''),
-        JSON.stringify(Array.isArray(documentos) ? documentos : []),
-        5,
-        now,
-        String(origenSubmodulo || '').slice(0, 80),
-        destinoCodigo,
-        uidOrig,
-        uidDest,
-      ],
-    );
-    const observacionId = rows[0]?.id || null;
+    let workflowObservacionId = null;
+    if (!esSubobs) {
+      const destinoCodigo = destinoSubmodulo === 'Registro de Requerimiento'
+        ? 'REGISTRO_REQUERIMIENTO'
+        : String(destinoSubmodulo || '').slice(0, 80);
+      const { rows } = await client.query(
+        `INSERT INTO workflow_observaciones
+           (expediente_id, origen, estado, emitida_por, responsable_subsanacion,
+            motivo, documentos, dias_plazo, emitida_at,
+            origen_submodulo_codigo, destino_submodulo_codigo,
+            usuario_origen_id, usuario_destino_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         RETURNING id`,
+        [
+          expedienteId,
+          String(origen || 'EVALUACION'),
+          'OBS_EMITIDA',
+          String(usuarioEmisor || 'SISTEMA'),
+          String(responsableSubsanacion || destinoPersona || ''),
+          String(motivo || ''),
+          JSON.stringify(Array.isArray(documentos) ? documentos : []),
+          5,
+          now,
+          String(origenSubmodulo || '').slice(0, 80),
+          destinoCodigo,
+          uidOrig,
+          uidDest,
+        ],
+      );
+      workflowObservacionId = rows[0]?.id || null;
+    }
 
-    // 2. Compatibilidad legacy: construir payload nuevo equivalente al flujo
-    //    emitirObservacion + historial_evaluacion, sobre el objeto en memoria.
-    const payload = normalizarPayloadCompat(row?.payload);
-    if (!Array.isArray(payload.historial_evaluacion)) payload.historial_evaluacion = [];
-    payload.historial_evaluacion.push({
-      tipo: 'observacion',
-      motivo: String(motivo || ''),
-      usuario: String(usuarioEmisor || ''),
-      fecha: now,
-      destino_persona: String(destinoPersona || responsableSubsanacion || ''),
-    });
-    // Reutilizar emitirObservacion (función pura, muta el objeto, sin SQL).
-    emitirObservacion(payload, {
-      motivo: String(motivo || ''),
-      gerente: String(usuarioEmisor || 'Gerente'),
-      origen: 'GERENTE',
-      origen_submodulo: String(origenSubmodulo || 'Evaluación de Requerimiento'),
-      destino_submodulo: String(destinoSubmodulo || 'Registro de Requerimiento'),
-      destino_etapa: String(destinoEtapa || 'REGISTRO'),
-      destino_persona: String(destinoPersona || responsableSubsanacion || ''),
-      usuario_origen_id: uidOrig,
-      usuario_destino_id: uidDest,
-      responsable_recomendado_id: responsableRecomendadoId,
-      reasignacion_manual: reasignacionManual === true,
-    });
-
-    // 3. Persistir payload actualizado con el MISMO tx.
-    await client.query(
-      `UPDATE requerimientos SET payload = $2, updated_at = NOW() WHERE id = $1`,
-      [expedienteId, JSON.stringify(payload)],
-    );
+    const payloadResult = await payloadMutator(client, ctx);
 
     return {
-      observacion_insertada: true,
+      observacion_insertada: !esSubobs,
       compat_payload_actualizado: true,
-      observacion_id: observacionId,
+      observacion_id: workflowObservacionId,
+      observacion_payload_id: payloadResult.observacion_payload_id,
+      observacion_padre_id: padreId,
+      es_subobservacion: esSubobs,
     };
   };
 }
