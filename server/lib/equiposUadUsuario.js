@@ -149,9 +149,21 @@ export function esDestinatarioProgramacionAprobadaContMenoresElegible(usuario, o
 }
 
 /**
- * Pool de candidatos PERSONA Cont.Menores para derivación desde Programación (8H).
+ * RC8.17.8H4 — Operadores UAD Programación (asignación interna Coordinador → Operador).
  * @returns {Promise<{ usuarios: object[], uadKeys: object }>}
  */
+export async function listarOperadoresProgramacionAsignables({ client = null } = {}) {
+  const { resolveUnidadAdquisicionesKeys } = await import('./workflowTransicionResponsable.js');
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const { rows } = await queryUsuariosActivosUad(uadKeys, client);
+  const usuarios = rows.filter((u) => esOperadorEquipoUad(u, EQUIPOS_UAD.PROGRAMACION, { uadKeys }));
+  return { usuarios, uadKeys };
+}
+
+export function esDestinatarioAsignacionInternaProgramacion(usuario, opts = {}) {
+  return esOperadorEquipoUad(usuario, EQUIPOS_UAD.PROGRAMACION, opts);
+}
+
 export async function listarUsuariosDestinoContMenoresProgramacionAprobada({ client = null } = {}) {
   const { resolveUnidadAdquisicionesKeys } = await import('./workflowTransicionResponsable.js');
   const uadKeys = await resolveUnidadAdquisicionesKeys(client);

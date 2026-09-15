@@ -18,6 +18,7 @@ function tipoLabel(tipo) {
 }
 
 import { generatePedidoSigamef } from './pedidoSigamefCodes.js';
+import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 function pedidoLabel(ped) {
   if (ped.pedido_sigamef) return String(ped.pedido_sigamef);
@@ -128,6 +129,26 @@ export async function buildMatrizSeguimientoPedidos() {
         historial_estados: enriched.historial_estados,
       },
     });
+  });
+
+  await enrichEstadoResponsableForBandeja(filas, 'requerimiento_id');
+  filas.forEach((f) => {
+    const bc = f.bandeja_contrato;
+    if (!bc) return;
+    f.etapa_codigo = bc.etapa?.codigo || '';
+    f.etapa_label = bc.etapa?.label || '';
+    f.estado_codigo_vigente = bc.estado?.codigo || '';
+    f.estado_actual = f.etapa_codigo || f.estado_actual;
+    f.estado_actual_texto = bc.estado?.label || f.estado_actual_texto;
+    f.responsable = bc.responsable?.nombre || f.responsable;
+    f.dias_en_estado = bc.dias_en_estado ?? f.dias_en_estado;
+    const estadoCod = String(bc.estado?.codigo || '').toUpperCase();
+    if (estadoCod === 'OBSERVADO') f.observado = true;
+    if (f.requerimiento) {
+      f.requerimiento.bandeja_contrato = bc;
+      f.requerimiento.estado_responsable_vigente = f.estado_responsable_vigente;
+      f.requerimiento.responsable_display = bc.responsable?.nombre;
+    }
   });
 
   return {

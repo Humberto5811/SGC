@@ -14,7 +14,24 @@ import {
   ROLES_GENERALES_LABELS,
   rolGeneralFromUsuario,
 } from '../../../server/utils/userRoleCatalog.js';
-import { listEquiposUadCatalogo } from '../../../shared/equiposUad.js';
+import {
+  listEquiposUadCatalogo,
+  normalizeEquipoUadCodigo,
+  labelEquipoUad,
+} from '../../../shared/equiposUad.js';
+
+function fmtEquipoUad(usuario = {}) {
+  const codigo = normalizeEquipoUadCodigo(usuario.equipo_uad);
+  if (!codigo) return '—';
+  return labelEquipoUad(codigo) || codigo;
+}
+
+function renderEquipoUadSelectOptions(selectedCodigo) {
+  const sel = normalizeEquipoUadCodigo(selectedCodigo) || '';
+  return listEquiposUadCatalogo().map((e) =>
+    `<option value="${esc(e.codigo)}" ${sel === e.codigo ? 'selected' : ''}>${esc(e.label)}</option>`,
+  ).join('');
+}
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -226,7 +243,7 @@ async function loadList() {
             <table class="table table-sm table-hover align-middle usu-list-table mb-0">
               <thead class="table-light"><tr>
                 <th>Usuario</th><th>Apellidos</th><th>Nombres</th><th>Cargo</th>
-                <th>Área Usuaria</th><th class="text-center">Centro</th><th>Correo</th><th>Rol</th>
+                <th>Área Usuaria</th><th class="text-center">Centro</th><th>Equipo UAD</th><th>Correo</th><th>Rol</th>
                 <th>Estado</th><th>Estado Contraseña</th>
                 <th class="text-center">Accesos</th><th class="text-center">Acciones</th>
               </tr></thead>
@@ -239,6 +256,7 @@ async function loadList() {
                     <td>${esc(u.cargo)}</td>
                     <td>${areaCell(u.descripcion_area)}</td>
                     <td class="usu-col-centro">${esc(u.centro || '—')}</td>
+                    <td class="usu-col-equipo-uad">${esc(u.equipo_uad_label || fmtEquipoUad(u))}</td>
                     <td>${esc(u.email)}</td>
                     <td class="usu-col-rol">${esc(fmtRol(u.rol))}</td>
                     <td><span class="badge ${u.activo ? 'bg-success' : 'bg-secondary'}">${u.activo ? 'Activo' : 'Inactivo'}</span></td>
@@ -250,7 +268,7 @@ async function loadList() {
                       <button type="button" class="btn btn-xs btn-outline-secondary usu-audit" data-id="${u.id}" title="Ver auditoría">📜</button>
                     </td>
                   </tr>
-                `).join('') : '<tr><td colspan="12" class="text-center text-muted py-4">Sin registros</td></tr>'}
+                `).join('') : '<tr><td colspan="13" class="text-center text-muted py-4">Sin registros</td></tr>'}
               </tbody>
             </table>
           </div>
@@ -452,13 +470,11 @@ async function openForm(id) {
               </select>
               <small class="text-muted d-block mt-1">Nivel general de actuación. El alcance de áreas se configura abajo.</small></div>
             <div class="col-md-3"><label class="form-label">Equipo UAD</label>
-              <select class="form-select form-select-sm" id="fEquipoUad">
+              <select class="form-select form-select-sm" id="fEquipoUad" title="Equipo funcional dentro de la Unidad de Adquisiciones">
                 <option value="">— Sin equipo específico —</option>
-                ${listEquiposUadCatalogo().map((e) =>
-    `<option value="${esc(e.codigo)}" ${String(u.equipo_uad || '') === e.codigo ? 'selected' : ''}>${esc(e.label)}</option>`,
-  ).join('')}
+                ${renderEquipoUadSelectOptions(u.equipo_uad)}
               </select>
-              <small class="text-muted d-block mt-1">Solo para personal de la Unidad de Adquisiciones.</small></div>
+              <small class="text-muted d-block mt-1">Independiente del cargo. Director UAD/DEC puede quedar sin equipo.</small></div>
             <div class="col-md-3"><label class="form-label">Perfil funcional</label>
               <div class="form-control form-control-sm bg-light text-muted" style="cursor:default;" title="Perfil inferido automáticamente según el cargo y permisos del usuario. No editable en esta versión.">
                 <i class="bi bi-person-badge"></i> ${esc(fmtPerfilFuncional(u))}
@@ -774,6 +790,10 @@ async function openForm(id) {
         state.formPermisos = normalizePermisos(permisosGuardados, body.rol, { explicit: true });
         const refreshed = await usuariosService.get(id);
         Object.assign(u, refreshed);
+        const selEquipo = modal.querySelector('#fEquipoUad');
+        if (selEquipo) {
+          selEquipo.value = normalizeEquipoUadCodigo(refreshed.equipo_uad) || '';
+        }
         refreshPermPanel(modal.querySelector('#permTreeWrap'), state.formPermisos, onPermChange);
         const session = authService.getCurrentUser();
         if (session && String(session.id) === String(id) && refreshed) {

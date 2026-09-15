@@ -176,6 +176,17 @@ export async function transicionarExpediente({
       cambiaUbicacion ? etapaEfectiva : (row.estado || etapaEfectiva),
     );
 
+    if (
+      eventoCodigo === 'REASIGNACION_RESPONSABLE'
+      && !cambiaUbicacion
+      && estadoVigentePrevio?.etapa_codigo
+    ) {
+      labels.etapaCodigo = estadoVigentePrevio.etapa_codigo;
+      labels.etapaLabel = estadoVigentePrevio.etapa_label || labels.etapaLabel;
+      labels.estadoCodigo = estadoVigentePrevio.estado_codigo || labels.estadoCodigo;
+      labels.estadoLabel = estadoVigentePrevio.estado_label || labels.estadoLabel;
+    }
+
     let resp = resolverResponsableSincero({
       usuarioDestinoId: usuarioDestinoIdNorm,
       unidadDestino: unidadDestino || transicion.responsable_destino || metaEtapa.responsableLabel,

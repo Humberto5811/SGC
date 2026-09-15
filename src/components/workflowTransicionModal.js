@@ -10,7 +10,7 @@ function esc(s) {
 }
 
 function renderCandidatoPickBtn(c, { destacado = false } = {}) {
-  const det = [c.rol_general_label, c.username].filter(Boolean).join(' · ');
+  const det = [c.rol_general_label, c.equipo_uad_label, c.username].filter(Boolean).join(' · ');
   const cls = destacado ? 'list-group-item-primary' : '';
   const badge = c.etiqueta ? `<span class="badge bg-secondary ms-1">${esc(c.etiqueta)}</span>` : '';
   return `<button type="button" class="list-group-item list-group-item-action py-1 px-2 usr-pick ${cls}"

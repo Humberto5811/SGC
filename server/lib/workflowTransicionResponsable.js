@@ -32,6 +32,8 @@ import {
   labelRolGeneralUsuario,
   listarUsuariosCoordinadoresEquipoUadSubmodulo,
   listarUsuariosDestinoContMenoresProgramacionAprobada,
+  listarOperadoresProgramacionAsignables,
+  appendEquipoUadCandidato,
 } from './equiposUadUsuario.js';
 export const EVENTOS_PILOT_EN_TRAMITE = Object.freeze([
   'REQUERIMIENTO_ENVIADO_EVALUACION',
@@ -595,6 +597,63 @@ export async function listarCandidatosProgramacionAprobadaContMenores(
   };
 }
 
+/** RC8.17.8H4 — REASIGNACION_RESPONSABLE en PROGRAMACION → OPERADOR mismo equipo. */
+export async function listarCandidatosReasignacionProgramacion(
+  requerimientoId,
+  { search = '' } = {},
+  row = null,
+  client = null,
+) {
+  const ev = 'REASIGNACION_RESPONSABLE';
+  const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(
+    requerimientoId,
+    ev,
+    row,
+    client,
+  );
+  if (String(etapaOrigen || '').toUpperCase() !== 'PROGRAMACION') {
+    return {
+      soportado: false,
+      evento_codigo: ev,
+      etapa_origen: etapaOrigen,
+      candidatos: [],
+      recomendado: null,
+      mensaje_sin_candidatos: 'El expediente no está en Programación.',
+    };
+  }
+  const { usuarios } = await listarOperadoresProgramacionAsignables({ client });
+  let candidatos = usuarios.map((u) => appendEquipoUadCandidato(mapCandidato(u)));
+  candidatos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  let recomendado = null;
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    candidatos = candidatos.filter((c) => matchesSearch(c, q));
+  }
+  const etapaLabel = metaDestino?.label || 'Programación';
+  return {
+    soportado: true,
+    evento_codigo: ev,
+    etapa_origen: etapaOrigen,
+    etapa_destino: etapaOrigen,
+    etapa_destino_label: etapaLabel,
+    destinos: [{
+      etapa_codigo: etapaOrigen,
+      etapa_label: `${etapaLabel} (sin cambio)`,
+      evento_codigo: ev,
+      unica: true,
+    }],
+    perfil_responsable: 'OPERADOR_EQUIPO_UAD_PROGRAMACION',
+    equipo_uad: EQUIPOS_UAD.PROGRAMACION,
+    equipo_uad_label: labelEquipoUad(EQUIPOS_UAD.PROGRAMACION),
+    alcance: 'UAD_EQUIPO',
+    centro: null,
+    recomendado,
+    candidatos,
+    resolucion_automatica: { usuarioId: null, ambiguo: candidatos.length !== 1, candidatos: candidatos.length },
+    mensaje_sin_candidatos: 'No hay operadores activos en el equipo UAD Programación.',
+  };
+}
+
 /**
  * Valida actor de PUT Programación → Cont.Menores (403 si no cumple).
  */
@@ -670,6 +729,10 @@ export async function listarCandidatosTransicion(
 
   if (ev === 'PROGRAMACION_APROBADA') {
     return listarCandidatosProgramacionAprobadaContMenores(requerimientoId, { search }, row, client);
+  }
+
+  if (ev === 'REASIGNACION_RESPONSABLE') {
+    return listarCandidatosReasignacionProgramacion(requerimientoId, { search }, row, client);
   }
 
   const { reqRow, transicion, etapaOrigen, metaDestino } = await resolveTransicionWorkflow(
@@ -910,6 +973,7 @@ export default {
   listarCandidatosTransicion,
   listarCandidatosDecAprobadoProgramacion,
   listarCandidatosProgramacionAprobadaContMenores,
+  listarCandidatosReasignacionProgramacion,
   assertActorProgramacionPuedeDerivar,
   listarCandidatosDerivacionDec,
   resolveUnidadAdquisicionesKeys,

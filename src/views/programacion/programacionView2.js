@@ -56,6 +56,7 @@ const selection = createTableSelectionState({
 const loadGuard = createRequestSequenceGuard();
 let lifecycle = null;
 let refreshIndicator = null;
+let progPuedeAsignarResponsable = false;
 const PROG_VIEW_ID = 'programacion';
 const PROG_SCROLL = '#progBandejaWrap';
 
@@ -402,7 +403,7 @@ async function loadBandeja(sortOverride = {}, resetPage = false) {
         <tr data-req-id="${r.id}" data-row-id="${r.id}" data-selection-id="${r.id}">
           <td onclick="event.stopPropagation()"><input type="checkbox" class="prog-select" data-id="${r.id}" data-selection-id="${r.id}" ${canSelect ? '' : 'disabled'} ${checked} title="${!canSelect ? (pedCnt === 0 ? 'Sin pedidos asociados' : inPaq ? 'Ya consolidado' : 'No seleccionable') : 'Seleccionar'}"></td>
           ${renderProgramacionRowCells(r, { pedCnt })}
-          ${renderActionMenuCell(r.id, progMenuItems(r), progHiddenActions(r))}
+          ${renderActionMenuCell(r.id, progMenuItems(r, { puedeAsignarResponsable: progPuedeAsignarResponsable }), progHiddenActions(r, { puedeAsignarResponsable: progPuedeAsignarResponsable }))}
         </tr>`;
     }).join('');
 
@@ -542,6 +543,7 @@ function bindBandejaEvents(cont) {
   cont.querySelectorAll('.prog-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
   cont.querySelectorAll('.prog-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
   cont.querySelectorAll('.prog-aprobar').forEach((b) => b.onclick = () => aprobarProgramacion(Number(b.dataset.id)));
+  cont.querySelectorAll('.prog-assign-resp').forEach((b) => b.onclick = () => asignarResponsableProgramacion(Number(b.dataset.id)));
   cont.querySelectorAll('.prog-observar').forEach((b) => b.onclick = () => observarProgramacion(Number(b.dataset.id)));
   allRows.forEach((r) => cargarContadorAdjuntos(r.id));
 
@@ -644,6 +646,29 @@ async function aprobarProgramacion(id) {
     loadBandeja();
   } catch (e) {
     alert('Error al aprobar: ' + e.message);
+  }
+}
+
+async function asignarResponsableProgramacion(id) {
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'REASIGNACION_RESPONSABLE',
+    title: 'Asignar responsable',
+    message: 'Seleccione un operador del equipo Programación. La etapa y el estado del expediente no cambian.',
+    buttonText: 'Asignar',
+    candidatosApiPath: (rid) => `/contrataciones/programacion/candidatos-asignacion/${rid}`,
+  });
+  if (!seleccion?.usuario_destino_id) return;
+  try {
+    const res = await contratacionesService.asignarResponsableProgramacion(id, {
+      usuario_destino_id: seleccion.usuario_destino_id,
+      client_request_id: `prog-reasign-ui:${id}:${seleccion.usuario_destino_id}`,
+    });
+    if (res && res.success === false) throw new Error(res.error || 'No se pudo asignar');
+    invalidatePedidosMatriz();
+    loadBandeja();
+  } catch (e) {
+    alert('Error al asignar responsable: ' + e.message);
   }
 }
 
@@ -1340,7 +1365,10 @@ export function initProgramacionView() {
 
     currentTab = 'bandeja';
     updateConsolidarBtn();
-    loadBandeja();
+    contratacionesService.getProgramacionCapacidadAsignacion()
+      .then((r) => { progPuedeAsignarResponsable = !!r?.puede_asignar_responsable; })
+      .catch(() => { progPuedeAsignarResponsable = false; })
+      .finally(() => loadBandeja());
   } catch (e) {
     const cont = document.getElementById('progContent');
     if (cont) cont.innerHTML = `<div class="alert alert-danger">Error al iniciar Programación: ${esc(e.message)}</div>`;

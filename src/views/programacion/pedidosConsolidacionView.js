@@ -11,7 +11,7 @@ import {
   esc, renderPedidosKpiCards, renderPedidosFilterBar, readPedidosFilters,
   filterFilasPedidos, computeIndicadoresPedidos, sortFilasPedidos,
   paqueteBadgeHtml, exportPedidosExcel, pedidosMatrizStyles,
-  estadoPaqueteBadge, responsableDosLineas, fmtMoney,
+  renderPedidoMatrizWorkflowCells, fmtMoney,
 } from '../../utils/pedidosConsolidacion.js';
 import { usePagination } from '../../utils/paginacion.js';
 
@@ -19,14 +19,15 @@ let rawFilas = [];
 let displayFilas = [];
 let allFilteredFilas = [];
 const pedPagination = usePagination('pedidos', () => programacionService.getMatrizPedidos(), { defaultPageSize: 25 });
-let sortField = 'pedido';
-let sortDir = 'asc';
+let sortField = 'requerimiento_codigo';
+let sortDir = 'desc';
 let callbacks = {};
 
 const SORT_MAP = {
   'Pedido SIGAMEF': 'pedido',
   Requerimiento: 'requerimiento_codigo',
   Paquete: 'paquete',
+  Etapa: 'etapa',
   Estado: 'estado',
   Responsable: 'responsable',
   Fecha: 'fecha',
@@ -34,21 +35,22 @@ const SORT_MAP = {
 
 function renderTable() {
   const headers = [
-    { label: 'Pedido SIGAMEF', sort: 'Pedido SIGAMEF' },
-    { label: 'Requerimiento', sort: 'Requerimiento' },
-    { label: 'Paquete', sort: 'Paquete' },
-    { label: 'Tipo', sort: null },
-    { label: 'Código SIGAMEF', sort: null },
-    { label: 'Descripción', sort: null },
-    { label: 'Cant.', sort: null },
-    { label: 'Monto Total', sort: null },
-    { label: 'Centro', sort: null },
+    { label: 'Pedido SIGAMEF', sort: 'Pedido SIGAMEF', cls: 'ped-col-pedido' },
+    { label: 'Requerimiento', sort: 'Requerimiento', cls: 'ped-col-req' },
+    { label: 'Paquete', sort: 'Paquete', cls: 'ped-col-paq' },
+    { label: 'Tipo', sort: null, cls: 'ped-col-tipo' },
+    { label: 'Código SIGAMEF', sort: null, cls: 'ped-col-sigamef' },
+    { label: 'Descripción', sort: null, cls: 'ped-col-desc' },
+    { label: 'Cant.', sort: null, cls: 'ped-col-cant' },
+    { label: 'Monto Total', sort: null, cls: 'ped-col-monto' },
+    { label: 'Centro', sort: null, cls: 'ped-col-centro' },
     { label: 'Área Usuaria', sort: null, cls: 'ped-col-area' },
-    { label: 'Estado', sort: 'Estado' },
-    { label: 'Responsable', sort: 'Responsable' },
+    { label: 'Etapa', sort: 'Etapa', cls: 'req-col-etapa' },
+    { label: 'Estado', sort: 'Estado', cls: 'req-col-estado-cell' },
+    { label: 'Responsable', sort: 'Responsable', cls: 'req-col-resp' },
     { label: 'Meta', sort: null, cls: 'ped-col-meta' },
     { label: 'Clasificador', sort: null, cls: 'ped-col-clas' },
-    { label: 'Acciones', sort: null },
+    { label: 'Acciones', sort: null, cls: 'req-col-acc' },
   ];
 
   const thead = `<tr>${headers.map((h) => {
@@ -63,29 +65,31 @@ function renderTable() {
     const tipDias = `${f.dias_en_estado} días en estado`;
     const pedidoLabel = formatPedidoOperativo(f.pedido);
     const areaText = f.area_usuaria || '—';
+    const wf = renderPedidoMatrizWorkflowCells(f);
     return `<tr data-pedido-id="${f.pedido_id}" data-paquete-id="${f.paquete_id || ''}"
       title="${esc([tipMeta, tipClas, tipDias].filter(Boolean).join(' · '))}">
-      <td><strong>${esc(pedidoLabel)}</strong></td>
-      <td>${esc(f.requerimiento_codigo)}</td>
-      <td>${paqueteBadgeHtml(f.codigo_paquete)}</td>
-      <td><span class="badge bg-light text-dark border">${esc(f.tipo)}</span></td>
-      <td>${esc(f.codigo_sigamef || '—')}</td>
-      <td><span class="req-desc-text" title="${esc(f.descripcion)}">${esc(f.descripcion)}</span></td>
-      <td class="text-end">${esc(f.cantidad)}</td>
-      <td class="text-end">${fmtMoney(f.monto_total)}</td>
-      <td>${esc(f.centro || '—')}</td>
+      <td class="ped-col-pedido"><strong class="ped-cell-compact">${esc(pedidoLabel)}</strong></td>
+      <td class="ped-col-req"><span class="ped-cell-compact">${esc(f.requerimiento_codigo)}</span></td>
+      <td class="ped-col-paq">${paqueteBadgeHtml(f.codigo_paquete)}</td>
+      <td class="ped-col-tipo"><span class="badge bg-light text-dark border ped-badge-tipo">${esc(f.tipo)}</span></td>
+      <td class="ped-col-sigamef"><span class="ped-cell-compact">${esc(f.codigo_sigamef || '—')}</span></td>
+      <td class="ped-col-desc"><span class="ped-desc-clamp" title="${esc(f.descripcion)}">${esc(f.descripcion)}</span></td>
+      <td class="ped-col-cant text-end">${esc(f.cantidad)}</td>
+      <td class="ped-col-monto text-end"><span class="ped-monto-text">${fmtMoney(f.monto_total)}</span></td>
+      <td class="ped-col-centro"><span class="ped-cell-compact" title="${esc(f.centro || '—')}">${esc(f.centro || '—')}</span></td>
       <td class="ped-col-area"><span class="ped-area-text" title="${esc(areaText)}">${esc(areaText)}</span></td>
-      <td title="${esc(tipDias)}">${estadoPaqueteBadge(f.estado, f.estado_actual, f.estado_actual_texto, f.requerimiento || f)}</td>
-      <td>${responsableDosLineas(f.responsable, f.sub_modulo)}</td>
-      <td class="ped-col-meta" title="${esc(f.meta)}">${esc(f.meta || '—')}</td>
-      <td class="ped-col-clas" title="${esc(f.clasificador)}">${esc(f.clasificador || '—')}</td>
+      <td class="req-col-etapa">${wf.etapa}</td>
+      <td class="req-col-estado-cell" title="${esc(tipDias)}">${wf.estado}</td>
+      <td class="req-col-resp">${wf.responsable}</td>
+      <td class="ped-col-meta"><span class="ped-meta-clamp" title="${esc(f.meta)}">${esc(f.meta || '—')}</span></td>
+      <td class="ped-col-clas"><span class="ped-meta-clamp" title="${esc(f.clasificador)}">${esc(f.clasificador || '—')}</span></td>
       ${renderActionMenuCell(`ped-${f.pedido_id}`, pedidosMenuItems(f), '')}
     </tr>`;
   }).join('');
 
-  return `<div class="table-responsive"><table class="table table-sm table-hover table-bordered mb-0">
+  return `<div class="table-responsive ped-matriz-scroll"><table class="table table-sm table-hover table-bordered mb-0 ped-matriz-table">
     <thead>${thead}</thead>
-    <tbody>${tbody || `<tr><td colspan="15" class="text-center text-muted">Sin pedidos</td></tr>`}</tbody>
+    <tbody>${tbody || `<tr><td colspan="16" class="text-center text-muted">Sin pedidos</td></tr>`}</tbody>
   </table></div>`;
 }
 

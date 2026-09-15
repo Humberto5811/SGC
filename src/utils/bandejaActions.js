@@ -161,7 +161,8 @@ export function decHiddenActions(r) {
     <button type="button" class="req-traza" data-act-trigger="timeline" data-id="${r.id}"></button>`;
 }
 
-export function progMenuItems(r) {
+export function progMenuItems(r, opts = {}) {
+  const { puedeAsignarResponsable = false } = opts;
   const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
   const enProgramacion = ubicacion === 'PROGRAMACION';
   const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
@@ -170,8 +171,13 @@ export function progMenuItems(r) {
   const obsLabel = labelBotonObservaciones(r, 'Programación');
   const obsEnabled = enProgramacion || esAprobadoDec;
   const cmnLabel = r.cmn ? 'Editar CMN' : 'Agregar CMN';
-  return [
+  const items = [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
+  ];
+  if (puedeAsignarResponsable && enProgramacion) {
+    items.push({ act: 'assignResp', label: 'Asignar responsable', icon: 'bi-person-plus' });
+  }
+  items.push(
     { act: 'pedido', label: 'Agregar pedido', icon: 'bi-plus-circle', disabled: !puedeGestionar },
     { act: 'cmn', label: cmnLabel, icon: 'bi-card-text', disabled: !puedeGestionar },
     { act: 'approve', label: 'Aprobar', icon: 'bi-check-circle', disabled: !puedeAprobar },
@@ -179,10 +185,12 @@ export function progMenuItems(r) {
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
     { act: 'download', label: 'Descargar', icon: 'bi-printer' },
     { act: 'timeline', label: 'Trazabilidad', icon: 'bi-clock-history' },
-  ];
+  );
+  return items;
 }
 
-export function progHiddenActions(r) {
+export function progHiddenActions(r, opts = {}) {
+  const { puedeAsignarResponsable = false } = opts;
   const ubicacion = String(r.estado_actual || r.estadoActual || '').toUpperCase();
   const enProgramacion = ubicacion === 'PROGRAMACION';
   const esAprobadoDec = /^Aprobado DEC$/i.test(String(r.estado || ''));
@@ -190,6 +198,7 @@ export function progHiddenActions(r) {
   const puedeAprobar = enProgramacion || esAprobadoDec;
   const obsEnabled = enProgramacion || esAprobadoDec;
   return `
+    ${puedeAsignarResponsable && enProgramacion ? `<button type="button" class="prog-assign-resp" data-act-trigger="assignResp" data-id="${r.id}"></button>` : ''}
     <button type="button" class="prog-add-pedido" data-act-trigger="pedido" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
     <button type="button" class="prog-edit-cmn" data-act-trigger="cmn" data-id="${r.id}" ${puedeGestionar ? '' : 'disabled'}></button>
     <button type="button" class="prog-ver" data-act-trigger="download" data-id="${r.id}"></button>

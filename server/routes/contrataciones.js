@@ -586,6 +586,53 @@ router.get('/programacion/candidatos-transicion/:requerimientoId', async (req, r
   }
 });
 
+/** RC8.17.8H4 — candidatos OPERADOR equipo UAD Programación (asignación interna). */
+router.get('/programacion/candidatos-asignacion/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { assertActorCoordinadorProgramacionPuedeAsignar, assertExpedienteEnProgramacionParaAsignar } =
+      await import('../lib/programacionAsignarResponsable.js');
+    const { listarCandidatosReasignacionProgramacion } = await import('../lib/workflowTransicionResponsable.js');
+    await assertActorCoordinadorProgramacionPuedeAsignar(req.user ?? null);
+    const row = await assertExpedienteEnProgramacionParaAsignar(requerimientoId);
+    const data = await listarCandidatosReasignacionProgramacion(requerimientoId, {
+      search: req.query.q || req.query.search || '',
+    }, row);
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+router.get('/programacion/mi-capacidad-asignacion', async (req, res) => {
+  try {
+    const { assertActorCoordinadorProgramacionPuedeAsignar } = await import('../lib/programacionAsignarResponsable.js');
+    await assertActorCoordinadorProgramacionPuedeAsignar(req.user ?? null);
+    res.json({ ok: true, puede_asignar_responsable: true });
+  } catch (_) {
+    res.json({ ok: true, puede_asignar_responsable: false });
+  }
+});
+
+router.put('/programacion/asignar-responsable/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const { usuario_destino_id: usuarioDestinoIdBody, client_request_id: clientRequestId } = req.body || {};
+    const { ejecutarAsignacionResponsableProgramacion } = await import('../lib/programacionAsignarResponsable.js');
+    const result = await ejecutarAsignacionResponsableProgramacion({
+      requerimientoId,
+      req,
+      usuarioDestinoId: usuarioDestinoIdBody,
+      clientRequestId: clientRequestId || null,
+    });
+    return responderTransicionMotor(res, result, requerimientoId);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
 router.put('/programacion/aprobar/:requerimientoId', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;

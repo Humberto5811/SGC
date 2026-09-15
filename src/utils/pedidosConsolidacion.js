@@ -2,8 +2,86 @@
 import * as XLSX from 'xlsx';
 import { esc } from './trazabilidad.js';
 import { estadoPaqueteBadge, responsableDosLineas, fmtMoney } from './paquetesConsolidacion.js';
+import { resolveContratoVisual, bandejaExpedienteStandardStyles } from './bandejaExpedienteColumns.js';
+import { renderEtapaBadgeHtml } from '../ui/workflow/EtapaBadge.js';
+import { renderEstadoBadgeHtml } from '../ui/workflow/EstadoBadge.js';
+import { renderResponsableBadgeHtml } from '../ui/workflow/ResponsableBadge.js';
 
 export { esc, fmtMoney, estadoPaqueteBadge, responsableDosLineas };
+
+/** Fila matriz pedidos → row con bandeja_contrato para resolveContratoVisual. */
+export function pedidoMatrizRowForContrato(f) {
+  if (!f) return {};
+  return {
+    ...(f.requerimiento || {}),
+    id: f.requerimiento_id,
+    requerimiento_id: f.requerimiento_id,
+    bandeja_contrato: f.bandeja_contrato,
+    estado_responsable_vigente: f.estado_responsable_vigente,
+  };
+}
+
+export function pedidoMatrizContratoExportTexts(f) {
+  const bc = f?.bandeja_contrato;
+  if (bc?.etapa?.label || bc?.estado?.label) {
+    return {
+      etapa: bc.etapa?.label || '',
+      estado: bc.estado?.label || '',
+      responsable: bc.responsable?.nombre || '',
+    };
+  }
+  return {
+    etapa: f?.etapa_label || '',
+    estado: f?.estado_actual_texto ?? '',
+    responsable: f?.responsable ?? '',
+  };
+}
+
+export function renderPedidoMatrizWorkflowCells(f) {
+  const visual = resolveContratoVisual(pedidoMatrizRowForContrato(f));
+  return {
+    etapa: renderEtapaBadgeHtml({ etapaLabel: visual.etapaLabel, etapaCodigo: visual.etapaCodigo }),
+    estado: renderEstadoBadgeHtml({
+      estadoCodigo: visual.estadoCodigo,
+      estadoLabel: visual.estadoLabel,
+      categoria: visual.categoria,
+      icono: visual.icono,
+      tooltip: visual.tooltip,
+    }),
+    responsable: renderResponsableBadgeHtml({
+      responsableTipo: visual.responsableTipo,
+      responsableNombre: visual.responsableNombre,
+      responsableUsername: visual.responsableUsername,
+      responsableUsuarioId: visual.responsableUsuarioId,
+      responsableUnidad: visual.responsableUnidad,
+      responsableDisplay: visual.responsableNombre,
+    }),
+  };
+}
+
+export function parseRequerimientoCorrelativo(codigo, requerimientoId) {
+  const m = String(codigo || '').match(/REQ[-\s]*0*(\d+)/i);
+  if (m) return parseInt(m[1], 10);
+  const n = Number(requerimientoId);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function parsePedidoCorrelativo(pedido, nroPedido) {
+  const raw = String(pedido || nroPedido || '');
+  const m = raw.match(/(\d+)\s*$/);
+  if (m) return parseInt(m[1], 10);
+  return raw.toLowerCase();
+}
+
+export function compareFilasPedidosDefault(a, b) {
+  const ra = parseRequerimientoCorrelativo(a.requerimiento_codigo, a.requerimiento_id);
+  const rb = parseRequerimientoCorrelativo(b.requerimiento_codigo, b.requerimiento_id);
+  if (ra !== rb) return rb - ra;
+  const pa = parsePedidoCorrelativo(a.pedido, a.nro_pedido);
+  const pb = parsePedidoCorrelativo(b.pedido, b.nro_pedido);
+  if (typeof pa === 'number' && typeof pb === 'number' && pa !== pb) return pa - pb;
+  return String(a.pedido || '').localeCompare(String(b.pedido || ''), 'es');
+}
 
 export function renderPedidosKpiCards(indicadores, prefix = 'ped') {
   const i = indicadores || {};
@@ -113,9 +191,11 @@ export function filterFilasPedidos(filas, filters) {
     if (fDesde && fPed != null && fPed < fDesde) return false;
     if (fHasta && fPed != null && fPed > fHasta) return false;
     if (filters.search) {
+      const exp = pedidoMatrizContratoExportTexts(f);
       const blob = [
         f.pedido, f.requerimiento_codigo, f.codigo_paquete, f.codigo_sigamef,
         f.descripcion, f.area_usuaria, f.responsable, f.estado_actual_texto,
+        exp.etapa, exp.estado,
       ].join(' ').toLowerCase();
       if (!blob.includes(filters.search)) return false;
     }
@@ -148,7 +228,10 @@ export function computeIndicadoresPedidos(filas) {
 
 export function sortFilasPedidos(filas, sortField, sortDir) {
   const dir = sortDir === 'desc' ? -1 : 1;
-  const key = sortField || 'pedido';
+  const key = sortField || 'requerimiento_codigo';
+  if (!sortField || key === 'requerimiento_codigo') {
+    return (filas || []).slice().sort((a, b) => compareFilasPedidosDefault(a, b) * (sortDir === 'asc' ? -1 : 1));
+  }
   return (filas || []).slice().sort((a, b) => {
     let va = a[key];
     let vb = b[key];
@@ -161,9 +244,24 @@ export function sortFilasPedidos(filas, sortField, sortDir) {
       va = a.codigo_paquete || '';
       vb = b.codigo_paquete || '';
     }
+    if (key === 'pedido') {
+      const pa = parsePedidoCorrelativo(a.pedido, a.nro_pedido);
+      const pb = parsePedidoCorrelativo(b.pedido, b.nro_pedido);
+      if (typeof pa === 'number' && typeof pb === 'number') return (pa - pb) * dir;
+      va = String(a.pedido || '');
+      vb = String(b.pedido || '');
+    }
+    if (key === 'etapa') {
+      va = a.etapa_label || a.bandeja_contrato?.etapa?.label || '';
+      vb = b.etapa_label || b.bandeja_contrato?.etapa?.label || '';
+    }
     if (key === 'estado') {
-      va = a.estado_actual_texto || '';
-      vb = b.estado_actual_texto || '';
+      va = a.estado_actual_texto || a.bandeja_contrato?.estado?.label || '';
+      vb = b.estado_actual_texto || b.bandeja_contrato?.estado?.label || '';
+    }
+    if (key === 'responsable') {
+      va = a.responsable || a.bandeja_contrato?.responsable?.nombre || '';
+      vb = b.responsable || b.bandeja_contrato?.responsable?.nombre || '';
     }
     va = String(va ?? '').toLowerCase();
     vb = String(vb ?? '').toLowerCase();
@@ -182,13 +280,14 @@ export function paqueteBadgeHtml(codigo) {
 
 export const EXPORT_COLUMNS = [
   'Pedido', 'Requerimiento', 'Paquete', 'Tipo', 'Código SIGAMEF', 'Descripción',
-  'Cantidad', 'Monto Total', 'Centro', 'Área Usuaria', 'Estado', 'Responsable',
+  'Cantidad', 'Monto Total', 'Centro', 'Área Usuaria', 'Etapa', 'Estado', 'Responsable',
   'Meta', 'Clasificador', 'Días en Estado',
 ];
 
 export function exportPedidosExcel(filas) {
   const rows = [EXPORT_COLUMNS];
   (filas || []).forEach((f) => {
+    const canon = pedidoMatrizContratoExportTexts(f);
     rows.push([
       f.pedido,
       f.requerimiento_codigo,
@@ -200,8 +299,9 @@ export function exportPedidosExcel(filas) {
       f.monto_total,
       f.centro,
       f.area_usuaria,
-      f.estado_actual_texto ?? '',
-      f.responsable ?? '',
+      canon.etapa,
+      canon.estado,
+      canon.responsable,
       f.meta ?? '',
       f.clasificador ?? '',
       f.dias_en_estado ?? 0,
@@ -214,22 +314,117 @@ export function exportPedidosExcel(filas) {
 
 export function pedidosMatrizStyles() {
   return `
-    .ped-matriz-wrap .table { font-size: 0.78rem; }
-    .ped-matriz-wrap .table th { white-space: nowrap; background: #f8f9fa; position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; }
-    .ped-matriz-wrap .table th.sorted-asc::after { content: ' ▲'; font-size: 0.65rem; }
-    .ped-matriz-wrap .table th.sorted-desc::after { content: ' ▼'; font-size: 0.65rem; }
-    .ped-matriz-wrap .table-responsive { max-height: 70vh; overflow: auto; }
-    .ped-matriz-wrap tr.ped-row-highlight { background: #fff3cd !important; outline: 2px solid #ffc107; }
-    .ped-matriz-wrap .ped-col-area { max-width: 120px; min-width: 90px; width: 110px; }
-    .ped-matriz-wrap .ped-area-text {
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-      overflow: hidden; word-break: break-word; line-height: 1.25;
+    ${bandejaExpedienteStandardStyles().replace(/\.sgc-bandeja-standard/g, '.ped-matriz-wrap')}
+    .ped-matriz-wrap .ped-matriz-table {
+      table-layout: fixed;
+      width: 100%;
+      min-width: 0;
+      font-size: 0.78rem;
     }
-    .ped-matriz-wrap .req-col-acc { width: 50px; text-align: center; position: static; overflow: visible; }
+    .ped-matriz-wrap .ped-matriz-table th,
+    .ped-matriz-wrap .ped-matriz-table td {
+      padding: 0.28rem 0.35rem;
+      line-height: 1.22;
+      vertical-align: middle;
+      overflow: hidden;
+    }
+    .ped-matriz-wrap .ped-matriz-table th {
+      white-space: nowrap;
+      background: #f8f9fa;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.72rem;
+    }
+    .ped-matriz-wrap .ped-matriz-table th.sorted-asc::after { content: ' ▲'; font-size: 0.65rem; }
+    .ped-matriz-wrap .ped-matriz-table th.sorted-desc::after { content: ' ▼'; font-size: 0.65rem; }
+    .ped-matriz-wrap .ped-matriz-scroll {
+      max-height: 70vh;
+      overflow-y: auto;
+      overflow-x: auto;
+    }
+    @media (min-width: 1200px) {
+      .ped-matriz-wrap .ped-matriz-scroll { overflow-x: hidden; }
+    }
+    .ped-matriz-wrap tr.ped-row-highlight { background: #fff3cd !important; outline: 2px solid #ffc107; }
+
+    .ped-matriz-wrap .ped-col-pedido { width: 4.5%; }
+    .ped-matriz-wrap .ped-col-req { width: 5.5%; }
+    .ped-matriz-wrap .ped-col-paq { width: 4.5%; }
+    .ped-matriz-wrap .ped-col-tipo { width: 3.5%; }
+    .ped-matriz-wrap .ped-col-sigamef { width: 4.5%; }
+    .ped-matriz-wrap .ped-col-desc { width: 11%; }
+    .ped-matriz-wrap .ped-col-cant { width: 3%; }
+    .ped-matriz-wrap .ped-col-monto { width: 5.5%; }
+    .ped-matriz-wrap .ped-col-centro { width: 4%; }
+    .ped-matriz-wrap .ped-col-area { width: 6%; }
+    .ped-matriz-wrap .req-col-etapa { width: 8%; max-width: none; }
+    .ped-matriz-wrap .req-col-estado-cell { width: 8%; max-width: none; }
+    .ped-matriz-wrap .req-col-resp { width: 9%; max-width: none; }
+    .ped-matriz-wrap .ped-col-meta { width: 4%; }
+    .ped-matriz-wrap .ped-col-clas { width: 4%; }
+    .ped-matriz-wrap .req-col-acc { width: 2.5%; min-width: 36px; text-align: center; position: static; overflow: visible; }
+
+    .ped-matriz-wrap .ped-cell-compact {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.76rem;
+    }
+    .ped-matriz-wrap .ped-badge-tipo { font-size: 0.62rem; padding: 0.15em 0.35em; }
+    .ped-matriz-wrap .ped-desc-clamp {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+      line-height: 1.2;
+      font-size: 0.76rem;
+    }
+    .ped-matriz-wrap .ped-area-text {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+      line-height: 1.2;
+      font-size: 0.76rem;
+    }
+    .ped-matriz-wrap .ped-meta-clamp {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.74rem;
+    }
+    .ped-matriz-wrap .ped-monto-text { font-size: 0.74rem; white-space: nowrap; }
+    .ped-matriz-wrap .ped-col-paq .badge { font-size: 0.65rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+    .ped-matriz-wrap .req-col-etapa .sgc-etapa-badge,
+    .ped-matriz-wrap .req-col-estado-cell .sgc-estado-badge,
+    .ped-matriz-wrap .req-col-resp .sgc-responsable-badge {
+      max-width: 100%;
+      min-height: 22px;
+      max-height: 24px;
+    }
+    .ped-matriz-wrap .req-col-etapa .sgc-etapa-badge__text,
+    .ped-matriz-wrap .req-col-estado-cell .sgc-estado-badge__text,
+    .ped-matriz-wrap .req-col-resp .sgc-responsable-badge__text {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .ped-matriz-wrap .req-col-acc .dropdown { position: static; }
-    .ped-matriz-wrap .bandeja-actions-btn { padding: 2px 8px; line-height: 1; font-size: 1.1rem; border: 1px solid #dee2e6; }
-    @media (max-width: 1366px) {
-      .ped-col-meta, .ped-col-clas { display: none; }
+    .ped-matriz-wrap .bandeja-actions-btn { padding: 2px 6px; line-height: 1; font-size: 1rem; border: 1px solid #dee2e6; }
+
+    @media (max-width: 991px) {
+      .ped-matriz-wrap .ped-matriz-table { min-width: 920px; }
+      .ped-matriz-wrap .ped-matriz-scroll { overflow-x: auto; }
     }
   `;
 }

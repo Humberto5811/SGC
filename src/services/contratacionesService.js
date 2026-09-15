@@ -27,6 +27,12 @@ export const contratacionesService = {
   async observarProgramacion(id, motivo, usuario = '', destino = {}) {
     return api.put(`/contrataciones/programacion/observar/${id}`, { motivo, usuario, ...destino });
   },
+  async getProgramacionCapacidadAsignacion() {
+    return api.get('/contrataciones/programacion/mi-capacidad-asignacion');
+  },
+  async asignarResponsableProgramacion(id, body = {}) {
+    return api.put(`/contrataciones/programacion/asignar-responsable/${id}`, body);
+  },
 
   // Actos Preparatorios
   async listActos(params = {}) {
