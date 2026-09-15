@@ -520,8 +520,20 @@ export function showDerivacionEvaluacionModal(opts = {}) {
   );
 }
 
+/** Id estable por intento lógico de observación (doble clic / retry reutiliza el mismo). */
+export function generateObservacionNodoId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `obs_act_${crypto.randomUUID().replace(/-/g, '').slice(0, 28)}`;
+  }
+  return `obs_act_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /** Modal de observación con selección de submódulo y persona destino. */
 export function showObservacionDirigidaModal(opts = {}) {
+  const observacionNodoId = opts.observacionNodoId
+    || opts.observacion_raiz_id
+    || opts.observacion_hija_id
+    || generateObservacionNodoId();
   const id = 'modObsDir_' + Date.now();
   const hist = opts.historyHtml || '';
   const destHtml = buildDestinoSelectorsHtml(
@@ -572,6 +584,9 @@ export function showObservacionDirigidaModal(opts = {}) {
         motivo,
         ...destino,
         origen_submodulo: opts.origenSubmodulo || '',
+        observacion_nodo_id: observacionNodoId,
+        observacion_raiz_id: opts.esSubobservacion ? undefined : observacionNodoId,
+        observacion_hija_id: opts.esSubobservacion ? observacionNodoId : undefined,
       });
       modal.hide();
     };

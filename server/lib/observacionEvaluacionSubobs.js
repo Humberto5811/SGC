@@ -1,8 +1,57 @@
 /**
- * RC8.17.8G — Subobservaciones Eval→destino con transición canónica e idempotencia por nodo.
+ * RC8.17.8G / G1 — Observaciones Eval→destino con transición canónica e idempotencia por nodo.
  * Payload.observaciones sigue siendo la fuente del árbol; ERV vía transicionarExpediente únicamente.
+ *
+ * Contrato PUT /api/requerimientos/:id/observar (raíz Eval→Registro, G1):
+ * - Clientes productivos DEBEN enviar `observacion_raiz_id` (o `observacionRaizId`) estable por
+ *   intento lógico: mismo id en reintento/doble clic → misma `client_request_id`
+ *   (`eval-obs:<reqId>:<observacionRaizId>`) → idempotencia de transición.
+ * - Nueva observación raíz → nuevo `observacion_raiz_id` (p. ej. `obs_act_*` desde UI).
+ * - Sin id de cliente: fallback servidor `obs_root_<n>` (n = raíces existentes + 1). Eso permite
+ *   compatibilidad con integraciones antiguas pero NO garantiza idempotencia ante reintentos
+ *   idénticos (cada POST sin id puede generar otra raíz y otra key). No se deduplica por motivo.
+ * - Eventos históricos con solo `eval-obs:<reqId>` siguen siendo válidos; no se reescriben.
  */
-import { getObservacionPadreId } from '../../shared/observacionesMotor.js';
+import { getObservacionPadreId, getRaicesObservaciones } from '../../shared/observacionesMotor.js';
+
+/** Identificadores de nodo de observación (raíz/hija/actuación). */
+const OBSERVACION_NODO_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/;
+
+/**
+ * Valida id de nodo enviado por cliente (autoridad de persistencia sigue en servidor).
+ * @param {string} id
+ * @param {string} [label]
+ */
+export function assertValidObservacionNodoId(id, label = 'observacion_id') {
+  const s = String(id || '').trim();
+  if (!s || !OBSERVACION_NODO_ID_RE.test(s)) {
+    const err = new Error(`${label} inválido`);
+    err.code = 'OBSERVACION_NODO_ID_INVALID';
+    throw err;
+  }
+  return s;
+}
+
+/**
+ * Id estable de nodo raíz Eval (reintentos reutilizan el mismo id si el cliente lo envía).
+ * @param {object} payload
+ * @param {string|null} explicitId — observacion_raiz_id desde cliente
+ */
+export function allocateObservacionRaizId(payload, explicitId = null) {
+  if (explicitId != null && String(explicitId).trim()) {
+    return assertValidObservacionNodoId(explicitId, 'observacion_raiz_id');
+  }
+  const hilos = Array.isArray(payload?.observaciones) ? payload.observaciones : [];
+  const raices = getRaicesObservaciones(hilos);
+  const existing = new Set(hilos.map((o) => String(o.id)));
+  let n = raices.length + 1;
+  let candidate = `obs_root_${n}`;
+  while (existing.has(candidate)) {
+    n += 1;
+    candidate = `obs_root_${n}`;
+  }
+  return candidate;
+}
 import { emitirObservacion } from './observacionesWorkflow.js';
 import { normalizarPayloadCompat } from './workflow/workflowIntegration.js';
 
@@ -26,12 +75,14 @@ export function allocateObservacionHijaId(payload, padreId, explicitId = null) {
 
 /**
  * client_request_id / idempotency para observación Eval.
- * Raíz: eval-obs:<id> (sin cambio). Subobs: eval-subobs:<id>:<observacionHijaId>.
+ * Raíz G1: eval-obs:<reqId>:<observacionRaizId> (legacy sin nodo: eval-obs:<reqId>).
+ * Subobs: eval-subobs:<id>:<observacionHijaId>.
  */
 export function buildClientRequestIdEvalObservacion({
   requerimientoId,
   observacionPadreId = null,
   observacionHijaId = null,
+  observacionRaizId = null,
   clientRequestIdFromBody = null,
 } = {}) {
   if (clientRequestIdFromBody != null && String(clientRequestIdFromBody).trim()) {
@@ -40,6 +91,9 @@ export function buildClientRequestIdEvalObservacion({
   const rid = Number(requerimientoId);
   if (observacionPadreId && observacionHijaId) {
     return `eval-subobs:${rid}:${observacionHijaId}`.slice(0, 80);
+  }
+  if (observacionRaizId) {
+    return `eval-obs:${rid}:${observacionRaizId}`.slice(0, 80);
   }
   return `eval-obs:${rid}`;
 }
@@ -62,6 +116,7 @@ export function buildEvalObservacionPayloadDomainMutator({
   reasignacionManual = false,
   observacionPadreId = null,
   observacionHijaId = null,
+  observacionRaizId = null,
   incluirHistorialEvaluacion = true,
 } = {}) {
   const padreId = observacionPadreId ? String(observacionPadreId).trim() : null;
@@ -92,6 +147,9 @@ export function buildEvalObservacionPayloadDomainMutator({
     const hijaId = esSubobs
       ? (observacionHijaId || allocateObservacionHijaId(payload, padreId))
       : null;
+    const raizId = esSubobs
+      ? null
+      : (observacionRaizId || allocateObservacionRaizId(payload));
 
     const emitResult = emitirObservacion(payload, {
       motivo: String(motivo || ''),
@@ -106,8 +164,8 @@ export function buildEvalObservacionPayloadDomainMutator({
       responsable_recomendado_id: responsableRecomendadoId,
       reasignacion_manual: reasignacionManual === true,
       observacion_padre_id: padreId,
-      id: hijaId || undefined,
-      forceNew: esSubobs ? true : undefined,
+      id: hijaId || raizId || undefined,
+      forceNew: (esSubobs || raizId) ? true : undefined,
     });
 
     await client.query(
@@ -115,7 +173,7 @@ export function buildEvalObservacionPayloadDomainMutator({
       [expedienteId, JSON.stringify(payload)],
     );
 
-    const obsId = emitResult?.observacion?.id || hijaId || null;
+    const obsId = emitResult?.observacion?.id || hijaId || raizId || null;
     return {
       compat_payload_actualizado: true,
       observacion_payload_id: obsId,
@@ -127,6 +185,8 @@ export function buildEvalObservacionPayloadDomainMutator({
 
 export default {
   allocateObservacionHijaId,
+  allocateObservacionRaizId,
+  assertValidObservacionNodoId,
   buildClientRequestIdEvalObservacion,
   buildEvalObservacionPayloadDomainMutator,
 };

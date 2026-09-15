@@ -35,8 +35,13 @@ ok(
   'reintento mismo hijo → misma key',
 );
 ok(
+  buildClientRequestIdEvalObservacion({ requerimientoId: 40, observacionRaizId: 'obs_root_1' })
+    === 'eval-obs:40:obs_root_1',
+  'raíz G1 eval-obs:<id>:<nodo>',
+);
+ok(
   buildClientRequestIdEvalObservacion({ requerimientoId: 40 }) === 'eval-obs:40',
-  'raíz conserva eval-obs:<id>',
+  'compat histórico eval-obs:<id> sin nodo',
 );
 
 console.log('\nIntegración BD (flujo REQ-00040)');
@@ -338,7 +343,7 @@ try {
   ok(erv.estado_codigo === 'EN_TRAMITE', 'ERV EN_TRAMITE DEC');
   ok(Number(erv.responsable_usuario_id) === Number(decId), 'ERV lespinoza');
 
-  console.log('\nRegresión raíz Eval→Registro (key eval-obs)');
+  console.log('\nRegresión raíz Eval→Registro (key eval-obs por nodo)');
   const codigo2 = `REQ-RC8178G-ROOT-${Date.now()}`;
   const ins2 = await query(`
     INSERT INTO requerimientos (tipo, codigo, denominacion, area, responsable, estado, payload, cmn)
@@ -353,6 +358,8 @@ try {
     ) VALUES ($1, 'EVALUACION', 'Evaluación', 'EN_TRAMITE', 'En trámite', 'PERSONA', $2, 1, NOW())
   `, [rid2, evalId]);
 
+  const raizG = `obs_root_g_${rid2}`;
+  const crqRaiz = buildClientRequestIdEvalObservacion({ requerimientoId: rid2, observacionRaizId: raizG });
   await transicionarExpediente({
     requerimientoId: rid2,
     evento: 'EVALUACION_OBSERVADA',
@@ -360,10 +367,11 @@ try {
     usuarioDestinoId: auId,
     motivo: 'Obs raíz',
     metadata: {
-      client_request_id: `eval-obs:${rid2}`,
+      client_request_id: crqRaiz,
       destino_submodulo: 'Registro de Requerimiento',
       destino_etapa: 'REGISTRO',
       usuario_destino_id: auId,
+      observacion_raiz_id: raizG,
     },
     actorRol: 'mgrande',
     domainMutator: buildEvalObservacionPayloadDomainMutator({
@@ -373,6 +381,7 @@ try {
       destinoEtapa: 'REGISTRO',
       usuarioDestinoId: auId,
       usuarioOrigenId: evalId,
+      observacionRaizId: raizG,
       incluirHistorialEvaluacion: true,
     }),
   });

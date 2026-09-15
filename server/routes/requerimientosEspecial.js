@@ -11,7 +11,6 @@ import {
   ETAPAS,
 } from '../lib/trazabilidad.js';
 import {
-  emitirObservacion,
   registrarSubsanacionObservacion,
   procesarAccionObservacion,
   autoCerrarObservacionesEmisorAlContinuar,
@@ -24,6 +23,7 @@ import {
 import { runWorkflowTransition, buildObservacionDomainMutator } from '../lib/workflow/workflowIntegration.js';
 import {
   allocateObservacionHijaId,
+  allocateObservacionRaizId,
   buildClientRequestIdEvalObservacion,
   buildEvalObservacionPayloadDomainMutator,
 } from '../lib/observacionEvaluacionSubobs.js';
@@ -454,6 +454,7 @@ router.get('/:requerimientoId/candidatos-observacion-destino', async (req, res, 
 });
 
 // PUT /api/requerimientos/:requerimientoId/observar
+// G1: raíz requiere observacion_raiz_id estable en clientes productivos (ver observacionEvaluacionSubobs.js).
 router.put('/:requerimientoId/observar', async (req, res, next) => {
   try {
     const { requerimientoId } = req.params;
@@ -495,17 +496,24 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
     const padreIdRaw = observacion_padre_id || observacionPadreId || null;
     const observacionPadreIdNorm = padreIdRaw ? String(padreIdRaw).trim() : null;
     let observacionHijaId = null;
+    let observacionRaizId = null;
     if (observacionPadreIdNorm) {
       observacionHijaId = allocateObservacionHijaId(
         payload,
         observacionPadreIdNorm,
         req.body?.observacion_hija_id || req.body?.observacionHijaId,
       );
+    } else {
+      observacionRaizId = allocateObservacionRaizId(
+        payload,
+        req.body?.observacion_raiz_id || req.body?.observacionRaizId,
+      );
     }
     const clientRequestIdEval = buildClientRequestIdEvalObservacion({
       requerimientoId,
       observacionPadreId: observacionPadreIdNorm,
       observacionHijaId,
+      observacionRaizId,
       clientRequestIdFromBody: req.body?.client_request_id,
     });
 
@@ -530,7 +538,10 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
         observacion_padre_id: observacionPadreIdNorm,
         observacion_id: observacionHijaId,
         es_subobservacion: true,
-      } : {}),
+      } : {
+        observacion_id: observacionRaizId,
+        observacion_raiz_id: observacionRaizId,
+      }),
     };
     const mutatorOpts = {
       motivo,
@@ -548,6 +559,7 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
       reasignacionManual,
       observacionPadreId: observacionPadreIdNorm,
       observacionHijaId,
+      observacionRaizId,
     };
 
     const result = await runWorkflowTransition({
@@ -568,68 +580,28 @@ router.put('/:requerimientoId/observar', async (req, res, next) => {
         const { transicionarExpediente } = await import('../lib/expedienteTransicion.js');
         const via = observacionPadreIdNorm
           ? 'requerimientos/observar:subobs'
-          : 'requerimientos/observar:legacy';
-
-        if (observacionPadreIdNorm) {
-          const tr = await transicionarExpediente({
-            requerimientoId,
-            evento: 'EVALUACION_OBSERVADA',
-            usuarioOrigenId: req.user?.id ?? null,
-            usuarioDestinoId,
-            unidadDestino: ETAPAS.REGISTRO?.responsable || ETAPAS.REGISTRADO?.responsable || 'Usuario AU',
-            motivo,
-            metadata: {
-              ...metaObservacionBase,
-              via,
-            },
-            actorRol: usuario || 'Gerente',
-            domainMutator: buildEvalObservacionPayloadDomainMutator(mutatorOpts),
-          });
-          const updated = tr.expediente;
-          return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
-        }
-
-        let payloadLegacy = {};
-        try { payloadLegacy = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
-
-        if (!Array.isArray(payloadLegacy.historial_evaluacion)) payloadLegacy.historial_evaluacion = [];
-        payloadLegacy.historial_evaluacion.push({
-          tipo: 'observacion',
-          motivo,
-          usuario: usuario || '',
-          fecha: new Date().toISOString(),
-        });
-
-        emitirObservacion(payloadLegacy, {
-          motivo,
-          gerente: usuario || 'Gerente',
-          origen: 'GERENTE',
-          origen_submodulo: origen_submodulo || 'Evaluación de Requerimiento',
-          destino_submodulo: destino_submodulo || 'Registro de Requerimiento',
-          destino_etapa: destino_etapa || 'REGISTRADO',
-          destino_persona: destino_persona || '',
-          usuario_origen_id: req.user?.id ?? null,
-          usuario_destino_id: usuarioDestinoId,
-        });
-
-        await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payloadLegacy)]);
+          : 'requerimientos/observar:legacy-root';
 
         const tr = await transicionarExpediente({
           requerimientoId,
           evento: 'EVALUACION_OBSERVADA',
           usuarioOrigenId: req.user?.id ?? null,
           usuarioDestinoId,
-          unidadDestino: ETAPAS.REGISTRADO?.responsable || ETAPAS.REGISTRO?.responsable || 'Usuario AU',
+          unidadDestino: ETAPAS.REGISTRO?.responsable || ETAPAS.REGISTRADO?.responsable || 'Usuario AU',
           motivo,
           metadata: {
             ...metaObservacionBase,
             via,
           },
           actorRol: usuario || 'Gerente',
+          domainMutator: buildEvalObservacionPayloadDomainMutator(mutatorOpts),
         });
         const updated = tr.expediente;
-
-        return { ok: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado } };
+        return {
+          ok: true,
+          requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado },
+          idempotente: tr.idempotente === true,
+        };
       },
     });
 

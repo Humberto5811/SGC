@@ -203,6 +203,7 @@ export async function openModalObservaciones(req, opts = {}) {
             : () => opts.candidatosApiPath)
           : null,
         requerimientoId: row.id,
+        esSubobservacion: !!padreDelegacion?.id,
       });
       if (!data) { modal.show(); return; }
       try {
@@ -216,6 +217,11 @@ export async function openModalObservaciones(req, opts = {}) {
         };
         if (padreDelegacion?.id) {
           payloadObs.observacion_padre_id = padreDelegacion.id;
+          if (data.observacion_hija_id || data.observacion_nodo_id) {
+            payloadObs.observacion_hija_id = data.observacion_hija_id || data.observacion_nodo_id;
+          }
+        } else if (data.observacion_raiz_id || data.observacion_nodo_id) {
+          payloadObs.observacion_raiz_id = data.observacion_raiz_id || data.observacion_nodo_id;
         }
         if (opts.onObservar) {
           await opts.onObservar(row.id, payloadObs, row);

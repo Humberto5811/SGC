@@ -124,6 +124,7 @@ export function buildObservacionDomainMutator({
   reasignacionManual = false,
   observacionPadreId = null,
   observacionHijaId = null,
+  observacionRaizId = null,
 } = {}) {
   const padreId = observacionPadreId ? String(observacionPadreId).trim() : null;
   const esSubobs = !!padreId;
@@ -141,6 +142,7 @@ export function buildObservacionDomainMutator({
     reasignacionManual,
     observacionPadreId: padreId,
     observacionHijaId,
+    observacionRaizId,
     incluirHistorialEvaluacion: !esSubobs,
   });
 
