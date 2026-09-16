@@ -1,4 +1,5 @@
 // Utilidades UI de trazabilidad de expedientes (frontend)
+import { formatDateTimeLima } from './dateTimeLima.js';
 import { computeMotorSnapshot, obtenerEstadoObservaciones } from '../../shared/observacionesMotor.js';
 import { buildEstadoVisual, renderEstadoVisualHtml, buildPresenterRow } from './estadoVisualPresenter.js';
 import { adaptEstadoResponsable } from '../ui/workflow/adaptEstadoResponsable.js';
@@ -91,7 +92,7 @@ export function mapEstadoToUbicacion(estado) {
   if (!e || e === 'Registrado') return 'REGISTRADO';
   if (/observado program/i.test(e)) return 'PROGRAMACION';
   if (/en programaci/i.test(e)) return 'PROGRAMACION';
-  if (/aprobad.*program/i.test(e)) return 'ACTOS_PREPARATORIOS';
+  if (/aprobad.*program/i.test(e)) return 'INVITACIONES';
   if (e === 'Aprobado DEC') return 'PROGRAMACION';
   if (/observado dec/i.test(e)) return 'PROGRAMACION';
   if (e === 'Aprobado') return 'DEC';
@@ -204,12 +205,7 @@ function esc(s) {
 }
 
 export function fmtDateTime(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('es-PE', {
-    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  return formatDateTimeLima(iso, { style: 'dmy' });
 }
 
 export function calcDiasEnEstado(fechaEstadoActual) {

@@ -576,8 +576,10 @@ router.get('/programacion/candidatos-transicion/:requerimientoId', async (req, r
     if (!rows.length) {
       return res.status(404).json({ ok: false, error: 'Requerimiento no encontrado en bandeja Programación' });
     }
+    const actorId = req.user?.id != null && Number.isFinite(Number(req.user.id)) ? Number(req.user.id) : null;
     const data = await listarCandidatosTransicion(requerimientoId, evento, {
       search: req.query.q || req.query.search || '',
+      excluirUsuarioId: actorId,
     }, rows[0]);
     res.json({ ok: true, data });
   } catch (err) {
@@ -796,7 +798,13 @@ router.get('/actos/usuarios', async (req, res, next) => {
   try {
     const perfil = (req.query.perfil || '').trim();
     const submodulo = (req.query.submodulo || '').trim();
+    const equipoUad = (req.query.equipo_uad || req.query.equipoUad || '').trim();
     const search = (req.query.search || '').trim();
+    if (equipoUad) {
+      const { listUsuariosPorEquipoUad } = await import('../lib/actosPreparatorios.js');
+      const data = await listUsuariosPorEquipoUad(equipoUad, search);
+      return res.json({ data });
+    }
     if (submodulo) {
       const data = await listUsuariosPorSubmodulo(submodulo, search);
       return res.json({ data });
@@ -804,6 +812,24 @@ router.get('/actos/usuarios', async (req, res, next) => {
     const data = await listUsuariosPerfilActos(perfil, submodulo);
     res.json({ data });
   } catch (err) { next(err); }
+});
+
+/** RC8.17.8H5 — candidatos observación upstream desde Cont.Menores. */
+router.get('/actos/candidatos-observacion-destino/:requerimientoId', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    const destinoSubmodulo = req.query.destino_submodulo || req.query.destinoSubmodulo || '';
+    const { listarCandidatosObservacionContMenores } = await import('../lib/candidatosObservacionContMenores.js');
+    const data = await listarCandidatosObservacionContMenores({
+      requerimientoId,
+      destinoSubmodulo,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.get('/actos', async (req, res, next) => {
@@ -815,17 +841,12 @@ router.get('/actos', async (req, res, next) => {
     const usuarioNombre = req.headers['x-user-name'] || req.query.usuario || '';
     const user = req.user ?? null;
     const userId = user?.id != null && Number.isFinite(Number(user.id)) ? Number(user.id) : null;
-    const { esCoordinadorActosUsuario, esMiembroContMenoresBandejaAcceso } = await import('../../shared/contMenoresBandejaAccess.js');
-    const esCoord = esCoordinadorActosUsuario(user || {});
-    const esOperCm = esMiembroContMenoresBandejaAcceso(user || {}) && !esCoord;
     const listOpts = { soloMiEquipo: miEquipo };
     if (soloMios && userId) {
       listOpts.soloAsignadosUsuarioId = userId;
       listOpts.soloAsignadosA = usuarioNombre;
     } else if (soloMios) {
       listOpts.soloAsignadosA = usuarioNombre;
-    } else if (esOperCm && userId && !miEquipo) {
-      listOpts.restringirPersonaUsuarioId = userId;
     }
     const result = await listarBandejaActos(page, pageSize, req.query, listOpts);
     res.json(result);

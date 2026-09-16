@@ -1,5 +1,5 @@
-// Fase 1B — PROGRAMACION_APROBADA (PROGRAMACION → COORDINACION_CM).
-// Casos: F flag off legacy; G flag on + write off 503; H destino COORDINACION_CM;
+// Fase 1B — PROGRAMACION_APROBADA (PROGRAMACION → INVITACIONES).
+// Casos: F flag off legacy; G flag on + write off 503; H destino INVITACIONES;
 // I bloquea sin pedido SIGAMEF; J bloquea si observación abierta; T un solo evento.
 // SIN tocar BD real: mock.
 import { assert, summarize } from './workflowTestUtils.mjs';
@@ -10,19 +10,20 @@ import { createDbMock } from './workflowTestDbMock.mjs';
 const FLAGS = { WORKFLOW_ENGINE_WRITE_ENABLED: true };
 
 async function run() {
-  // H — PROGRAMACION_APROBADA → COORDINACION_CM (motor, mock). BD guarda ACTOS_PREPARATORIOS (legacy comapt).
+  // H — PROGRAMACION_APROBADA → INVITACIONES (motor, mock).
   const mockH = createDbMock({ tipo: 'BIEN', estadoInicial: 'PROGRAMACION', payloadInicial: '{"historial_programacion":[]}' });
   const cH = mockH.connect();
   await cH.query('BEGIN');
   const rH = await executeTransition({
     expediente_id: 1, tipo_contratacion: 'BIEN', evento: 'PROGRAMACION_APROBADA',
     idempotency_key: 'req:1:PROGRAMACION_APROBADA:h1', actor: { id: 7, rol: 'PROGRAMADOR' },
+    usuario_destino_id: 260,
     responsable_destino: 'Coordinador de Contratos Menores',
   }, FLAGS, cH);
   await cH.query('COMMIT');
   cH.release();
-  assert(rH.evento?.etapa_destino === 'COORDINACION_CM', 'H1. destino canónico COORDINACION_CM');
-  assert(mockH.row.estado_actual === 'ACTOS_PREPARATORIOS', 'H2. estado_actual BD = ACTOS_PREPARATORIOS (compat bandeja)');
+  assert(rH.evento?.etapa_destino === 'INVITACIONES', 'H1. destino canónico INVITACIONES');
+  assert(mockH.row.estado_actual === 'INVITACIONES', 'H2. estado_actual BD = INVITACIONES');
   assert(mockH.eventos.length === 1, 'T. un solo workflow_eventos');
   assert(mockH.movimientos === 1, 'U. un solo historial_movimientos');
 

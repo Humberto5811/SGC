@@ -106,19 +106,11 @@ function getCurrentUser() {
   return (authService.getCurrentUser && authService.getCurrentUser()) || {};
 }
 
-const ETAPAS_UI_CONT_MENORES = new Set(['COORDINACION_CM', 'ACTOS_PREPARATORIOS']);
+/** Denominación visible del submódulo (códigos internos CONT_MENORES / INVITACIONES sin cambio). */
+const SUBMODULO_UI_LABEL = 'Coordinador CM';
 
-function aplicarEtiquetaContMenoresEnFila(r) {
-  if (!r?.bandeja_contrato?.etapa) return r;
-  const cod = String(r.bandeja_contrato.etapa.codigo || '').toUpperCase();
-  if (!ETAPAS_UI_CONT_MENORES.has(cod)) return r;
-  return {
-    ...r,
-    bandeja_contrato: {
-      ...r.bandeja_contrato,
-      etapa: { ...r.bandeja_contrato.etapa, label: 'Cont.Menores' },
-    },
-  };
+function perfilActivoLabel(user) {
+  return isCoordinadorActos(user) ? SUBMODULO_UI_LABEL : 'Operador CM';
 }
 
 function getRowContext(r) {
@@ -149,7 +141,8 @@ function filterRowsForProfile(rows, filters = {}) {
     }
     return rows;
   }
-  return rows.filter((r) => isExpedienteAsignadoAMi(r, userName));
+  // RC8.17.8H5-05 — visibilidad histórica: lista server ya acota por ingreso a CM.
+  return rows;
 }
 
 function readActosFilterParams() {
@@ -164,7 +157,7 @@ function readActosFilterParams() {
 
 function renderActosView() {
   const user = getCurrentUser();
-  const perfil = isCoordinadorActos(user) ? 'Coordinador Cont.Menores' : 'Operador Cont.Menores';
+  const perfil = perfilActivoLabel(user);
   return `
     <div class="container-fluid actos-bandeja-page">
       <style>${bandejaTableStyles()}${actosBandejaStyles()}
@@ -173,8 +166,8 @@ function renderActosView() {
       </style>
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
-          <h3 class="mb-1"><i class="bi bi-file-earmark-ruled"></i> Cont.Menores</h3>
-          <p class="text-muted mb-0">Expedientes en Contratos Menores. Perfil activo: <strong>${esc(perfil)}</strong></p>
+          <h3 class="mb-1"><i class="bi bi-file-earmark-ruled"></i> ${esc(SUBMODULO_UI_LABEL)}</h3>
+          <p class="text-muted mb-0">Expedientes en ${esc(SUBMODULO_UI_LABEL)}. Perfil activo: <strong>${esc(perfil)}</strong></p>
         </div>
         <button id="actosReload" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Actualizar</button>
       </div>
@@ -226,13 +219,12 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
       });
     }
     rows = filterRowsForProfile(rows, listFilters);
-    rows = rows.map((r) => aplicarEtiquetaContMenoresEnFila(r));
     rows = sortBandejaRows(rows, listSort.sort, listSort.dir);
     lastRows = rows;
     updateSummaryCards(rows, 'actosTrazaSummary');
 
     if (!rows.length) {
-      cont.innerHTML = '<div class="alert alert-light border">No hay expedientes en Cont.Menores para su bandeja.</div>';
+      cont.innerHTML = `<div class="alert alert-light border">No hay expedientes en ${esc(SUBMODULO_UI_LABEL)} para su bandeja.</div>`;
       return;
     }
 
@@ -372,9 +364,11 @@ async function observarActos(id) {
   }
 
   const data = await showActosDestinoModal({
-    title: pending ? 'Continuar conversación — Coordinación CM' : 'Observación',
+    title: pending ? `Continuar conversación — ${SUBMODULO_UI_LABEL}` : 'Observación',
     historyHtml: historialHtml(allObs),
     origenSubmodulo: 'Coordinación CM',
+    observacionContMenores: true,
+    requerimientoId: id,
     motivoRequired: true,
     buttonText: pending ? 'Reenviar observación' : 'Observar',
     buttonClass: 'btn-danger',
@@ -418,13 +412,13 @@ async function derivarAnalistaActos(id) {
 async function derivarActos(id) {
   const req = lastRows.find((x) => String(x.id) === String(id));
   if (!req) return;
-  const data = await showActosDestinoModal({
+  const { showContMenoresDerivacionUadModal } = await import('../../utils/actosModals.js');
+  const data = await showContMenoresDerivacionUadModal({
     title: 'Derivar expediente',
     origenSubmodulo: 'Coordinación CM',
-    motivoRequired: false,
+    incluirContMenores: true,
     motivoLabel: 'Observación (opcional)',
     buttonText: 'Derivar',
-    buttonClass: 'btn-primary',
   });
   if (!data) return;
   try {

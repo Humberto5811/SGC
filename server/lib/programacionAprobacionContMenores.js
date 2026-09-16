@@ -107,7 +107,7 @@ export async function ejecutarProgramacionAprobadaContMenores({
     responsable_seleccionado_id: uidDest,
     reasignacion_manual: reasignacion,
     etapa_origen: 'PROGRAMACION',
-    etapa_destino: 'COORDINACION_CM',
+    etapa_destino: 'INVITACIONES',
     evento: 'PROGRAMACION_APROBADA',
   };
 
@@ -121,9 +121,9 @@ export async function ejecutarProgramacionAprobadaContMenores({
     metadata: {
       tipo_contratacion: req?.body?.tipo_contratacion || 'BIEN',
       client_request_id: crq,
-      observacion: 'Programación aprobada — derivado a Cont. Menores',
+      observacion: 'Programación aprobada — derivado a Invitaciones (Cont.Menores)',
       ...metaDerivacion,
-      unidad_destino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
+      unidad_destino: ETAPAS.INVITACIONES?.responsable || 'Invitaciones',
     },
     domainMutator: buildTramo1bPayloadMutator({
       accionHistorial: 'historial_programacion',
@@ -145,8 +145,8 @@ export async function ejecutarProgramacionAprobadaContMenores({
         requerimientoId,
         evento: 'PROGRAMACION_APROBADA',
         usuarioDestinoId: uidDest,
-        unidadDestino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
-        motivo: 'Aprobado en Programación — derivado a Cont. Menores',
+        unidadDestino: ETAPAS.INVITACIONES?.responsable || 'Invitaciones',
+        motivo: 'Aprobado en Programación — derivado a Invitaciones (Cont.Menores)',
         metadata: {
           client_request_id: crq,
           via: 'programacion/aprobar:legacyHandler',

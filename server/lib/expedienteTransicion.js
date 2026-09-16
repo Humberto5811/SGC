@@ -329,6 +329,50 @@ export async function transicionarExpediente({
           );
         }
       }
+    } else if (eventoCodigo === 'COORDINACION_CM_OBSERVADA') {
+      const { submoduloLabelToEtapa } = await import('./observacionDestino.js');
+      const destFromSub = metaTransicion.destino_submodulo
+        ? submoduloLabelToEtapa(metaTransicion.destino_submodulo)
+        : '';
+      const destRaw = metaTransicion.etapa_destino
+        || metaTransicion.destino_etapa
+        || destFromSub
+        || '';
+      const etapaDestNorm = String(destRaw || '')
+        .toUpperCase()
+        .replace(/^REGISTRADO$/, 'REGISTRO');
+      if (etapaDestNorm === 'REGISTRO') {
+        const { applyPilotObservacionDecDestino } = await import('./workflowTransicionResponsable.js');
+        metaTransicion.etapa_origen = etapaOrigen;
+        metaTransicion.etapa_destino = etapaDestNorm;
+        metaTransicion.evento = eventoCodigo;
+        metaTransicion.etapa_funcional_cm_origen = etapaOrigen;
+        const pilotObs = applyPilotObservacionDecDestino({
+          resp,
+          usuarioDestinoId: usuarioDestinoIdNorm,
+          unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+          metadata: metaTransicion,
+          etapaEfectiva,
+          labels,
+        });
+        resp = pilotObs.resp;
+        etapaEfectiva = pilotObs.etapaEfectiva;
+        metaEtapa = getEtapaMeta(etapaEfectiva) || metaEtapa;
+        Object.assign(labels, pilotObs.labels);
+        metaTransicion = { ...metaTransicion, ...pilotObs.metaExtra };
+        if (pilotObs.usuarioDestinoEfectivo != null) {
+          usuarioDestinoEfectivo = pilotObs.usuarioDestinoEfectivo;
+        }
+        const tienePersona = resp.responsableTipo === TIPO_RESPONSABLE.PERSONA
+          && resp.responsableUsuarioId != null
+          && Number.isFinite(Number(resp.responsableUsuarioId));
+        if (!tienePersona) {
+          const { buildErrorSubsanacionSinPersona } = await import('./pilotRegistroEvaluacion.js');
+          throw buildErrorSubsanacionSinPersona(
+            'Debe seleccionar una persona responsable válida para la observación.',
+          );
+        }
+      }
     } else if (eventoCodigo === 'OBSERVACION_SUBSANADA') {
       const { applyPilotObservacionSubsanada } = await import('./pilotRegistroEvaluacion.js');
       const pilotSub = await applyPilotObservacionSubsanada({

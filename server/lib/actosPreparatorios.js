@@ -201,6 +201,33 @@ function submoduloLabelFromCode(code) {
 }
 
 /** Usuarios activos con permiso real en un submódulo de Contrataciones (permisos normalizados). */
+/** RC8.17.8H5 — Usuarios elegibles por equipo UAD (organizacional: COORD/OPER). */
+export async function listUsuariosPorEquipoUad(equipoCodigo, search = '') {
+  const { listarUsuariosDestinoEquipoUadOrganizacional, labelRolGeneralUsuario } = await import('./equiposUadUsuario.js');
+  const { usuarios } = await listarUsuariosDestinoEquipoUadOrganizacional({ equipoCodigo });
+  const q = String(search || '').trim().toLowerCase();
+  return usuarios
+    .map((u) => {
+      const nombre = u.nombre || [u.apellidos, u.nombres].filter(Boolean).join(' ').trim();
+      const rolLabel = labelRolGeneralUsuario(u);
+      return {
+        id: u.id,
+        nombre,
+        cargo: u.cargo || rolLabel,
+        rol_label: rolLabel,
+        username: u.username || u.dni || '',
+        equipo_uad: u.equipo_uad,
+      };
+    })
+    .filter((u) => u.nombre)
+    .filter((u) => {
+      if (!q) return true;
+      const blob = `${u.nombre} ${u.cargo} ${u.username}`.toLowerCase();
+      return blob.includes(q);
+    })
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
 export async function listUsuariosPorSubmodulo(submoduloCode, search = '') {
   const code = String(submoduloCode || 'ACTOS_PREPARATORIOS').toUpperCase();
   const params = ['admin'];
@@ -258,6 +285,37 @@ const ETAPAS_BANDEJA_CM = `(
   'CUADRO_COMPARATIVO', 'CCP', 'EJECUCION', 'FINALIZADO', 'OBSERVADO'
 )`;
 
+/** RC8.17.8H5-05 — Ingreso válido a Cont.Menores (permanencia histórica bandeja). */
+export const WHERE_INGRESO_HISTORICO_CONT_MENORES = `
+  EXISTS (
+    SELECT 1 FROM workflow_eventos we_cm
+    WHERE we_cm.expediente_id = r.id
+      AND (
+        (
+          UPPER(TRIM(COALESCE(we_cm.evento_codigo, ''))) = 'PROGRAMACION_APROBADA'
+          AND UPPER(TRIM(COALESCE(we_cm.etapa_destino, ''))) = 'INVITACIONES'
+        )
+        OR UPPER(TRIM(COALESCE(we_cm.evento_codigo, ''))) IN (
+          'COORDINACION_CM_ASIGNADA', 'COORDINACION_CM_APROBADA',
+          'COORDINACION_CM_OBSERVADA', 'COORDINACION_CM_SUBSANADA'
+        )
+        OR UPPER(TRIM(COALESCE(we_cm.etapa_origen, ''))) IN (
+          'INVITACIONES', 'COORDINACION_CM', 'ACTOS_PREPARATORIOS'
+        )
+        OR UPPER(TRIM(COALESCE(we_cm.etapa_destino, ''))) IN (
+          'INVITACIONES', 'COORDINACION_CM', 'ACTOS_PREPARATORIOS'
+        )
+      )
+  )
+  OR EXISTS (
+    SELECT 1 FROM expediente_asignaciones ea_cm
+    WHERE ea_cm.requerimiento_id = r.id
+      AND UPPER(TRIM(COALESCE(ea_cm.etapa_codigo, ''))) IN (
+        'INVITACIONES', 'COORDINACION_CM', 'ACTOS_PREPARATORIOS'
+      )
+  )
+`;
+
 /** RC8.17.8H1 — PERSONA asignada vía ERV (prioridad) + legacy id/nombre. */
 function appendFiltroPersonaContMenores(where, params, usuarioId, nombreLegacy = '') {
   const uid = Number(usuarioId);
@@ -266,7 +324,7 @@ function appendFiltroPersonaContMenores(where, params, usuarioId, nombreLegacy =
   const pUid = params.length;
   let clause = ` AND (
     (
-      UPPER(COALESCE(erv.etapa_codigo, '')) IN ('COORDINACION_CM', 'ACTOS_PREPARATORIOS')
+      UPPER(COALESCE(erv.etapa_codigo, '')) IN ('COORDINACION_CM', 'ACTOS_PREPARATORIOS', 'INVITACIONES')
       AND UPPER(COALESCE(erv.responsable_tipo, '')) = 'PERSONA'
       AND erv.responsable_usuario_id = $${pUid}
     )
@@ -302,6 +360,7 @@ export async function listarBandejaActos(page, pageSize, queryParams = {}, optio
       AND jsonb_typeof(COALESCE(r.payload, '{}')::jsonb -> 'historial_actos') = 'array'
       AND jsonb_array_length(COALESCE(r.payload, '{}')::jsonb -> 'historial_actos') > 0
     )
+    OR (${WHERE_INGRESO_HISTORICO_CONT_MENORES})
   )`;
   if (whereExtra) where += ` AND ${whereExtra}`;
 
@@ -363,7 +422,79 @@ async function loadReqPayload(requerimientoId) {
 }
 
 function pushObservacion(payload, entry) {
-  emitirObservacion(payload, entry);
+  return emitirObservacion(payload, entry);
+}
+
+async function resolveUsuarioDestinoPersonaObservacionActos(requerimientoId, destinoSubmodulo, destinoPersona) {
+  const raw = String(destinoPersona ?? '').trim();
+  const {
+    listarCandidatosObservacionContMenores,
+    assertUsuarioDestinoObservacionContMenores,
+  } = await import('./candidatosObservacionContMenores.js');
+  const {
+    buildErrorSubsanacionSinPersona,
+    resolveUsuarioIdDesdeNombreCompletoInequivoco,
+  } = await import('./pilotRegistroEvaluacion.js');
+
+  if (/^\d+$/.test(raw)) {
+    const uid = Number(raw);
+    if (destinoSubmodulo) {
+      await assertUsuarioDestinoObservacionContMenores({
+        requerimientoId,
+        destinoSubmodulo: destinoSubmodulo,
+        usuarioDestinoId: uid,
+      });
+    }
+    return uid;
+  }
+
+  if (!raw) {
+    throw buildErrorSubsanacionSinPersona('Debe seleccionar una persona destino válida.');
+  }
+
+  const lista = await listarCandidatosObservacionContMenores({
+    requerimientoId,
+    destinoSubmodulo: destinoSubmodulo,
+    search: raw,
+  });
+  const pool = [
+    ...(lista.recomendado ? [lista.recomendado] : []),
+    ...(lista.candidatos || []),
+  ];
+  const needle = raw.toLowerCase();
+  const fromPool = pool.find((c) => {
+    const n = String(c.nombre || '').toLowerCase();
+    if (n === needle) return true;
+    const parts = needle.split(/\s+/).filter((p) => p.length > 2);
+    return parts.length > 0 && parts.every((p) => n.includes(p));
+  });
+  if (fromPool?.id != null) {
+    const uid = Number(fromPool.id);
+    if (destinoSubmodulo) {
+      await assertUsuarioDestinoObservacionContMenores({
+        requerimientoId,
+        destinoSubmodulo: destinoSubmodulo,
+        usuarioDestinoId: uid,
+      });
+    }
+    return uid;
+  }
+
+  const byName = await resolveUsuarioIdDesdeNombreCompletoInequivoco(raw);
+  if (byName != null) {
+    if (destinoSubmodulo) {
+      await assertUsuarioDestinoObservacionContMenores({
+        requerimientoId,
+        destinoSubmodulo: destinoSubmodulo,
+        usuarioDestinoId: byName,
+      });
+    }
+    return byName;
+  }
+
+  const err = buildErrorSubsanacionSinPersona('Debe seleccionar una persona destino válida.');
+  err.status = 422;
+  throw err;
 }
 
 function resolveEstadoMovimientoObservacion(destinoSubmodulo, destinoEtapa) {
@@ -440,37 +571,65 @@ export async function observarActos(requerimientoId, body) {
 
   if (!motivo) throw new Error('Motivo requerido');
 
-  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO').toUpperCase();
+  const { esDestinoObservacionContMenoresSoportado } = await import('./candidatosObservacionContMenores.js');
+  if (destino_submodulo && !esDestinoObservacionContMenoresSoportado(destino_submodulo)) {
+    const err = new Error('Destino no permitido desde Cont.Menores (Registro, Evaluación, DEC o Programación)');
+    err.status = 400;
+    throw err;
+  }
+
+  const etapaDestObs = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'REGISTRO')
+    .toUpperCase()
+    .replace(/^REGISTRADO$/, 'REGISTRO');
   const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDestObs);
-  const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
+  let uid = null;
+  if (destino_submodulo) {
+    uid = await resolveUsuarioDestinoPersonaObservacionActos(
+      requerimientoId,
+      destino_submodulo,
+      destino_persona,
+    );
+  } else if (/^\d+$/.test(String(destino_persona || '').trim())) {
+    uid = Number(destino_persona);
+  }
+  if (etapaDestObs === 'REGISTRO' && !uid) {
+    const { buildErrorSubsanacionSinPersona } = await import('./pilotRegistroEvaluacion.js');
+    throw buildErrorSubsanacionSinPersona('Debe seleccionar una persona destino válida.');
+  }
   const estadoDestinoLabel = resolveEstadoMovimientoObservacion(destino_submodulo, destino_etapa);
 
-  pushObservacion(loaded.payload, {
+  const emitResult = pushObservacion(loaded.payload, {
     motivo,
     gerente: usuario || COORDINADOR_ACTOS,
     origen: 'ACTOS PREPARATORIOS',
     origen_submodulo: origen_submodulo || SUBMODULO_COORDINACION_CM,
     destino_submodulo: destino_submodulo || '',
-    destino_etapa: destino_etapa || '',
+    destino_etapa: destino_etapa || etapaDestObs,
     destino_persona: destino_persona || '',
     observacion_padre_id: observacion_padre_id || observacionPadreId || null,
   });
+  const observacionId = emitResult?.observacion?.id
+    || emitResult?.observacion?.observacion_id
+    || null;
 
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const result = await transicionarExpediente({
     requerimientoId,
     evento: 'COORDINACION_CM_OBSERVADA',
     usuarioDestinoId: uid,
-    unidadDestino: uid ? null : (responsable || null),
+    unidadDestino: null,
     motivo: formatObservacionTraza(motivo, { destino_persona, destino_submodulo }),
     metadata: {
       client_request_id: body?.client_request_id || `actos-obs:${requerimientoId}:${String(motivo).slice(0, 40)}`,
       via: 'observarActos',
       estado_destino: estadoDestinoLabel,
       etapa_destino: etapaDestObs,
+      destino_etapa: etapaDestObs,
       responsable_destino: responsable,
       quien_subsana: destino_persona || responsable,
       destino_submodulo: destino_submodulo || '',
+      observacion_id: observacionId,
+      usuario_destino_id: uid,
     },
     actorRol: usuario || COORDINADOR_ACTOS,
     domainMutator: async (tx) => {
@@ -489,9 +648,36 @@ export async function observarActos(requerimientoId, body) {
   return result.expediente;
 }
 
+async function assertUsuarioEnPoolEquipoUad(equipoCodigo, destinoPersona) {
+  const uid = /^\d+$/.test(String(destinoPersona || '').trim()) ? Number(destinoPersona) : null;
+  const { listarUsuariosDestinoEquipoUadOrganizacional } = await import('./equiposUadUsuario.js');
+  const { usuarios } = await listarUsuariosDestinoEquipoUadOrganizacional({ equipoCodigo });
+  if (uid != null) {
+    if (!usuarios.some((u) => Number(u.id) === uid)) {
+      const err = new Error('Usuario destino no pertenece al equipo UAD seleccionado');
+      err.status = 422;
+      throw err;
+    }
+    return uid;
+  }
+  const nom = String(destinoPersona || '').trim().toLowerCase();
+  const match = usuarios.find((u) => {
+    const n = (u.nombre || [u.apellidos, u.nombres].filter(Boolean).join(' ')).trim().toLowerCase();
+    return n === nom;
+  });
+  if (!match) {
+    const err = new Error('Usuario destino no pertenece al equipo UAD seleccionado');
+    err.status = 422;
+    throw err;
+  }
+  return Number(match.id);
+}
+
 export async function derivarActos(requerimientoId, body) {
-  const { motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo } = body || {};
-  if (!destino_submodulo && !destino_etapa) throw new Error('Destino requerido');
+  const {
+    motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo, equipo_uad,
+  } = body || {};
+  if (!destino_submodulo && !destino_etapa && !equipo_uad) throw new Error('Destino requerido');
 
   const loaded = await ensureEtapaCoordinacionCm(requerimientoId, usuario);
   if (!loaded) throw new Error('Requerimiento no encontrado');
@@ -508,9 +694,18 @@ export async function derivarActos(requerimientoId, body) {
     });
   }
 
-  const etapaDest = String(destino_etapa || submoduloLabelToEtapa(destino_submodulo) || 'ACTOS_PREPARATORIOS').toUpperCase();
+  const { etapaFuncionalPorEquipoUad } = await import('../../shared/contMenoresDerivacionUad.js');
+  const eqUad = String(equipo_uad || '').trim().toUpperCase() || null;
+  const etapaDest = String(
+    destino_etapa
+    || (eqUad ? etapaFuncionalPorEquipoUad(eqUad) : null)
+    || submoduloLabelToEtapa(destino_submodulo)
+    || 'INVITACIONES',
+  ).toUpperCase();
   const responsable = resolveResponsableFromDestino(destino_submodulo, destino_persona, etapaDest);
-  const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
+  const uid = eqUad
+    ? await assertUsuarioEnPoolEquipoUad(eqUad, destino_persona)
+    : (/^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null);
 
   if (etapaDest === 'INVITACIONES') {
     const { transicionarExpediente } = await import('./expedienteTransicion.js');

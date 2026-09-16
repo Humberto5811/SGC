@@ -70,15 +70,15 @@ export function movimientosTimelineHtml(movimientos, escFn = esc) {
     return `
       <div class="traza-timeline-item ${isCurrent ? 'traza-timeline-current' : ''} ${cls}">
         <div class="traza-dot"></div>
-        <div class="traza-content mb-2 pb-2">
-          <div class="fw-bold"><span class="${accionBadgeCls} me-1">${escFn(label)}</span></div>
-          <div class="small text-muted">${escFn(m.modulo || 'SGC')}${m.subModulo ? ` · ${escFn(m.subModulo)}` : ''}</div>
-          <div class="small mt-1"><i class="bi bi-person"></i> ${escFn(m.usuario || m.actor || '—')}${m.rol ? ` · ${escFn(m.rol)}` : ''}</div>
-          ${m.responsable ? `<div class="small"><i class="bi bi-briefcase"></i> ${escFn(m.responsable)}</div>` : ''}
-          <div class="small"><i class="bi bi-clock"></i> ${escFn(fmtDateTime(m.fecha))}</div>
-          ${estadoRes ? `<div class="small">Estado resultante: <strong>${escFn(estadoRes)}</strong></div>` : ''}
-          ${isCurrent ? '<div class="small text-success fw-semibold">Etapa vigente</div>' : ''}
-          ${m.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(m.observacion))}</div>` : ''}
+        <div class="traza-content mb-1 pb-1">
+          <div class="fw-semibold small"><span class="${accionBadgeCls} me-1">${escFn(label)}</span></div>
+          <div class="small text-muted lh-sm">${escFn(m.modulo || 'SGC')}${m.subModulo ? ` · ${escFn(m.subModulo)}` : ''}</div>
+          <div class="small lh-sm"><i class="bi bi-person"></i> ${escFn(m.usuario || m.actor || '—')}${m.rol ? ` · ${escFn(m.rol)}` : ''}</div>
+          ${m.responsable ? `<div class="small lh-sm"><i class="bi bi-briefcase"></i> ${escFn(m.responsable)}</div>` : ''}
+          <div class="small lh-sm"><i class="bi bi-clock"></i> ${escFn(fmtDateTime(m.fecha))}</div>
+          ${estadoRes ? `<div class="small lh-sm">Estado: <strong>${escFn(estadoRes)}</strong></div>` : ''}
+          ${isCurrent ? '<div class="small text-success">Etapa vigente</div>' : ''}
+          ${m.observacion ? `<div class="small mt-1 p-1 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(m.observacion))}</div>` : ''}
         </div>
       </div>
       ${idx < list.length - 1 ? '<div class="traza-connector">↓</div>' : ''}`;
@@ -104,13 +104,13 @@ export function timelineHtml(historial, escFn = esc) {
     return `
       <div class="traza-timeline-item ${isCurrent ? 'traza-timeline-current' : ''} ${tipoClass}">
         <div class="traza-dot"></div>
-        <div class="traza-content mb-2 pb-2">
-          <div class="fw-bold">${escFn(label)}</div>
-          ${accionLabel ? `<div class="small"><span class="badge bg-secondary">${escFn(accionLabel)}</span></div>` : ''}
-          <div class="small text-muted mt-1">${escFn(h.usuario || '—')}</div>
-          <div class="small">${escFn(fmtDateTime(h.fechaIngreso || h.fecha))}</div>
-          ${isCurrent ? `<div class="small text-success">Etapa vigente · ${escFn(diasLabel(duracion))}</div>` : ''}
-          ${h.observacion ? `<div class="small mt-2 p-2 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(h.observacion))}</div>` : ''}
+        <div class="traza-content mb-1 pb-1">
+          <div class="fw-semibold small">${escFn(label)}</div>
+          ${accionLabel ? `<div class="small lh-sm"><span class="badge bg-secondary">${escFn(accionLabel)}</span></div>` : ''}
+          <div class="small text-muted lh-sm">${escFn(h.usuario || '—')}</div>
+          <div class="small lh-sm">${escFn(fmtDateTime(h.fechaIngreso || h.fecha))}</div>
+          ${isCurrent ? `<div class="small text-success lh-sm">Etapa vigente · ${escFn(diasLabel(duracion))}</div>` : ''}
+          ${h.observacion ? `<div class="small mt-1 p-1 rounded bg-light border-start border-3 border-secondary">${escFn(normalizeLegacyActosLabel(h.observacion))}</div>` : ''}
         </div>
       </div>
       ${idx < list.length - 1 ? '<div class="traza-connector">↓</div>' : ''}`;
@@ -134,7 +134,8 @@ export function timelineModalStyles() {
     }
     .traza-timeline-wrap { padding-left: 8px; }
     .traza-timeline-item { display: flex; gap: 12px; position: relative; }
-    .traza-connector { text-align: center; color: #adb5bd; font-size: 14px; margin: 2px 0 2px 7px; }
+    .traza-connector { text-align: center; color: #adb5bd; font-size: 12px; margin: 0 0 0 7px; line-height: 1; }
+    .traza-timeline-item { margin-bottom: 2px; }
     .traza-dot {
       width: 14px; height: 14px; border-radius: 50%; background: #0d6efd; border: 2px solid #fff;
       box-shadow: 0 0 0 2px #0d6efd; flex-shrink: 0; margin-top: 6px;

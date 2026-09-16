@@ -1,17 +1,20 @@
 // Modales — Coordinación CM (asignación, derivación, aprobación)
 import { contratacionesService } from '../services/contratacionesService.js';
+import { listEquiposUadCatalogo } from '../../shared/equiposUad.js';
+import { etapaFuncionalPorEquipoUad } from '../../shared/contMenoresDerivacionUad.js';
 import { SUBMODULOS_DESTINO, getSubmoduloByLabel } from './observacionDestino.js';
+import { api } from '../services/apiService.js';
 import { esc } from './trazabilidad.js';
 import { renderResponsableCellHtml, estadoModernBadge } from './bandejaUi.js';
+import { esCoordinadorActosUsuario } from '../../shared/contMenoresBandejaAccess.js';
 
 function formatNombre(u) {
   return String(u?.nombre || '').trim();
 }
 
+/** Alineado con server: cargo CM, admin, o COORDINADOR + equipo CONT_MENORES. */
 export function isCoordinadorActos(user) {
-  const cargo = String(user?.cargo || '').toLowerCase();
-  if (cargo.includes('coordinador') && cargo.includes('contratos')) return true;
-  return user?.rol === 'admin';
+  return esCoordinadorActosUsuario(user || {});
 }
 
 export function isExpedientePoolCoordinador(req) {
@@ -49,6 +52,30 @@ async function loadUsuariosPorSubmodulo(code, search = '') {
   if (search.trim()) params.search = search.trim();
   const resp = await contratacionesService.listActosUsuarios(params);
   return resp?.data || [];
+}
+
+async function loadUsuariosPorEquipoUad(equipoCodigo, search = '') {
+  const params = { equipo_uad: equipoCodigo };
+  if (search.trim()) params.search = search.trim();
+  const resp = await contratacionesService.listActosUsuarios(params);
+  return resp?.data || [];
+}
+
+const OBS_CONT_MENORES_LABELS = new Set([
+  'Registro de Requerimiento',
+  'Evaluación de Requerimiento',
+  'DEC',
+  'Programación',
+]);
+
+async function loadCandidatosObservacionContMenores(requerimientoId, destinoLabel) {
+  if (!requerimientoId || !destinoLabel) return [];
+  const q = new URLSearchParams({ destino_submodulo: destinoLabel }).toString();
+  const resp = await api.get(`/contrataciones/actos/candidatos-observacion-destino/${requerimientoId}?${q}`);
+  const data = resp?.data || resp;
+  const list = data?.candidatos || data?.data?.candidatos || [];
+  const rec = data?.recomendado || data?.data?.recomendado;
+  return rec ? [rec, ...list.filter((c) => c.id !== rec.id)] : list;
 }
 
 export const ASIGNACION_DESTINOS = [
@@ -245,7 +272,10 @@ export async function showAprobarInvitacionesModal() {
 
 export async function showActosDestinoModal(opts = {}) {
   const motivoReq = opts.motivoRequired !== false;
-  const optsSub = SUBMODULOS_DESTINO.map((s) =>
+  const destinos = opts.observacionContMenores
+    ? SUBMODULOS_DESTINO.filter((s) => OBS_CONT_MENORES_LABELS.has(s.label))
+    : SUBMODULOS_DESTINO;
+  const optsSub = destinos.map((s) =>
     `<option value="${esc(s.label)}" data-code="${esc(s.code)}">${esc(s.label)}</option>`,
   ).join('');
 
@@ -286,12 +316,25 @@ export async function showActosDestinoModal(opts = {}) {
   const refreshUsuarios = async () => {
     const sub = getSubmoduloByLabel(subEl.value);
     usrEl.innerHTML = '<option value="">Cargando…</option>';
-    const users = await loadUsuariosPorSubmodulo(sub?.code || '');
+    let users = [];
+    if (opts.observacionContMenores && opts.requerimientoId) {
+      users = await loadCandidatosObservacionContMenores(opts.requerimientoId, subEl.value);
+    } else {
+      users = await loadUsuariosPorSubmodulo(sub?.code || '');
+    }
     const fallback = getSubmoduloByLabel(subEl.value)?.personas || [];
-    const nombres = users.length ? users.map(formatNombre).filter(Boolean) : fallback;
-    usrEl.innerHTML = nombres.length
-      ? nombres.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')
-      : '<option value="">Sin usuarios registrados</option>';
+    if (!users.length && fallback.length) {
+      usrEl.innerHTML = fallback.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+      return;
+    }
+    usrEl.innerHTML = users.length
+      ? users.map((u) => {
+        const nom = formatNombre(u);
+        const rol = u.rol_label || u.cargo || '';
+        const val = u.id != null ? String(u.id) : nom;
+        return `<option value="${esc(val)}">${esc(nom)}${rol ? ` — ${esc(rol)}` : ''}</option>`;
+      }).join('')
+      : '<option value="">Sin usuarios elegibles</option>';
   };
   subEl.onchange = refreshUsuarios;
   await refreshUsuarios();
@@ -309,6 +352,87 @@ export async function showActosDestinoModal(opts = {}) {
         motivo,
         destino_submodulo: subEl.value,
         destino_etapa: sub?.code || '',
+        destino_persona: persona,
+        origen_submodulo: opts.origenSubmodulo || 'Coordinación CM',
+      });
+      modal.hide();
+    };
+    el.addEventListener('hidden.bs.modal', () => {
+      wrap.remove();
+      if (!resolved) resolve(null);
+    }, { once: true });
+    modal.show();
+  });
+}
+
+/** RC8.17.8H5 — Paso 1: equipo UAD destino; paso 2: personas del pool UAD real. */
+export async function showContMenoresDerivacionUadModal(opts = {}) {
+  const equipos = listEquiposUadCatalogo().filter((e) => e.codigo !== 'CONT_MENORES' || opts.incluirContMenores);
+  const eqOpts = equipos.map((e, i) =>
+    `<option value="${esc(e.codigo)}" ${i === 0 ? 'selected' : ''}>${esc(e.label)}</option>`,
+  ).join('');
+
+  const wrap = document.createElement('div');
+  const id = 'modCmDeriv_' + Date.now();
+  wrap.innerHTML = `
+    <div class="modal fade" id="${id}" tabindex="-1">
+      <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">${esc(opts.title || 'Derivar expediente')}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <div class="row g-2 mb-3 border rounded p-2 bg-light">
+            <div class="col-md-5">
+              <label class="form-label small fw-semibold">Equipo / submódulo destino</label>
+              <select id="${id}_eq" class="form-select form-select-sm">${eqOpts}</select>
+            </div>
+            <div class="col-md-7">
+              <label class="form-label small fw-semibold">Persona destino</label>
+              <select id="${id}_usr" class="form-select form-select-sm"><option value="">Cargando…</option></select>
+            </div>
+          </div>
+          <label class="form-label">${esc(opts.motivoLabel || 'Observación (opcional)')}</label>
+          <textarea id="${id}_motivo" class="form-control form-control-sm" rows="3"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" id="${id}_ok" class="btn btn-primary">${esc(opts.buttonText || 'Derivar')}</button>
+        </div>
+      </div></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const el = document.getElementById(id);
+  const modal = new bootstrap.Modal(el);
+  const eqEl = document.getElementById(`${id}_eq`);
+  const usrEl = document.getElementById(`${id}_usr`);
+
+  const refreshUsuarios = async () => {
+    usrEl.innerHTML = '<option value="">Cargando…</option>';
+    const users = await loadUsuariosPorEquipoUad(eqEl.value);
+    usrEl.innerHTML = users.length
+      ? users.map((u) => {
+        const nom = formatNombre(u);
+        const rol = u.rol_label || u.cargo || '';
+        return `<option value="${esc(String(u.id))}">${esc(nom)}${rol ? ` — ${esc(rol)}` : ''}</option>`;
+      }).join('')
+      : '<option value="">Sin usuarios en el equipo UAD</option>';
+  };
+  eqEl.onchange = refreshUsuarios;
+  await refreshUsuarios();
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    document.getElementById(`${id}_ok`).onclick = () => {
+      const persona = usrEl.value;
+      if (!persona) { alert('Seleccione persona destino.'); return; }
+      const eq = eqEl.value;
+      const etapa = etapaFuncionalPorEquipoUad(eq) || '';
+      const eqLabel = equipos.find((e) => e.codigo === eq)?.label || eq;
+      resolved = true;
+      resolve({
+        motivo: (document.getElementById(`${id}_motivo`)?.value || '').trim(),
+        equipo_uad: eq,
+        destino_submodulo: eqLabel,
+        destino_etapa: etapa,
         destino_persona: persona,
         origen_submodulo: opts.origenSubmodulo || 'Coordinación CM',
       });

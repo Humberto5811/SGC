@@ -548,7 +548,7 @@ export async function listarCandidatosDecAprobadoProgramacion(
 /** RC8.17.8H — PROGRAMACION_APROBADA → PERSONA Cont.Menores (elegibilidad organizacional). */
 export async function listarCandidatosProgramacionAprobadaContMenores(
   requerimientoId,
-  { search = '' } = {},
+  { search = '', excluirUsuarioId = null } = {},
   row = null,
   client = null,
 ) {
@@ -559,11 +559,15 @@ export async function listarCandidatosProgramacionAprobadaContMenores(
     row,
     client,
   );
-  const etapaDest = transicion.etapa_destino || 'COORDINACION_CM';
+  const etapaDest = transicion.etapa_destino || 'INVITACIONES';
   const { usuarios } = await listarUsuariosDestinoContMenoresProgramacionAprobada({ client });
   const uadKeys = await resolveUnidadAdquisicionesKeys(client);
-  const coordinadores = usuarios.filter((u) => esCoordinadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
-  const operadores = usuarios.filter((u) => esOperadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
+  const exclUid = excluirUsuarioId != null && Number.isFinite(Number(excluirUsuarioId))
+    ? Number(excluirUsuarioId)
+    : null;
+  const filtrados = exclUid != null ? usuarios.filter((u) => Number(u.id) !== exclUid) : usuarios;
+  const coordinadores = filtrados.filter((u) => esCoordinadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
+  const operadores = filtrados.filter((u) => esOperadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
 
   let base = empaquetarListaDestinoContMenores(coordinadores, operadores);
   let { recomendado, candidatos } = base;
@@ -578,10 +582,10 @@ export async function listarCandidatosProgramacionAprobadaContMenores(
     evento_codigo: ev,
     etapa_origen: etapaOrigen,
     etapa_destino: etapaDest,
-    etapa_destino_label: 'Cont.Menores',
+    etapa_destino_label: metaDestino.label || 'Invitaciones',
     destinos: [{
       etapa_codigo: etapaDest,
-      etapa_label: 'Cont.Menores',
+      etapa_label: metaDestino.label || 'Invitaciones',
       evento_codigo: ev,
       unica: true,
     }],
@@ -695,7 +699,7 @@ export async function assertActorProgramacionPuedeDerivar(user, client = null) {
 export async function listarCandidatosTransicion(
   requerimientoId,
   eventoCodigo,
-  { search = '' } = {},
+  { search = '', excluirUsuarioId = null } = {},
   row = null,
   client = null,
 ) {
@@ -728,7 +732,12 @@ export async function listarCandidatosTransicion(
   }
 
   if (ev === 'PROGRAMACION_APROBADA') {
-    return listarCandidatosProgramacionAprobadaContMenores(requerimientoId, { search }, row, client);
+    return listarCandidatosProgramacionAprobadaContMenores(
+      requerimientoId,
+      { search, excluirUsuarioId },
+      row,
+      client,
+    );
   }
 
   if (ev === 'REASIGNACION_RESPONSABLE') {

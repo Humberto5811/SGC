@@ -164,6 +164,27 @@ export function esDestinatarioAsignacionInternaProgramacion(usuario, opts = {}) 
   return esOperadorEquipoUad(usuario, EQUIPOS_UAD.PROGRAMACION, opts);
 }
 
+/**
+ * RC8.17.8H5 — Pool organizacional UAD por equipo (COORD/OPER), sin filtro de permisos JSON.
+ * @returns {Promise<{ usuarios: object[], uadKeys: object }>}
+ */
+export async function listarUsuariosDestinoEquipoUadOrganizacional({
+  equipoCodigo,
+  client = null,
+} = {}) {
+  const { resolveUnidadAdquisicionesKeys } = await import('./workflowTransicionResponsable.js');
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const eq = normalizeEquipoUadCodigo(equipoCodigo);
+  if (!eq) return { usuarios: [], uadKeys };
+  const { rows } = await queryUsuariosActivosUad(uadKeys, client);
+  const usuarios = rows.filter((u) => {
+    if (!usuarioPerteneceEquipoUad(u, eq, { uadKeys })) return false;
+    const rol = rolGeneralFromUsuario(usuarioRowBasico(u));
+    return rol === ROLES_GENERALES.COORDINADOR || rol === ROLES_GENERALES.OPERADOR;
+  });
+  return { usuarios, uadKeys };
+}
+
 export async function listarUsuariosDestinoContMenoresProgramacionAprobada({ client = null } = {}) {
   const { resolveUnidadAdquisicionesKeys } = await import('./workflowTransicionResponsable.js');
   const uadKeys = await resolveUnidadAdquisicionesKeys(client);

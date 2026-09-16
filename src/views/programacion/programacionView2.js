@@ -628,7 +628,7 @@ async function aprobarProgramacion(id) {
     requerimientoId: id,
     eventoCodigo: 'PROGRAMACION_APROBADA',
     title: 'Aprobar y derivar a Cont.Menores',
-    message: 'Seleccione la persona responsable en Cont. Menores. Etapa destino: Cont.Menores, estado: En trámite.',
+    message: 'Seleccione la persona responsable en Cont.Menores (equipo UAD). Etapa destino: Invitaciones, estado: En trámite.',
     buttonText: 'Confirmar aprobación',
     candidatosApiPath: (rid) => `/contrataciones/programacion/candidatos-transicion/${rid}`,
   });
@@ -1205,7 +1205,7 @@ async function aprobarPaquete(id) {
       requerimientoId: firstReqId,
       eventoCodigo: 'PROGRAMACION_APROBADA',
       title: 'Aprobar paquete y derivar a Cont.Menores',
-      message: 'Seleccione la persona responsable en Cont. Menores para todos los requerimientos del paquete.',
+      message: 'Seleccione la persona responsable en Cont.Menores (Invitaciones) para todos los requerimientos del paquete.',
       buttonText: 'Confirmar aprobación del paquete',
       candidatosApiPath: (rid) => `/contrataciones/programacion/candidatos-transicion/${rid}`,
     });
