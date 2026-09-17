@@ -13,7 +13,7 @@ import { loadInvitacionesBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import {
-  renderBandejaCanonicoEstadoRespCells,
+  renderBandejaCanonicoEtapaEstadoRespCells,
   renderBandejaCanonicoDiasCell,
   getBandejaCanonicoFechaAsignacion,
 } from '../../utils/bandejaExpedienteColumns.js';
@@ -84,18 +84,12 @@ function solicitudEstadoBadge(s) {
 
 export function renderInvitacionesView() {
   return `
-    <div class="container-fluid actos-bandeja-page inv-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}
-        .inv-bandeja-page { overflow: visible; padding-bottom: 2rem; }
-        .inv-bandeja-wrap.table-responsive,
-        .inv-bandeja-wrap .table-responsive { overflow-x: auto; }
-        .inv-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
-        .inv-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
-      </style>
-      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <div>
-          <h3 class="mb-1"><i class="bi bi-envelope"></i> Invitaciones</h3>
-          <p class="text-muted mb-0">Bandeja maestra — expedientes en Invitaciones con trazabilidad completa.</p>
+    <div class="container-fluid actos-bandeja-page inv-bandeja-page sgc-registro-compact">
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+        <div class="d-flex flex-wrap align-items-baseline gap-2">
+          <h3 class="mb-0 fs-5"><i class="bi bi-envelope"></i> Invitaciones</h3>
+          <p class="text-muted mb-0 inv-page-subtitle">Bandeja maestra — expedientes en Invitaciones.</p>
         </div>
         <div class="d-flex gap-2 flex-wrap align-items-center" id="invToolbar">
           <button id="invBtnSC" class="btn btn-sm btn-primary" disabled><i class="bi bi-file-earmark-plus"></i> Crear Solicitud de Cotización</button>
@@ -104,13 +98,12 @@ export function renderInvitacionesView() {
           <span id="invBgRefreshHost"></span>
         </div>
       </div>
-      <hr/>
-      <ul class="nav nav-tabs mb-3" id="invTabs">
+      <ul class="nav nav-tabs mb-2 inv-tabs-compact" id="invTabs">
         <li class="nav-item"><a class="nav-link active" href="#" data-tab="bandeja">📋 Bandeja</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-tab="solicitudes">✉️ Invitaciones (Solicitudes)</a></li>
       </ul>
-      <div id="invTrazaSummaryWrap">${renderSummaryCardsHtml('invTrazaSummary')}</div>
-      <div id="invFilterWrap">${renderFilterBarHtml('inv', { hideExecutive: true })}</div>
+      <div id="invTrazaSummaryWrap">${renderSummaryCardsHtml('invTrazaSummary', { compact: true })}</div>
+      <div id="invFilterWrap">${renderFilterBarHtml('inv', { hideExecutive: true, compact: true })}</div>
       <div id="invContent"><div class="text-muted" id="invBootMsg">Cargando…</div></div>
     </div>`;
 }
@@ -127,9 +120,9 @@ function setInvTabChrome(tab) {
 
 function invitacionesBandejaHeaders(sortState = null) {
   return `
-    <th style="width:35px;"><input type="checkbox" id="invSelectAll" title="Seleccionar todos"></th>
+    <th class="inv-col-select text-center"><input type="checkbox" id="invSelectAll" title="Seleccionar todos"></th>
     <th class="req-col-timeline" title="Timeline">🕒</th>
-    ${sortableTh('N° Requerimiento', 'codigo', sortState)}
+    ${sortableTh('N° Requerimiento', 'codigo', sortState, 'req-col-req')}
     ${sortableTh('Solicitud de Cotización', 'codigo_solicitud', sortState, 'actos-col-sc')}
     ${sortableTh('Paquete', 'paquete', sortState, 'actos-col-paq')}
     ${sortableTh('Pedido SIGAMEF', 'pedido', sortState, 'actos-col-pedido')}
@@ -138,12 +131,13 @@ function invitacionesBandejaHeaders(sortState = null) {
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
-    ${sortableTh('Estado', 'estado', sortState)}
-    ${sortableTh('Responsable', 'responsable', sortState)}
-    ${sortableTh('Fecha Asignación', 'fecha', sortState)}
-    ${sortableTh('Días', 'dias', sortState)}
-    <th class="text-center actos-col-inv-count" style="min-width:72px;">Invitado</th>
-    <th class="text-center actos-col-inv-count" style="min-width:100px;">N° Invitaciones</th>
+    ${sortableTh('Etapa', 'etapa', sortState, 'req-col-etapa')}
+    ${sortableTh('Estado', 'estado', sortState, 'req-col-estado-cell')}
+    ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
+    ${sortableTh('Fecha Asignación', 'fecha', sortState, 'inv-col-fecha')}
+    ${sortableTh('Días', 'dias', sortState, 'req-col-dias')}
+    <th class="text-center actos-col-inv-count">Inv.</th>
+    <th class="text-center actos-col-inv-num">N° Inv.</th>
     <th class="req-col-acc"></th>`;
 }
 
@@ -184,18 +178,18 @@ function renderInvBandejaRowCells(r, opts = {}) {
 
   return `
     <td class="text-center"><button type="button" class="btn btn-link btn-sm p-0 req-traza text-secondary" data-id="${r.id}" onclick="event.stopPropagation()"><i class="bi bi-clock-history"></i></button></td>
-    <td><strong>${escFn(r.codigo || ('#' + r.id))}</strong></td>
-    <td class="actos-col-sc small"><strong>${scCode ? escFn(scCode) : '<span class="text-muted">—</span>'}</strong></td>
+    <td class="req-col-req"><strong class="text-truncate d-inline-block" style="max-width:100%;" title="${escFn(r.codigo || ('#' + r.id))}">${escFn(r.codigo || ('#' + r.id))}</strong></td>
+    <td class="actos-col-sc small"><span class="d-inline-block text-truncate" style="max-width:100%;" title="${escFn(scCode)}"><strong>${scCode ? escFn(scCode) : '<span class="text-muted">—</span>'}</strong></span></td>
     <td class="actos-col-paq">${paqBadge}</td>
-    <td class="actos-col-pedido small">${escFn(pedidos)}</td>
-    <td class="actos-col-sigamef small">${escFn(sigamef || '—')}</td>
+    <td class="actos-col-pedido small"><span class="d-inline-block text-truncate" style="max-width:100%;" title="${escFn(pedidos)}">${escFn(pedidos)}</span></td>
+    <td class="actos-col-sigamef small"><span class="d-inline-block text-truncate" style="max-width:100%;" title="${escFn(sigamef || '—')}">${escFn(sigamef || '—')}</span></td>
     <td class="actos-col-desc"><span class="req-desc-text" title="${escFn(nombreItem)}">${escFn(nombreItem)}</span></td>
     <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
-    <td class="actos-col-area">${escFn(r.area || '—')}</td>
+    <td class="actos-col-area"><span class="req-area-text" title="${escFn(r.area || '—')}">${escFn(r.area || '—')}</span></td>
     <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
-    ${renderBandejaCanonicoEstadoRespCells(r)}
-    <td class="small text-muted">${escFn(fechaFmt)}</td>
-    <td class="text-center">${renderBandejaCanonicoDiasCell(r, escFn)}</td>`;
+    ${renderBandejaCanonicoEtapaEstadoRespCells(r)}
+    <td class="inv-col-fecha small text-muted">${escFn(fechaFmt)}</td>
+    <td class="text-center req-col-dias">${renderBandejaCanonicoDiasCell(r, escFn)}</td>`;
 }
 
 function renderInvExtraCells(r) {
@@ -204,7 +198,7 @@ function renderInvExtraCells(r) {
   const badge = invitado
     ? '<span class="badge bg-success">Sí</span>'
     : '<span class="badge bg-secondary">No</span>';
-  return `<td class="text-center">${badge}</td><td class="text-center"><strong>${num}</strong></td>`;
+  return `<td class="text-center actos-col-inv-count">${badge}</td><td class="text-center actos-col-inv-num"><strong>${num}</strong></td>`;
 }
 
 function updateSelectionUi() {
@@ -221,7 +215,7 @@ function buildBandejaRowHtml(r) {
   const checked = selection.has(r.id) ? 'checked' : '';
   return `
     <tr data-req-id="${r.id}" data-row-id="${r.id}" data-selection-id="${r.id}">
-      <td onclick="event.stopPropagation()"><input type="checkbox" class="inv-select" data-id="${r.id}" data-selection-id="${r.id}" ${checked}></td>
+      <td class="inv-col-select" onclick="event.stopPropagation()"><input type="checkbox" class="inv-select" data-id="${r.id}" data-selection-id="${r.id}" ${checked}></td>
       ${renderInvBandejaRowCells(r, { escFn: esc })}
       ${renderInvExtraCells(r)}
       ${renderActionMenuCell(r.id, invitacionesMenuItems(r), invitacionesHiddenActions(r))}

@@ -32,6 +32,7 @@ import {
   labelRolGeneralUsuario,
   listarUsuariosCoordinadoresEquipoUadSubmodulo,
   listarUsuariosDestinoContMenoresProgramacionAprobada,
+  listarUsuariosDestinoEquipoUadSubmodulo,
   listarOperadoresProgramacionAsignables,
   appendEquipoUadCandidato,
 } from './equiposUadUsuario.js';
@@ -624,6 +625,88 @@ export async function listarCandidatosProgramacionAprobadaContMenores(
   };
 }
 
+/** RC8.17.8H6-A2 — COORDINACION_CM_APROBADA → operadores UAD Cont.Menores (Invitaciones). */
+export async function listarCandidatosCoordinacionCmAprobadaInvitaciones(
+  requerimientoId,
+  { search = '', excluirUsuarioId = null } = {},
+  row = null,
+  client = null,
+) {
+  const ev = 'COORDINACION_CM_APROBADA';
+  const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(
+    requerimientoId,
+    ev,
+    row,
+    client,
+  );
+  const etapaDest = transicion.etapa_destino || 'INVITACIONES';
+  const submoduloCodigo = metaDestino.submoduloCodigo || 'INVITACIONES';
+  const perfil = PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES;
+
+  const { usuarios, uadKeys } = await listarUsuariosDestinoEquipoUadSubmodulo({
+    equipoCodigo: EQUIPOS_UAD.CONT_MENORES,
+    submoduloPermisosCodigo: submoduloCodigo,
+    client,
+  });
+
+  const exclUid = excluirUsuarioId != null && Number.isFinite(Number(excluirUsuarioId))
+    ? Number(excluirUsuarioId)
+    : null;
+
+  let elegibles = usuarios.filter(
+    (u) => (exclUid == null || Number(u.id) !== exclUid)
+      && esOperadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys })
+      && esUsuarioElegibleParaPerfil(u, perfil, submoduloCodigo),
+  );
+
+  let candidatos = elegibles.map((u) => appendEquipoUadCandidato(mapCandidato(u), u));
+  candidatos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+
+  let recomendado = null;
+  if (candidatos.length === 1) {
+    recomendado = {
+      ...candidatos[0],
+      etiqueta: 'Analista recomendado',
+      recomendado: true,
+      fuente: 'equipo_uad',
+    };
+    candidatos = [];
+  }
+
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    candidatos = candidatos.filter((c) => matchesSearch(c, q));
+    if (recomendado && !matchesSearch(recomendado, q)) recomendado = null;
+  }
+
+  const nTotal = (recomendado ? 1 : 0) + candidatos.length;
+
+  return {
+    soportado: true,
+    evento_codigo: ev,
+    etapa_origen: etapaOrigen,
+    etapa_destino: etapaDest,
+    etapa_destino_label: metaDestino.label || 'Invitaciones',
+    destinos: [{
+      etapa_codigo: etapaDest,
+      etapa_label: metaDestino.label || 'Invitaciones',
+      evento_codigo: ev,
+      unica: true,
+    }],
+    perfil_responsable: perfil,
+    equipo_uad: EQUIPOS_UAD.CONT_MENORES,
+    equipo_uad_label: labelEquipoUad(EQUIPOS_UAD.CONT_MENORES),
+    alcance: 'UAD_EQUIPO',
+    centro: null,
+    recomendado,
+    candidatos,
+    resolucion_automatica: recomendado
+      ? { usuarioId: recomendado.id, ambiguo: false }
+      : { usuarioId: null, ambiguo: nTotal !== 1, candidatos: nTotal },
+    mensaje_sin_candidatos: 'No hay operadores Cont.Menores con permiso operativo en Invitaciones.',
+  };
+}
+
 /** RC8.17.8H4 — REASIGNACION_RESPONSABLE en PROGRAMACION → OPERADOR mismo equipo. */
 export async function listarCandidatosReasignacionProgramacion(
   requerimientoId,
@@ -756,6 +839,15 @@ export async function listarCandidatosTransicion(
 
   if (ev === 'PROGRAMACION_APROBADA') {
     return listarCandidatosProgramacionAprobadaContMenores(
+      requerimientoId,
+      { search, excluirUsuarioId },
+      row,
+      client,
+    );
+  }
+
+  if (ev === 'COORDINACION_CM_APROBADA') {
+    return listarCandidatosCoordinacionCmAprobadaInvitaciones(
       requerimientoId,
       { search, excluirUsuarioId },
       row,
@@ -1005,6 +1097,7 @@ export default {
   listarCandidatosTransicion,
   listarCandidatosDecAprobadoProgramacion,
   listarCandidatosProgramacionAprobadaContMenores,
+  listarCandidatosCoordinacionCmAprobadaInvitaciones,
   listarCandidatosReasignacionProgramacion,
   assertActorProgramacionPuedeDerivar,
   listarCandidatosDerivacionDec,

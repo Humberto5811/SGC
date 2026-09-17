@@ -307,7 +307,7 @@ export async function runWorkflowTransition({
         }
       : null,
     evento: {
-      codigo: evento,
+      codigo: eventoCodigo,
       idempotente: motor.idempotente === true,
     },
     data: motor.expediente_actualizado || null,

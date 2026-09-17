@@ -863,6 +863,7 @@ router.put('/actos/asignar/:requerimientoId', async (req, res, next) => {
       usuario: usuario || COORDINADOR_ACTOS,
       submodulo_code,
       submodulo_label,
+      usuario_destino_id: req.body?.usuario_destino_id,
     });
     res.json({ success: true, requerimiento: { id: updated.id, codigo: updated.codigo, estado: updated.estado, responsable_actual: updated.responsable_actual } });
   } catch (err) { next(err); }
@@ -878,6 +879,7 @@ router.put('/actos/reasignar/:requerimientoId', async (req, res, next) => {
       usuario,
       submodulo_code,
       submodulo_label,
+      usuario_destino_id: req.body?.usuario_destino_id,
     });
     res.json({ success: true, requerimiento: updated });
   } catch (err) { next(err); }

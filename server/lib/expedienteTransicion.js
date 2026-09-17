@@ -410,6 +410,19 @@ export async function transicionarExpediente({
           throw buildErrorSubsanacionSinPersona();
         }
       }
+    } else if (
+      eventoCodigo === 'INVITACION_ENVIADA'
+      || eventoCodigo === 'REINVITACION_ENVIADA'
+    ) {
+      const { applyErvExpedientePostEnvioInvitacion } = await import('./invitacionesExpedienteEstado.js');
+      const applied = applyErvExpedientePostEnvioInvitacion({
+        labels,
+        usuarioOrigenId,
+      });
+      Object.assign(labels, applied.labels);
+      resp = applied.resp;
+      Object.assign(metaTransicion, applied.metaPatch);
+      usuarioDestinoEfectivo = null;
     }
 
     // 1. Mutación de dominio PRIMERO (misma tx) — si falla, nada se confirma
@@ -482,16 +495,26 @@ export async function transicionarExpediente({
       || metaTransicion.pilot_observacion_subsanada_retorno_dec === true;
     const pilotObsDirigida = metaTransicion.pilot_observacion_dirigida_destino === true
       || metaTransicion.pilot_observacion_dec_destino === true;
+    const postEnvioInvitacionProveedores = eventoCodigo === 'INVITACION_ENVIADA'
+      || eventoCodigo === 'REINVITACION_ENVIADA';
     const pilotCambiaUbicacion = cambiaUbicacion || pilotObsReg || pilotObsSub || pilotObsDirigida
       || etapaEfectiva !== etapaOrigen;
     const estadoNegocio = pilotCambiaUbicacion
       ? (getEstadoNegocioFromEtapa(mapEtapaDestinoBD(etapaEfectiva)) || labels.estadoLabel)
       : null;
-    if (pilotCambiaUbicacion || usuarioDestinoEfectivo != null || unidadDestino) {
+    const estadoNegocioLegacy = postEnvioInvitacionProveedores
+      ? (metaTransicion.sync_legacy_estado_negocio || labels.estadoLabel)
+      : (pilotCambiaUbicacion ? estadoNegocio : null);
+    if (
+      pilotCambiaUbicacion
+      || usuarioDestinoEfectivo != null
+      || unidadDestino
+      || postEnvioInvitacionProveedores
+    ) {
       await syncLegacyRequerimiento(tx, {
         requerimientoId: rid,
         etapaCodigo: etapaEfectiva,
-        estadoNegocio: pilotCambiaUbicacion ? estadoNegocio : null,
+        estadoNegocio: estadoNegocioLegacy,
         responsableTipo: resp.responsableTipo,
         responsableUsuarioId: resp.responsableUsuarioId,
         responsableUnidad: resp.responsableUnidad,

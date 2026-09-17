@@ -19,8 +19,7 @@ import { handleBandejaObservaciones } from '../../components/modalObservaciones.
 import { getUserDisplayName } from '../../utils/userDisplay.js';
 import {
   isCoordinadorActos, isExpedientePoolCoordinador, isExpedienteAsignadoAMi,
-  showAsignarAnalistaModal, showActosDestinoModal,
-  showDerivarAnalistaModal,
+  showActosDestinoModal,
   actosBandejaStyles,
 } from '../../utils/actosModals.js';
 import {
@@ -114,6 +113,21 @@ function perfilActivoLabel(user) {
   return isCoordinadorActos(user) ? SUBMODULO_UI_LABEL : 'Operador CM';
 }
 
+function etapaVigenteCodigo(r) {
+  return String(
+    r?.etapa_codigo
+    || r?.bandeja_contrato?.etapa?.codigo
+    || r?.expediente_estado_vigente?.etapa_codigo
+    || r?.estado_actual
+    || '',
+  ).toUpperCase();
+}
+
+function enCoordinacionCm(r) {
+  const e = etapaVigenteCodigo(r);
+  return e === 'COORDINACION_CM' || e === 'ACTOS_PREPARATORIOS';
+}
+
 function getRowContext(r) {
   const user = getCurrentUser();
   const userName = getUserDisplayName(user);
@@ -123,6 +137,7 @@ function getRowContext(r) {
     esCoordinador: isCoordinadorActos(user),
     esPoolCoordinador: isExpedientePoolCoordinador(r),
     esAsignadoAMi: isExpedienteAsignadoAMi(r, userName, user.id),
+    enCoordinacionCm: enCoordinacionCm(r),
   };
 }
 
@@ -305,14 +320,15 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
         onReload: () => loadActosList(),
         bandejaPrefix: 'actos',
       }),
-      deriveAnalyst: (id) => derivarAnalistaActos(id),
+      deriveInvitaciones: (id) => derivarActosInvitacionesCm(id),
+      reassign: (id) => reasignarResponsableCm(id),
     });
     bindRowDetailPanel(cont, rows, { onAdjuntos: (id) => manageAdjuntos(id, true) });
 
     cont.querySelectorAll('.actos-ver').forEach((b) => b.onclick = () => printRequerimiento(b.dataset.id));
     cont.querySelectorAll('.actos-attach').forEach((b) => b.onclick = () => manageAdjuntos(b.dataset.id, true));
-    cont.querySelectorAll('.actos-asignar').forEach((b) => b.onclick = () => asignarActos(b.dataset.id));
-    cont.querySelectorAll('.actos-derivar-analista').forEach((b) => b.onclick = () => derivarAnalistaActos(b.dataset.id));
+    cont.querySelectorAll('.actos-derivar-invitaciones').forEach((b) => b.onclick = () => derivarActosInvitacionesCm(b.dataset.id));
+    cont.querySelectorAll('.actos-reasignar').forEach((b) => b.onclick = () => reasignarResponsableCm(b.dataset.id));
     cont.querySelectorAll('.actos-observar').forEach((b) => b.onclick = () => observarActos(b.dataset.id));
     cont.querySelectorAll('.actos-derivar').forEach((b) => b.onclick = () => derivarActos(b.dataset.id));
     cont.querySelectorAll('.actos-aprobar-inv').forEach((b) => b.onclick = () => aprobarActosInv(b.dataset.id));
@@ -325,28 +341,64 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
   }
 }
 
-async function asignarActos(id) {
+const MSG_DERIVAR_INVITACIONES = 'Etapa destino: Invitaciones. Estado: En trámite. Seleccione la persona responsable en Invitaciones.';
+const MSG_REASIGNAR_CM = 'La etapa permanece en Coordinación CM y el estado en En trámite. Solo cambia la persona responsable.';
+
+async function derivarActosInvitacionesCm(id) {
   const req = lastRows.find((x) => String(x.id) === String(id));
-  if (!req) return;
-  const ctx = getRowContext(req);
-  const data = await showAsignarAnalistaModal({
-    title: ctx.esPoolCoordinador ? 'Asignar responsable' : 'Reasignar analista',
-    subtitle: ctx.esPoolCoordinador
-      ? 'Seleccione el submódulo destino y el analista autorizado. El expediente permanecerá visible en Coordinación CM.'
-      : 'Seleccione el nuevo analista responsable.',
+  if (!req || !enCoordinacionCm(req)) {
+    alert('Solo puede derivar a Invitaciones mientras el expediente está en Coordinación CM.');
+    return;
+  }
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'COORDINACION_CM_APROBADA',
+    title: 'Derivar a Invitaciones',
+    message: MSG_DERIVAR_INVITACIONES,
+    buttonText: 'Derivar',
   });
-  if (!data) return;
+  if (!seleccion) return;
   try {
     const userName = getUserDisplayName(getCurrentUser());
-    const fn = ctx.esPoolCoordinador ? contratacionesService.asignarActos : contratacionesService.reasignarActos;
-    await fn(id, data.analista, userName, {
-      submodulo_code: data.submodulo_code,
-      submodulo_label: data.submodulo_label,
+    await contratacionesService.aprobarActosInvitaciones(id, {
+      usuario: userName,
+      usuario_destino_id: seleccion.usuario_destino_id,
+      responsable_recomendado_id: seleccion.responsable_recomendado_id,
+      reasignacion_manual: seleccion.reasignacion_manual,
     });
-    alert(`Asignación registrada. Responsable: ${data.analista}. El expediente sigue visible en la bandeja de Coordinación CM.`);
+    alert('Expediente derivado a Invitaciones (En trámite). Permanece visible en Coordinación CM por historial.');
     loadActosList();
   } catch (e) {
-    alert('Error al asignar: ' + e.message);
+    alert('Error al derivar: ' + e.message);
+  }
+}
+
+async function reasignarResponsableCm(id) {
+  const req = lastRows.find((x) => String(x.id) === String(id));
+  if (!req || !enCoordinacionCm(req)) {
+    alert('Solo puede reasignar responsable mientras el expediente está en Coordinación CM.');
+    return;
+  }
+  const seleccion = await showWorkflowTransicionModal({
+    requerimientoId: id,
+    eventoCodigo: 'COORDINACION_CM_ASIGNADA',
+    title: 'Reasignar responsable',
+    message: MSG_REASIGNAR_CM,
+    buttonText: 'Reasignar',
+  });
+  if (!seleccion) return;
+  try {
+    const userName = getUserDisplayName(getCurrentUser());
+    const uid = seleccion.usuario_destino_id;
+    await contratacionesService.reasignarActos(id, String(uid), userName, {
+      submodulo_code: 'ACTOS_PREPARATORIOS',
+      submodulo_label: 'Coordinación CM',
+      usuario_destino_id: uid,
+    });
+    alert(`Responsable actualizado. Etapa: Coordinación CM, estado: En trámite.`);
+    loadActosList();
+  } catch (e) {
+    alert('Error al reasignar: ' + e.message);
   }
 }
 
@@ -411,28 +463,6 @@ async function observarActos(id) {
   }
 }
 
-async function derivarAnalistaActos(id) {
-  const req = lastRows.find((x) => String(x.id) === String(id));
-  if (!req) return;
-  const ctx = getRowContext(req);
-  const data = await showDerivarAnalistaModal({
-    subtitle: 'El expediente permanece en Coordinación CM; el analista quedará como responsable.',
-  });
-  if (!data) return;
-  try {
-    const userName = getUserDisplayName(getCurrentUser());
-    const fn = ctx.esPoolCoordinador ? contratacionesService.asignarActos : contratacionesService.reasignarActos;
-    await fn(id, data.analista, userName, {
-      submodulo_code: data.submodulo_code,
-      submodulo_label: data.submodulo_label,
-    });
-    alert(`Expediente asignado a ${data.analista}.`);
-    loadActosList();
-  } catch (e) {
-    alert('Error al derivar: ' + e.message);
-  }
-}
-
 async function derivarActos(id) {
   const req = lastRows.find((x) => String(x.id) === String(id));
   if (!req) return;
@@ -458,9 +488,9 @@ async function aprobarActosInv(id) {
   const seleccion = await showWorkflowTransicionModal({
     requerimientoId: id,
     eventoCodigo: 'COORDINACION_CM_APROBADA',
-    title: 'Aprobar y derivar a Invitaciones',
-    message: 'Seleccione la persona responsable en Invitaciones. Etapa destino: Invitaciones, estado: En trámite.',
-    buttonText: 'Confirmar envío',
+    title: 'Derivar a Invitaciones',
+    message: MSG_DERIVAR_INVITACIONES,
+    buttonText: 'Derivar',
   });
   if (!seleccion) return;
   try {

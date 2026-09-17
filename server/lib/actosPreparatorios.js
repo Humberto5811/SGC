@@ -502,13 +502,24 @@ function resolveEstadoMovimientoObservacion(destinoSubmodulo, destinoEtapa) {
   return resolveEstadoFromDestino(destinoSubmodulo, destinoEtapa);
 }
 
-export async function asignarAnalistaActos(requerimientoId, { analista, usuario, submodulo_code, submodulo_label }) {
+export async function asignarAnalistaActos(requerimientoId, {
+  analista,
+  usuario,
+  submodulo_code,
+  submodulo_label,
+  usuario_destino_id: usuarioDestinoIdParam = null,
+}) {
   const loaded = await ensureEtapaCoordinacionCm(requerimientoId, usuario);
   if (!loaded) throw new Error('Requerimiento no encontrado');
   if (!expedienteEnActos(loaded.row)) throw new Error(`El expediente no está en ${SUBMODULO_COORDINACION_CM}`);
 
   const code = String(submodulo_code || 'ACTOS_PREPARATORIOS').toUpperCase();
   const subLabel = submodulo_label || submoduloLabelFromCode(code);
+  if (code !== 'ACTOS_PREPARATORIOS' && code !== 'COORDINACION_CM') {
+    const err = new Error('Reasignación interna solo permitida en Coordinación CM');
+    err.status = 422;
+    throw err;
+  }
 
   if (!Array.isArray(loaded.payload.historial_actos)) loaded.payload.historial_actos = [];
   loaded.payload.historial_actos.push({
@@ -523,7 +534,21 @@ export async function asignarAnalistaActos(requerimientoId, { analista, usuario,
     fecha: new Date().toISOString(),
   });
 
-  const uid = /^\d+$/.test(String(analista || '').trim()) ? Number(analista) : null;
+  let uid = usuarioDestinoIdParam != null && Number.isFinite(Number(usuarioDestinoIdParam))
+    ? Number(usuarioDestinoIdParam)
+    : null;
+  if (uid == null && /^\d+$/.test(String(analista || '').trim())) {
+    uid = Number(analista);
+  }
+  if (uid != null) {
+    const { assertUsuarioDestinoTransicionElegible } = await import('./workflowTransicionResponsable.js');
+    await assertUsuarioDestinoTransicionElegible(
+      requerimientoId,
+      'COORDINACION_CM_ASIGNADA',
+      uid,
+      loaded.row,
+    );
+  }
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const result = await transicionarExpediente({
     requerimientoId,

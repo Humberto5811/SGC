@@ -447,11 +447,14 @@ export async function showContMenoresDerivacionUadModal(opts = {}) {
   });
 }
 
+/**
+ * @deprecated RC8.17.8H6-A1 — usar showWorkflowTransicionModal (COORDINACION_CM_APROBADA / ASIGNADA).
+ */
 export async function showDerivarAnalistaModal(opts = {}) {
   return openAsignacionAnalistaModal({
     title: opts.title || 'Derivar a analista',
-    subtitle: opts.subtitle || 'Seleccione submódulo destino y analista autorizado.',
-    defaultSubmodulo: opts.defaultSubmodulo || 'ACTOS_PREPARATORIOS',
+    subtitle: opts.subtitle || 'Obsoleto: use Derivar a Invitaciones o Reasignar responsable en bandeja CM.',
+    defaultSubmodulo: 'ACTOS_PREPARATORIOS',
     buttonText: 'Derivar',
     buttonClass: 'btn-primary',
     motivoField: true,
@@ -481,24 +484,74 @@ export function actosBandejaStyles() {
     }
     .actos-bandeja-wrap .actos-col-paq { min-width: 100px; }
     .actos-bandeja-wrap .actos-col-sc { min-width: 130px; white-space: nowrap; }
-    .inv-bandeja-wrap .actos-col-area { min-width: 90px; max-width: 120px; }
-    .inv-bandeja-wrap .actos-col-inv-count { min-width: 88px; max-width: 100px; }
     .actos-bandeja-wrap .actos-col-pedido { min-width: 110px; white-space: normal; }
     .actos-bandeja-wrap .actos-col-sigamef { min-width: 110px; white-space: normal; }
-    .inv-bandeja-page { overflow: visible; padding-bottom: 2.5rem; }
+    /* RC8.17.8H6-A3 — Invitaciones: bandeja compacta (ref. Registro / CM) */
+    .inv-bandeja-page { overflow: visible; padding-bottom: 1.25rem; }
     .inv-bandeja-page #invContent { overflow: visible; }
-    .inv-bandeja-wrap .req-list-table { min-width: 1680px; }
-    .inv-bandeja-wrap .req-col-acc .dropdown-menu { min-width: 240px; max-height: none; overflow: visible; }
+    .inv-bandeja-page .inv-page-subtitle { font-size: 0.78rem; line-height: 1.2; }
     #invTabs { border-bottom: 2px solid #dee2e6; }
+    #invTabs.inv-tabs-compact { margin-bottom: 0.5rem !important; }
     #invTabs .nav-link {
       border: 1px solid transparent; border-radius: 6px 6px 0 0; margin-bottom: -2px;
       color: #495057; background: #f8f9fa;
     }
+    #invTabs.inv-tabs-compact .nav-link { padding: 0.35rem 0.75rem; font-size: 0.8125rem; }
     #invTabs .nav-link.active {
       border-color: #dee2e6 #dee2e6 #fff; background: #fff; font-weight: 600; color: #0a4275;
     }
     #invTabs .nav-link[data-tab="solicitudes"].active { border-top: 3px solid #0a4275; }
-    .inv-tab-panel { border: 1px solid #dee2e6; border-radius: 8px; background: #fff; padding: 1rem; }
+    .inv-tab-panel { border: 1px solid #dee2e6; border-radius: 6px; background: #fff; padding: 0.5rem 0.65rem; }
+    .inv-bandeja-wrap .req-list-table {
+      table-layout: fixed; width: 100%; min-width: 1180px;
+    }
+    .inv-bandeja-wrap .req-list-table th,
+    .inv-bandeja-wrap .req-list-table td {
+      vertical-align: middle; font-size: 0.78rem; padding: 0.32rem 0.38rem; line-height: 1.25;
+    }
+    .inv-bandeja-wrap .req-list-table tbody tr { height: 34px; max-height: 38px; }
+    .inv-bandeja-wrap .inv-col-select { width: 28px; max-width: 32px; padding-left: 0.25rem; padding-right: 0.25rem; }
+    .inv-bandeja-wrap .req-col-req { width: 5.5rem; max-width: 5.5rem; }
+    .inv-bandeja-wrap .actos-col-sc { min-width: 0; width: 5.25rem; max-width: 5.5rem; white-space: nowrap; }
+    .inv-bandeja-wrap .actos-col-paq { min-width: 0; width: 4.25rem; max-width: 4.5rem; }
+    .inv-bandeja-wrap .actos-col-pedido,
+    .inv-bandeja-wrap .actos-col-sigamef { min-width: 0; width: 4.75rem; max-width: 5rem; white-space: nowrap; }
+    .inv-bandeja-wrap .actos-col-desc { min-width: 0; width: 8%; max-width: 10.5rem; }
+    .inv-bandeja-wrap .actos-col-desc .req-desc-text {
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 1.25; max-width: 100%;
+    }
+    .inv-bandeja-wrap .actos-col-centro { min-width: 0; width: 4.25rem; max-width: 4.75rem; }
+    .inv-bandeja-wrap .actos-col-area { min-width: 0; width: 4.5rem; max-width: 5rem; }
+    .inv-bandeja-wrap .actos-col-cmn { width: 3.5rem; max-width: 3.75rem; }
+    .inv-bandeja-wrap .req-col-etapa,
+    .inv-bandeja-wrap .req-col-estado-cell,
+    .inv-bandeja-wrap .req-col-resp { padding: 0.28rem 0.35rem; vertical-align: middle; }
+    .inv-bandeja-wrap .req-col-etapa { width: 7.5rem; max-width: 7.5rem; }
+    .inv-bandeja-wrap .req-col-estado-cell { width: 7.75rem; max-width: 7.75rem; }
+    .inv-bandeja-wrap .req-col-resp { width: 8.25rem; max-width: 8.25rem; }
+    .inv-bandeja-wrap .req-col-etapa .sgc-etapa-badge,
+    .inv-bandeja-wrap .req-col-estado-cell .sgc-estado-badge,
+    .inv-bandeja-wrap .req-col-resp .sgc-responsable-badge {
+      min-height: 22px; max-height: 24px; max-width: 100%;
+    }
+    .inv-bandeja-wrap .req-col-etapa .sgc-etapa-badge__text { max-width: 6.75rem; }
+    .inv-bandeja-wrap .req-col-estado-cell .sgc-estado-badge__text { max-width: 7rem; }
+    .inv-bandeja-wrap .req-col-resp .sgc-responsable-badge__text { max-width: 7.5rem; }
+    .inv-bandeja-wrap .sgc-etapa-badge__text,
+    .inv-bandeja-wrap .sgc-estado-badge__text,
+    .inv-bandeja-wrap .sgc-responsable-badge__text {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      display: inline-block; vertical-align: bottom;
+    }
+    .inv-bandeja-wrap .inv-col-fecha { width: 6.25rem; max-width: 6.5rem; white-space: nowrap; font-size: 0.72rem; }
+    .inv-bandeja-wrap .req-col-dias { width: 2.75rem; max-width: 3rem; }
+    .inv-bandeja-wrap .actos-col-inv-count { min-width: 0; width: 2.75rem; max-width: 3rem; font-size: 0.72rem; }
+    .inv-bandeja-wrap .actos-col-inv-num { min-width: 0; width: 3rem; max-width: 3.25rem; font-size: 0.72rem; }
+    .inv-bandeja-wrap .req-col-acc { width: 2.5rem; max-width: 2.75rem; overflow: visible; }
+    .inv-bandeja-wrap .req-col-acc .dropdown-menu { min-width: 240px; max-height: none; overflow: visible; }
+    @media (max-width: 991.98px) {
+      .inv-bandeja-wrap .req-list-table { min-width: 980px; }
+    }
   `;
 }
 

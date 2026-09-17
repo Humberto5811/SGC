@@ -209,7 +209,12 @@ export function progHiddenActions(r, opts = {}) {
 }
 
 export function actosMenuItems(r, opts = {}) {
-  const { esCoordinador = false, esAsignadoAMi = false, esPoolCoordinador = false } = opts;
+  const {
+    esCoordinador = false,
+    esAsignadoAMi = false,
+    esPoolCoordinador = false,
+    enCoordinacionCm = true,
+  } = opts;
   const pending = getObservacionPendiente(r);
   const pendActos = observacionPendienteParaSubmodulo(pending, 'Coordinación CM');
   const obsLabel = labelBotonObservaciones(r, 'Coordinación CM');
@@ -220,9 +225,15 @@ export function actosMenuItems(r, opts = {}) {
     { act: 'attach', label: 'Adjuntos', icon: 'bi-paperclip' },
   ];
   if (esCoordinador) {
+    const coordItems = [];
+    if (enCoordinacionCm) {
+      coordItems.push(
+        { act: 'deriveInvitaciones', label: 'Derivar a Invitaciones', icon: 'bi-box-arrow-right' },
+        { act: 'reassign', label: 'Reasignar responsable', icon: 'bi-person-check' },
+      );
+    }
     return [
-      { act: 'deriveAnalyst', label: 'Derivar a analista', icon: 'bi-person-plus' },
-      { act: 'approve', label: esPoolCoordinador ? 'Asignar analista' : 'Reasignar', icon: 'bi-person-check' },
+      ...coordItems,
       { act: 'obs', label: obsLabel, icon: 'bi-chat-left-dots' },
       { act: 'derive', label: 'Derivar (otro destino)', icon: 'bi-arrow-right-circle' },
       ...baseItems,
@@ -247,9 +258,9 @@ export function actosHiddenActions(r, opts = {}) {
   if (esCoordinador) {
     html += `
     <button type="button" class="actos-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>
-    <button type="button" class="actos-derivar-analista" data-act-trigger="deriveAnalyst" data-id="${r.id}" data-perm-act="DERIVAR"></button>
-    <button type="button" class="actos-derivar" data-act-trigger="derive" data-id="${r.id}" data-perm-act="DERIVAR"></button>
-    <button type="button" class="actos-asignar" data-act-trigger="approve" data-id="${r.id}" data-perm-act="APROBAR"></button>`;
+    <button type="button" class="actos-derivar-invitaciones" data-act-trigger="deriveInvitaciones" data-id="${r.id}" data-perm-act="DERIVAR"></button>
+    <button type="button" class="actos-reasignar" data-act-trigger="reassign" data-id="${r.id}" data-perm-act="APROBAR"></button>
+    <button type="button" class="actos-derivar" data-act-trigger="derive" data-id="${r.id}" data-perm-act="DERIVAR"></button>`;
   } else if (esAsignadoAMi) {
     html += `
     <button type="button" class="actos-observar" data-act-trigger="obs" data-id="${r.id}" data-perm-act="OBSERVAR"></button>

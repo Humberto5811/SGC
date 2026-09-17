@@ -711,19 +711,26 @@ export async function persistirInvitaciones(client, { requerimientoId, solicitud
  * Conserva EXACTAMENTE la respuesta anterior y el orden de escrituras.
  * Con flag WORKFLOW_ENGINE_INVITACIONES off, el flujo es idéntico al legacy.
  */
-export async function enviarInvitaciones(requerimientoId, { solicitud_id, invitacion_ids, usuario, ip } = {}) {
+export async function enviarInvitaciones(requerimientoId, {
+  solicitud_id, invitacion_ids, usuario, ip, usuarioOrigenId = null,
+} = {}) {
   const persisted = await persistirInvitaciones(null, { requerimientoId, solicitud_id, invitacion_ids, usuario, ip }, enviarCorreosInvitacion);
 
   if (persisted.solicitud) {
     const { transicionarExpediente } = await import('./expedienteTransicion.js');
+    const { UNIDAD_RESPONSABLE_PROVEEDORES } = await import('../../shared/invitacionesExpedienteCanon.js');
+    const contador = Number(persisted.contador_envios || 0);
+    const evento = contador > 1 ? 'REINVITACION_ENVIADA' : 'INVITACION_ENVIADA';
     await transicionarExpediente({
       requerimientoId,
-      evento: 'INVITACION_ENVIADA',
-      unidadDestino: SUBMODULO_INVITACIONES,
+      evento,
+      unidadDestino: UNIDAD_RESPONSABLE_PROVEEDORES,
+      usuarioOrigenId: usuarioOrigenId != null ? Number(usuarioOrigenId) : null,
       motivo: `${persisted.estadoNuevo} — ${persisted.codigo} (${persisted.enviados.length} proveedor${persisted.enviados.length === 1 ? '' : 'es'})`,
       metadata: {
-        client_request_id: `inv-enviar:${requerimientoId}:${persisted.solicitud?.id || ''}:${persisted.contador_envios || 0}`,
+        client_request_id: `inv-enviar:${requerimientoId}:${persisted.solicitud?.id || ''}:${contador || 0}`,
         via: 'enviarInvitaciones',
+        solicitud_id: persisted.solicitud?.id ?? solicitud_id ?? null,
       },
       actorRol: usuario || SUBMODULO_INVITACIONES,
     });

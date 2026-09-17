@@ -1,5 +1,6 @@
 /**
- * RC8.17.8H — Programación → Cont.Menores (PROGRAMACION_APROBADA, responsable PERSONA).
+ * RC8.17.8H / RC8.17.8H6-A — Programación → Coordinación CM (PROGRAMACION_APROBADA, PERSONA).
+ * Destino canónico ERV: COORDINACION_CM / EN_TRAMITE (matriz; no salto a Invitaciones).
  */
 import { query } from '../db.js';
 import { ETAPAS } from './trazabilidad.js';
@@ -46,6 +47,7 @@ export async function ejecutarProgramacionAprobadaContMenores({
   reasignacionManual = false,
   clientRequestId = null,
   reqRow = null,
+  flagsOverride = null,
 }) {
   await assertActorProgramacionPuedeDerivar(req?.user ?? null);
 
@@ -123,13 +125,14 @@ export async function ejecutarProgramacionAprobadaContMenores({
       client_request_id: crq,
       observacion: 'Programación aprobada — derivado a Coordinación CM (Cont.Menores)',
       ...metaDerivacion,
-      unidad_destino: ETAPAS.COORDINACION_CM?.responsable || 'Coordinador de Contratos Menores',
+      unidad_destino: ETAPAS.ACTOS_PREPARATORIOS?.responsable || 'Coordinador de Contratos Menores',
     },
     domainMutator: buildTramo1bPayloadMutator({
       accionHistorial: 'historial_programacion',
       submoduloLabel: 'Programación',
       camposExtras: { tipo: 'aprobacion_programacion', usuario: usuario || 'Programación' },
     }),
+    flagsOverride,
     legacyHandler: async () => {
       let payloadLegacy = {};
       try { payloadLegacy = JSON.parse(row.payload || '{}'); } catch (_) {}
@@ -145,8 +148,8 @@ export async function ejecutarProgramacionAprobadaContMenores({
         requerimientoId,
         evento: 'PROGRAMACION_APROBADA',
         usuarioDestinoId: uidDest,
-        unidadDestino: ETAPAS.INVITACIONES?.responsable || 'Invitaciones',
-        motivo: 'Aprobado en Programación — derivado a Invitaciones (Cont.Menores)',
+        unidadDestino: ETAPAS.ACTOS_PREPARATORIOS?.responsable || 'Coordinador de Contratos Menores',
+        motivo: 'Aprobado en Programación — derivado a Coordinación CM (Cont.Menores)',
         metadata: {
           client_request_id: crq,
           via: 'programacion/aprobar:legacyHandler',

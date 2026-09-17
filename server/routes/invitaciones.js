@@ -130,12 +130,13 @@ router.post('/solicitudes/:id/enviar-correos', async (req, res, next) => {
     const contadorActual = Number(scRows[0]?.contador_envios || 0);
     const contadorObjetivo = cicloObjetivo ?? (contadorActual + 1);
 
-    // Fase 2A.3E — REINVITACION_ENVIADA (INVITACIONES → INVITACIONES).
-    // Reutiliza el patrón de INVITACION_ENVIADA: domainMutator persiste con el tx del motor
-    // y devuelve planCorreos; afterCommit envía correos post-COMMIT y marca SMTP.
+    // RC8.17.8H6-A4 — primer envío INVITACION_ENVIADA; reenvíos REINVITACION_ENVIADA.
+    // Mismo ERV vigente (ESPERANDO_COTIZACIONES / Proveedores) vía transicionarExpediente.
+    const eventoCodigoEnvio = contadorActual === 0 ? 'INVITACION_ENVIADA' : 'REINVITACION_ENVIADA';
+
     const result = await runWorkflowTransition({
       moduleFlag: 'WORKFLOW_ENGINE_INVITACIONES',
-      eventoCodigo: 'REINVITACION_ENVIADA',
+      eventoCodigo: eventoCodigoEnvio,
       expedienteId: requerimientoId,
       req,
       metadata: {
@@ -196,7 +197,11 @@ router.post('/solicitudes/:id/enviar-correos', async (req, res, next) => {
         enviados: correoMotor.enviados,
         total: totalMotor,
         contador_envios: result.domainResults?.contador_envios ?? 0,
-        mensaje: result.mensaje ?? 'Solicitud de Cotización reinvitada (reenvío) correctamente.',
+        mensaje: result.mensaje ?? (
+          eventoCodigoEnvio === 'INVITACION_ENVIADA'
+            ? 'Solicitud de Cotización enviada correctamente.'
+            : 'Solicitud de Cotización reinvitada (reenvío) correctamente.'
+        ),
         workflow: result.workflow || undefined,
         evento: result.evento,
         correo: correoMotor,
