@@ -40,6 +40,7 @@ export function buildSafeUser(row, accesoCcpFlags = null) {
     email: row.email || '',
     telefono: row.telefono || '',
     cargo: row.cargo || '',
+    equipo_uad: row.equipo_uad || null,
     area_id: row.area_id,
     codigo_centro_costo: row.codigo_centro_costo || '',
     descripcion_area: row.descripcion_area || '',

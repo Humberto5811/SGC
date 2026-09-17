@@ -261,6 +261,7 @@ function wireDestinoSelectors(id, opts = {}) {
   const nombreEl = document.getElementById(`${id}_destPersonaNombre`);
 
   let seleccion = { id: null, nombre: '' };
+  let destinoEtapaResuelta = '';
 
   const seleccionarCandidato = (uid, nombre) => {
     if (!uid) return;
@@ -305,6 +306,7 @@ function wireDestinoSelectors(id, opts = {}) {
         : (opts.candidatosApiPath || defaultPath);
       const resp = await api.get(`${apiPath}?${params}`);
       const data = resp?.data || resp;
+      destinoEtapaResuelta = data.destino_etapa || '';
       if (!data?.soportado) {
         if (requerimientoId) {
           sugeridoEl.innerHTML = '<div class="text-muted small border rounded p-2">Sin personas elegibles canónicas para este destino.</div>';
@@ -409,7 +411,8 @@ function wireDestinoSelectors(id, opts = {}) {
       return null;
     }
 
-    const etapaCode = sub?.code === 'REGISTRADO' ? 'REGISTRO' : (sub?.code || '');
+    const etapaCode = destinoEtapaResuelta
+      || (sub?.code === 'REGISTRADO' ? 'REGISTRO' : (sub?.code || ''));
     const recomendadoId = recomEl.value ? Number(recomEl.value) : null;
     return {
       destino_submodulo: subEl.value,

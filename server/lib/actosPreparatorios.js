@@ -293,7 +293,7 @@ export const WHERE_INGRESO_HISTORICO_CONT_MENORES = `
       AND (
         (
           UPPER(TRIM(COALESCE(we_cm.evento_codigo, ''))) = 'PROGRAMACION_APROBADA'
-          AND UPPER(TRIM(COALESCE(we_cm.etapa_destino, ''))) = 'INVITACIONES'
+          AND UPPER(TRIM(COALESCE(we_cm.etapa_destino, ''))) IN ('INVITACIONES', 'COORDINACION_CM')
         )
         OR UPPER(TRIM(COALESCE(we_cm.evento_codigo, ''))) IN (
           'COORDINACION_CM_ASIGNADA', 'COORDINACION_CM_APROBADA',
@@ -598,6 +598,20 @@ export async function observarActos(requerimientoId, body) {
   }
   const estadoDestinoLabel = resolveEstadoMovimientoObservacion(destino_submodulo, destino_etapa);
 
+  const { resolveUsuarioIdDesdeActor } = await import('./pilotRegistroEvaluacion.js');
+  let uidOrig = body.usuario_origen_id ?? body.usuarioOrigenId ?? null;
+  if (uidOrig != null && Number.isFinite(Number(uidOrig))) {
+    uidOrig = Number(uidOrig);
+  } else {
+    uidOrig = null;
+  }
+  if (!uidOrig && usuario) {
+    uidOrig = await resolveUsuarioIdDesdeActor({
+      usuarioOrigenId: body.usuario_origen_id ?? body.usuarioOrigenId,
+      actorRol: usuario,
+    }, null);
+  }
+
   const emitResult = pushObservacion(loaded.payload, {
     motivo,
     gerente: usuario || COORDINADOR_ACTOS,
@@ -607,6 +621,8 @@ export async function observarActos(requerimientoId, body) {
     destino_etapa: destino_etapa || etapaDestObs,
     destino_persona: destino_persona || '',
     observacion_padre_id: observacion_padre_id || observacionPadreId || null,
+    usuario_origen_id: uidOrig,
+    usuario_destino_id: uid,
   });
   const observacionId = emitResult?.observacion?.id
     || emitResult?.observacion?.observacion_id
@@ -673,6 +689,52 @@ async function assertUsuarioEnPoolEquipoUad(equipoCodigo, destinoPersona) {
   return Number(match.id);
 }
 
+/** Etapa canónica vigente (ERV prevalece sobre legacy). */
+export async function getEtapaVigenteCodigoRequerimiento(requerimientoId, fallbackRow = null) {
+  const rid = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(rid)) return '';
+  const { rows } = await query(
+    'SELECT etapa_codigo FROM expediente_estado_vigente WHERE requerimiento_id = $1',
+    [rid],
+  );
+  const fromErv = String(rows[0]?.etapa_codigo || '').toUpperCase();
+  if (fromErv) return fromErv;
+  let legacy = String(fallbackRow?.estado_actual || '').toUpperCase();
+  if (legacy === 'ACTOS_PREPARATORIOS') return 'COORDINACION_CM';
+  return legacy;
+}
+
+/** RC8.17.8H5-09B — evento según etapa vigente al derivar hacia Invitaciones. */
+export function resolverEventoDerivarHaciaInvitaciones(etapaVigenteCodigo) {
+  const et = String(etapaVigenteCodigo || '').toUpperCase();
+  if (et === 'COORDINACION_CM' || et === 'ACTOS_PREPARATORIOS') {
+    return { evento: 'COORDINACION_CM_APROBADA', modo: 'cm_a_invitaciones' };
+  }
+  if (et === 'INVITACIONES') {
+    return { evento: 'COORDINACION_CM_ASIGNADA', modo: 'reasignacion_invitaciones' };
+  }
+  const err = new Error(`No se puede derivar a Invitaciones desde etapa ${et || 'desconocida'}`);
+  err.status = 422;
+  throw err;
+}
+
+/**
+ * Idempotencia derivar Actos:
+ * - CM→Invitaciones (APROBADA): una clave por REQ.
+ * - reasignación en I (ASIGNADA): clave por REQ + persona destino.
+ */
+export function buildClientRequestIdDerivarActos(requerimientoId, { evento, usuarioDestinoId = null } = {}) {
+  const rid = parseInt(requerimientoId, 10);
+  const ev = String(evento || '').toUpperCase();
+  if (ev === 'COORDINACION_CM_ASIGNADA') {
+    const uid = usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))
+      ? Number(usuarioDestinoId)
+      : 0;
+    return `actos-derivar:asignar-i:${rid}:${uid}`;
+  }
+  return `actos-derivar:cm-invitaciones:${rid}`;
+}
+
 export async function derivarActos(requerimientoId, body) {
   const {
     motivo, usuario, destino_submodulo, destino_etapa, destino_persona, origen_submodulo, equipo_uad,
@@ -694,11 +756,11 @@ export async function derivarActos(requerimientoId, body) {
     });
   }
 
-  const { etapaFuncionalPorEquipoUad } = await import('../../shared/contMenoresDerivacionUad.js');
+  const { etapaTransicionDestinoDerivacionEquipoUad } = await import('../../shared/contMenoresDerivacionUad.js');
   const eqUad = String(equipo_uad || '').trim().toUpperCase() || null;
   const etapaDest = String(
     destino_etapa
-    || (eqUad ? etapaFuncionalPorEquipoUad(eqUad) : null)
+    || (eqUad ? etapaTransicionDestinoDerivacionEquipoUad(eqUad) : null)
     || submoduloLabelToEtapa(destino_submodulo)
     || 'INVITACIONES',
   ).toUpperCase();
@@ -708,16 +770,29 @@ export async function derivarActos(requerimientoId, body) {
     : (/^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null);
 
   if (etapaDest === 'INVITACIONES') {
+    const etapaVigente = await getEtapaVigenteCodigoRequerimiento(requerimientoId, loaded.row);
+    const { evento, modo } = resolverEventoDerivarHaciaInvitaciones(etapaVigente);
+    const clientRequestId = buildClientRequestIdDerivarActos(requerimientoId, {
+      evento,
+      usuarioDestinoId: uid,
+    });
     const { transicionarExpediente } = await import('./expedienteTransicion.js');
     const result = await transicionarExpediente({
       requerimientoId,
-      evento: 'COORDINACION_CM_APROBADA',
+      evento,
       usuarioDestinoId: uid,
       unidadDestino: uid ? null : (responsable || null),
       motivo: motivo
         ? formatObservacionTraza(motivo, { destino_persona, destino_submodulo })
-        : `Derivado a ${destino_submodulo || etapaDest}`,
-      metadata: { client_request_id: `actos-derivar:${requerimientoId}`, via: 'derivarActos' },
+        : (modo === 'reasignacion_invitaciones'
+          ? `Reasignado en Invitaciones — ${destino_submodulo || etapaDest}`
+          : `Derivado a ${destino_submodulo || etapaDest}`),
+      metadata: {
+        client_request_id: clientRequestId,
+        via: 'derivarActos',
+        derivar_modo: modo,
+        etapa_vigente_origen: etapaVigente,
+      },
       actorRol: usuario || COORDINADOR_ACTOS,
       domainMutator: motivo ? async (tx) => {
         await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [

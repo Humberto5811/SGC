@@ -1,5 +1,5 @@
 /**
- * RC8.17.8H5 — Programación → Invitaciones (CM) + derivación UAD + observaciones + ERV + idempotencia.
+ * RC8.17.8H5 — Programación → Coordinación CM + derivación UAD + observaciones + ERV + idempotencia.
  */
 import assert from 'node:assert/strict';
 import { query } from '../server/db.js';
@@ -28,9 +28,9 @@ const ok = (c, m) => { assert.ok(c, m); console.log(`  ✓ ${m}`); };
 
 console.log('\n=== RC8.17.8H5 — Cont.Menores derivación ===\n');
 
-// A. Matriz PROGRAMACION_APROBADA → INVITACIONES
+// A. Matriz PROGRAMACION_APROBADA → COORDINACION_CM
 const tr = getTransition({ tipoContratacion: 'BIEN', etapaOrigen: 'PROGRAMACION', eventoCodigo: 'PROGRAMACION_APROBADA' });
-ok(tr?.etapa_destino === 'INVITACIONES', 'A1 PROGRAMACION_APROBADA → INVITACIONES (matriz)');
+ok(tr?.etapa_destino === 'COORDINACION_CM', 'A1 PROGRAMACION_APROBADA → COORDINACION_CM (matriz)');
 
 const mockUsers = [
   { id: 10, activo: true, equipo_uad: 'CONT_MENORES', cargo: 'Coordinador', permisos: {}, rol: 'coordinador', apellidos: 'Rod', nombres: 'Coord', centro: 'OA', codigo_centro_costo: '01.04.01.02.01' },
@@ -54,7 +54,7 @@ const row = { id: 50, tipo: 'bienes', estado_actual: 'PROGRAMACION', payload: '{
 const client = mockClient();
 
 const lista = await listarCandidatosProgramacionAprobadaContMenores(50, { excluirUsuarioId: 999 }, row, client);
-ok(lista.etapa_destino === 'INVITACIONES', 'A2 etapa destino INVITACIONES');
+ok(lista.etapa_destino === 'COORDINACION_CM', 'A2 etapa destino COORDINACION_CM');
 ok(lista.equipo_uad === EQUIPOS_UAD.CONT_MENORES, 'A3 equipo CONT_MENORES');
 ok(lista.candidatos.some((c) => c.id === 260) || lista.recomendado?.id === 10, 'A4 candidatos CM incluyen operador/coord');
 ok(!lista.candidatos.some((c) => c.id === 999) && lista.recomendado?.id !== 999, 'A5 actor Programación excluido');
@@ -149,5 +149,25 @@ const localWrong = new Date(utcSample).toLocaleString('es-PE', {
   day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
 });
 ok(lima !== localWrong || process.env.TZ === 'America/Lima', 'F2 fmtDateTime centralizado evita depender del TZ del runtime');
+
+// G. RC8.17.8H5-09B — ingreso CM→I vs reasignación I→I
+const {
+  resolverEventoDerivarHaciaInvitaciones,
+  buildClientRequestIdDerivarActos,
+} = await import('../server/lib/actosPreparatorios.js');
+ok(
+  resolverEventoDerivarHaciaInvitaciones('COORDINACION_CM').evento === 'COORDINACION_CM_APROBADA',
+  'G1 desde COORDINACION_CM → APROBADA (CM→Invitaciones)',
+);
+ok(
+  resolverEventoDerivarHaciaInvitaciones('INVITACIONES').evento === 'COORDINACION_CM_ASIGNADA',
+  'G2 ya en INVITACIONES → ASIGNADA (solo reasignación interna)',
+);
+const trAsignI = getTransition({ tipoContratacion: 'BIEN', etapaOrigen: 'INVITACIONES', eventoCodigo: 'COORDINACION_CM_ASIGNADA' });
+ok(trAsignI?.cambia_ubicacion === false, 'G3 ASIGNADA I→I cambia_ubicacion false');
+ok(
+  buildClientRequestIdDerivarActos(1, { evento: 'COORDINACION_CM_APROBADA' }) === 'actos-derivar:cm-invitaciones:1',
+  'G4 clave idempotencia CM→I estable por REQ',
+);
 
 console.log('\n=== RC8.17.8H5 OK ===\n');

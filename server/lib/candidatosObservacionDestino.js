@@ -85,6 +85,25 @@ export function mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo = '') {
   return null;
 }
 
+/** RC8.17.8H5-08A — Retorno subsanación desde observación emitida en Coordinación CM. */
+export function esDestinoSubsanacionRetornoContMenores(destinoSubmodulo = '') {
+  const s = String(destinoSubmodulo || '').trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  if (lower === 'invitaciones') return true;
+  if (/^coordinaci[oó]n cm$/i.test(s)) return true;
+  if (/actos prep/i.test(s)) return true;
+  return false;
+}
+
+/**
+ * Etapa ERV para subsanación retorno Cont.Menores (submódulo Coordinación CM).
+ */
+export function mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo = '') {
+  if (esDestinoSubsanacionRetornoContMenores(destinoSubmodulo)) return 'COORDINACION_CM';
+  return mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo);
+}
+
 export function esDestinoObservacionDecSoportado(destinoSubmodulo = '') {
   return mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo) != null;
 }
@@ -579,7 +598,7 @@ export async function listarCandidatosSubsanacionDestino({
   search = '',
   client = null,
 } = {}) {
-  const etapaDest = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo);
+  const etapaDest = mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo);
   if (!etapaDest) {
     return {
       destino: String(destinoSubmodulo || ''),
@@ -592,6 +611,60 @@ export async function listarCandidatosSubsanacionDestino({
 
   const emisorId = await resolveEmisorObservacionRetorno(requerimientoId, client, { observacionId });
   const emisorRow = emisorId ? await loadUsuarioRow(emisorId, client) : null;
+
+  if (etapaDest === 'COORDINACION_CM' && esDestinoSubsanacionRetornoContMenores(destinoSubmodulo)) {
+    const { listarCandidatosPoolContMenoresEquipoUad } = await import('./workflowTransicionResponsable.js');
+    const base = await listarCandidatosPoolContMenoresEquipoUad({ search: '' }, client);
+    const elegibles = [...(base.recomendado ? [base.recomendado] : []), ...(base.candidatos || [])]
+      .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+    const idsElegibles = new Set(elegibles.map((c) => Number(c.id)));
+
+    const esElegibleCmRetorno = (u) => {
+      if (!u || u.activo === false) return false;
+      if (emisorId != null && Number(u.id) === Number(emisorId)) return true;
+      return idsElegibles.has(Number(u.id));
+    };
+
+    const emisorCand = emisorRow
+      ? { ...mapCandidato(emisorRow, { fuente: 'emisor_observacion' }), permisos: emisorRow.permisos, rol: emisorRow.rol }
+      : null;
+    const { recomendado, recomendadoInactivo } = aplicarRecomendadoHistorico({
+      recomendadoRaw: emisorCand,
+      elegibles,
+      esElegibleFn: esElegibleCmRetorno,
+      centroCodigo: null,
+    });
+
+    let recomendadoFinal = recomendado;
+    if (emisorId && emisorRow && emisorRow.activo !== false && esElegibleCmRetorno(emisorRow)) {
+      recomendadoFinal = {
+        ...mapCandidato(emisorRow, {
+          fuente: 'emisor_observacion',
+          recomendado: true,
+          etiqueta: 'Emisor de la observación',
+        }),
+      };
+    }
+    let candidatos = elegibles.filter((c) => !recomendadoFinal || c.id !== recomendadoFinal.id);
+    const filtrado = filtrarListaCandidatosObservacion({
+      recomendado: recomendadoFinal,
+      candidatos,
+      search,
+    });
+    const meta = getEtapaMeta('COORDINACION_CM');
+    return {
+      destino: destinoSubmodulo,
+      destino_etapa: 'COORDINACION_CM',
+      destino_submodulo_codigo: meta?.submoduloCodigo || 'COORDINACION_CM',
+      soportado: true,
+      perfil_responsable: base.perfil_responsable,
+      equipo_uad: base.equipo_uad,
+      recomendado: filtrado.recomendado,
+      recomendado_inactivo: recomendadoInactivo,
+      candidatos: filtrado.candidatos,
+      emisor_observacion_id: emisorId,
+    };
+  }
 
   if (etapaDest === 'DEC') {
     const uadKeys = await resolveUnidadAdquisicionesKeys(client);

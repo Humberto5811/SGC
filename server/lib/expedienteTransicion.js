@@ -185,6 +185,13 @@ export async function transicionarExpediente({
       labels.etapaLabel = estadoVigentePrevio.etapa_label || labels.etapaLabel;
       labels.estadoCodigo = estadoVigentePrevio.estado_codigo || labels.estadoCodigo;
       labels.estadoLabel = estadoVigentePrevio.estado_label || labels.estadoLabel;
+    } else if (
+      eventoCodigo === 'COORDINACION_CM_ASIGNADA'
+      && !cambiaUbicacion
+      && estadoVigentePrevio?.estado_codigo
+    ) {
+      labels.estadoCodigo = estadoVigentePrevio.estado_codigo;
+      labels.estadoLabel = estadoVigentePrevio.estado_label || labels.estadoLabel;
     }
 
     let resp = resolverResponsableSincero({

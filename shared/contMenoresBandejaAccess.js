@@ -31,14 +31,21 @@ export function esMiembroContMenoresBandejaAcceso(usuario = {}) {
   return rg === 'COORDINADOR' || rg === 'OPERADOR';
 }
 
-/** Coordinador CM (vista amplia) — por cargo/rol, no por equipo_uad solo. */
+function esCargoCoordinadorContMenores(cargo = '') {
+  const c = String(cargo || '').trim().toLowerCase();
+  if (!c.includes('coordinador')) return false;
+  if (c.includes('contratos')) return true;
+  if (/coordinador[\s._-]*cm\b|coordinador-cm/.test(c)) return true;
+  return false;
+}
+
+/** Coordinador CM (vista amplia) — cargo CM, admin, o COORDINADOR + equipo CONT_MENORES. */
 export function esCoordinadorActosUsuario(usuario = {}) {
-  const cargo = String(usuario.cargo || '').toLowerCase();
-  if (cargo.includes('coordinador') && cargo.includes('contratos')) return true;
+  if (!usuario || usuario.activo === false) return false;
   if (String(usuario.rol || '').toLowerCase() === 'admin') return true;
-  if (rolGeneralBasicoFromUsuario(usuario) === 'COORDINADOR'
-    && normalizeEquipoUadCodigo(usuario.equipo_uad) === EQUIPOS_UAD.CONT_MENORES) {
-    return true;
-  }
+  if (esCargoCoordinadorContMenores(usuario.cargo)) return true;
+  const rg = rolGeneralBasicoFromUsuario(usuario);
+  const eq = normalizeEquipoUadCodigo(usuario.equipo_uad);
+  if (rg === 'COORDINADOR' && eq === EQUIPOS_UAD.CONT_MENORES) return true;
   return false;
 }

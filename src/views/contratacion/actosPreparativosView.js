@@ -24,7 +24,7 @@ import {
   actosBandejaStyles,
 } from '../../utils/actosModals.js';
 import {
-  renderBandejaCanonicoEstadoRespCells,
+  renderBandejaCanonicoEtapaEstadoRespCells,
   renderBandejaCanonicoDiasCell,
   getBandejaCanonicoFechaAsignacion,
 } from '../../utils/bandejaExpedienteColumns.js';
@@ -52,8 +52,9 @@ function actosSortBandejaHeaders(sortState = null) {
     ${sortableTh('Centro', 'centro_nombre', sortState, 'actos-col-centro')}
     ${sortableTh('Área Usuaria', 'area', sortState, 'actos-col-area')}
     ${sortableTh('CMN N°', 'cmn', sortState, 'actos-col-cmn')}
-    ${sortableTh('Estado', 'estado', sortState)}
-    ${sortableTh('Responsable', 'responsable', sortState)}
+    ${sortableTh('Etapa', 'etapa', sortState, 'req-col-etapa')}
+    ${sortableTh('Estado', 'estado', sortState, 'req-col-estado-cell')}
+    ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
     ${sortableTh('Fecha Asignación', 'fecha', sortState)}
     ${sortableTh('Días', 'dias', sortState)}
     <th class="req-col-acc"></th>`;
@@ -97,7 +98,7 @@ function renderCmBandejaRowCells(r, opts = {}) {
     <td class="actos-col-centro"><span class="req-centro-text" title="${escFn(r.centro_nombre || r.centro || '—')}">${escFn(r.centro_nombre || r.centro || '—')}</span></td>
     <td class="actos-col-area">${escFn(r.area || '—')}</td>
     <td class="actos-col-cmn small">${escFn(r.cmn || '—')}</td>
-    ${renderBandejaCanonicoEstadoRespCells(r)}
+    ${renderBandejaCanonicoEtapaEstadoRespCells(r)}
     <td class="small text-muted">${escFn(fechaFmt)}</td>
     <td class="text-center">${renderBandejaCanonicoDiasCell(r, escFn)}</td>`;
 }
@@ -163,6 +164,29 @@ function renderActosView() {
       <style>${bandejaTableStyles()}${actosBandejaStyles()}
         .actos-bandeja-wrap .actos-col-centro { min-width: 120px; max-width: 180px; }
         .actos-bandeja-wrap .actos-col-area { min-width: 120px; max-width: 180px; }
+        .actos-bandeja-wrap .req-col-etapa,
+        .actos-bandeja-wrap .req-col-estado-cell,
+        .actos-bandeja-wrap .req-col-resp {
+          padding: 0.32rem 0.38rem;
+          vertical-align: middle;
+        }
+        .actos-bandeja-wrap .req-col-etapa { width: 7.5rem; max-width: 7.5rem; }
+        .actos-bandeja-wrap .req-col-estado-cell { width: 7.75rem; max-width: 7.75rem; }
+        .actos-bandeja-wrap .req-col-resp { width: 8.25rem; max-width: 8.25rem; }
+        .actos-bandeja-wrap .req-col-etapa .sgc-etapa-badge,
+        .actos-bandeja-wrap .req-col-estado-cell .sgc-estado-badge,
+        .actos-bandeja-wrap .req-col-resp .sgc-responsable-badge {
+          min-height: 22px; max-height: 24px; max-width: 100%;
+        }
+        .actos-bandeja-wrap .req-col-etapa .sgc-etapa-badge__text { max-width: 6.75rem; }
+        .actos-bandeja-wrap .req-col-estado-cell .sgc-estado-badge__text { max-width: 7rem; }
+        .actos-bandeja-wrap .req-col-resp .sgc-responsable-badge__text { max-width: 7.5rem; }
+        .actos-bandeja-wrap .sgc-etapa-badge__text,
+        .actos-bandeja-wrap .sgc-estado-badge__text,
+        .actos-bandeja-wrap .sgc-responsable-badge__text {
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+          display: inline-block; vertical-align: bottom;
+        }
       </style>
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>

@@ -3,6 +3,7 @@
  * Hilo independiente por emisor; cadena de actuaciones; cierre automático al continuar workflow.
  */
 import { submoduloLabelToEtapa } from './observacionDestino.js';
+import { mapDestinoSubmoduloAEtapaSubsanacion } from './candidatosObservacionDestino.js';
 import { buildObservacionEntry } from './observacionesExpediente.js';
 import {
   ESTADOS_OBS,
@@ -240,7 +241,9 @@ export function registrarSubsanacionObservacion(payload, {
   const now = new Date().toISOString();
   const origenMod = origen_submodulo || obs.moduloReceptor || 'Registro de Requerimiento';
   const destinoEmisor = obs.origen_submodulo || obs.moduloEmisor || obs.moduloOrigen || 'DEC';
-  const destinoEtapa = submoduloLabelToEtapa(destinoEmisor) || 'DEC';
+  const destinoEtapa = mapDestinoSubmoduloAEtapaSubsanacion(destinoEmisor)
+    || submoduloLabelToEtapa(destinoEmisor)
+    || 'DEC';
 
   obs.subsanacion = texto;
   obs.respuesta = texto;

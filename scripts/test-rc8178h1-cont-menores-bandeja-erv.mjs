@@ -66,6 +66,15 @@ ok(permissionsService.canAccessRoute('dec/actos', 'VER', jcrisostomo), 'E) menú
 ok(!permissionsService.tieneActividad('APROBAR', jcrisostomo, 'ACTOS_PREPARATORIOS'), 'F) sin APROBAR ACTOS');
 ok(!permissionsService.tieneActividad('OBSERVAR', jcrisostomo, 'ACTOS_PREPARATORIOS'), 'F) sin OBSERVAR ACTOS');
 ok(esCoordinadorActosUsuario(wendy), 'G) Wendy coordinador actos');
+const wendySinEquipoEnSesion = {
+  id: 20,
+  rol: 'coordinador',
+  cargo: 'COORDINADOR-CM',
+  centro: 'OA',
+  activo: true,
+  permisos: wendy.permisos,
+};
+ok(esCoordinadorActosUsuario(wendySinEquipoEnSesion), 'G2) Wendy sesión sin equipo_uad — cargo COORDINADOR-CM');
 
 const row43 = {
   id: 43,

@@ -821,14 +821,14 @@ export async function registrarSubsanacionDerivacion({
       : (etapaActual === 'REGISTRADO' ? 'REGISTRO' : etapaActual);
 
   const etapaDestinoLabel = submoduloLabelToEtapa(destinoSubmodulo) || String(destinoEtapa || '').toUpperCase();
-  const { mapDestinoSubmoduloAEtapaObservacion, assertUsuarioDestinoSubsanacionElegible } = await import('./candidatosObservacionDestino.js');
+  const { mapDestinoSubmoduloAEtapaSubsanacion, assertUsuarioDestinoSubsanacionElegible } = await import('./candidatosObservacionDestino.js');
   const {
     resolveUsuarioDestinoRetornoSubsanacion,
     resolveUsuarioIdDesdeActor,
     buildErrorSubsanacionSinPersona,
   } = await import('./pilotRegistroEvaluacion.js');
-  const etapaDest = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo)
-    || String(etapaDestinoLabel || destinoEtapa || '').toUpperCase().replace('REGISTRADO', 'REGISTRO');
+  const etapaDest = mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo)
+    || String(destinoEtapa || etapaDestinoLabel || '').toUpperCase().replace('REGISTRADO', 'REGISTRO');
 
   let uid = await resolveUsuarioDestinoRetornoSubsanacion({
     requerimientoId,
@@ -840,7 +840,7 @@ export async function registrarSubsanacionDerivacion({
   });
 
   const cambiaUbicacion = etapaDest && etapaDest !== etapaCanon;
-  const destinoSoportado = mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo) != null;
+  const destinoSoportado = mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo) != null;
 
   if (cambiaUbicacion) {
     if (!uid) throw buildErrorSubsanacionSinPersona();
@@ -878,7 +878,7 @@ export async function registrarSubsanacionDerivacion({
       client_request_id: `subsanar:${requerimientoId}:${Date.now()}`,
       origen_submodulo: origenSubmodulo,
       destino_submodulo: destinoSubmodulo || '',
-      destino_etapa: etapaDestinoLabel || '',
+      destino_etapa: etapaDest || etapaDestinoLabel || '',
       destino_persona: destinoPersona || '',
       responsable_emisor_id: uid,
       observacion_id: observacionId,

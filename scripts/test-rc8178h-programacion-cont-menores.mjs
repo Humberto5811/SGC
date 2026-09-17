@@ -360,11 +360,11 @@ const otrosIds = (lista.candidatos || []).map((c) => c.id).sort((a, b) => a - b)
 
 ok(otrosIds.join(',') === '21,260', 'operadores en candidatos (orden alfabético por nombre)');
 
-ok(lista.etapa_destino === 'INVITACIONES', 'J) etapa funcional INVITACIONES');
+ok(lista.etapa_destino === 'COORDINACION_CM', 'J) etapa destino matriz COORDINACION_CM');
 
-ok(lista.etapa_destino_label === 'Invitaciones', 'etiqueta destino Invitaciones');
+ok(lista.etapa_destino_label === 'Coordinación CM', 'etiqueta destino Coordinación CM');
 
-ok(lista.destinos?.[0]?.etapa_label === 'Invitaciones', 'destinos UI Invitaciones');
+ok(lista.destinos?.[0]?.etapa_label === 'Coordinación CM', 'destinos UI Coordinación CM');
 
 ok(lista.equipo_uad === EQUIPOS_UAD.CONT_MENORES, 'equipo receptor CONT_MENORES');
 

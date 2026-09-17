@@ -1,7 +1,7 @@
 // Modales — Coordinación CM (asignación, derivación, aprobación)
 import { contratacionesService } from '../services/contratacionesService.js';
 import { listEquiposUadCatalogo } from '../../shared/equiposUad.js';
-import { etapaFuncionalPorEquipoUad } from '../../shared/contMenoresDerivacionUad.js';
+import { etapaTransicionDestinoDerivacionEquipoUad } from '../../shared/contMenoresDerivacionUad.js';
 import { SUBMODULOS_DESTINO, getSubmoduloByLabel } from './observacionDestino.js';
 import { api } from '../services/apiService.js';
 import { esc } from './trazabilidad.js';
@@ -380,6 +380,7 @@ export async function showContMenoresDerivacionUadModal(opts = {}) {
         <div class="modal-header"><h5 class="modal-title">${esc(opts.title || 'Derivar expediente')}</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body">
+          ${opts.subtitle ? `<p class="text-muted small mb-2">${esc(opts.subtitle)}</p>` : ''}
           <div class="row g-2 mb-3 border rounded p-2 bg-light">
             <div class="col-md-5">
               <label class="form-label small fw-semibold">Equipo / submódulo destino</label>
@@ -425,7 +426,7 @@ export async function showContMenoresDerivacionUadModal(opts = {}) {
       const persona = usrEl.value;
       if (!persona) { alert('Seleccione persona destino.'); return; }
       const eq = eqEl.value;
-      const etapa = etapaFuncionalPorEquipoUad(eq) || '';
+      const etapa = etapaTransicionDestinoDerivacionEquipoUad(eq) || '';
       const eqLabel = equipos.find((e) => e.codigo === eq)?.label || eq;
       resolved = true;
       resolve({

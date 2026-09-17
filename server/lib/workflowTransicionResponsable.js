@@ -545,6 +545,29 @@ export async function listarCandidatosDecAprobadoProgramacion(
   };
 }
 
+/** Pool PERSONA Cont.Menores (UAD) sin depender de la etapa vigente del expediente (subsanación retorno CM). */
+export async function listarCandidatosPoolContMenoresEquipoUad({ search = '' } = {}, client = null) {
+  const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+  const { listarUsuariosDestinoContMenoresProgramacionAprobada } = await import('./equiposUadUsuario.js');
+  const { usuarios } = await listarUsuariosDestinoContMenoresProgramacionAprobada({ client });
+  const coordinadores = usuarios.filter((u) => esCoordinadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
+  const operadores = usuarios.filter((u) => esOperadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys }));
+  let { recomendado, candidatos } = empaquetarListaDestinoContMenores(coordinadores, operadores);
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    candidatos = candidatos.filter((c) => matchesSearch(c, q));
+    if (recomendado && !matchesSearch(recomendado, q)) recomendado = null;
+  }
+  return {
+    soportado: true,
+    perfil_responsable: 'EQUIPO_UAD_CONT_MENORES',
+    equipo_uad: EQUIPOS_UAD.CONT_MENORES,
+    equipo_uad_label: labelEquipoUad(EQUIPOS_UAD.CONT_MENORES),
+    recomendado,
+    candidatos,
+  };
+}
+
 /** RC8.17.8H — PROGRAMACION_APROBADA → PERSONA Cont.Menores (elegibilidad organizacional). */
 export async function listarCandidatosProgramacionAprobadaContMenores(
   requerimientoId,
@@ -559,7 +582,7 @@ export async function listarCandidatosProgramacionAprobadaContMenores(
     row,
     client,
   );
-  const etapaDest = transicion.etapa_destino || 'INVITACIONES';
+  const etapaDest = transicion.etapa_destino || 'COORDINACION_CM';
   const { usuarios } = await listarUsuariosDestinoContMenoresProgramacionAprobada({ client });
   const uadKeys = await resolveUnidadAdquisicionesKeys(client);
   const exclUid = excluirUsuarioId != null && Number.isFinite(Number(excluirUsuarioId))
@@ -582,10 +605,10 @@ export async function listarCandidatosProgramacionAprobadaContMenores(
     evento_codigo: ev,
     etapa_origen: etapaOrigen,
     etapa_destino: etapaDest,
-    etapa_destino_label: metaDestino.label || 'Invitaciones',
+    etapa_destino_label: metaDestino.label || 'Coordinación CM',
     destinos: [{
       etapa_codigo: etapaDest,
-      etapa_label: metaDestino.label || 'Invitaciones',
+      etapa_label: metaDestino.label || 'Coordinación CM',
       evento_codigo: ev,
       unica: true,
     }],
