@@ -4,8 +4,8 @@
  *
  * Reglas:
  * - Cada etapa es la ubicación vigente del expediente (requerimientos.estado_actual).
- * - CONSULTAS_OBSERVACIONES NO es etapa del expediente: es fase interna del
- *   dominio SOLICITUD_COTIZACION (ver estadosPorDominio.js / SC_ABIERTA_CONSULTAS).
+ * - CONSULTAS_OBSERVACIONES es etapa ERV real (RC8.17.8H6-B1); el dominio SC
+ *   mantiene su cronograma en estadosPorDominio.js / SC_ABIERTA_CONSULTAS.
  * - RECEPCION_BIENES solo BIEN; PRESENTACION_ENTREGABLES SERVICIO/LOCACION.
  * - DERIVACION_PAGO no es terminal; FINALIZADO es la única terminal.
  */
@@ -17,6 +17,7 @@ export const ETAPAS = Object.freeze({
   PROGRAMACION: 'PROGRAMACION',
   COORDINACION_CM: 'COORDINACION_CM',
   INVITACIONES: 'INVITACIONES',
+  CONSULTAS_OBSERVACIONES: 'CONSULTAS_OBSERVACIONES',
   RECEPCION_COTIZACIONES: 'RECEPCION_COTIZACIONES',
   VALIDACIONES: 'VALIDACIONES',
   CUADRO_COMPARATIVO: 'CUADRO_COMPARATIVO',
@@ -72,6 +73,12 @@ const ETAPA_META_DEF = Object.freeze({
     submoduloCodigo: 'INVITACIONES', submoduloLabel: 'Invitaciones',
     responsableCodigo: 'ESPECIALISTA_CONTRATACIONES', responsableLabel: 'Especialista Contrataciones',
     tipos: TODOS, terminal: false,
+  }),
+  CONSULTAS_OBSERVACIONES: Object.freeze({
+    codigo: 'CONSULTAS_OBSERVACIONES', label: 'Consultas y Observaciones',
+    submoduloCodigo: 'CONSULTAS_OBSERVACIONES', submoduloLabel: 'Consultas y Observaciones',
+    responsableCodigo: 'ESPECIALISTA_CONTRATACIONES', responsableLabel: 'Especialista Contrataciones',
+    tipos: Object.freeze(['BIEN', 'SERVICIO', 'LOCACION']), terminal: false,
   }),
   RECEPCION_COTIZACIONES: Object.freeze({
     codigo: 'RECEPCION_COTIZACIONES', label: 'Recepción de Cotizaciones',

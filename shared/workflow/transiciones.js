@@ -29,6 +29,7 @@ const D = ETAPAS.DEC;
 const P = ETAPAS.PROGRAMACION;
 const CM = ETAPAS.COORDINACION_CM;
 const I = ETAPAS.INVITACIONES;
+const CO = ETAPAS.CONSULTAS_OBSERVACIONES;
 const RC = ETAPAS.RECEPCION_COTIZACIONES;
 const VAL = ETAPAS.VALIDACIONES;
 const CUA = ETAPAS.CUADRO_COMPARATIVO;
@@ -118,6 +119,19 @@ const DEFS = [
   [B, I, 'INVITACIONES_OBSERVADA', I, false, 'invitaciones:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_INVITACIONES', null],
   [S, I, 'INVITACIONES_OBSERVADA', I, false, 'invitaciones:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_INVITACIONES', null],
   [L, I, 'INVITACIONES_OBSERVADA', I, false, 'invitaciones:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_INVITACIONES', null],
+  // RC8.17.8H6-B1 — Consultas canónicas (etapa CO real).
+  [B, I, 'CONSULTA_PROVEEDOR_REGISTRADA', CO, true, 'portal:registrar_consulta', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_CONSULTA_REGISTRADA', null],
+  [S, I, 'CONSULTA_PROVEEDOR_REGISTRADA', CO, true, 'portal:registrar_consulta', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_CONSULTA_REGISTRADA', null],
+  [L, I, 'CONSULTA_PROVEEDOR_REGISTRADA', CO, true, 'portal:registrar_consulta', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_CONSULTA_REGISTRADA', null],
+  [B, CO, 'CONSULTA_PROVEEDOR_ABSUELTA', I, true, 'consultas:responder', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_CONSULTA_ABSUELTA', null],
+  [S, CO, 'CONSULTA_PROVEEDOR_ABSUELTA', I, true, 'consultas:responder', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_CONSULTA_ABSUELTA', null],
+  [L, CO, 'CONSULTA_PROVEEDOR_ABSUELTA', I, true, 'consultas:responder', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_CONSULTA_ABSUELTA', null],
+  [B, CO, 'CONSULTAS_OBSERVADA', CO, false, 'consultas:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_CONSULTAS', null],
+  [S, CO, 'CONSULTAS_OBSERVADA', CO, false, 'consultas:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_CONSULTAS', null],
+  [L, CO, 'CONSULTAS_OBSERVADA', CO, false, 'consultas:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_CONSULTAS', null],
+  [B, CO, 'OBSERVACION_SUBSANADA', CO, false, 'observacion:subsanar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_SUBSANAR_OBS', null],
+  [S, CO, 'OBSERVACION_SUBSANADA', CO, false, 'observacion:subsanar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_SUBSANAR_OBS', null],
+  [L, CO, 'OBSERVACION_SUBSANADA', CO, false, 'observacion:subsanar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_SUBSANAR_OBS', null],
   // Subsanación genérica (misma etapa; restaura responsable destino).
   [B, R, 'OBSERVACION_SUBSANADA', R, false, 'observacion:subsanar', 'DIRECTOR_GERENTE', 'GUARD_SUBSANAR_OBS', null],
   [S, R, 'OBSERVACION_SUBSANADA', R, false, 'observacion:subsanar', 'DIRECTOR_GERENTE', 'GUARD_SUBSANAR_OBS', null],

@@ -6,7 +6,7 @@ import {
   esTipoValido,
   esTipoHabilitado,
 } from '../shared/workflow/tiposContratacion.js';
-import { ETAPAS, ETAPAS_LIST, esEtapaValida, esEtapaTerminal } from '../shared/workflow/etapas.js';
+import { ETAPAS, ETAPAS_LIST, esEtapaValida, esEtapaTerminal, getEtapaMeta } from '../shared/workflow/etapas.js';
 import {
   DOMINIOS,
   getCatalogoEstados,
@@ -58,9 +58,10 @@ assert(!grafoViatico.includes('RECEPCION_COTIZACIONES'), 'C.6 VIATICO sin RECEPC
 assert(esTipoValido(TIPOS_CONTRATACION.VIATICO_PASAJE_AEREO), 'D.1 VIATICO definido en catálogo');
 assert(!esTipoHabilitado(TIPOS_CONTRATACION.VIATICO_PASAJE_AEREO), 'D.2 VIATICO no habilitado productivamente');
 
-// E. CONSULTAS_OBSERVACIONES no es etapa
-assert(ETAPAS.CONSULTAS_OBSERVACIONES === undefined, 'E.1 CONSULTAS_OBSERVACIONES no es etapa');
-assert(getEstadoPorCodigo('SC_ABIERTA_CONSULTAS')?.dominio === DOMINIOS.SOLICITUD_COTIZACION, 'E.2 consultas = fase interna SC');
+// E. CONSULTAS_OBSERVACIONES etapa ERV real (RC8.17.8H6-B1)
+assert(ETAPAS.CONSULTAS_OBSERVACIONES === 'CONSULTAS_OBSERVACIONES', 'E.1 CONSULTAS_OBSERVACIONES es etapa');
+assert(getEtapaMeta('CONSULTAS_OBSERVACIONES')?.submoduloLabel === 'Consultas y Observaciones', 'E.2 meta submódulo CO');
+assert(getEstadoPorCodigo('SC_ABIERTA_CONSULTAS')?.dominio === DOMINIOS.SOLICITUD_COTIZACION, 'E.3 dominio SC consultas');
 
 // F. Estados sin códigos ambiguos sin prefijo
 const ambiguos = ['APROBADO', 'APROBADO_DEC', 'PENDIENTE', 'OBSERVADO', 'EN_PROCESO'];

@@ -357,6 +357,14 @@ portalAnalistaRouter.put('/consultas/:id/responder', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+portalAnalistaRouter.put('/consultas/observar/:requerimientoId', async (req, res, next) => {
+  try {
+    const { observarConsultasObservaciones } = await import('../lib/consultasObservacionesExpediente.js');
+    const updated = await observarConsultasObservaciones(req.params.requerimientoId, req.body || {});
+    res.json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
 portalAnalistaRouter.get('/cotizaciones', async (req, res, next) => {
   try {
     const data = await listarRecepcionCotizaciones(req.query);

@@ -183,18 +183,78 @@ export async function registrarConsulta(proveedorId, body, req) {
   if (!inv.length) throw new Error('Sin acceso a esta convocatoria');
   if (convocatoriaCerrada(normalizeCronogramaRow(inv[0]))) throw new Error('Convocatoria cerrada — no se aceptan consultas');
 
-  const { rows } = await query(`
-    INSERT INTO consultas_proveedor (solicitud_id, proveedor_id, requerimiento_id, asunto, consulta, adjuntos, estado, responsable_actual)
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'PENDIENTE', 'Analista CM')
-    RETURNING *
-  `, [
-    solicitud_id, proveedorId, inv[0].requerimiento_id,
-    asunto || 'Consulta', consulta,
-    JSON.stringify(adjuntos || []),
-  ]);
+  const requerimientoId = parseInt(inv[0].requerimiento_id, 10);
+  if (!Number.isFinite(requerimientoId) || requerimientoId <= 0) {
+    throw new Error('Requerimiento no asociado a la invitación');
+  }
+
+  const { withTransaction } = await import('./workflow/workflowTransaction.js');
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const {
+    resolveAnalistaInvitacionesPrevio,
+    ETAPA_CONSULTAS,
+  } = await import('./consultasExpedienteEstado.js');
+  const { getEstadoVigenteForUpdate } = await import('./expedienteEstadoPersistido.js');
+
+  const clientRequestId = `portal-consulta:${solicitud_id}:${proveedorId}:${Date.now()}`;
+  let consultaRow = null;
+
+  await withTransaction(async (tx) => {
+    const ev = await getEstadoVigenteForUpdate(tx, requerimientoId);
+    const etapaActual = String(ev?.etapa_codigo || '').toUpperCase();
+    const analistaPrevio = await resolveAnalistaInvitacionesPrevio(requerimientoId, ev, tx);
+
+    const domainInsert = async (dbTx) => {
+      const { rows } = await dbTx.query(`
+        INSERT INTO consultas_proveedor (solicitud_id, proveedor_id, requerimiento_id, asunto, consulta, adjuntos, estado, responsable_actual)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'PENDIENTE', 'Analista CM')
+        RETURNING *
+      `, [
+        solicitud_id, proveedorId, requerimientoId,
+        asunto || 'Consulta', consulta,
+        JSON.stringify(adjuntos || []),
+      ]);
+      consultaRow = rows[0];
+      return consultaRow;
+    };
+
+    if (etapaActual === ETAPA_CONSULTAS) {
+      consultaRow = await domainInsert(tx);
+      return;
+    }
+
+    if (etapaActual !== 'INVITACIONES') {
+      const err = new Error('La convocatoria no admite consultas en la etapa actual del expediente');
+      err.status = 409;
+      throw err;
+    }
+
+    if (!analistaPrevio) {
+      const err = new Error('No hay analista de Invitaciones asignado para atender la consulta');
+      err.code = 'CONSULTA_SIN_ANALISTA';
+      err.status = 409;
+      throw err;
+    }
+
+    await transicionarExpediente({
+      requerimientoId,
+      evento: 'CONSULTA_PROVEEDOR_REGISTRADA',
+      usuarioDestinoId: analistaPrevio,
+      metadata: {
+        client_request_id: clientRequestId,
+        via: 'registrarConsulta',
+        solicitud_id,
+        proveedor_id: proveedorId,
+        analista_invitaciones_previo_id: analistaPrevio,
+      },
+      actorRol: req.portalProveedor?.ruc || 'PORTAL_PROVEEDOR',
+      client: tx,
+      domainMutator: async (dbTx) => domainInsert(dbTx),
+    });
+  });
 
   await registrarTrazaPortal({
-    solicitud_id, proveedor_id: proveedorId, requerimiento_id: inv[0].requerimiento_id,
+    solicitud_id, proveedor_id: proveedorId, requerimiento_id: requerimientoId,
     evento: 'CONSULTA_REGISTRADA', detalle: asunto || consulta.slice(0, 120),
     usuario: req.portalProveedor?.ruc, ip: clientIp(req),
   });
@@ -204,8 +264,8 @@ export async function registrarConsulta(proveedorId, body, req) {
     FROM consultas_proveedor c
     LEFT JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
     WHERE c.id = $1
-  `, [rows[0].id]);
-  return enriched[0] || rows[0];
+  `, [consultaRow.id]);
+  return enriched[0] || consultaRow;
 }
 
 export async function listConsultasProveedor(proveedorId, solicitudId) {
@@ -557,23 +617,10 @@ export async function listarConsultasBandeja(queryParams = {}) {
     centro: r.centros_texto || '',
   }));
 
-  // RC8.4E — anexar estado_responsable_vigente en batch
+  // RC8.4E + RC8.17 — contrato bandeja (Etapa/Estado/Responsable canónicos)
   try {
-    const { resolveEstadoResponsableBatch } = await import('./resolvedorEstadoResponsable.js');
-    const reqIds = [...new Set(
-      rows.map((r) => parseInt(r.requerimiento_id, 10)).filter((n) => Number.isFinite(n) && n > 0),
-    )];
-    if (reqIds.length) {
-      const resolved = await resolveEstadoResponsableBatch(reqIds);
-      for (const row of mapped) {
-        const rid = parseInt(row.requerimiento_id, 10);
-        if (Number.isFinite(rid) && resolved.has(rid)) {
-          row.estado_responsable_vigente = resolved.get(rid);
-        } else {
-          row.estado_responsable_vigente = null;
-        }
-      }
-    }
+    const { enrichEstadoResponsableForBandeja } = await import('./enrichEstadoResponsable.js');
+    await enrichEstadoResponsableForBandeja(mapped, 'requerimiento_id');
   } catch (_) { /* resolvedor no disponible */ }
 
   return mapped;
@@ -582,18 +629,68 @@ export async function listarConsultasBandeja(queryParams = {}) {
 export async function responderConsultaAnalista(consultaId, body, usuario) {
   const { respuesta, adjuntos, publicar } = body || {};
   if (!respuesta) throw new Error('Respuesta requerida');
-  const { rows } = await query(`
-    UPDATE consultas_proveedor SET
-      respuesta = $2, respuesta_adjuntos = $3::jsonb,
-      estado = 'RESPONDIDA', absolucion_publica = $4,
-      historial = historial || $5::jsonb, updated_at = NOW()
-    WHERE id = $1 RETURNING *
-  `, [
-    consultaId, respuesta, JSON.stringify(adjuntos || []), !!publicar,
-    JSON.stringify([{ tipo: 'respuesta_analista', usuario, fecha: new Date().toISOString(), publicar: !!publicar }]),
-  ]);
-  if (!rows.length) throw new Error('Consulta no encontrada');
-  const c = rows[0];
+
+  const { withTransaction } = await import('./workflow/workflowTransaction.js');
+  const { transicionarExpediente } = await import('./expedienteTransicion.js');
+  const { ETAPA_CONSULTAS } = await import('./consultasExpedienteEstado.js');
+  const { getEstadoVigenteForUpdate } = await import('./expedienteEstadoPersistido.js');
+
+  let c = null;
+
+  await withTransaction(async (tx) => {
+    const { rows } = await tx.query(`
+      UPDATE consultas_proveedor SET
+        respuesta = $2, respuesta_adjuntos = $3::jsonb,
+        estado = 'RESPONDIDA', absolucion_publica = $4,
+        historial = historial || $5::jsonb, updated_at = NOW()
+      WHERE id = $1 RETURNING *
+    `, [
+      consultaId, respuesta, JSON.stringify(adjuntos || []), !!publicar,
+      JSON.stringify([{
+        tipo: 'respuesta_analista', usuario, fecha: new Date().toISOString(), publicar: !!publicar,
+      }]),
+    ]);
+    if (!rows.length) {
+      const err = new Error('Consulta no encontrada');
+      err.status = 404;
+      throw err;
+    }
+    c = rows[0];
+
+    const { rows: pend } = await tx.query(
+      `SELECT COUNT(*)::int AS n FROM consultas_proveedor
+       WHERE solicitud_id = $1 AND UPPER(estado) = 'PENDIENTE'`,
+      [c.solicitud_id],
+    );
+    const pendientes = pend[0]?.n || 0;
+    if (pendientes > 0) return;
+
+    const rid = parseInt(c.requerimiento_id, 10);
+    if (!Number.isFinite(rid) || rid <= 0) return;
+
+    const ev = await getEstadoVigenteForUpdate(tx, rid);
+    if (String(ev?.etapa_codigo || '').toUpperCase() !== ETAPA_CONSULTAS) return;
+
+    let meta = {};
+    try {
+      meta = typeof ev.metadata === 'object' ? ev.metadata : JSON.parse(ev.metadata || '{}');
+    } catch (_) { meta = {}; }
+
+    await transicionarExpediente({
+      requerimientoId: rid,
+      evento: 'CONSULTA_PROVEEDOR_ABSUELTA',
+      metadata: {
+        client_request_id: `consulta-abs:${c.solicitud_id}:${consultaId}:${Date.now()}`,
+        via: 'responderConsultaAnalista',
+        solicitud_id: c.solicitud_id,
+        consulta_id: c.id,
+        analista_invitaciones_previo_id: meta.analista_invitaciones_previo_id ?? ev.responsable_usuario_id,
+      },
+      actorRol: usuario || 'ANALISTA_CM',
+      client: tx,
+    });
+  });
+
   await registrarTrazaPortal({
     solicitud_id: c.solicitud_id, proveedor_id: c.proveedor_id, requerimiento_id: c.requerimiento_id,
     evento: publicar ? 'ABSOLUCION_PUBLICADA' : 'CONSULTA_RESPONDIDA',

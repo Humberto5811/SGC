@@ -99,10 +99,19 @@ export function esDestinoSubsanacionRetornoContMenores(destinoSubmodulo = '') {
   return false;
 }
 
-/**
- * Etapa ERV para subsanación retorno Cont.Menores (submódulo Coordinación CM).
- */
+/** RC8.17.8H6-B1 — Retorno subsanación hacia Consultas y Observaciones. */
+export function esDestinoSubsanacionRetornoConsultasObservaciones(destinoSubmodulo = '') {
+  const s = String(destinoSubmodulo || '').trim().toLowerCase();
+  if (!s) return false;
+  return s === 'consultas y observaciones'
+    || s === 'consultas y observacion'
+    || /^consultas/i.test(s);
+}
+
 export function mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo = '') {
+  if (esDestinoSubsanacionRetornoConsultasObservaciones(destinoSubmodulo)) {
+    return 'CONSULTAS_OBSERVACIONES';
+  }
   if (esDestinoSubsanacionRetornoContMenores(destinoSubmodulo)) return 'COORDINACION_CM';
   return mapDestinoSubmoduloAEtapaObservacion(destinoSubmodulo);
 }

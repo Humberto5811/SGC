@@ -47,6 +47,26 @@ function fechaSortKey(iso) {
  * Consolida consultas planas en una fila por solicitud.
  * Detalle en `consultas` para el modal Ver.
  */
+function pickBandejaContratoFromConsultas(consultas = []) {
+  for (const c of consultas || []) {
+    if (c?.bandeja_contrato?.etapa?.codigo) {
+      return {
+        bandeja_contrato: c.bandeja_contrato,
+        estado_responsable_vigente: c.estado_responsable_vigente,
+        requerimiento_id: c.requerimiento_id,
+      };
+    }
+    if (c?.estado_responsable_vigente && !c.estado_responsable_vigente.canonicalMissing) {
+      return {
+        estado_responsable_vigente: c.estado_responsable_vigente,
+        requerimiento_id: c.requerimiento_id,
+      };
+    }
+  }
+  const first = (consultas || [])[0];
+  return first ? { requerimiento_id: first.requerimiento_id } : {};
+}
+
 export function consolidarExpedientesConsultas(consultas = []) {
   const map = new Map();
   (consultas || []).forEach((c) => {
@@ -81,8 +101,10 @@ export function consolidarExpedientesConsultas(consultas = []) {
     const est = estadoAgregadoConsultas(g.consultas);
     const fechas = g.consultas.map((c) => c.created_at).filter(Boolean);
     const fechaUltima = fechas.sort((a, b) => fechaSortKey(b) - fechaSortKey(a))[0] || '';
+    const erv = pickBandejaContratoFromConsultas(g.consultas);
     return {
       ...g,
+      ...erv,
       cantidad_consultas: g.consultas.length,
       estado_bandeja: est.label,
       estado_bandeja_class: est.badge,

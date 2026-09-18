@@ -2,11 +2,13 @@
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
-import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
+import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { openAdjuntosSolicitudModal } from '../../utils/adjuntosModal.js';
-import { closeBandejaActionMenus, renderResponsableCellHtml } from '../../utils/bandejaUi.js';
+import { closeBandejaActionMenus, bindActionMenus } from '../../utils/bandejaUi.js';
+import { renderBandejaCanonicoEtapaEstadoRespCells } from '../../utils/bandejaExpedienteColumns.js';
+import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import {
   consolidarExpedientesConsultas,
   formatCentrosConsultas,
@@ -37,7 +39,24 @@ function esc(s) {
 }
 
 function fmtFecha(iso) {
-  return String(iso || '').slice(0, 16).replace('T', ' ');
+  return formatDateTimeLima(iso);
+}
+
+function consultaDetalleActionMenuHtml(consultaId, menuItems) {
+  const id = `co_${consultaId}`;
+  const items = menuItems.filter((m) => m.show !== false);
+  return `
+    <div class="dropdown d-inline-block">
+      <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
+        data-bs-toggle="dropdown" aria-expanded="false">Acciones</button>
+      <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+        ${items.map((m) => `
+          <li><button type="button" class="dropdown-item bandeja-menu-act py-1"
+            data-act="${esc(m.act)}" data-id="${esc(id)}">
+            <i class="bi ${m.icon || 'bi-dot'} me-2"></i>${esc(m.label)}
+          </button></li>`).join('')}
+      </ul>
+    </div>`;
 }
 
 function labelEstadoConsulta(estado) {
@@ -276,22 +295,25 @@ function showExpedienteConsultasModal(expediente) {
             <div class="table-responsive">
               <table class="table table-sm table-hover table-bordered mb-0">
                 <thead class="table-light"><tr>
-                  <th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th><th class="text-center">Acciones</th>
+                  <th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th>                  <th class="text-center">Acciones</th>
                 </tr></thead>
                 <tbody>
-                  ${consultas.map((c) => `
-                    <tr>
+                  ${consultas.map((c) => {
+                    const pendiente = String(c.estado || '').toUpperCase() === 'PENDIENTE';
+                    const menuItems = [
+                      ...(pendiente ? [{ act: 'responder', label: 'Responder', icon: 'bi-reply-fill' }] : []),
+                      { act: 'adjuntos', label: 'Adjuntos', icon: 'bi-paperclip' },
+                      ...(pendiente ? [{ act: 'observar', label: 'Observar/Derivar', icon: 'bi-exclamation-circle' }] : []),
+                    ];
+                    return `
+                    <tr data-consulta-id="${c.id}">
                       <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
                       <td>${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 80))}</div></td>
                       <td>${badgeEstadoConsulta(c.estado)}</td>
                       <td class="small">${esc(fmtFecha(c.created_at))}</td>
-                      <td class="text-center text-nowrap">
-                        ${String(c.estado || '').toUpperCase() === 'PENDIENTE'
-                          ? `<button type="button" class="btn btn-sm btn-primary co-responder" data-id="${c.id}">Responder</button>`
-                          : '<span class="small text-muted">—</span>'}
-                        <button type="button" class="btn btn-sm btn-outline-secondary co-adjuntos ms-1" data-sid="${c.solicitud_id}">Adjuntos</button>
-                      </td>
-                    </tr>`).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin consultas</td></tr>'}
+                      <td class="text-center">${consultaDetalleActionMenuHtml(c.id, menuItems)}</td>
+                    </tr>`;
+                  }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin consultas</td></tr>'}
                 </tbody>
               </table>
             </div>
@@ -312,22 +334,50 @@ function showExpedienteConsultasModal(expediente) {
   modal.show();
 
   const body = document.getElementById(`${id}_body`);
-  body?.querySelectorAll('.co-responder').forEach((btn) => {
-    btn.onclick = async () => {
-      const consulta = consultasCache.find((c) => String(c.id) === String(btn.dataset.id));
+  bindActionMenus(body, {
+    responder: async (menuId) => {
+      const cid = String(menuId).replace(/^co_/, '');
+      const consulta = consultasCache.find((c) => String(c.id) === String(cid));
       if (!consulta) return;
       const ok = await showResponderConsultaModal(consulta);
       if (ok) {
         modal.hide();
         loadConsultas(true);
       }
-    };
-  });
-  body?.querySelectorAll('.co-adjuntos').forEach((btn) => {
-    btn.onclick = () => {
-      const sid = parseInt(btn.dataset.sid, 10);
+    },
+    adjuntos: (menuId) => {
+      const cid = String(menuId).replace(/^co_/, '');
+      const consulta = consultas.find((c) => String(c.id) === String(cid));
+      const sid = consulta?.solicitud_id;
       if (sid) openAdjuntosSolicitudModal(sid, true);
-    };
+    },
+    observar: async (menuId) => {
+      const cid = String(menuId).replace(/^co_/, '');
+      const consulta = consultas.find((c) => String(c.id) === String(cid));
+      const reqId = consulta?.requerimiento_id || expediente.requerimiento_id;
+      if (!reqId) {
+        alert('Sin requerimiento asociado.');
+        return;
+      }
+      const { handleBandejaObservaciones } = await import('../../components/modalObservaciones.js');
+      const pseudoRow = { id: reqId, codigo: expediente.requerimientos_texto || consulta?.requerimiento_codigo };
+      await handleBandejaObservaciones(reqId, [pseudoRow], {
+        submoduloLabel: 'Consultas y Observaciones',
+        bandejaPrefix: 'consultasObs',
+        puedeObservar: () => true,
+        candidatosApiPath: '/api/requerimientos-especial/observacion-destino-candidatos',
+        onObservar: async (rid, data) => {
+          await contratacionesService.observarConsultasObservaciones(rid, {
+            ...data,
+            origen_submodulo: 'Consultas y Observaciones',
+            usuario: getUserDisplayName(authService.getUser?.() || {}),
+          });
+          modal.hide();
+          loadConsultas(true);
+        },
+        onReload: () => loadConsultas(true),
+      });
+    },
   });
 }
 
@@ -342,6 +392,7 @@ const CONSULTAS_THEAD = `<tr>
   <th>Requerimiento</th>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
+  <th>Etapa</th>
   <th>Estado</th>
   <th>Responsable</th>
   <th class="text-center">Ver</th>
@@ -349,9 +400,6 @@ const CONSULTAS_THEAD = `<tr>
 
 function buildConsultaRowHtml(exp) {
   const n = Number(exp.cantidad_consultas) || (exp.consultas || []).length || 0;
-  const tienePendiente = (exp.consultas || []).some((c) => String(c.estado || '').toUpperCase() === 'PENDIENTE');
-  const estadoLabel = tienePendiente ? 'Consultas' : 'Consultas';
-  const estadoBadge = tienePendiente ? 'warning text-dark' : 'success';
   return `
     <tr data-row-id="${esc(exp.solicitud_id)}">
       <td>
@@ -360,10 +408,7 @@ function buildConsultaRowHtml(exp) {
       <td class="small">${formatRequerimientosConsultas(exp, esc)}</td>
       <td class="small">${formatCentrosConsultas(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} consulta${n === 1 ? '' : 's'}</td>
-      <td>
-        <span class="badge bg-${estadoBadge}">${esc(estadoLabel)}</span>
-      </td>
-      <td class="small">${renderResponsableCellHtml(exp, esc)}</td>
+      ${renderBandejaCanonicoEtapaEstadoRespCells(exp)}
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary co-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">

@@ -1,8 +1,13 @@
 import { portalService } from '../../services/portalService.js';
 import {
-  esc, fmtDt, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
+  esc, renderProveedorShell, requireProveedorSession, bindProveedorLogout,
   PROVEEDOR_ROUTES, cleanupModalBackdrop, makeModalDraggable, labelEstadoConsulta,
 } from '../../utils/proveedorShared.js';
+import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
+
+function fmtDt(v) {
+  return formatDateTimeLima(v);
+}
 
 export function renderMisConsultasView() {
   if (!requireProveedorSession()) return '';

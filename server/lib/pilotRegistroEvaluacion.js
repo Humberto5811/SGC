@@ -644,6 +644,7 @@ const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze([
   'PROGRAMACION',
   'COORDINACION_CM',
   'INVITACIONES',
+  'CONSULTAS_OBSERVACIONES',
   'RECEPCION_COTIZACIONES',
   'VALIDACIONES',
   'REGISTRO_ORDEN',
@@ -676,7 +677,10 @@ export async function applyPilotObservacionSubsanada({
     return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
   }
   if (destinoEtapa === etapaEfectiva) {
-    return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
+    const retornoInternoConsultas = destinoEtapa === 'CONSULTAS_OBSERVACIONES';
+    if (!retornoInternoConsultas) {
+      return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
+    }
   }
   const obsId = metadata.observacion_id ?? metadata.observacionId ?? null;
 

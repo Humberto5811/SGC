@@ -412,6 +412,75 @@ export async function transicionarExpediente({
           throw buildErrorSubsanacionSinPersona();
         }
       }
+    } else if (eventoCodigo === 'CONSULTAS_OBSERVADA') {
+      const { applyPilotConsultasObservada } = await import('./consultasExpedienteEstado.js');
+      metaTransicion.etapa_origen = etapaOrigen;
+      metaTransicion.evento = eventoCodigo;
+      const pilotObs = applyPilotConsultasObservada({
+        resp,
+        usuarioDestinoId: usuarioDestinoIdNorm,
+        unidadDestino: unidadDestino || metaEtapa.responsableLabel,
+        metadata: metaTransicion,
+        labels,
+      });
+      resp = pilotObs.resp;
+      etapaEfectiva = pilotObs.etapaEfectiva;
+      metaEtapa = getEtapaMeta(etapaEfectiva) || metaEtapa;
+      Object.assign(labels, pilotObs.labels);
+      metaTransicion = { ...metaTransicion, ...pilotObs.metaExtra };
+      if (pilotObs.usuarioDestinoEfectivo != null) {
+        usuarioDestinoEfectivo = pilotObs.usuarioDestinoEfectivo;
+      }
+      const tienePersona = resp.responsableTipo === TIPO_RESPONSABLE.PERSONA
+        && resp.responsableUsuarioId != null
+        && Number.isFinite(Number(resp.responsableUsuarioId));
+      if (!tienePersona) {
+        const { buildErrorSubsanacionSinPersona } = await import('./pilotRegistroEvaluacion.js');
+        throw buildErrorSubsanacionSinPersona(
+          'Debe seleccionar una persona responsable válida para la observación.',
+        );
+      }
+    } else if (
+      eventoCodigo === 'CONSULTA_PROVEEDOR_REGISTRADA'
+    ) {
+      const {
+        applyErvPostConsultaProveedorRegistrada,
+        resolveAnalistaInvitacionesPrevio,
+      } = await import('./consultasExpedienteEstado.js');
+      const analistaPrevio = metaTransicion.analista_invitaciones_previo_id != null
+        ? Number(metaTransicion.analista_invitaciones_previo_id)
+        : await resolveAnalistaInvitacionesPrevio(rid, estadoVigentePrevio, tx);
+      const uid = usuarioDestinoIdNorm ?? analistaPrevio;
+      const applied = applyErvPostConsultaProveedorRegistrada({
+        labels,
+        analistaUsuarioId: uid,
+        analistaPrevioId: analistaPrevio,
+      });
+      Object.assign(labels, applied.labels);
+      resp = applied.resp;
+      Object.assign(metaTransicion, applied.metaPatch);
+      if (applied.usuarioDestinoEfectivo != null) {
+        usuarioDestinoEfectivo = applied.usuarioDestinoEfectivo;
+      }
+      if (!resp.responsableUsuarioId) {
+        const err = new Error('No se pudo resolver analista de Invitaciones para la consulta');
+        err.code = 'CONSULTA_SIN_ANALISTA';
+        err.status = 409;
+        throw err;
+      }
+    } else if (eventoCodigo === 'CONSULTA_PROVEEDOR_ABSUELTA') {
+      const { applyErvPostConsultaProveedorAbsuelta } = await import('./consultasExpedienteEstado.js');
+      const previo = metaTransicion.analista_invitaciones_previo_id != null
+        ? Number(metaTransicion.analista_invitaciones_previo_id)
+        : null;
+      const applied = applyErvPostConsultaProveedorAbsuelta({
+        labels,
+        analistaPrevioId: previo,
+      });
+      Object.assign(labels, applied.labels);
+      resp = applied.resp;
+      Object.assign(metaTransicion, applied.metaPatch);
+      usuarioDestinoEfectivo = null;
     } else if (
       eventoCodigo === 'INVITACION_ENVIADA'
       || eventoCodigo === 'REINVITACION_ENVIADA'
@@ -498,7 +567,8 @@ export async function transicionarExpediente({
     const pilotObsDirigida = metaTransicion.pilot_observacion_dirigida_destino === true
       || metaTransicion.pilot_observacion_dec_destino === true;
     const postEnvioInvitacionProveedores = eventoCodigo === 'INVITACION_ENVIADA'
-      || eventoCodigo === 'REINVITACION_ENVIADA';
+      || eventoCodigo === 'REINVITACION_ENVIADA'
+      || eventoCodigo === 'CONSULTA_PROVEEDOR_ABSUELTA';
     const pilotCambiaUbicacion = cambiaUbicacion || pilotObsReg || pilotObsSub || pilotObsDirigida
       || etapaEfectiva !== etapaOrigen;
     const estadoNegocio = pilotCambiaUbicacion

@@ -132,6 +132,9 @@ export const contratacionesService = {
   async responderConsultaAnalista(id, body) {
     return api.put(`/contrataciones/portal-analista/consultas/${id}/responder`, body);
   },
+  async observarConsultasObservaciones(id, body) {
+    return api.put(`/contrataciones/portal-analista/consultas/observar/${id}`, body);
+  },
   async listRecepcionCotizaciones(params = {}) {
     const q = new URLSearchParams(params).toString();
     return api.get(`/contrataciones/portal-analista/cotizaciones${q ? `?${q}` : ''}`);
