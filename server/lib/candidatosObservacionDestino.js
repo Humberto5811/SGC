@@ -776,6 +776,58 @@ export async function listarCandidatosSubsanacionDestino({
     };
   }
 
+  if (etapaDest === 'CONSULTAS_OBSERVACIONES') {
+    const { resolveAnalistaInvitacionesPrevio } = await import('./consultasExpedienteEstado.js');
+    const { rows: eevRows } = await queryFn(
+      client,
+      `SELECT * FROM expediente_estado_vigente WHERE requerimiento_id = $1 LIMIT 1`,
+      [requerimientoId],
+    );
+    let emisorIdResolved = emisorId;
+    if (!emisorIdResolved) {
+      emisorIdResolved = await resolveAnalistaInvitacionesPrevio(requerimientoId, eevRows[0] || null, client);
+    }
+    const emisorRowCo = emisorIdResolved ? await loadUsuarioRow(emisorIdResolved, client) : emisorRow;
+    const { listarCandidatosPorPerfil } = await import('./workflowTransicionResponsable.js');
+    const pool = await listarCandidatosPorPerfil({
+      perfil: PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES,
+      submoduloCodigo: 'CONSULTAS_OBSERVACIONES',
+      search: '',
+      client,
+    });
+    const elegibles = [...(pool.recomendado ? [pool.recomendado] : []), ...(pool.candidatos || [])]
+      .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+    const emisorCand = emisorRowCo
+      ? {
+        ...mapCandidato(emisorRowCo, { fuente: 'emisor_observacion', etiqueta: 'Analista emisor' }),
+        permisos: emisorRowCo.permisos,
+        rol: emisorRowCo.rol,
+      }
+      : null;
+    let recomendadoFinal = emisorCand && emisorRowCo?.activo !== false
+      ? { ...emisorCand, recomendado: true }
+      : null;
+    if (!recomendadoFinal && elegibles.length) {
+      recomendadoFinal = elegibles[0];
+    }
+    const filtrado = filtrarListaCandidatosObservacion({
+      recomendado: recomendadoFinal,
+      candidatos: elegibles.filter((c) => !recomendadoFinal || c.id !== recomendadoFinal.id),
+      search,
+    });
+    const meta = getEtapaMeta('CONSULTAS_OBSERVACIONES');
+    return {
+      destino: destinoSubmodulo,
+      destino_etapa: 'CONSULTAS_OBSERVACIONES',
+      destino_submodulo_codigo: meta?.submoduloCodigo || 'CONSULTAS_OBSERVACIONES',
+      soportado: true,
+      recomendado: filtrado.recomendado,
+      recomendado_inactivo: null,
+      candidatos: filtrado.candidatos,
+      emisor_observacion_id: emisorIdResolved,
+    };
+  }
+
   if (etapaDest === 'DEC') {
     const uadKeys = await resolveUnidadAdquisicionesKeys(client);
     const elegibles = await listarPersonasElegiblesDec({ search: '' }, client);

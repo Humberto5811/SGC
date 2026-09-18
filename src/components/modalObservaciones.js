@@ -139,6 +139,11 @@ export async function openModalObservaciones(req, opts = {}) {
         requerimientoId: row.id,
         observacionId: pending?.id || pending?.observacion_id || null,
         onAdjuntos: opts.onAdjuntos,
+        candidatosApiPath: typeof opts.candidatosSubsanacionApiPath === 'function'
+          ? opts.candidatosSubsanacionApiPath
+          : (typeof opts.candidatosApiPath === 'function'
+            ? opts.candidatosApiPath
+            : (opts.candidatosSubsanacionApiPath || opts.candidatosApiPath || null)),
       });
       if (!data) { modal.show(); return; }
       try {
@@ -257,6 +262,7 @@ export async function handleBandejaObservaciones(id, rows, config = {}) {
     defaultDestinoObservacion: config.defaultDestinoObservacion,
     destinosPermitidosObservacion: config.destinosPermitidosObservacion,
     candidatosApiPath: config.candidatosApiPath,
+    candidatosSubsanacionApiPath: config.candidatosSubsanacionApiPath,
   });
 }
 

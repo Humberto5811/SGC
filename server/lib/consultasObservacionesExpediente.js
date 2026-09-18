@@ -46,20 +46,23 @@ export async function observarConsultasObservaciones(requerimientoId, body) {
 
   if (!motivo) throw new Error('Motivo requerido');
 
+  const etapaDestObs = String(
+    destino_etapa || submoduloLabelToEtapa(destino_submodulo) || '',
+  ).toUpperCase();
+
   appendObservacion(loaded.payload, {
     motivo,
     gerente: usuario || SUBMODULO_CONSULTAS_OBSERVACIONES,
     origen: 'CONSULTAS_OBSERVACIONES',
     origen_submodulo: origen_submodulo || SUBMODULO_CONSULTAS_OBSERVACIONES,
-    destino_submodulo: destino_submodulo || '',
-    destino_etapa: destino_etapa || '',
+    // Receptor actúa en bandeja Consultas; trazabilidad de derivación AU/DEC en campos auxiliares.
+    destino_submodulo: SUBMODULO_CONSULTAS_OBSERVACIONES,
+    destino_etapa: 'CONSULTAS_OBSERVACIONES',
     destino_persona: destino_persona || '',
+    destino_derivacion_submodulo: destino_submodulo || '',
+    destino_derivacion_etapa: etapaDestObs || destino_etapa || '',
     observacion_padre_id: observacion_padre_id || observacionPadreId || null,
   });
-
-  const etapaDestObs = String(
-    destino_etapa || submoduloLabelToEtapa(destino_submodulo) || '',
-  ).toUpperCase();
   const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
 
   const { transicionarExpediente } = await import('./expedienteTransicion.js');

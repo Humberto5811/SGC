@@ -43,6 +43,7 @@ export const SUBMODULO_DISPLAY_LABELS = {
   'Evaluación de Requerimientos': 'Evaluación',
   'Registro de Requerimiento': 'Registro AU',
   'Invitaciones': 'Invitaciones',
+  'Consultas y Observaciones': 'Consultas y Observaciones',
   'Cotizaciones': 'Cotizaciones',
   'Cuadro Comparativo': 'Cuadro Comparativo',
   'CCP': 'CCP',
@@ -194,6 +195,9 @@ export function getSubmoduloByLabel(label) {
   }
   if (/actos prep/i.test(s) || /coordinaci[oó]n cm/i.test(s)) {
     return SUBMODULOS_DESTINO.find((item) => item.code === 'ACTOS_PREPARATORIOS') || null;
+  }
+  if (/consultas?\s+y\s+observ/i.test(s)) {
+    return { code: 'CONSULTAS_OBSERVACIONES', label: 'Consultas y Observaciones', personas: ['Especialista Contrataciones'] };
   }
   return SUBMODULOS_DESTINO.find((item) => item.label === s) || null;
 }

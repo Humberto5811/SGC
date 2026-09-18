@@ -26,6 +26,9 @@ export const ESTADOS_ABIERTOS = new Set([
 export function normalizeModuloKey(label) {
   const s = String(label || '').trim().toLowerCase();
   if (!s) return '';
+  if (/consultas?\s+y\s+observ/i.test(s) || (s.includes('consultas') && s.includes('observ'))) {
+    return 'CONSULTAS_OBSERVACIONES';
+  }
   if (s.includes('registro')) return 'REGISTRO';
   if (s.includes('evalu')) return 'EVALUACION';
   if (s === 'dec' || s.includes(' dec') || s.startsWith('dec')) return 'DEC';

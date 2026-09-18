@@ -6,7 +6,7 @@ import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { openAdjuntosSolicitudModal } from '../../utils/adjuntosModal.js';
-import { closeBandejaActionMenus, bindActionMenus } from '../../utils/bandejaUi.js';
+import { closeBandejaActionMenus, bindActionMenus, fixBandejaDropdownMenus } from '../../utils/bandejaUi.js';
 import { renderBandejaCanonicoEtapaEstadoRespCells } from '../../utils/bandejaExpedienteColumns.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import {
@@ -14,6 +14,13 @@ import {
   formatCentrosConsultas,
   formatRequerimientosConsultas,
 } from '../../utils/consultasObservacionesUtils.js';
+import {
+  buildConsultasObservacionModalConfig,
+  consultasDetalleModalStyles,
+  loadRequerimientoParaConsultasObservacion,
+  usuarioPuedeSubsanarConsultas,
+  CONSULTAS_SUBMODULO_LABEL,
+} from '../../utils/consultasObservacionFlow.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -272,113 +279,139 @@ function showExpedienteConsultasModal(expediente) {
   closeBandejaActionMenus();
   const id = `coExpModal_${Date.now()}`;
   const consultas = expediente?.consultas || [];
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-    <div class="modal fade" id="${id}" tabindex="-1">
-      <div class="modal-dialog modal-xl modal-dialog-scrollable">
-        <div class="modal-content">
-          <div class="modal-header bg-light">
-            <h5 class="modal-title">
-              <i class="bi bi-chat-square-text"></i> Consultas — ${esc(expediente.solicitud_codigo || '')}
-            </h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-          </div>
-          <div class="modal-body" id="${id}_body">
-            <div class="mb-3 small">
-              <div><strong>${esc(expediente.solicitud_codigo || '')}</strong></div>
-              <div class="text-muted mt-1">
-                Requerimiento(s): ${esc(expediente.requerimientos_texto || '—')}
-                · Centro: ${esc(expediente.centros_texto || '—')}
-                · Consultas: <strong>${consultas.length}</strong>
+  const reqId = expediente.requerimiento_id || consultas[0]?.requerimiento_id;
+
+  const renderModalBody = (reqRow, canSubsanar) => {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <style>${consultasDetalleModalStyles()}</style>
+      <div class="modal fade co-exp-modal" id="${id}" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header bg-light">
+              <h5 class="modal-title">
+                <i class="bi bi-chat-square-text"></i> Consultas — ${esc(expediente.solicitud_codigo || '')}
+              </h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="${id}_body">
+              <div class="mb-3 small">
+                <div><strong>${esc(expediente.solicitud_codigo || '')}</strong></div>
+                <div class="text-muted mt-1">
+                  Requerimiento(s): ${esc(expediente.requerimientos_texto || '—')}
+                  · Centro: ${esc(expediente.centros_texto || '—')}
+                  · Consultas: <strong>${consultas.length}</strong>
+                </div>
+              </div>
+              <div class="co-exp-table-wrap table-responsive">
+                <table class="table table-sm table-hover table-bordered mb-0 co-exp-detail-table">
+                  <thead class="table-light"><tr>
+                    <th class="co-exp-col-proveedor">Proveedor</th>
+                    <th class="co-exp-col-asunto">Asunto</th>
+                    <th>Estado</th>
+                    <th>Fecha</th>
+                    <th class="text-center co-exp-col-acc">Acciones</th>
+                  </tr></thead>
+                  <tbody>
+                    ${consultas.map((c) => {
+                      const pendiente = String(c.estado || '').toUpperCase() === 'PENDIENTE';
+                      const menuItems = [
+                        ...(pendiente ? [{ act: 'responder', label: 'Responder', icon: 'bi-reply-fill' }] : []),
+                        { act: 'adjuntos', label: 'Adjuntos', icon: 'bi-paperclip' },
+                        ...(pendiente ? [{ act: 'observar', label: 'Observar/Derivar', icon: 'bi-exclamation-circle' }] : []),
+                        ...(canSubsanar ? [{ act: 'subsanar', label: 'Subsanar', icon: 'bi-arrow-return-left' }] : []),
+                      ];
+                      return `
+                      <tr data-consulta-id="${c.id}">
+                        <td class="co-exp-col-proveedor"><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
+                        <td class="co-exp-col-asunto">${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 120))}</div></td>
+                        <td>${badgeEstadoConsulta(c.estado)}</td>
+                        <td class="small text-nowrap">${esc(fmtFecha(c.created_at))}</td>
+                        <td class="text-center">${consultaDetalleActionMenuHtml(c.id, menuItems)}</td>
+                      </tr>`;
+                    }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin consultas</td></tr>'}
+                  </tbody>
+                </table>
               </div>
             </div>
-            <div class="table-responsive">
-              <table class="table table-sm table-hover table-bordered mb-0">
-                <thead class="table-light"><tr>
-                  <th>Proveedor</th><th>Asunto</th><th>Estado</th><th>Fecha</th>                  <th class="text-center">Acciones</th>
-                </tr></thead>
-                <tbody>
-                  ${consultas.map((c) => {
-                    const pendiente = String(c.estado || '').toUpperCase() === 'PENDIENTE';
-                    const menuItems = [
-                      ...(pendiente ? [{ act: 'responder', label: 'Responder', icon: 'bi-reply-fill' }] : []),
-                      { act: 'adjuntos', label: 'Adjuntos', icon: 'bi-paperclip' },
-                      ...(pendiente ? [{ act: 'observar', label: 'Observar/Derivar', icon: 'bi-exclamation-circle' }] : []),
-                    ];
-                    return `
-                    <tr data-consulta-id="${c.id}">
-                      <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-                      <td>${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 80))}</div></td>
-                      <td>${badgeEstadoConsulta(c.estado)}</td>
-                      <td class="small">${esc(fmtFecha(c.created_at))}</td>
-                      <td class="text-center">${consultaDetalleActionMenuHtml(c.id, menuItems)}</td>
-                    </tr>`;
-                  }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin consultas</td></tr>'}
-                </tbody>
-              </table>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
             </div>
           </div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-          </div>
         </div>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const el = document.getElementById(id);
-  const modal = window.bootstrap.Modal.getOrCreateInstance(el);
-  el.addEventListener('hidden.bs.modal', () => {
-    closeBandejaActionMenus();
-    wrap.remove();
-  }, { once: true });
-  modal.show();
+      </div>`;
+    document.body.appendChild(wrap);
+    const el = document.getElementById(id);
+    const modal = window.bootstrap.Modal.getOrCreateInstance(el);
+    el.addEventListener('hidden.bs.modal', () => {
+      closeBandejaActionMenus();
+      wrap.remove();
+    }, { once: true });
+    modal.show();
 
-  const body = document.getElementById(`${id}_body`);
-  bindActionMenus(body, {
-    responder: async (menuId) => {
-      const cid = String(menuId).replace(/^co_/, '');
-      const consulta = consultasCache.find((c) => String(c.id) === String(cid));
-      if (!consulta) return;
-      const ok = await showResponderConsultaModal(consulta);
-      if (ok) {
+    const body = document.getElementById(`${id}_body`);
+    fixBandejaDropdownMenus(body);
+
+    const obsConfig = buildConsultasObservacionModalConfig({
+      onReload: () => {
         modal.hide();
         loadConsultas(true);
-      }
-    },
-    adjuntos: (menuId) => {
-      const cid = String(menuId).replace(/^co_/, '');
-      const consulta = consultas.find((c) => String(c.id) === String(cid));
-      const sid = consulta?.solicitud_id;
-      if (sid) openAdjuntosSolicitudModal(sid, true);
-    },
-    observar: async (menuId) => {
-      const cid = String(menuId).replace(/^co_/, '');
-      const consulta = consultas.find((c) => String(c.id) === String(cid));
-      const reqId = consulta?.requerimiento_id || expediente.requerimiento_id;
-      if (!reqId) {
-        alert('Sin requerimiento asociado.');
-        return;
-      }
-      const { handleBandejaObservaciones } = await import('../../components/modalObservaciones.js');
-      const pseudoRow = { id: reqId, codigo: expediente.requerimientos_texto || consulta?.requerimiento_codigo };
-      await handleBandejaObservaciones(reqId, [pseudoRow], {
-        submoduloLabel: 'Consultas y Observaciones',
-        bandejaPrefix: 'consultasObs',
-        puedeObservar: () => true,
-        candidatosApiPath: '/api/requerimientos-especial/observacion-destino-candidatos',
-        onObservar: async (rid, data) => {
-          await contratacionesService.observarConsultasObservaciones(rid, {
-            ...data,
-            origen_submodulo: 'Consultas y Observaciones',
-            usuario: getUserDisplayName(authService.getUser?.() || {}),
-          });
+      },
+    });
+
+    bindActionMenus(body, {
+      responder: async (menuId) => {
+        const cid = String(menuId).replace(/^co_/, '');
+        const consulta = consultasCache.find((c) => String(c.id) === String(cid));
+        if (!consulta) return;
+        const ok = await showResponderConsultaModal(consulta);
+        if (ok) {
           modal.hide();
           loadConsultas(true);
-        },
-        onReload: () => loadConsultas(true),
-      });
-    },
-  });
+        }
+      },
+      adjuntos: (menuId) => {
+        const cid = String(menuId).replace(/^co_/, '');
+        const consulta = consultas.find((c) => String(c.id) === String(cid));
+        const sid = consulta?.solicitud_id;
+        if (sid) openAdjuntosSolicitudModal(sid, true);
+      },
+      observar: async () => {
+        if (!reqId) {
+          alert('Sin requerimiento asociado.');
+          return;
+        }
+        const row = reqRow || await loadRequerimientoParaConsultasObservacion(reqId);
+        if (!row) {
+          alert('No se pudo cargar el expediente.');
+          return;
+        }
+        const { handleBandejaObservaciones } = await import('../../components/modalObservaciones.js');
+        await handleBandejaObservaciones(reqId, [row], obsConfig);
+      },
+      subsanar: async () => {
+        if (!reqId) return;
+        const row = reqRow || await loadRequerimientoParaConsultasObservacion(reqId);
+        if (!row) {
+          alert('No se pudo cargar el expediente.');
+          return;
+        }
+        const { handleBandejaObservaciones } = await import('../../components/modalObservaciones.js');
+        await handleBandejaObservaciones(reqId, [row], {
+          ...obsConfig,
+          puedeObservar: () => false,
+        });
+      },
+    });
+  };
+
+  if (reqId) {
+    loadRequerimientoParaConsultasObservacion(reqId)
+      .then((reqRow) => renderModalBody(reqRow, usuarioPuedeSubsanarConsultas(reqRow)))
+      .catch(() => renderModalBody(null, false));
+  } else {
+    renderModalBody(null, false);
+  }
 }
 
 function buildLoadParams() {

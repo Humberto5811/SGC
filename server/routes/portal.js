@@ -365,6 +365,53 @@ portalAnalistaRouter.put('/consultas/observar/:requerimientoId', async (req, res
   } catch (err) { next(err); }
 });
 
+portalAnalistaRouter.get('/consultas/candidatos-observacion-destino/:requerimientoId', async (req, res, next) => {
+  try {
+    const rid = parseInt(req.params.requerimientoId, 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      return res.status(400).json({ ok: false, error: 'requerimientoId inválido' });
+    }
+    const destinoSubmodulo = req.query.destino_submodulo || req.query.destinoSubmodulo || '';
+    const { listarCandidatosObservacionDestino, esDestinoObservacionDecSoportado } =
+      await import('../lib/candidatosObservacionDestino.js');
+    if (destinoSubmodulo && !esDestinoObservacionDecSoportado(destinoSubmodulo)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Destino no permitido (Registro, Evaluación o DEC)',
+      });
+    }
+    const data = await listarCandidatosObservacionDestino({
+      requerimientoId: rid,
+      destinoSubmodulo,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
+portalAnalistaRouter.get('/consultas/candidatos-subsanacion-destino/:requerimientoId', async (req, res, next) => {
+  try {
+    const rid = parseInt(req.params.requerimientoId, 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      return res.status(400).json({ ok: false, error: 'requerimientoId inválido' });
+    }
+    const { listarCandidatosSubsanacionDestino } = await import('../lib/candidatosObservacionDestino.js');
+    const data = await listarCandidatosSubsanacionDestino({
+      requerimientoId: rid,
+      destinoSubmodulo: req.query.destino_submodulo || req.query.destinoSubmodulo || '',
+      observacionId: req.query.observacion_id || null,
+      search: req.query.q || req.query.search || '',
+    });
+    res.json({ ok: true, data });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+    next(err);
+  }
+});
+
 portalAnalistaRouter.get('/cotizaciones', async (req, res, next) => {
   try {
     const data = await listarRecepcionCotizaciones(req.query);

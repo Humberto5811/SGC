@@ -80,11 +80,15 @@ export function consolidarExpedientesConsultas(consultas = []) {
         objeto: c.objeto || '',
         requerimientos_texto: c.requerimientos_texto || c.requerimiento_codigo || '',
         centros_texto: c.centros_texto || c.centro || '',
+        requerimiento_id: c.requerimiento_id,
         consultas: [],
       });
     }
     const g = map.get(key);
     g.consultas.push(c);
+    if (c.requerimiento_id && !g.requerimiento_id) {
+      g.requerimiento_id = c.requerimiento_id;
+    }
     if (c.requerimiento_codigo) {
       const codes = new Set(
         String(g.requerimientos_texto || '').split(',').map((s) => s.trim()).filter(Boolean),
