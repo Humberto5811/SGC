@@ -17,6 +17,8 @@ import {
   esUsuarioElegibleParaPerfil,
 } from './workflowTransicionResponsable.js';
 import { resolveEmisorObservacionRetorno } from './pilotRegistroEvaluacion.js';
+import { EQUIPOS_UAD } from '../../shared/equiposUad.js';
+import { listarUsuariosDestinoEquipoUadOrganizacional } from './equiposUadUsuario.js';
 
 const DESTINO_REGISTRO_LABELS = Object.freeze([
   'Registro de Requerimiento',
@@ -37,6 +39,7 @@ export const DESTINOS_OBSERVACION_DEC = Object.freeze([
   ...DESTINO_REGISTRO_LABELS,
   ...DESTINO_EVALUACION_LABELS,
   ...DESTINO_PROGRAMACION_LABELS,
+  'DEC',
 ]);
 
 const ACTIVIDADES_REG_ELEGIBLES = Object.freeze(['VER', 'CREAR', 'EDITAR', 'OBSERVAR', 'DERIVAR']);
@@ -288,6 +291,56 @@ export async function resolveRecomendadoEvaluacion(requerimientoId, client = nul
   return null;
 }
 
+/** Participante histórico más reciente en etapa DEC. */
+export async function resolveRecomendadoDec(requerimientoId, client = null) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  const { rows: asig } = await queryFn(
+    client,
+    `SELECT a.usuario_id, u.id, u.username, u.apellidos, u.nombres, u.nombre, u.dni,
+            u.cargo, u.rol, u.permisos, u.centro, u.codigo_centro_costo, u.activo, a.asignado_at
+     FROM expediente_asignaciones a
+     JOIN usuarios u ON u.id = a.usuario_id
+     WHERE a.requerimiento_id = $1
+       AND UPPER(TRIM(a.etapa_codigo)) = 'DEC'
+       AND UPPER(TRIM(a.tipo_responsable)) = 'PERSONA'
+       AND a.usuario_id IS NOT NULL
+     ORDER BY a.asignado_at DESC NULLS LAST, a.id DESC
+     LIMIT 1`,
+    [rid],
+  );
+  if (asig.length) {
+    return mapCandidato(asig[0], { fuente: 'asignacion_dec', asignado_at: asig[0].asignado_at });
+  }
+  return null;
+}
+
+/** Participante histórico más reciente en etapa PROGRAMACION. */
+export async function resolveRecomendadoProgramacion(requerimientoId, client = null) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  const { rows: asig } = await queryFn(
+    client,
+    `SELECT a.usuario_id, u.id, u.username, u.apellidos, u.nombres, u.nombre, u.dni,
+            u.cargo, u.rol, u.permisos, u.centro, u.codigo_centro_costo, u.equipo_uad, u.activo, a.asignado_at
+     FROM expediente_asignaciones a
+     JOIN usuarios u ON u.id = a.usuario_id
+     WHERE a.requerimiento_id = $1
+       AND UPPER(TRIM(a.etapa_codigo)) = 'PROGRAMACION'
+       AND UPPER(TRIM(a.tipo_responsable)) = 'PERSONA'
+       AND a.usuario_id IS NOT NULL
+     ORDER BY a.asignado_at DESC NULLS LAST, a.id DESC
+     LIMIT 1`,
+    [rid],
+  );
+  if (asig.length) {
+    return mapCandidato(asig[0], { fuente: 'asignacion_programacion', asignado_at: asig[0].asignado_at });
+  }
+  return null;
+}
+
 function aplicarRecomendadoHistorico({
   recomendadoRaw,
   elegibles,
@@ -429,24 +482,72 @@ export async function listarCandidatosObservacionDestino({
 
   if (etapaDest === 'PROGRAMACION') {
     const meta = getEtapaMeta('PROGRAMACION');
-    const base = await listarCandidatosPorPerfil({
-      perfil: PERFILES_FUNCIONALES.PROGRAMACION,
-      submoduloCodigo: meta?.submoduloCodigo || 'PROGRAMACION',
-      alcanceTransversal: true,
-      search,
+    const { usuarios } = await listarUsuariosDestinoEquipoUadOrganizacional({
+      equipoCodigo: EQUIPOS_UAD.PROGRAMACION,
       client,
     });
+    const elegibles = usuarios.map((u) => mapCandidato(u, { fuente: 'equipo_uad_programacion' }));
+    const historico = await resolveRecomendadoProgramacion(rid, client);
+    const esElegibleProg = (u) => u?.activo !== false && elegibles.some((c) => c.id === Number(u.id));
+    const { recomendado: recHist, recomendadoInactivo } = aplicarRecomendadoHistorico({
+      recomendadoRaw: historico,
+      elegibles,
+      esElegibleFn: esElegibleProg,
+      centroCodigo: null,
+    });
+    let recomendado = recHist;
+    let candidatos = elegibles.filter((c) => !recomendado || c.id !== recomendado.id);
+    const filtrado = filtrarListaCandidatosObservacion({ recomendado, candidatos, search });
     return {
       destino: destinoSubmodulo,
       destino_etapa: 'PROGRAMACION',
       destino_submodulo_codigo: meta?.submoduloCodigo || 'PROGRAMACION',
       soportado: true,
-      perfil_responsable: PERFILES_FUNCIONALES.PROGRAMACION,
-      alcance: 'TRANSVERSAL',
-      recomendado: base.recomendado,
-      recomendado_inactivo: null,
-      candidatos: base.candidatos || [],
-      resolucion_automatica: base.resolucion_automatica,
+      perfil_responsable: 'EQUIPO_UAD_PROGRAMACION',
+      equipo_uad: EQUIPOS_UAD.PROGRAMACION,
+      alcance: 'UAD_EQUIPO',
+      recomendado: filtrado.recomendado,
+      recomendado_inactivo: recomendadoInactivo,
+      candidatos: filtrado.candidatos,
+      resolucion_automatica: {
+        usuarioId: filtrado.recomendado?.id ?? null,
+        ambiguo: !filtrado.recomendado && filtrado.candidatos.length !== 1,
+        candidatos: (filtrado.recomendado ? 1 : 0) + filtrado.candidatos.length,
+      },
+    };
+  }
+
+  if (etapaDest === 'DEC') {
+    const meta = getEtapaMeta('DEC');
+    const uadKeys = await resolveUnidadAdquisicionesKeys(client);
+    const elegibles = await listarPersonasElegiblesDec({ search: '' }, client);
+    const historico = await resolveRecomendadoDec(rid, client);
+    const esElegibleDecFn = (u) => esElegibleDirectorUnidadAdquisiciones(u, uadKeys)
+      || (esUsuarioElegibleParaPerfil(u, PERFILES_FUNCIONALES.DEC, 'DEC') && !esCuentaLegacyDecSemilla(u));
+    const { recomendado: recHist, recomendadoInactivo } = aplicarRecomendadoHistorico({
+      recomendadoRaw: historico,
+      elegibles,
+      esElegibleFn: esElegibleDecFn,
+      centroCodigo: null,
+    });
+    let recomendado = recHist;
+    let candidatos = elegibles.filter((c) => !recomendado || c.id !== recomendado.id);
+    const filtrado = filtrarListaCandidatosObservacion({ recomendado, candidatos, search });
+    return {
+      destino: destinoSubmodulo,
+      destino_etapa: 'DEC',
+      destino_submodulo_codigo: meta?.submoduloCodigo || 'DEC',
+      soportado: true,
+      perfil_responsable: PERFILES_FUNCIONALES.DEC,
+      alcance: 'UNIDAD_ADQUISICIONES',
+      recomendado: filtrado.recomendado,
+      recomendado_inactivo: recomendadoInactivo,
+      candidatos: filtrado.candidatos,
+      resolucion_automatica: {
+        usuarioId: filtrado.recomendado?.id ?? null,
+        ambiguo: !filtrado.recomendado && filtrado.candidatos.length !== 1,
+        candidatos: (filtrado.recomendado ? 1 : 0) + filtrado.candidatos.length,
+      },
     };
   }
 
@@ -822,6 +923,8 @@ export default {
   esElegibleRegistroRequerimiento,
   resolveRecomendadoRegistro,
   resolveRecomendadoEvaluacion,
+  resolveRecomendadoDec,
+  resolveRecomendadoProgramacion,
   listarCandidatosObservacionDestino,
   listarCandidatosSubsanacionDestino,
   listarPersonasElegiblesDec,

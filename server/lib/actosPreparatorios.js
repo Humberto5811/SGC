@@ -617,7 +617,8 @@ export async function observarActos(requerimientoId, body) {
   } else if (/^\d+$/.test(String(destino_persona || '').trim())) {
     uid = Number(destino_persona);
   }
-  if (etapaDestObs === 'REGISTRO' && !uid) {
+  const etapasObsRequierenPersona = new Set(['REGISTRO', 'EVALUACION', 'DEC', 'PROGRAMACION']);
+  if (etapasObsRequierenPersona.has(etapaDestObs) && !uid) {
     const { buildErrorSubsanacionSinPersona } = await import('./pilotRegistroEvaluacion.js');
     throw buildErrorSubsanacionSinPersona('Debe seleccionar una persona destino válida.');
   }

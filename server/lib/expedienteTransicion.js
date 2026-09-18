@@ -347,8 +347,10 @@ export async function transicionarExpediente({
         || '';
       const etapaDestNorm = String(destRaw || '')
         .toUpperCase()
-        .replace(/^REGISTRADO$/, 'REGISTRO');
-      if (etapaDestNorm === 'REGISTRO') {
+        .replace(/^REGISTRADO$/, 'REGISTRO')
+        .replace(/^ACTOS_PREPARATORIOS$/, 'COORDINACION_CM');
+      const etapasObsCmPilot = new Set(['REGISTRO', 'EVALUACION', 'DEC', 'PROGRAMACION']);
+      if (etapasObsCmPilot.has(etapaDestNorm)) {
         const { applyPilotObservacionDecDestino } = await import('./workflowTransicionResponsable.js');
         metaTransicion.etapa_origen = etapaOrigen;
         metaTransicion.etapa_destino = etapaDestNorm;

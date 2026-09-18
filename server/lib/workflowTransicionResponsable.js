@@ -1017,10 +1017,10 @@ export async function applyPilotTransicionPersona({
   };
 }
 
-const ETAPAS_OBSERVACION_DEC = Object.freeze(['REGISTRO', 'EVALUACION', 'PROGRAMACION']);
+export const ETAPAS_OBSERVACION_DEC = Object.freeze(['REGISTRO', 'EVALUACION', 'PROGRAMACION', 'DEC']);
 
 /**
- * Piloto RC8.17.3B — DEC observa hacia REGISTRO / EVALUACION / PROGRAMACION.
+ * Piloto RC8.17.3B — observación dirigida hacia REGISTRO / EVALUACION / PROGRAMACION / DEC.
  * Etapa = destino, estado OBSERVADO, responsable PERSONA seleccionada.
  */
 export function applyPilotObservacionDecDestino({

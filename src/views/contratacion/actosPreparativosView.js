@@ -297,6 +297,13 @@ async function loadActosList(sortOverride = {}, resetPage = false) {
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'Coordinación CM',
+        destinosPermitidosObservacion: [
+          'Registro de Requerimiento',
+          'Evaluación de Requerimiento',
+          'DEC',
+          'Programación',
+        ],
+        candidatosApiPath: (reqId) => `/contrataciones/actos/candidatos-observacion-destino/${reqId}`,
         puedeObservar: () => true,
         onObservar: async (reqId, data) => {
           await contratacionesService.observarActos(reqId, data.motivo || '', data.usuario, {

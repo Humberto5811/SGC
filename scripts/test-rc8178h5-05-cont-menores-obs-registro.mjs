@@ -34,7 +34,7 @@ ok(getTransition({
 
 const expSrc = readFileSync(join(__dir, '../server/lib/expedienteTransicion.js'), 'utf8');
 ok(/eventoCodigo === 'COORDINACION_CM_OBSERVADA'/.test(expSrc), 'B expedienteTransicion maneja COORDINACION_CM_OBSERVADA');
-ok(/etapaDestNorm === 'REGISTRO'/.test(expSrc), 'B piloto Registro para CM');
+ok(/etapasObsCmPilot\.has\(etapaDestNorm\)/.test(expSrc), 'B piloto CM obs (Registro/Eval/DEC/Prog)');
 
 console.log('\nC — applyPilotObservacionDecDestino (CM metadata)');
 {
