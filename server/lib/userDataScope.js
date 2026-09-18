@@ -612,6 +612,26 @@ export async function assertAreaWithinScope(userId, areaRef = {}) {
 export { httpError as scopeHttpError };
 
 /**
+ * RC8.3D — ¿Usuario con fila activa en expediente_asignaciones para el REQ?
+ * Misma tabla canónica que accesoCcp / accesoRegistroOrdenes (044).
+ */
+async function usuarioTieneAsignacionActivaExpediente(usuarioId, requerimientoId) {
+  const uid = parseInt(usuarioId, 10);
+  const rid = parseInt(requerimientoId, 10);
+  if (!Number.isFinite(uid) || !Number.isFinite(rid)) return false;
+  const { rows } = await query(`
+    SELECT 1
+    FROM expediente_asignaciones a
+    JOIN usuarios u ON u.id = a.usuario_id AND u.activo = TRUE
+    WHERE a.requerimiento_id = $1
+      AND a.usuario_id = $2
+      AND a.activo = TRUE
+    LIMIT 1
+  `, [rid, uid]);
+  return rows.length > 0;
+}
+
+/**
  * RC8.2H — Guard central para autorizar acceso a requerimiento en contexto
  * de Contrataciones (Invitaciones, Solicitudes de Cotización).
  *
@@ -648,10 +668,8 @@ export async function assertCanAccessRequirementForContracting(userId, requerimi
     };
   }
 
-  // 2) Asignación dinámica por expediente (RC8.3D)
-  // Permite que un Coordinador CM asigne explícitamente un expediente a un analista.
-  const { isAssignedExpediente } = await import('./expedienteAsignaciones.js');
-  const assigned = await isAssignedExpediente(userId, 'REQUERIMIENTO', requerimientoId);
+  // 2) Asignación dinámica por expediente (RC8.3D) — expediente_asignaciones activa
+  const assigned = await usuarioTieneAsignacionActivaExpediente(userId, requerimientoId);
   if (assigned) {
     return {
       scopeType: SCOPE_TYPES.TRANSVERSAL_FLUJO,
