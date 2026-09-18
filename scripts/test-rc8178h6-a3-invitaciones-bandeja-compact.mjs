@@ -51,7 +51,7 @@ ok(invSrc.includes('sgc-registro-compact'), 'D1 contenedor compacto');
 
 const css = actosBandejaStyles();
 ok(css.includes('inv-bandeja-wrap .req-col-etapa'), 'C2 estilos compactos Etapa');
-ok(css.includes('min-width: 1180px'), 'C3 tabla min-width reducida');
-ok(Number(css.match(/max-width: 7\.5rem/g)?.length || 0) >= 2, 'C4 badges con ellipsis');
+ok(css.includes('thead th') && css.includes('white-space: normal'), 'C3 encabezados con wrap (sin superposición)');
+ok(css.includes('text-overflow: ellipsis'), 'C4 celdas con ellipsis');
 
 console.log('\n=== H6-A3 OK ===\n');

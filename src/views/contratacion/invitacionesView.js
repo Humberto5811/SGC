@@ -136,8 +136,8 @@ function invitacionesBandejaHeaders(sortState = null) {
     ${sortableTh('Responsable', 'responsable', sortState, 'req-col-resp')}
     ${sortableTh('Fecha Asignación', 'fecha', sortState, 'inv-col-fecha')}
     ${sortableTh('Días', 'dias', sortState, 'req-col-dias')}
-    <th class="text-center actos-col-inv-count">Inv.</th>
-    <th class="text-center actos-col-inv-num">N° Inv.</th>
+    <th class="text-center actos-col-inv-count" title="¿Invitado?">Inv.</th>
+    <th class="text-center actos-col-inv-num" title="Número de invitaciones">N° Inv.</th>
     <th class="req-col-acc"></th>`;
 }
 
