@@ -27,6 +27,12 @@ export async function observarConsultasObservaciones(requerimientoId, body) {
   const loaded = await loadReqPayload(requerimientoId);
   if (!loaded) throw new Error('Requerimiento no encontrado');
 
+  const { asegurarExpedienteConsultasCanonico } = await import('./consultasLegacyNormalizacion.js');
+  await asegurarExpedienteConsultasCanonico(requerimientoId, {
+    via: 'observarConsultasObservaciones',
+    actorRol: usuario || SUBMODULO_CONSULTAS_OBSERVACIONES,
+  });
+
   const accionObs = procesarAccionObservacion(loaded.payload, {
     accion,
     observacion_id,

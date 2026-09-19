@@ -286,7 +286,7 @@ function showExpedienteConsultasModal(expediente) {
     wrap.innerHTML = `
       <style>${consultasDetalleModalStyles()}</style>
       <div class="modal fade co-exp-modal" id="${id}" tabindex="-1">
-        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-dialog modal-xl">
           <div class="modal-content">
             <div class="modal-header bg-light">
               <h5 class="modal-title">

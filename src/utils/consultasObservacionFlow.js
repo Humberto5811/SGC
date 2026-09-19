@@ -75,9 +75,6 @@ export function consultasDetalleModalStyles() {
       margin: 1rem auto;
     }
     .co-exp-modal .modal-body {
-      min-height: 280px;
-      max-height: min(78vh, 720px);
-      overflow-y: auto;
       overflow-x: visible;
     }
     .co-exp-modal .co-exp-table-wrap {
@@ -86,8 +83,6 @@ export function consultasDetalleModalStyles() {
     }
     .co-exp-modal .co-exp-table-wrap .dropdown-menu {
       z-index: 1095;
-      max-height: 70vh;
-      overflow-y: auto;
     }
     .co-exp-modal table.co-exp-detail-table th,
     .co-exp-modal table.co-exp-detail-table td {

@@ -630,6 +630,24 @@ export async function responderConsultaAnalista(consultaId, body, usuario) {
   const { respuesta, adjuntos, publicar } = body || {};
   if (!respuesta) throw new Error('Respuesta requerida');
 
+  const { rows: preConsulta } = await query(
+    'SELECT id, requerimiento_id FROM consultas_proveedor WHERE id = $1 LIMIT 1',
+    [consultaId],
+  );
+  if (!preConsulta.length) {
+    const err = new Error('Consulta no encontrada');
+    err.status = 404;
+    throw err;
+  }
+  const ridPre = parseInt(preConsulta[0].requerimiento_id, 10);
+  if (Number.isFinite(ridPre) && ridPre > 0) {
+    const { asegurarExpedienteConsultasCanonico } = await import('./consultasLegacyNormalizacion.js');
+    await asegurarExpedienteConsultasCanonico(ridPre, {
+      via: 'responderConsultaAnalista',
+      actorRol: usuario || 'ANALISTA_CM',
+    });
+  }
+
   const { withTransaction } = await import('./workflow/workflowTransaction.js');
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const { ETAPA_CONSULTAS } = await import('./consultasExpedienteEstado.js');
