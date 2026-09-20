@@ -6,7 +6,11 @@ import { bandejaTableStyles } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { openAdjuntosSolicitudModal } from '../../utils/adjuntosModal.js';
-import { closeBandejaActionMenus, bindActionMenus, fixBandejaDropdownMenus } from '../../utils/bandejaUi.js';
+import {
+  closeBandejaActionMenus,
+  bindActionMenus,
+  renderActionMenuCell,
+} from '../../utils/bandejaUi.js';
 import { renderBandejaCanonicoEtapaEstadoRespCells } from '../../utils/bandejaExpedienteColumns.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import {
@@ -47,23 +51,6 @@ function esc(s) {
 
 function fmtFecha(iso) {
   return formatDateTimeLima(iso);
-}
-
-function consultaDetalleActionMenuHtml(consultaId, menuItems) {
-  const id = `co_${consultaId}`;
-  const items = menuItems.filter((m) => m.show !== false);
-  return `
-    <div class="dropdown d-inline-block">
-      <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
-        data-bs-toggle="dropdown" aria-expanded="false">Acciones</button>
-      <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-        ${items.map((m) => `
-          <li><button type="button" class="dropdown-item bandeja-menu-act py-1"
-            data-act="${esc(m.act)}" data-id="${esc(id)}">
-            <i class="bi ${m.icon || 'bi-dot'} me-2"></i>${esc(m.label)}
-          </button></li>`).join('')}
-      </ul>
-    </div>`;
 }
 
 function labelEstadoConsulta(estado) {
@@ -303,14 +290,14 @@ function showExpedienteConsultasModal(expediente) {
                   · Consultas: <strong>${consultas.length}</strong>
                 </div>
               </div>
-              <div class="co-exp-table-wrap table-responsive">
+              <div class="sgc-bandeja-wrap table-responsive co-exp-bandeja-wrap">
                 <table class="table table-sm table-hover table-bordered mb-0 co-exp-detail-table">
                   <thead class="table-light"><tr>
                     <th class="co-exp-col-proveedor">Proveedor</th>
                     <th class="co-exp-col-asunto">Asunto</th>
                     <th>Estado</th>
                     <th>Fecha</th>
-                    <th class="text-center co-exp-col-acc">Acciones</th>
+                    <th class="text-center req-col-acc">Acciones</th>
                   </tr></thead>
                   <tbody>
                     ${consultas.map((c) => {
@@ -327,7 +314,7 @@ function showExpedienteConsultasModal(expediente) {
                         <td class="co-exp-col-asunto">${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 120))}</div></td>
                         <td>${badgeEstadoConsulta(c.estado)}</td>
                         <td class="small text-nowrap">${esc(fmtFecha(c.created_at))}</td>
-                        <td class="text-center">${consultaDetalleActionMenuHtml(c.id, menuItems)}</td>
+                        ${renderActionMenuCell(`co_${c.id}`, menuItems)}
                       </tr>`;
                     }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin consultas</td></tr>'}
                   </tbody>
@@ -350,7 +337,6 @@ function showExpedienteConsultasModal(expediente) {
     modal.show();
 
     const body = document.getElementById(`${id}_body`);
-    fixBandejaDropdownMenus(body);
 
     const obsConfig = buildConsultasObservacionModalConfig({
       onReload: () => {

@@ -34,6 +34,9 @@ ok(!viewSrc.includes('co-exp-modal') || !/co-exp-modal[\s\S]{0,400}modal-dialog-
 ok(!flowSrc.includes('max-height: min(78vh'), '7 — modal-body sin viewport vertical fijo');
 ok(!/\.co-exp-modal \.modal-body[\s\S]*overflow-y:\s*auto/.test(flowSrc),
   '7 — modal-body sin overflow-y interno');
+ok(viewSrc.includes('renderActionMenuCell'), '7 — Acciones patrón CM (renderActionMenuCell)');
+ok(viewSrc.includes('bindActionMenus'), '7 — bindActionMenus Popper fixed');
+ok(!viewSrc.includes('co-exp-table-wrap'), '7 — sin viewport co-exp-table-wrap');
 
 await runMigrations({ silent: true });
 
@@ -146,18 +149,35 @@ try {
   ok(norm2.aplicada === false && norm2.razon === 'ya_en_consultas', '2 — segunda pasada no reaplica');
   ok(await countNormEvents(ridLegacy) === eventsAfterFirst, '2 — sin evento duplicado');
 
+  const { listarCandidatosObservacionDestino } = await import('../server/lib/candidatosObservacionDestino.js');
+  let candObs = await listarCandidatosObservacionDestino({
+    requerimientoId: ridLegacy,
+    destinoSubmodulo: 'Registro de Requerimiento',
+  });
+  let obsSub = 'Registro de Requerimiento';
+  let pickObs = candObs.recomendado || candObs.candidatos?.[0];
+  if (!pickObs?.id) {
+    candObs = await listarCandidatosObservacionDestino({
+      requerimientoId: ridLegacy,
+      destinoSubmodulo: 'DEC',
+    });
+    pickObs = candObs.recomendado || candObs.candidatos?.[0];
+    obsSub = 'DEC';
+  }
+  ok(pickObs?.id != null, '3 — candidato elegible para observar');
   await observarConsultasObservaciones(ridLegacy, {
     motivo: 'Observación post-normalización legacy',
     usuario: 'test-h6b3',
-    destino_submodulo: 'Registro de Requerimiento',
-    destino_persona: String(destinoObsId),
+    destino_submodulo: obsSub,
+    destino_persona: pickObs.nombre,
+    usuario_destino_id: pickObs.id,
     origen_submodulo: SUBMODULO_CONSULTAS_OBSERVACIONES,
     client_request_id: `test-h6b3-obs:${ridLegacy}:${ts}`,
   });
   const evObs = await erv(ridLegacy);
   ok(evObs?.etapa_codigo === 'CONSULTAS_OBSERVACIONES', '3 — observar permanece CO');
   ok(evObs?.estado_codigo === 'OBSERVADO', '3 — OBSERVADO destinatario');
-  ok(Number(evObs?.responsable_usuario_id) === Number(destinoObsId), '3 — PERSONA destino');
+  ok(Number(evObs?.responsable_usuario_id) === Number(pickObs.id), '3 — PERSONA destino');
 
   // 4 — flujo B1 (ya en CO) no normaliza
   const insB1 = await query(`

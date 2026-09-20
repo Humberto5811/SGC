@@ -49,7 +49,8 @@ const flowSrc = readFileSync(
 ok(!viewSrc.includes('requerimientos-especial/observacion-destino'), 'a — FE sin ruta 404 legacy');
 ok(flowSrc.includes('candidatos-observacion-destino'), 'a — FE usa ruta portal-analista candidatos');
 ok(viewSrc.includes('co-exp-modal'), 'h — modal ampliado co-exp-modal');
-ok(viewSrc.includes('fixBandejaDropdownMenus'), 'h — dropdown Popper en modal detalle');
+ok(viewSrc.includes('bindActionMenus'), 'h — bindActionMenus (Popper fixed, patrón CM)');
+ok(viewSrc.includes('renderActionMenuCell'), 'h — renderActionMenuCell en detalle SC');
 
 await runMigrations({ silent: true });
 
@@ -164,11 +165,30 @@ try {
   ok(candObs.soportado === true, 'a — candidatos observación Registro soportado');
   ok(Array.isArray(candObs.candidatos) || candObs.recomendado, 'a — candidatos observación responde datos');
 
+  let candReg = await listarCandidatosObservacionDestino({
+    requerimientoId: rid,
+    destinoSubmodulo: 'Registro de Requerimiento',
+  });
+  let destSub = 'Registro de Requerimiento';
+  let destEtapa = 'REGISTRO';
+  let pick = candReg.recomendado || candReg.candidatos?.[0];
+  if (!pick?.id) {
+    candReg = await listarCandidatosObservacionDestino({
+      requerimientoId: rid,
+      destinoSubmodulo: 'DEC',
+    });
+    pick = candReg.recomendado || candReg.candidatos?.[0];
+    destSub = 'DEC';
+    destEtapa = 'DEC';
+  }
+  ok(pick?.id != null, 'b0 — candidato elegible con id');
   await observarConsultasObservaciones(rid, {
     motivo: 'Derivación interna test B2',
     usuario: 'test-h6b2',
-    destino_submodulo: 'Registro de Requerimiento',
-    destino_persona: String(destinoId),
+    destino_submodulo: destSub,
+    destino_etapa: destEtapa,
+    destino_persona: pick.nombre,
+    usuario_destino_id: pick.id,
     origen_submodulo: SUBMODULO_CONSULTAS_OBSERVACIONES,
     client_request_id: `test-h6b2-obs:${rid}:${ts}`,
   });
@@ -176,7 +196,7 @@ try {
   const postObs = await erv();
   ok(postObs?.etapa_codigo === 'CONSULTAS_OBSERVACIONES', 'b — observación etapa CO');
   ok(postObs?.estado_codigo === 'OBSERVADO', 'b — observación OBSERVADO');
-  ok(Number(postObs?.responsable_usuario_id) === Number(destinoId), 'b — persona destino ERV');
+  ok(Number(postObs?.responsable_usuario_id) === Number(pick.id), 'b — persona destino ERV');
 
   const bandejaRows = await listarConsultasBandeja({});
   const hit = bandejaRows.find((r) => Number(r.requerimiento_id) === Number(rid));
@@ -190,7 +210,7 @@ try {
   ok(contrato.bandeja_contrato?.estado?.codigo === 'OBSERVADO', 'c — bandeja estado OBSERVADO');
   ok(
     contrato.bandeja_contrato?.responsable?.tipo === 'PERSONA'
-      && Number(contrato.bandeja_contrato?.responsable?.usuarioId) === Number(destinoId),
+      && Number(contrato.bandeja_contrato?.responsable?.usuarioId) === Number(pick.id),
     'c — bandeja PERSONA(destinatario)',
   );
   const expCons = consolidarExpedientesConsultas([hit])[0];

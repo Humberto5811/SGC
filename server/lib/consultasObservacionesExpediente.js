@@ -7,6 +7,61 @@ import { procesarAccionObservacion } from './observacionesWorkflow.js';
 import { formatObservacionTraza, submoduloLabelToEtapa } from './observacionDestino.js';
 import { SUBMODULO_CONSULTAS_OBSERVACIONES } from './consultasObservacionesBandeja.js';
 
+/**
+ * Resuelve PERSONA destino (mismo contrato que bandejas con candidatos canónicos):
+ * usuario_destino_id numérico + validación; destino_persona numérico legacy; nombre vía pool.
+ */
+async function resolveUsuarioDestinoObservacionConsultas(
+  requerimientoId,
+  destinoSubmodulo,
+  destinoPersona,
+  body = {},
+) {
+  const { buildErrorSubsanacionSinPersona } = await import('./pilotRegistroEvaluacion.js');
+  const {
+    assertUsuarioDestinoObservacionElegible,
+    listarCandidatosObservacionDestino,
+  } = await import('./candidatosObservacionDestino.js');
+
+  const fromBody = body?.usuario_destino_id ?? body?.usuarioDestinoId;
+  if (fromBody != null && Number.isFinite(Number(fromBody))) {
+    const uid = Number(fromBody);
+    if (destinoSubmodulo) {
+      await assertUsuarioDestinoObservacionElegible(requerimientoId, destinoSubmodulo, uid);
+    }
+    return uid;
+  }
+
+  const raw = String(destinoPersona ?? '').trim();
+  if (/^\d+$/.test(raw)) {
+    const uid = Number(raw);
+    if (destinoSubmodulo) {
+      await assertUsuarioDestinoObservacionElegible(requerimientoId, destinoSubmodulo, uid);
+    }
+    return uid;
+  }
+
+  if (raw && destinoSubmodulo) {
+    const lista = await listarCandidatosObservacionDestino({
+      requerimientoId,
+      destinoSubmodulo,
+      search: raw,
+    });
+    const pool = [
+      ...(lista.recomendado ? [lista.recomendado] : []),
+      ...(lista.candidatos || []),
+    ];
+    const needle = raw.toLowerCase();
+    const hit = pool.find((c) => String(c.nombre || '').toLowerCase() === needle);
+    if (hit?.id != null) {
+      await assertUsuarioDestinoObservacionElegible(requerimientoId, destinoSubmodulo, hit.id);
+      return Number(hit.id);
+    }
+  }
+
+  throw buildErrorSubsanacionSinPersona('Debe seleccionar una persona destino válida.');
+}
+
 async function loadReqPayload(requerimientoId) {
   const { rows } = await query(
     'SELECT id, codigo, estado, estado_actual, payload, responsable_actual FROM requerimientos WHERE id = $1',
@@ -56,6 +111,27 @@ export async function observarConsultasObservaciones(requerimientoId, body) {
     destino_etapa || submoduloLabelToEtapa(destino_submodulo) || '',
   ).toUpperCase();
 
+  const uid = await resolveUsuarioDestinoObservacionConsultas(
+    requerimientoId,
+    destino_submodulo,
+    destino_persona,
+    body,
+  );
+
+  const { resolveUsuarioIdDesdeActor } = await import('./pilotRegistroEvaluacion.js');
+  let uidOrig = body?.usuario_origen_id ?? body?.usuarioOrigenId ?? null;
+  if (uidOrig != null && Number.isFinite(Number(uidOrig))) {
+    uidOrig = Number(uidOrig);
+  } else {
+    uidOrig = null;
+  }
+  if (!uidOrig && usuario) {
+    uidOrig = await resolveUsuarioIdDesdeActor({
+      usuarioOrigenId: body?.usuario_origen_id ?? body?.usuarioOrigenId,
+      actorRol: usuario,
+    }, null);
+  }
+
   appendObservacion(loaded.payload, {
     motivo,
     gerente: usuario || SUBMODULO_CONSULTAS_OBSERVACIONES,
@@ -68,8 +144,9 @@ export async function observarConsultasObservaciones(requerimientoId, body) {
     destino_derivacion_submodulo: destino_submodulo || '',
     destino_derivacion_etapa: etapaDestObs || destino_etapa || '',
     observacion_padre_id: observacion_padre_id || observacionPadreId || null,
+    usuario_origen_id: uidOrig,
+    usuario_destino_id: uid,
   });
-  const uid = /^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null;
 
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const result = await transicionarExpediente({
@@ -82,7 +159,9 @@ export async function observarConsultasObservaciones(requerimientoId, body) {
       via: 'observarConsultasObservaciones',
       etapa_destino: etapaDestObs,
       destino_submodulo: destino_submodulo || '',
+      destino_etapa: etapaDestObs,
       quien_subsana: destino_persona || '',
+      usuario_destino_id: uid,
     },
     actorRol: usuario || SUBMODULO_CONSULTAS_OBSERVACIONES,
     domainMutator: async (tx) => {

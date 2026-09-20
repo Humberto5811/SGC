@@ -48,6 +48,10 @@ export function buildConsultasObservacionModalConfig({ onReload } = {}) {
         ...data,
         origen_submodulo: data.origen_submodulo || CONSULTAS_SUBMODULO_LABEL,
         usuario: data.usuario || userName,
+        usuario_destino_id: data.usuario_destino_id,
+        destino_persona: data.destino_persona,
+        destino_submodulo: data.destino_submodulo,
+        destino_etapa: data.destino_etapa,
       });
       onReload?.();
     },
@@ -75,14 +79,15 @@ export function consultasDetalleModalStyles() {
       margin: 1rem auto;
     }
     .co-exp-modal .modal-body {
-      overflow-x: visible;
+      overflow: visible;
     }
-    .co-exp-modal .co-exp-table-wrap {
+    .co-exp-modal .co-exp-bandeja-wrap {
       overflow-x: auto;
       overflow-y: visible;
     }
-    .co-exp-modal .co-exp-table-wrap .dropdown-menu {
-      z-index: 1095;
+    .co-exp-modal .co-exp-bandeja-wrap .req-col-acc {
+      position: static;
+      overflow: visible;
     }
     .co-exp-modal table.co-exp-detail-table th,
     .co-exp-modal table.co-exp-detail-table td {
@@ -91,6 +96,5 @@ export function consultasDetalleModalStyles() {
     }
     .co-exp-modal .co-exp-col-proveedor { min-width: 140px; }
     .co-exp-modal .co-exp-col-asunto { min-width: 200px; }
-    .co-exp-modal .co-exp-col-acc { width: 120px; min-width: 110px; }
   `;
 }
