@@ -71,8 +71,10 @@ export async function openModalObservaciones(req, opts = {}) {
   if (!req) return null;
   const row = await refreshReq(req);
   const obs = todasObservaciones(row);
-  const motor = obtenerEstadoObservaciones(row, opts.submoduloLabel);
-  const pending = motor.pendienteModulo || getObservacionPendienteParaModulo(row, opts.submoduloLabel);
+  const sessionUserId = authService.getCurrentUser?.()?.id ?? null;
+  const motor = obtenerEstadoObservaciones(row, opts.submoduloLabel, sessionUserId);
+  const pending = motor.pendienteModulo
+    || getObservacionPendienteParaModulo(row, opts.submoduloLabel, sessionUserId);
   const padreDelegacion = motor.observacionPadreDelegacion || getObservacionPadreParaDelegacion(opts.submoduloLabel, row);
   const pendienteAqui = motor.puedeSubsanar;
   const puedeCerrar = motor.puedeCerrar;
@@ -106,7 +108,7 @@ export async function openModalObservaciones(req, opts = {}) {
           <div class="modal-footer flex-wrap gap-2">
             ${opts.onAdjuntos ? `<button type="button" class="btn btn-outline-secondary btn-sm" id="${id}_adj"><i class="bi bi-paperclip"></i> Adjuntos</button>` : ''}
             ${pendienteAqui ? `<button type="button" class="btn btn-primary btn-sm" id="${id}_subsanar"><i class="bi bi-reply"></i> Subsanar observación</button>` : ''}
-            ${opts.onObservar !== false ? `<button type="button" class="btn btn-danger btn-sm" id="${id}_nueva"><i class="bi bi-plus-circle"></i> Nueva observación</button>` : ''}
+            ${opts.puedeObservar ? `<button type="button" class="btn btn-danger btn-sm" id="${id}_nueva"><i class="bi bi-plus-circle"></i> Nueva observación</button>` : ''}
             ${puedeCerrar && opts.onObservar ? `<button type="button" class="btn btn-success btn-sm" id="${id}_cerrar"><i class="bi bi-check2-circle"></i> Cerrar observación</button>` : ''}
             <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
           </div>

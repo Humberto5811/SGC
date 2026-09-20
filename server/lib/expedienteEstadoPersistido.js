@@ -7,6 +7,7 @@
 import { getEtapaMeta, getLabelEtapa } from '../../shared/workflow/etapas.js';
 import { TIPO_RESPONSABLE } from '../../shared/resolvedorEstadoResponsable.js';
 import { getLabelEstado } from '../../shared/estadoExpedienteVigente.js';
+import { getLabelEstadoParaEtapa } from '../../shared/estadoExpedienteCatalog.js';
 import {
   ORIGEN_ESCRITURA_VIGENTE,
   evaluarEscrituraVigente,
@@ -77,7 +78,7 @@ export function buildEstadoLabels(etapaCodigo, estadoCodigo = null) {
   // ETAPA). En ese caso el label humano es el de la etapa; nunca persistir el código.
   const estadoLabel = codigo === etapaCodigo
     ? etapaLabel
-    : (getLabelEstado(codigo) || etapaLabel || codigo);
+    : (getLabelEstadoParaEtapa(etapaCodigo, codigo) || etapaLabel || codigo);
   return { estadoCodigo: codigo, estadoLabel, etapaCodigo, etapaLabel };
 }
 

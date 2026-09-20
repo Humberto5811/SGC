@@ -6,6 +6,12 @@ import {
   hayObservacionPendienteAccion,
   requiereBadgeModulo,
 } from './observacionDestino.js';
+import { authService } from '../services/authService.js';
+
+function sessionUserId() {
+  const id = authService.getCurrentUser?.()?.id;
+  return id != null && Number.isFinite(Number(id)) ? Number(id) : null;
+}
 import {
   estaEnRegistroAccionable,
   estaEnEvaluacionAccionable,
@@ -26,7 +32,7 @@ export function estaEnEvaluacion(r = {}) {
 
 export function registroMenuItems(r) {
   const enRegistro = estaEnRegistroAccionable(r);
-  const obsLabel = labelBotonObservaciones(r, 'Registro de Requerimiento');
+  const obsLabel = labelBotonObservaciones(r, 'Registro de Requerimiento', sessionUserId());
   return [
     { act: 'detail', label: 'Ver detalle', icon: 'bi-eye' },
     { act: 'edit', label: 'Editar', icon: 'bi-pencil', disabled: !enRegistro },
@@ -41,7 +47,7 @@ export function registroMenuItems(r) {
 
 export function registroHiddenActions(r, esc) {
   const enRegistro = estaEnRegistroAccionable(r);
-  const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Registro de Requerimiento');
+  const pendienteSubsanar = hayObservacionPendienteAccion(r, 'Registro de Requerimiento', sessionUserId());
   return `
     <button type="button" class="req-open" data-act-trigger="edit" data-id="${r.id}" ${enRegistro ? '' : 'disabled'}></button>
     <button type="button" class="req-print" data-act-trigger="download" data-id="${r.id}"></button>

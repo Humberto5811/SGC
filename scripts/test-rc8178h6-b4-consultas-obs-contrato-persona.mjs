@@ -43,7 +43,7 @@ let rid = null;
 
 async function erv() {
   const { rows } = await query(
-    `SELECT etapa_codigo, estado_codigo, responsable_tipo, responsable_usuario_id
+    `SELECT etapa_codigo, estado_codigo, estado_label, responsable_tipo, responsable_usuario_id
      FROM expediente_estado_vigente WHERE requerimiento_id = $1`,
     [rid],
   );
@@ -103,5 +103,7 @@ ok(post?.etapa_codigo === 'CONSULTAS_OBSERVACIONES', 'ERV etapa CONSULTAS_OBSERV
 ok(post?.estado_codigo === 'OBSERVADO', 'ERV estado OBSERVADO');
 ok(post?.responsable_tipo === 'PERSONA', 'ERV responsable PERSONA');
 ok(Number(post?.responsable_usuario_id) === Number(destinatario.id), 'ERV responsable = destinatario seleccionado');
+ok(post?.estado_label === 'Observado', 'ERV estado_label Observado (no cuadro CM)');
+ok(!String(post?.estado_label || '').includes('C.C.'), 'ERV label sin C.C.');
 
 console.log('\n✅ RC8.17.8H6-B4 OK\n');

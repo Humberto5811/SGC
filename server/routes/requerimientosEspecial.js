@@ -654,6 +654,11 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
     } = req.body || {};
     if (!respuesta) return res.status(400).json({ success: false, error: 'Subsanación requerida' });
 
+    const actorUsuarioIdRaw = authUserId(req);
+    const actorUsuarioId = actorUsuarioIdRaw != null && Number.isFinite(Number(actorUsuarioIdRaw))
+      ? Number(actorUsuarioIdRaw)
+      : null;
+
     const usuarioDestinoId = usuarioDestinoIdBody != null && Number.isFinite(Number(usuarioDestinoIdBody))
       ? Number(usuarioDestinoIdBody)
       : (/^\d+$/.test(String(destino_persona || '').trim()) ? Number(destino_persona) : null);
@@ -689,6 +694,7 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
       destino_submodulo: destino_submodulo || '',
       destino_etapa: destino_etapa || '',
       destino_persona: usuarioDestinoId ? String(usuarioDestinoId) : (destino_persona || ''),
+      actorUsuarioId,
     };
 
     let updated;

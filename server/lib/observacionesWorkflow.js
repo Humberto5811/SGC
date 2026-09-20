@@ -19,6 +19,7 @@ import {
   getObservacionPendiente,
   obtenerEstadoObservaciones,
   puedeSubsanar,
+  observacionSubsanableEnModulo,
   hayObservacionPendienteAccion,
   labelBotonObservaciones,
   hayObservacionAbiertaRelacionada,
@@ -221,14 +222,18 @@ export function registrarSubsanacionObservacion(payload, {
   respuesta,
   origen_submodulo,
   usuario,
+  actorUsuarioId = null,
 }) {
   let obs = observacion_id ? findObservacionById(payload, observacion_id) : null;
   if (!obs) {
-    obs = getObservacionPendienteParaModulo(payload, origen_submodulo);
+    obs = getObservacionPendienteParaModulo(payload, origen_submodulo, actorUsuarioId);
   }
   if (!obs) throw new Error('No hay observación pendiente para subsanar');
-  if (!receptorDebeActuar(obs)) {
-    throw new Error('La observación indicada no está pendiente de subsanación en este módulo');
+  if (!observacionSubsanableEnModulo(obs, origen_submodulo, actorUsuarioId)) {
+    const err = new Error('No está autorizado para subsanar esta observación en este submódulo.');
+    err.status = 403;
+    err.code = 'SUBSANACION_NO_AUTORIZADA';
+    throw err;
   }
   const hilos = getListaObservaciones(payload);
   if (bloqueaSubsanacionPorHijos(hilos, obs.id)) {

@@ -30,7 +30,8 @@ export async function loadRequerimientoParaConsultasObservacion(requerimientoId)
 
 export function usuarioPuedeSubsanarConsultas(reqRow) {
   if (!reqRow) return false;
-  return puedeSubsanar(CONSULTAS_SUBMODULO_LABEL, reqRow);
+  const uid = authService.getCurrentUser?.()?.id ?? null;
+  return puedeSubsanar(CONSULTAS_SUBMODULO_LABEL, reqRow, uid);
 }
 
 export function buildConsultasObservacionModalConfig({ onReload } = {}) {

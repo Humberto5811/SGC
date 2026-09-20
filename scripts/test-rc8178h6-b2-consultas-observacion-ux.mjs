@@ -218,7 +218,14 @@ try {
 
   const { rows: reqRaw } = await query('SELECT * FROM requerimientos WHERE id = $1', [rid]);
   const reqRow = enrichRequerimientoRow(reqRaw[0]);
-  ok(puedeSubsanar(SUBMODULO_CONSULTAS_OBSERVACIONES, reqRow), 'c — puedeSubsanar=true destinatario');
+  ok(
+    puedeSubsanar(SUBMODULO_CONSULTAS_OBSERVACIONES, reqRow, pick.id),
+    'c — puedeSubsanar=true destinatario',
+  );
+  ok(
+    puedeSubsanar(destSub, reqRow, pick.id),
+    'c — destinatario puede subsanar desde submódulo operativo',
+  );
 
   ok(
     mapDestinoSubmoduloAEtapaSubsanacion('Consultas y Observaciones') === 'CONSULTAS_OBSERVACIONES',

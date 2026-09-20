@@ -305,6 +305,20 @@ export function getLabelEstado(codigo) {
   return def ? def.label : (codigo || '');
 }
 
+/**
+ * Label de estado acotado por etapa expediente (evita alias globales p. ej. OBSERVADO→cuadro).
+ * RC8.17.8H6-B5 — CONSULTAS_OBSERVACIONES + OBSERVADO → «Observado».
+ */
+export function getLabelEstadoParaEtapa(etapaCodigo, estadoCodigo) {
+  const etapa = String(etapaCodigo || '').trim().toUpperCase();
+  const rawEst = String(estadoCodigo || '').trim().toUpperCase().replace(/\s+/g, '_');
+  // OBSERVADO se normaliza globalmente a cuadro; en CO es situación de etapa.
+  if (etapa === 'CONSULTAS_OBSERVACIONES' && rawEst === 'OBSERVADO') {
+    return SITUACIONES.OBSERVADO.label;
+  }
+  return getLabelEstado(estadoCodigo);
+}
+
 export function isTerminalEstado(codigo) {
   const def = getEstadoDef(codigo);
   return !!(def && def.terminal);

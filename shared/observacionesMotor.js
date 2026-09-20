@@ -51,6 +51,44 @@ export function getModuloReceptor(o) {
   return normalizeModuloKey(o?.destino_submodulo || o?.moduloDestino || o?.moduloReceptor);
 }
 
+/** Bandeja/submódulo operativo del destinatario PERSONA (derivación AU/DEC/Registro). */
+export function getModuloOperativoDestinatario(o) {
+  const deriv = String(
+    o?.destino_derivacion_submodulo || o?.destinoDerivacionSubmodulo || '',
+  ).trim();
+  if (deriv) return normalizeModuloKey(deriv);
+  return getModuloReceptor(o);
+}
+
+function usuarioDestinoIdObservacion(o) {
+  const raw = o?.usuario_destino_id ?? o?.usuarioDestinoId ?? null;
+  if (raw == null || !Number.isFinite(Number(raw))) return null;
+  return Number(raw);
+}
+
+/**
+ * RC8.17.8H6-B5 — ¿Puede el actor subsanar esta observación en el submódulo actual?
+ * Con usuario_destino_id: solo esa PERSONA (desde módulo receptor o derivación operativa).
+ */
+export function observacionSubsanableEnModulo(o, moduloActual, usuarioSesionId = null) {
+  if (!receptorDebeActuar(o)) return false;
+  const mod = normalizeModuloKey(moduloActual);
+  if (!mod) return false;
+
+  const modReceptor = getModuloReceptor(o);
+  const modOperativo = getModuloOperativoDestinatario(o);
+  const derivRaw = String(o?.destino_derivacion_submodulo || o?.destinoDerivacionSubmodulo || '').trim();
+  const moduloCoincide = modReceptor === mod || (derivRaw && modOperativo === mod);
+  if (!moduloCoincide) return false;
+
+  const uidDest = usuarioDestinoIdObservacion(o);
+  if (uidDest != null) {
+    if (usuarioSesionId == null || !Number.isFinite(Number(usuarioSesionId))) return false;
+    return Number(usuarioSesionId) === uidDest;
+  }
+  return modReceptor === mod;
+}
+
 /** Normaliza variantes legacy de estado (sin tildes, alias). */
 export function canonEstadoObservacion(estado) {
   const plain = String(estado || '').trim().toUpperCase()
@@ -224,13 +262,10 @@ export function emisorDebeRevisar(o) {
 }
 
 /** ¿Existe hilo abierto donde el módulo actual es receptor y puede subsanar (sin hijas pendientes de receptor)? */
-export function puedeSubsanar(moduloActual, input) {
-  const mod = normalizeModuloKey(moduloActual);
-  if (!mod) return false;
+export function puedeSubsanar(moduloActual, input, usuarioSesionId = null) {
   const hilos = getListaObservaciones(input);
   return getObservacionesAbiertas(input).some((o) => {
-    if (getModuloReceptor(o) !== mod) return false;
-    if (!receptorDebeActuar(o)) return false;
+    if (!observacionSubsanableEnModulo(o, moduloActual, usuarioSesionId)) return false;
     if (bloqueaSubsanacionPorHijos(hilos, o.id)) return false;
     return true;
   });
@@ -254,8 +289,8 @@ export function puedeEmitirObservacionHija(moduloActual, input) {
   return !!getObservacionPadreParaDelegacion(moduloActual, input);
 }
 
-export function hayObservacionPendienteAccion(input, submoduloLabel) {
-  return puedeSubsanar(submoduloLabel, input);
+export function hayObservacionPendienteAccion(input, submoduloLabel, usuarioSesionId = null) {
+  return puedeSubsanar(submoduloLabel, input, usuarioSesionId);
 }
 
 export function hayObservacionAbiertaRelacionada(input, submoduloLabel) {
@@ -264,21 +299,19 @@ export function hayObservacionAbiertaRelacionada(input, submoduloLabel) {
   return getObservacionesAbiertas(input).some((o) => moduloCoincideConObservacion(o, submoduloLabel));
 }
 
-export function labelBotonObservaciones(input, submoduloLabel) {
-  if (puedeSubsanar(submoduloLabel, input)) {
+export function labelBotonObservaciones(input, submoduloLabel, usuarioSesionId = null) {
+  if (puedeSubsanar(submoduloLabel, input, usuarioSesionId)) {
     return 'Observaciones / Subsanar';
   }
   return 'Observaciones';
 }
 
-export function getObservacionPendienteParaModulo(input, submoduloLabel) {
-  const mod = normalizeModuloKey(submoduloLabel);
+export function getObservacionPendienteParaModulo(input, submoduloLabel, usuarioSesionId = null) {
   const hilos = getListaObservaciones(input);
   const abiertas = getObservacionesAbiertas(input);
   for (let i = abiertas.length - 1; i >= 0; i -= 1) {
     const o = abiertas[i];
-    if (getModuloReceptor(o) !== mod) continue;
-    if (!receptorDebeActuar(o)) continue;
+    if (!observacionSubsanableEnModulo(o, submoduloLabel, usuarioSesionId)) continue;
     if (bloqueaSubsanacionPorHijos(hilos, o.id)) continue;
     return o;
   }
@@ -379,20 +412,24 @@ function ultimoMovimientoDeHilos(hilos) {
 /**
  * Fuente única de verdad — todos los componentes deben usar esta función.
  */
-export function obtenerEstadoObservaciones(input, moduloActual = null) {
+export function obtenerEstadoObservaciones(input, moduloActual = null, usuarioSesionId = null) {
   const hilos = getListaObservaciones(input);
   const abiertas = hilos.filter(isObservacionAbierta);
   const cerradas = hilos.filter((o) => !isObservacionAbierta(o));
   const pendientes = abiertas.filter((o) => receptorDebeActuar(o));
   const modKey = moduloActual ? normalizeModuloKey(moduloActual) : null;
-  const puedeSubsanarMod = modKey ? puedeSubsanar(moduloActual, input) : false;
+  const puedeSubsanarMod = modKey ? puedeSubsanar(moduloActual, input, usuarioSesionId) : false;
   const puedeHijaMod = modKey ? puedeEmitirObservacionHija(moduloActual, input) : false;
   const puedeCerrarMod = modKey ? puedeCerrarObservacion(moduloActual, input) : false;
   const padreDelegacion = modKey ? getObservacionPadreParaDelegacion(moduloActual, input) : null;
-  const pendienteModulo = modKey ? getObservacionPendienteParaModulo(input, moduloActual) : null;
+  const pendienteModulo = modKey
+    ? getObservacionPendienteParaModulo(input, moduloActual, usuarioSesionId)
+    : null;
   const cierreModulo = modKey ? getObservacionEmisorPendienteCierre(input, moduloActual) : null;
   const pendientesModulo = modKey ? getPendientesModulo(input, moduloActual) : [];
-  const labelBoton = modKey ? labelBotonObservaciones(input, moduloActual) : 'Observaciones';
+  const labelBoton = modKey
+    ? labelBotonObservaciones(input, moduloActual, usuarioSesionId)
+    : 'Observaciones';
   const arbol = buildArbolObservaciones(hilos);
 
   return {
@@ -512,6 +549,8 @@ export default {
   normalizeModuloKey,
   getModuloEmisor,
   getModuloReceptor,
+  getModuloOperativoDestinatario,
+  observacionSubsanableEnModulo,
   migrateObservacion,
   isObservacionAbierta,
   getListaObservaciones,

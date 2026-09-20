@@ -2,7 +2,7 @@
  * RC8.17.8H6-B1 — ERV canónico Consultas y Observaciones (etapa expediente real).
  */
 import { query } from '../db.js';
-import { getLabelEstado } from '../../shared/estadoExpedienteVigente.js';
+import { getLabelEstado, getLabelEstadoParaEtapa } from '../../shared/estadoExpedienteCatalog.js';
 import { getLabelEtapa } from '../../shared/workflow/etapas.js';
 import { TIPO_RESPONSABLE } from '../../shared/resolvedorEstadoResponsable.js';
 import { ESTADO_PILOT_EN_TRAMITE, LABEL_PILOT_EN_TRAMITE } from './pilotRegistroEvaluacion.js';
@@ -157,7 +157,7 @@ export function applyPilotConsultasObservada({
       etapaCodigo,
       etapaLabel: getLabelEtapa(etapaCodigo) || 'Consultas y Observaciones',
       estadoCodigo: 'OBSERVADO',
-      estadoLabel: getLabelEstado('OBSERVADO') || 'Observado',
+      estadoLabel: getLabelEstadoParaEtapa(etapaCodigo, 'OBSERVADO') || 'Observado',
     },
     metaExtra: {
       pilot_consultas_observada: true,
