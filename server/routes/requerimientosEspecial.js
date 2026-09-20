@@ -176,6 +176,8 @@ router.get('/listar-con-detalles', async (req, res, next) => {
     `;
 
     const result = await query(dataSql, params);
+    const { enrichRowsPayloadConsultasLegacyDerivacion } = await import('../lib/consultasObservacionLegacyDerivacionEnrich.js');
+    await enrichRowsPayloadConsultasLegacyDerivacion(result.rows || []);
     const roleLabels = Object.values(ETAPAS).map((v) => v.responsable);
     const rows = await enrichRequerimientoRowsWithCcp(result.rows || []);
     const { enrichEstadoResponsableForBandeja } = await import('../lib/enrichEstadoResponsable.js');

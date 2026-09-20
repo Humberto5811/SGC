@@ -419,6 +419,11 @@ app.use('/api/requerimientos', crudRouter({
       await assertCanAccessRequirement(userId, row.id, String(req.method));
     }
   },
+  afterRead: async (_req, row) => {
+    const { enrichRowsPayloadConsultasLegacyDerivacion } = await import('./lib/consultasObservacionLegacyDerivacionEnrich.js');
+    await enrichRowsPayloadConsultasLegacyDerivacion([row]);
+    return row;
+  },
   afterCreate: async (row, body, req) => {
     const { resolveUsuarioCreadorRequerimiento } = await import('./lib/usuarioDisplay.js');
     // Preferir identidad autenticada (username) sobre body; nunca el centro (row.responsable).

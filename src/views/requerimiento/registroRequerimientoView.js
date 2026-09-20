@@ -42,7 +42,10 @@ import {
   renderBandejaExpedienteRowCells,
   renderBandejaExpedienteActionCell,
 } from '../../utils/bandejaExpedienteColumns.js';
-import { estaEnRegistroAccionable } from '../../utils/estadoAccionesExpediente.js';
+import {
+  estaEnRegistroAccionable,
+  puedeEmitirNuevaObservacionRegistro,
+} from '../../utils/estadoAccionesExpediente.js';
 import { loadRegistroBandeja } from '../../utils/bandejaRequerimientos.js';
 import { usePagination } from '../../utils/paginacion.js';
 import { openDetailPanel, bindRowDetailPanel, closeDetailPanel } from '../../components/bandejaDetailPanel.js';
@@ -274,7 +277,7 @@ async function loadList(sortOverride = {}, resetPage = false) {
       },
       obs: (id) => handleBandejaObservaciones(id, rows, {
         submoduloLabel: 'Registro de Requerimiento',
-        puedeObservar: (r) => estaEnRegistroAccionable(r),
+        puedeObservar: (r) => puedeEmitirNuevaObservacionRegistro(r),
         onSubsanar: async (reqId, data) => {
           const req = rows.find((x) => String(x.id) === String(reqId));
           if (!req) return;

@@ -19,6 +19,8 @@ export function crudRouter(cfg) {
     beforeCreate,
     /** @type {(req, row) => Promise<void>|void} */
     authorizeRow,
+    /** @type {(req, row) => Promise<object|void>|object|void} */
+    afterRead,
   } = cfg;
 
   function sendAuthError(res, err) {
@@ -71,7 +73,11 @@ export function crudRouter(cfg) {
       if (authorizeRow) {
         try { await authorizeRow(req, rows[0]); } catch (e) { return sendAuthError(res, e); }
       }
-      res.json(rows[0]);
+      let row = rows[0];
+      if (afterRead) {
+        row = (await afterRead(req, row)) ?? row;
+      }
+      res.json(row);
     } catch (err) { next(err); }
   });
 

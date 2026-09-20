@@ -155,6 +155,24 @@ export function estaEnRegistroAccionable(r = {}) {
   return false;
 }
 
+const ETAPAS_EMITIR_OBS_REGISTRO = new Set(['REGISTRO', 'REGISTRADO', '']);
+
+/**
+ * RC8.17.8H6-B5.1 — Nueva observación en Registro: ERV/etapa vigente manda sobre columna legacy r.estado.
+ */
+export function puedeEmitirNuevaObservacionRegistro(r = {}) {
+  if (!estaEnRegistroAccionable(r)) return false;
+  const etapaErv = normUpper(
+    r.estado_responsable_vigente?.etapaCodigo
+    || r.estado_etapa_codigo
+    || '',
+  );
+  if (etapaErv && !ETAPAS_EMITIR_OBS_REGISTRO.has(etapaErv)) return false;
+  const etapaActual = getEtapaActual(r);
+  if (etapaActual && !ETAPAS_EMITIR_OBS_REGISTRO.has(etapaActual)) return false;
+  return true;
+}
+
 /** Evaluación: pendiente de acción en bandeja Evaluación. */
 export function estaEnEvaluacionAccionable(r = {}) {
   if (estaEnEstado(r, 'REQUERIMIENTO_EN_EVALUACION')) return true;
