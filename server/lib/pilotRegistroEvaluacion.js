@@ -302,6 +302,40 @@ export function buildErrorSubsanacionSinPersona(message = 'No se pudo determinar
   return err;
 }
 
+const ETAPA_CONSULTAS_RETORNO = 'CONSULTAS_OBSERVACIONES';
+
+/**
+ * RC8.17.8H6-B5.3 — Emisor de observación CO para retorno interno post-subsanación.
+ * Solo payload (usuario_origen_id / gerente); sin ERV vigente ni CONSULTAS_OBSERVADA destinatario.
+ */
+export async function resolveEmisorConsultasRetornoInterno(
+  requerimientoId,
+  observacionId = null,
+  client = null,
+) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  const { obs } = await resolveObservacionPayload(rid, observacionId, client);
+  if (!obs) return null;
+
+  if (obs.usuario_origen_id != null && Number.isFinite(Number(obs.usuario_origen_id))) {
+    return Number(obs.usuario_origen_id);
+  }
+
+  const hint = String(obs.gerente || obs.usuarioOrigen || obs.usuario || '').trim();
+  if (!hint || /^gerente$/i.test(hint)) return null;
+  const byUser = await resolveUsuarioIdDesdeActor({ actorRol: hint }, client);
+  if (byUser) return byUser;
+  return resolveUsuarioIdDesdeNombreCompletoInequivoco(hint, client);
+}
+
+function normalizeEtapaRetornoSubsanacion(destinoEtapa, metadata = {}) {
+  return String(
+    destinoEtapa || metadata.destino_etapa || metadata.destinoEtapa || '',
+  ).trim().toUpperCase().replace('REGISTRADO', 'REGISTRO');
+}
+
 /**
  * Resuelve PERSONA destino en retorno por subsanación (prioridad RC8.17.8D).
  */
@@ -316,6 +350,12 @@ export async function resolveUsuarioDestinoRetornoSubsanacion({
 } = {}) {
   const rid = Number(requerimientoId);
   if (!Number.isFinite(rid) || rid <= 0) return null;
+
+  const etapaRetorno = normalizeEtapaRetornoSubsanacion(destinoEtapa, metadata);
+  if (etapaRetorno === ETAPA_CONSULTAS_RETORNO) {
+    const emisorCo = await resolveEmisorConsultasRetornoInterno(rid, observacionId, client);
+    if (emisorCo != null) return emisorCo;
+  }
 
   if (usuarioDestinoIdExplicit != null && Number.isFinite(Number(usuarioDestinoIdExplicit))) {
     return Number(usuarioDestinoIdExplicit);
@@ -802,6 +842,7 @@ export default {
   getPilotEstadoLabels,
   resolveUsuarioIdDesdeActor,
   resolveEmisorObservacionRetorno,
+  resolveEmisorConsultasRetornoInterno,
   resolveUsuarioDestinoRetornoSubsanacion,
   resolveUsuarioIdDesdeNombreCompletoInequivoco,
   buildErrorSubsanacionSinPersona,
