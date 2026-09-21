@@ -63,6 +63,38 @@ async function guardAdjuntoByReq(req, requerimientoId) {
   await assertCanAccessRequirement(userId, requerimientoId, 'VER');
 }
 
+// GET /api/adjuntos/requerimiento/:requerimientoId/documento-canonico
+router.get('/requerimiento/:requerimientoId/documento-canonico', async (req, res, next) => {
+  try {
+    const { requerimientoId } = req.params;
+    try {
+      await guardAdjuntoByReq(req, requerimientoId);
+    } catch (e) {
+      if (e.status === 403 || e.status === 401) {
+        return res.status(e.status).json({
+          code: e.code || (e.status === 401 ? 'NO_AUTENTICADO' : 'REQUERIMIENTO_FUERA_DE_ALCANCE'),
+          error: e.message,
+          message: e.message,
+        });
+      }
+      throw e;
+    }
+    const { resolveDocumentoRequerimientoCanonico } = await import('../lib/requerimientoDocumentoCanonico.js');
+    const result = await resolveDocumentoRequerimientoCanonico(requerimientoId);
+    res.json({
+      success: true,
+      status: result.status,
+      razon: result.razon,
+      requerimiento_id: result.requerimiento_id,
+      requerimiento_codigo: result.requerimiento_codigo,
+      adjunto: result.adjunto,
+      candidatos: result.candidatos || [],
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/adjuntos/descargar/:adjuntoId - Descargar un adjunto (DEBE IR PRIMERO)
 router.get('/descargar/:adjuntoId', async (req, res, next) => {
   try {

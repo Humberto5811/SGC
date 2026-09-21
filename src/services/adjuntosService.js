@@ -27,6 +27,10 @@ export const adjuntosService = {
   // Obtener lista de adjuntos de un requerimiento
   getAdjuntos: (requerimientoId) => api.get(`/adjuntos/listar/${requerimientoId}`),
 
+  /** Metadatos del PDF canónico del requerimiento (sin base64). */
+  getDocumentoRequerimientoCanonico: (requerimientoId) =>
+    api.get(`/adjuntos/requerimiento/${requerimientoId}/documento-canonico`),
+
   // Adjuntos de todos los requerimientos vinculados a una solicitud de cotización
   getAdjuntosSolicitud: (solicitudId) => api.get(`/adjuntos/solicitud/${solicitudId}`),
 

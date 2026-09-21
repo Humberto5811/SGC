@@ -23,7 +23,8 @@ import {
   bindTrazabilidadButtons, showTrazabilidadModal,
 } from '../requerimiento/reqShared.js';
 import { openDetailPanel, bindRowDetailPanel } from '../../components/bandejaDetailPanel.js';
-import { printRequerimiento, manageAdjuntos } from '../requerimiento/registroRequerimientoView.js';
+import { manageAdjuntos } from '../requerimiento/registroRequerimientoView.js';
+import { descargarRequerimientoDesdeInvitaciones } from '../../utils/descargarRequerimientoOriginal.js';
 import { formatCronogramaDisplay } from '../../utils/cronogramaDatetime.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import {
@@ -283,7 +284,9 @@ function bindBandejaShellEvents(cont) {
     obs: (id) => handleObservacion(id),
     timeline: (id) => cont.querySelector(`.req-traza[data-id="${id}"]`)?.click(),
     attach: (id) => manageAdjuntos(id, true),
-    download: (id) => printRequerimiento(id),
+    download: (id) => {
+      descargarRequerimientoDesdeInvitaciones(id).catch((e) => alert(e.message || String(e)));
+    },
     crearSc: (id) => handleCrearSC([parseInt(id, 10)]),
   });
 
