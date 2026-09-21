@@ -8,11 +8,6 @@ import {
   cantidadPorTipo, unidadMedidaCotizacion, unidadMedidaAnexo11,
 } from './proveedorCotizacionConfig.js';
 import { sumPrecioEntregables } from './entregablesCotizacion.js';
-import {
-  agruparItemsPorRequerimiento,
-  filasCronogramaParaRequerimiento,
-  requerimientoTieneCronogramaProgramado,
-} from './bienesCronogramaCotizacion.js';
 import { TZ_LIMA } from './dateTimeLima.js';
 
 const MARGIN = 54;
@@ -103,6 +98,18 @@ function appendWrappedText(doc, text, x, y, maxWidth, lineHeight = 11) {
   const lines = doc.splitTextToSize(text, maxWidth);
   doc.text(lines, x, y);
   return y + lines.length * lineHeight;
+}
+
+/** Texto envuelto con salto de página si no cabe (glosas largas Anexo 05). */
+function appendWrappedTextPaginated(doc, text, x, y, maxWidth, lineHeight = 11) {
+  const lines = doc.splitTextToSize(String(text || ''), maxWidth);
+  let cy = y;
+  lines.forEach((line) => {
+    cy = ensureSpace(doc, cy, lineHeight + 2);
+    doc.text(line, x, cy);
+    cy += lineHeight;
+  });
+  return cy;
 }
 
 function centerText(doc, text, y, fontSize = 11) {
@@ -221,6 +228,7 @@ function appendDatosProveedor(doc, datos, startY) {
     ['Firma del Representante legal:', d.firma_representante || ''],
   ];
   rows.forEach(([label, val]) => {
+    y = ensureSpace(doc, y, 24);
     doc.setFont(undefined, 'bold');
     doc.text(label, 40, y);
     doc.setFont(undefined, 'normal');
@@ -231,11 +239,33 @@ function appendDatosProveedor(doc, datos, startY) {
   return y + 8;
 }
 
+/** Ancho de glosas 05-B portrait (layout histórico: x=40, maxWidth=520). */
+export const ANEXO_05B_GLOSA_WRAP_WIDTH = 520;
+export const ANEXO_05_GLOSA_MARGIN_X = 40;
+
+export function resolveAnexo05GlosaMaxWidth(doc, options = {}) {
+  const n = Number(options.glosaMaxWidth);
+  if (Number.isFinite(n) && n > 0) return n;
+  const marginX = options.marginX ?? ANEXO_05_GLOSA_MARGIN_X;
+  return doc.internal.pageSize.getWidth() - marginX * 2;
+}
+
+/** Cierre institucional compartido Anexo 05-A / 05-B (datos proveedor + glosas). */
+export function appendAnexo05InstitucionalCierre(doc, datos, startY, options = {}) {
+  const marginX = options.marginX ?? ANEXO_05_GLOSA_MARGIN_X;
+  const glosaMaxWidth = resolveAnexo05GlosaMaxWidth(doc, options);
+  let y = ensureSpace(doc, startY, 80);
+  y = appendDatosProveedor(doc, datos, y);
+  doc.setFontSize(8);
+  y = appendWrappedTextPaginated(doc, TEXTO_AUTORIZACION_CORREO, marginX, y, glosaMaxWidth);
+  y += 6;
+  y = appendWrappedTextPaginated(doc, TEXTO_LEY_27444, marginX, y, glosaMaxWidth);
+  return y;
+}
+
 export function downloadAnexo05A({
   solicitud, items, formItems, proveedor, datos,
-  cronogramaEntregasPorRequerimiento, cronogramaEntregas, workspace,
 }) {
-  const cronogramas = cronogramaEntregasPorRequerimiento || cronogramaEntregas || {};
   const jsPDF = ensureJsPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   const codigo = solicitud?.codigo || 'SC';
@@ -251,10 +281,6 @@ export function downloadAnexo05A({
   ]];
   const body = (items || []).map((it, idx) => {
     const f = formItems[idx] || {};
-    const usaCrono = workspace
-      ? requerimientoTieneCronogramaProgramado(workspace, it.requerimiento_id)
-      : filasCronogramaParaRequerimiento(cronogramas, it.requerimiento_id).length > 0;
-    const plazoCell = usaCrono ? 'Cronograma' : (f.plazo_entrega || '');
     return [
       it.requerimiento_codigo || '',
       it.codigo_sigamef || '',
@@ -269,7 +295,7 @@ export function downloadAnexo05A({
       f.garantia || '',
       f.vigencia_minima || '',
       f.compromiso_canje || '',
-      plazoCell,
+      String(f.plazo_entrega ?? ''),
       f.doc_tecnica || '',
     ];
   });
@@ -278,43 +304,16 @@ export function downloadAnexo05A({
     startY: 82,
     head,
     body,
-    styles: { fontSize: 7, cellPadding: 2 },
+    styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [13, 110, 253] },
     margin: { left: 40, right: 40 },
+    columnStyles: { 13: { cellWidth: 90 } },
   });
 
-  let y = doc.lastAutoTable.finalY + 16;
-  const wsLike = workspace || { items: items || [] };
-  agruparItemsPorRequerimiento(wsLike).forEach((grp) => {
-    const filas = filasCronogramaParaRequerimiento(cronogramas, grp.requerimiento_id);
-    if (!filas.length) return;
-    const rid = String(grp.requerimiento_id);
-    doc.setFontSize(10);
-    doc.text(`Propuesta de entregas — ${grp.requerimiento_codigo || `REQ ${rid}`}`, 40, y);
-    y += 12;
-    const cHead = [['N°', 'Cant.req.', 'U.M.', 'Plazo prog.', 'Condición', 'Plazo ofertado']];
-    const cBody = filas.map((r) => [
-      String(r.numero_entrega ?? ''),
-      String(r.cantidad_requerida ?? ''),
-      String(r.unidad_medida_display ?? r.unidad_medida ?? '—'),
-      r.plazo_programado != null && r.plazo_programado !== '' ? `${r.plazo_programado} días` : '',
-      String(r.condicion || '').slice(0, 50),
-      String(r.plazo_ofertado ?? ''),
-    ]);
-    doc.autoTable({
-      startY: y,
-      head: cHead,
-      body: cBody,
-      styles: { fontSize: 7, cellPadding: 2 },
-      margin: { left: 40, right: 40 },
-    });
-    y = doc.lastAutoTable.finalY + 14;
+  const y = doc.lastAutoTable.finalY + 16;
+  appendAnexo05InstitucionalCierre(doc, datos, y, {
+    glosaMaxWidth: doc.internal.pageSize.getWidth() - ANEXO_05_GLOSA_MARGIN_X * 2,
   });
-
-  y = Math.max(y, doc.lastAutoTable.finalY + 24);
-  doc.setFontSize(9);
-  doc.text('Firma del proveedor:', 40, y);
-  doc.line(40, y + 28, 280, y + 28);
   doc.save(`Anexo_05-A_${codigo.replace(/\s+/g, '_')}.pdf`);
 }
 
@@ -353,11 +352,9 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
   doc.setFontSize(10);
   doc.text(`Monto total de la oferta (incluido IGV): S/ ${money(total)}`, 40, y);
   y += 22;
-  y = appendDatosProveedor(doc, datos, y);
-  doc.setFontSize(8);
-  y = appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO, 40, y, 520);
-  y += 6;
-  appendWrappedText(doc, TEXTO_LEY_27444, 40, y, 520);
+  appendAnexo05InstitucionalCierre(doc, datos, y, {
+    glosaMaxWidth: ANEXO_05B_GLOSA_WRAP_WIDTH,
+  });
   doc.save(`Anexo_05-B_${codigo.replace(/\s+/g, '_')}.pdf`);
 }
 

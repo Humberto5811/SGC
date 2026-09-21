@@ -1,30 +1,25 @@
 /**
- * RC8.17.8H6-C1A/B — Bienes multi-entrega Anexo 05-A (cronograma por requerimiento).
+ * RC8.17.8H6-C1AB1 — Bienes: plazo_entrega textual por ítem; cronograma solo referencial.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  filasCronogramaDesdeProgramadas,
-  initCronogramaEntregasPorRequerimiento,
-  validateCronogramaEntregasBienes,
   buildPropuestaTecnicaBienesPayload,
-  programadasEntregasBienesRequerimiento,
-  workspaceUsaCronogramaEntregasBienes,
-  parsePlazoProgramadoDias,
-  resolveUnidadMedidaCronogramaRequerimiento,
+  bloquesCronogramaSolicitadoBienes,
   agruparItemsPorRequerimiento,
-  cantidadRequerimientosDistintos,
-  filasCronogramaReferencialInferiorBienes,
 } from '../src/utils/bienesCronogramaCotizacion.js';
-import { resolveEntregablesFromWorkspace } from '../src/utils/proveedorCotizacionSteps.js';
-import { downloadAnexo05A } from '../src/utils/proveedorPdfCotizacion.js';
+import {
+  ANEXO_05B_GLOSA_WRAP_WIDTH,
+  ANEXO_05_GLOSA_MARGIN_X,
+  resolveAnexo05GlosaMaxWidth,
+} from '../src/utils/proveedorPdfCotizacion.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const ok = (c, m) => { assert.ok(c, m); console.log(`  ✓ ${m}`); };
 
-console.log('\n=== RC8.17.8H6-C1A/B — Bienes multi-entrega cotización ===\n');
+console.log('\n=== RC8.17.8H6-C1AB1 — Cotización Bienes / Anexo 05-A ===\n');
 
 const entregas2400 = {
   tipo: 'Bienes',
@@ -40,222 +35,143 @@ function itemBase(overrides = {}) {
     requerimiento_id: 10,
     requerimiento_codigo: 'REQ-00001',
     cantidad: 4800,
-    unidad_medida: 'KILOGRAMO',
     um: 'KILOGRAMO',
     entregables_source: entregas2400,
     ...overrides,
   };
 }
 
-const ws1item2ent = {
+const ws1 = {
   solicitud: { tipo: 'Bienes' },
   items: [itemBase()],
 };
 
-// 1 — 1 REQ / 1 item / 2 entregas → 1 cronograma REQ con 2 filas
+// 1 — plazo textual guarda y recarga vía payload items
 {
-  const init = initCronogramaEntregasPorRequerimiento(ws1item2ent, {});
-  ok(Object.keys(init).length === 1 && init['10']?.length === 2, '1 — un cronograma REQ con 2 filas');
-  ok(programadasEntregasBienesRequerimiento(ws1item2ent, 10).length === 2, '1 — dos entregas programadas');
+  const items = [{
+    item_key: '10-0',
+    plazo_entrega: '30 días calendario',
+    presentacion: 'X',
+  }];
+  const payload = buildPropuestaTecnicaBienesPayload(items);
+  ok(payload.items[0].plazo_entrega === '30 días calendario', '1 — plazo textual en payload');
+  ok(!('cronogramas_por_requerimiento' in payload), '1 — no escribe cronogramas_por_requerimiento');
+  const prev = { items: payload.items, cronogramas_por_requerimiento: { 10: [{ plazo_ofertado: 99 }] } };
+  const saved = prev.items.find((p) => p.item_key === '10-0');
+  ok(saved.plazo_entrega === '30 días calendario', '1 — recarga plazo desde items');
 }
 
-// 2 — 1 REQ / 2 items → cronograma una sola vez, sin validación vs cantidades ítem
+// 2 — varios ítems, plazos independientes
+{
+  const items = [
+    { item_key: '10-0', plazo_entrega: '30 días calendario' },
+    { item_key: '10-1', plazo_entrega: '1ra entrega 15 días; 2da entrega 30 días' },
+  ];
+  const payload = buildPropuestaTecnicaBienesPayload(items);
+  ok(payload.items[0].plazo_entrega !== payload.items[1].plazo_entrega, '2 — plazos independientes');
+}
+
+// 3 — build + recarga simulada
+{
+  const a = '30 días calendario';
+  const b = '1ra entrega: 2400 kg a 30 días; 2da entrega: 2400 kg a 60 días';
+  const payload = buildPropuestaTecnicaBienesPayload([
+    { item_key: '10-0', plazo_entrega: a },
+    { item_key: '10-1', plazo_entrega: b },
+  ]);
+  const reloaded = payload.items;
+  ok(reloaded[0].plazo_entrega === a && reloaded[1].plazo_entrega === b, '3 — textos sobreviven payload');
+}
+
+// 4 — validación: plazo vacío (contrato view)
+{
+  const view = readFileSync(join(__dir, '../src/views/proveedor/misCotizacionesView.js'), 'utf8');
+  ok(view.includes("plazo_entrega: 'Plazo de entrega'"), '4 — plazo_entrega obligatorio en validación Bienes');
+  ok(!view.includes('validateCronogramaEntregasBienes'), '4 — sin validación cronograma por REQ');
+}
+
+// 5 — payload.entregas no genera inputs editables por entrega
+{
+  const steps = readFileSync(join(__dir, '../src/utils/proveedorCotizacionSteps.js'), 'utf8');
+  ok(!steps.includes('prov-crono-plazo-ofertado'), '5 — sin inputs plazo por entrega');
+  ok(!steps.includes('Propuesta de entregas'), '5 — sin bloque propuesta editable');
+}
+
+// 6 — cronograma referencial una vez por REQ (multi-ítem mismo REQ)
 {
   const wsMulti = {
     solicitud: { tipo: 'Bienes' },
     items: [
-      itemBase({ item_key: '10-0', cantidad: 3000 }),
-      itemBase({ item_key: '10-1', cantidad: 1800, um: 'UNIDAD', unidad_medida: 'UNIDAD' }),
+      itemBase({ item_key: '10-0' }),
+      itemBase({ item_key: '10-1', cantidad: 1800 }),
     ],
   };
-  const init = initCronogramaEntregasPorRequerimiento(wsMulti, {});
-  ok(Object.keys(init).filter((k) => init[k]?.length).length === 1, '2 — una clave cronograma');
-  ok(init['10']?.length === 2, '2 — dos filas entrega');
-  const filas = init['10'];
-  filas[0].plazo_ofertado = 30;
-  filas[1].plazo_ofertado = 60;
-  ok(validateCronogramaEntregasBienes(filas).length === 0, '2 — no falla validación vs 3000/1800');
+  ok(bloquesCronogramaSolicitadoBienes(wsMulti).length === 1, '6 — un bloque referencial por REQ');
+  ok(agruparItemsPorRequerimiento(wsMulti).length === 1, '6 — un REQ');
+}
+
+// 7 — PDF 05-A plazo textual, sin Propuesta ni Cronograma
+{
+  const pdf = readFileSync(join(__dir, '../src/utils/proveedorPdfCotizacion.js'), 'utf8');
+  ok(pdf.includes('f.plazo_entrega'), '7 — PDF columna plazo_entrega');
+  ok(!pdf.includes('Propuesta de entregas'), '7 — PDF sin tabla propuesta');
+  ok(!/plazoCell.*Cronograma/.test(pdf), '7 — PDF sin placeholder Cronograma');
+}
+
+// 8 — bloque institucional compartido 05-A / 05-B (layout + glosas únicas)
+{
+  const pdf = readFileSync(join(__dir, '../src/utils/proveedorPdfCotizacion.js'), 'utf8');
+  const fnA = pdf.slice(pdf.indexOf('export function downloadAnexo05A'), pdf.indexOf('export function downloadAnexo05B'));
+  const fnB = pdf.slice(pdf.indexOf('export function downloadAnexo05B'), pdf.indexOf('export function downloadAnexo06A'));
+  ok(fnA.includes('appendAnexo05InstitucionalCierre'), 'A — 05-A usa helper institucional');
+  ok(fnB.includes('appendAnexo05InstitucionalCierre'), 'A — 05-B usa helper institucional');
+  ok(fnB.includes('ANEXO_05B_GLOSA_WRAP_WIDTH'), 'B — 05-B conserva ancho glosa 520');
+  ok(fnA.includes('ANEXO_05_GLOSA_MARGIN_X * 2'), 'C — 05-A ancho landscape (page − márgenes)');
+  const glosaUses = (pdf.match(/appendWrappedTextPaginated\(doc, TEXTO_AUTORIZACION_CORREO/g) || []).length;
+  ok(glosaUses === 1, 'D — una sola inserción glosa autorización en helper');
+  const leyUses = (pdf.match(/appendWrappedTextPaginated\(doc, TEXTO_LEY_27444/g) || []).length;
+  ok(leyUses === 1, 'D — una sola inserción Ley 27444 en helper');
+  ok(!fnA.includes('appendWrappedText(doc, TEXTO_AUTORIZACION_CORREO'), 'D — 05-A no duplica glosas');
+  ok(pdf.includes('appendWrappedTextPaginated'), 'paginación — glosas con salto de página');
+  ok(ANEXO_05B_GLOSA_WRAP_WIDTH === 520, 'B — constante ancho 520 pt');
+  const mockDoc = { internal: { pageSize: { getWidth: () => 612, getHeight: () => 792 } } };
+  ok(resolveAnexo05GlosaMaxWidth(mockDoc, { glosaMaxWidth: 520 }) === 520, 'B — resolve respeta 520');
+  ok(resolveAnexo05GlosaMaxWidth({ internal: { pageSize: { getWidth: () => 792 } } }) === 792 - 80, 'C — landscape auto 712');
+}
+
+// E — sin propuesta estructurada editable/PDF
+{
   const steps = readFileSync(join(__dir, '../src/utils/proveedorCotizacionSteps.js'), 'utf8');
-  const blocks = (steps.match(/Propuesta de entregas —/g) || []).length;
-  ok(blocks >= 1 && steps.includes('agruparItemsPorRequerimiento'), '2 — UI agrupa por REQ');
+  const pdf = readFileSync(join(__dir, '../src/utils/proveedorPdfCotizacion.js'), 'utf8');
+  ok(!steps.includes('Propuesta de entregas'), 'E — UI sin propuesta editable');
+  ok(!pdf.includes('Propuesta de entregas'), 'E — PDF sin tabla propuesta');
 }
 
-// 3 — 2 REQ distintos
+// 9 — Servicios sin cambios de contrato Bienes
 {
-  const ws2req = {
-    solicitud: { tipo: 'Bienes' },
-    items: [
-      itemBase({ requerimiento_id: 10, item_key: '10-0' }),
-      itemBase({
-        requerimiento_id: 20,
-        requerimiento_codigo: 'REQ-00002',
-        item_key: '20-0',
-        entregables_source: {
-          tipo: 'Bienes',
-          entregas: [{ numero_entrega: 1, cantidad: 100, plazo: '15', condicion: 'Única' }],
-        },
-      }),
-    ],
-  };
-  const init = initCronogramaEntregasPorRequerimiento(ws2req, {});
-  ok(init['10']?.length === 2 && init['20']?.length === 1, '3 — cronogramas independientes');
-}
-
-// 4 — N entregas
-{
-  const srcN = {
-    tipo: 'Bienes',
-    entregas: [
-      { numero_entrega: 1, cantidad: 1, plazo: '10', condicion: 'E1' },
-      { numero_entrega: 2, cantidad: 2, plazo: '20', condicion: 'E2' },
-      { numero_entrega: 3, cantidad: 3, plazo: '30', condicion: 'E3' },
-    ],
-  };
-  const wsN = { solicitud: { tipo: 'Bienes' }, items: [itemBase({ entregables_source: srcN })] };
-  ok(programadasEntregasBienesRequerimiento(wsN, 10).length === 3, '4 — N=3 filas');
-  ok(initCronogramaEntregasPorRequerimiento(wsN, {})['10'].length === 3, '4 — N filas en init');
-}
-
-// 5 — plazo faltante → validación falla
-{
-  const filas = initCronogramaEntregasPorRequerimiento(ws1item2ent, {})['10'];
-  ok(validateCronogramaEntregasBienes(filas).length >= 2, '5 — falta plazo en entregas');
-}
-
-// 6 — plazos completos → pasa
-{
-  const filas = initCronogramaEntregasPorRequerimiento(ws1item2ent, {})['10'].map((r) => ({ ...r }));
-  filas[0].plazo_ofertado = 30;
-  filas[1].plazo_ofertado = 60;
-  ok(validateCronogramaEntregasBienes(filas).length === 0, '6 — plazos completos OK');
-}
-
-// 7 — U.M. homogénea KILOGRAMO
-{
-  const um = resolveUnidadMedidaCronogramaRequerimiento([itemBase()]);
-  const filas = filasCronogramaDesdeProgramadas(
-    programadasEntregasBienesRequerimiento(ws1item2ent, 10),
-    um,
-    [],
-  );
-  ok(filas.every((r) => r.unidad_medida === 'KILOGRAMO'), '7 — KILOGRAMO');
-}
-
-// 8 — U.M. heterogéneas → no UND ni primera silenciosa
-{
-  const wsHet = {
-    solicitud: { tipo: 'Bienes' },
-    items: [
-      itemBase({ item_key: '10-0', um: 'KILOGRAMO', unidad_medida: 'KILOGRAMO' }),
-      itemBase({ item_key: '10-1', um: 'UNIDAD', unidad_medida: 'UNIDAD' }),
-    ],
-  };
-  const um = resolveUnidadMedidaCronogramaRequerimiento(wsHet.items);
-  ok(!um.homogenea && um.display === '—', '8 — display neutro');
-  const filas = filasCronogramaDesdeProgramadas(
-    programadasEntregasBienesRequerimiento(wsHet, 10),
-    um,
-    [],
-  );
-  ok(filas.every((r) => r.unidad_medida_display === '—' && r.unidad_medida == null), '8 — filas sin UND inventada');
-}
-
-// 9 — recarga requerimiento_id + numero_entrega
-{
-  const cronos = { 10: [{ numero_entrega: 1, plazo_ofertado: 11 }, { numero_entrega: 2, plazo_ofertado: 22 }] };
-  const payload = buildPropuestaTecnicaBienesPayload([], cronos);
-  ok(payload.cronogramas_por_requerimiento['10'][1].plazo_ofertado === 22, '9 — payload por REQ');
-  ok(!('cronogramas_por_item' in payload) && !('cronograma_entregas' in payload), '9 — no campos legacy en escritura');
-  const reloaded = initCronogramaEntregasPorRequerimiento(ws1item2ent, payload);
-  ok(reloaded['10'][0].plazo_ofertado === 11 && reloaded['10'][1].plazo_ofertado === 22, '9 — recarga plazos');
-  ok(reloaded['10'][0].cantidad_requerida === 2400, '9 — cantidad programada intacta');
-}
-
-// 10 — PDF no duplica por item
-{
-  const pdfSrc = readFileSync(join(__dir, '../src/utils/proveedorPdfCotizacion.js'), 'utf8');
-  ok(pdfSrc.includes('cronogramas_por_requerimiento') || pdfSrc.includes('cronogramaEntregasPorRequerimiento'), '10 — PDF usa mapa por REQ');
-  ok(pdfSrc.includes('agruparItemsPorRequerimiento'), '10 — PDF agrupa por REQ');
-  ok(!/cronogramaEntregas\?\.\[it\.item_key\]/.test(pdfSrc), '10 — no cronograma por item_key');
-  ok(typeof downloadAnexo05A === 'function', '10 — downloadAnexo05A exportado');
-}
-
-// 11 — legacy sin entregas + lectura legacy cronogramas_por_item
-{
-  const wsLegacy = { solicitud: { tipo: 'Bienes' }, items: [{ item_key: '1-0', requerimiento_id: 1, cantidad: 5 }] };
-  ok(!workspaceUsaCronogramaEntregasBienes(wsLegacy), '11 — sin cronograma estructurado');
   const steps = readFileSync(join(__dir, '../src/utils/proveedorCotizacionSteps.js'), 'utf8');
-  ok(steps.includes('prov-f-plazo'), '11 — plazo_entrega escalar conservado');
-  const legacyPrev = {
-    cronogramas_por_item: {
-      '10-0': [{ numero_entrega: 1, plazo_ofertado: 99 }],
-    },
-  };
-  const fromLegacy = initCronogramaEntregasPorRequerimiento(ws1item2ent, legacyPrev);
-  ok(fromLegacy['10']?.[0]?.plazo_ofertado === 99, '11 — lectura legacy cronogramas_por_item');
+  ok(steps.includes('renderStep1Servicios'), '9 — Servicios intacto');
+  ok(steps.includes('renderStep1Locadores'), '9 — Locadores intacto');
 }
 
-// A — 2 REQ + cronograma_entregas plano → no asignar arbitrariamente
+// 10 — borrador C1A/B con cronogramas_por_requerimiento no inventa plazo_entrega
 {
-  const ws2 = {
-    solicitud: { tipo: 'Bienes' },
-    items: [
-      itemBase({ requerimiento_id: 10, item_key: '10-0' }),
-      itemBase({
-        requerimiento_id: 20,
-        requerimiento_codigo: 'REQ-00002',
-        item_key: '20-0',
-        entregables_source: {
-          tipo: 'Bienes',
-          entregas: [{ numero_entrega: 1, cantidad: 50, plazo: '10', condicion: 'B' }],
-        },
-      }),
-    ],
+  const prevItems = [{ item_key: '10-0', presentacion: 'P', plazo_entrega: '' }];
+  const prev = {
+    items: prevItems,
+    cronogramas_por_requerimiento: { 10: [{ numero_entrega: 1, plazo_ofertado: 30 }] },
   };
-  ok(cantidadRequerimientosDistintos(ws2) === 2, 'A — dos REQ distintos');
-  const prevPlano = { cronograma_entregas: [{ numero_entrega: 1, plazo_ofertado: 77 }] };
-  const init10 = initCronogramaEntregasPorRequerimiento(ws2, prevPlano)['10'] || [];
-  const init20 = initCronogramaEntregasPorRequerimiento(ws2, prevPlano)['20'] || [];
-  ok(init10.every((r) => String(r.plazo_ofertado) !== '77'), 'A — REQ 10 no hereda plano');
-  ok(init20.every((r) => String(r.plazo_ofertado) !== '77'), 'A — REQ 20 no hereda plano');
+  const merged = prev.items.find((p) => p.item_key === '10-0');
+  ok(String(merged.plazo_entrega || '').trim() === '', '10 — no inventa plazo desde cronograma REQ');
+  ok(prev.cronogramas_por_requerimiento['10'][0].plazo_ofertado === 30, '10 — legacy cronograma sigue en JSON sin romper');
 }
 
-// B — 1 REQ + cronograma_entregas plano → lectura compatible
+// UI — textarea plazo + cronograma solicitado referencial
 {
-  const prevPlano = { cronograma_entregas: [{ numero_entrega: 1, plazo_ofertado: 44 }] };
-  const init = initCronogramaEntregasPorRequerimiento(ws1item2ent, prevPlano)['10'];
-  ok(init?.[0]?.plazo_ofertado === 44, 'B — único REQ acepta cronograma_entregas plano');
-}
-
-// C — bloque inferior: no duplicar C1 ni ocultar globalmente el legacy de otro REQ
-{
-  const wsMix = {
-    solicitud: { tipo: 'Bienes' },
-    items: [
-      itemBase({ requerimiento_id: 10, item_key: '10-0' }),
-      itemBase({
-        requerimiento_id: 20,
-        requerimiento_codigo: 'REQ-00002',
-        item_key: '20-0',
-        cantidad: 100,
-        entregables_source: null,
-      }),
-    ],
-  };
-  const refConC1 = filasCronogramaReferencialInferiorBienes(wsMix, resolveEntregablesFromWorkspace);
-  ok(refConC1.length === 0, 'C — con REQ en C1 no repite entregas globales del REQ 10');
-  const wsSoloLegacy = {
-    solicitud: { tipo: 'Bienes' },
-    items: [{ item_key: '1-0', requerimiento_id: 1, cantidad: 5 }],
-    entregables_programados: [
-      { numero_entrega: 1, cantidad: 5, plazo: '15', condicion: 'Única', descripcion: 'Única' },
-    ],
-  };
-  const refLegacy = filasCronogramaReferencialInferiorBienes(wsSoloLegacy, resolveEntregablesFromWorkspace);
-  ok(refLegacy.length >= 1, 'C — sin C1 conserva cronograma referencial inferior');
   const steps = readFileSync(join(__dir, '../src/utils/proveedorCotizacionSteps.js'), 'utf8');
-  ok(steps.includes('filasCronogramaReferencialInferiorBienes'), 'C — bloque inferior usa filtro por REQ');
-  ok(!steps.includes('workspaceUsaCronogramaEntregasBienes(workspace)) return'), 'C — sin ocultar global por algún REQ');
+  ok(steps.includes('textarea') && steps.includes('prov-f-plazo'), 'UI — plazo textual por ítem');
+  ok(steps.includes('Cronograma de entregas solicitadas'), 'UI — cronograma referencial');
+  ok(steps.includes('bloquesCronogramaSolicitadoBienes'), 'UI — agrupado por REQ');
 }
 
-console.log('\n  OK H6-C1A/B\n');
+console.log('\n  OK H6-C1AB1\n');
