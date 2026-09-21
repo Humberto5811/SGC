@@ -8,6 +8,11 @@ import {
   cantidadPorTipo, unidadMedidaCotizacion, unidadMedidaAnexo11,
 } from './proveedorCotizacionConfig.js';
 import { sumPrecioEntregables } from './entregablesCotizacion.js';
+import {
+  agruparItemsPorRequerimiento,
+  filasCronogramaParaRequerimiento,
+  requerimientoTieneCronogramaProgramado,
+} from './bienesCronogramaCotizacion.js';
 import { TZ_LIMA } from './dateTimeLima.js';
 
 const MARGIN = 54;
@@ -226,7 +231,11 @@ function appendDatosProveedor(doc, datos, startY) {
   return y + 8;
 }
 
-export function downloadAnexo05A({ solicitud, items, formItems, proveedor, datos }) {
+export function downloadAnexo05A({
+  solicitud, items, formItems, proveedor, datos,
+  cronogramaEntregasPorRequerimiento, cronogramaEntregas, workspace,
+}) {
+  const cronogramas = cronogramaEntregasPorRequerimiento || cronogramaEntregas || {};
   const jsPDF = ensureJsPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   const codigo = solicitud?.codigo || 'SC';
@@ -242,6 +251,10 @@ export function downloadAnexo05A({ solicitud, items, formItems, proveedor, datos
   ]];
   const body = (items || []).map((it, idx) => {
     const f = formItems[idx] || {};
+    const usaCrono = workspace
+      ? requerimientoTieneCronogramaProgramado(workspace, it.requerimiento_id)
+      : filasCronogramaParaRequerimiento(cronogramas, it.requerimiento_id).length > 0;
+    const plazoCell = usaCrono ? 'Cronograma' : (f.plazo_entrega || '');
     return [
       it.requerimiento_codigo || '',
       it.codigo_sigamef || '',
@@ -256,7 +269,7 @@ export function downloadAnexo05A({ solicitud, items, formItems, proveedor, datos
       f.garantia || '',
       f.vigencia_minima || '',
       f.compromiso_canje || '',
-      f.plazo_entrega || '',
+      plazoCell,
       f.doc_tecnica || '',
     ];
   });
@@ -270,7 +283,35 @@ export function downloadAnexo05A({ solicitud, items, formItems, proveedor, datos
     margin: { left: 40, right: 40 },
   });
 
-  let y = doc.lastAutoTable.finalY + 24;
+  let y = doc.lastAutoTable.finalY + 16;
+  const wsLike = workspace || { items: items || [] };
+  agruparItemsPorRequerimiento(wsLike).forEach((grp) => {
+    const filas = filasCronogramaParaRequerimiento(cronogramas, grp.requerimiento_id);
+    if (!filas.length) return;
+    const rid = String(grp.requerimiento_id);
+    doc.setFontSize(10);
+    doc.text(`Propuesta de entregas — ${grp.requerimiento_codigo || `REQ ${rid}`}`, 40, y);
+    y += 12;
+    const cHead = [['N°', 'Cant.req.', 'U.M.', 'Plazo prog.', 'Condición', 'Plazo ofertado']];
+    const cBody = filas.map((r) => [
+      String(r.numero_entrega ?? ''),
+      String(r.cantidad_requerida ?? ''),
+      String(r.unidad_medida_display ?? r.unidad_medida ?? '—'),
+      r.plazo_programado != null && r.plazo_programado !== '' ? `${r.plazo_programado} días` : '',
+      String(r.condicion || '').slice(0, 50),
+      String(r.plazo_ofertado ?? ''),
+    ]);
+    doc.autoTable({
+      startY: y,
+      head: cHead,
+      body: cBody,
+      styles: { fontSize: 7, cellPadding: 2 },
+      margin: { left: 40, right: 40 },
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  });
+
+  y = Math.max(y, doc.lastAutoTable.finalY + 24);
   doc.setFontSize(9);
   doc.text('Firma del proveedor:', 40, y);
   doc.line(40, y + 28, 280, y + 28);

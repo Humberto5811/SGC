@@ -20,6 +20,13 @@ import {
 } from '../../utils/proveedorCotizacionConfig.js';
 import { renderStep1ByTipo, initEntregablesEco, resolveEntregablesFromWorkspace } from '../../utils/proveedorCotizacionSteps.js';
 import { sumPrecioEntregables } from '../../utils/entregablesCotizacion.js';
+import {
+  initCronogramaEntregasPorRequerimiento,
+  validateCronogramaEntregasBienes,
+  buildPropuestaTecnicaBienesPayload,
+  requerimientoTieneCronogramaProgramado,
+  filasCronogramaParaRequerimiento,
+} from '../../utils/bienesCronogramaCotizacion.js';
 
 const STEP_LABELS = ['Información técnica', 'Documentos técnicos', 'Resumen y envío'];
 
@@ -28,7 +35,7 @@ let wizardStep = 1;
 let wizardBusy = false;
 let isReadonly = false;
 let formState = {
-  items: [], precios: {}, entregablesEco: {}, extra: {},
+  items: [], precios: {}, entregablesEco: {}, cronogramaEntregasPorRequerimiento: {}, extra: {},
   datos: {},
   adjuntos: { docs: {}, requisitos: {}, anexoTecnico: null, anexoEconomico: null },
 };
@@ -144,6 +151,7 @@ function initFormFromWorkspace(ws) {
       doc_tecnica: saved.doc_tecnica || '',
     };
   });
+  formState.cronogramaEntregasPorRequerimiento = initCronogramaEntregasPorRequerimiento(ws, prev);
   formState.precios = {};
   ws.items.forEach((it) => {
     const saved = prevPrecios[it.item_key] || {};
@@ -448,6 +456,19 @@ function collectStep1FromDom() {
     plazos[parseInt(inp.dataset.i, 10)] = inp.value || '';
   });
   if (plazos.length) formState.extra.plazos_entregables = plazos;
+
+  document.querySelectorAll('#provCotWizardBody .prov-crono-plazo-ofertado').forEach((inp) => {
+    const reqId = inp.dataset.reqId;
+    const num = parseInt(inp.dataset.num, 10);
+    if (!reqId || !Number.isFinite(num)) return;
+    const list = formState.cronogramaEntregasPorRequerimiento[reqId];
+    if (!Array.isArray(list)) return;
+    formState.cronogramaEntregasPorRequerimiento[reqId] = list.map((r) => (
+      Number(r.numero_entrega) === num
+        ? { ...r, plazo_ofertado: inp.value ?? '' }
+        : r
+    ));
+  });
 }
 
 function recalcPrecios() {
@@ -512,15 +533,31 @@ function validateStep1() {
   const config = getCotConfig();
 
   if (tipo === 'Bienes') {
-    const labels = {
+    const labelsBase = {
       presentacion: 'Presentación', marca: 'Marca', modelo: 'Modelo', pais: 'País',
       anio_fabricacion: 'Año de fabricación', garantia: 'Garantía', vigencia_minima: 'Vigencia mínima',
-      plazo_entrega: 'Plazo de entrega', doc_tecnica: 'Documentación técnica',
+      doc_tecnica: 'Documentación técnica',
     };
+    const cronogramaReqValidados = new Set();
     formState.items.forEach((f, idx) => {
+      const it = workspace.items[idx];
+      const usaCrono = requerimientoTieneCronogramaProgramado(workspace, it?.requerimiento_id);
+      const labels = { ...labelsBase };
+      if (!usaCrono) labels.plazo_entrega = 'Plazo de entrega';
       Object.entries(labels).forEach(([k, lbl]) => {
         if (!String(f[k] ?? '').trim()) errors.push(`Ítem ${idx + 1}: falta ${lbl}`);
       });
+      const rid = String(it?.requerimiento_id ?? '');
+      if (usaCrono && rid && !cronogramaReqValidados.has(rid)) {
+        cronogramaReqValidados.add(rid);
+        const filas = filasCronogramaParaRequerimiento(
+          formState.cronogramaEntregasPorRequerimiento,
+          it.requerimiento_id,
+        );
+        validateCronogramaEntregasBienes(filas).forEach((msg) => {
+          errors.push(`${it.requerimiento_codigo || `REQ ${rid}`}: ${msg}`);
+        });
+      }
       if (!f.cantidad_ofertada || f.cantidad_ofertada <= 0) errors.push(`Ítem ${idx + 1}: cantidad ofertada inválida`);
     });
     workspace.items.forEach((it, idx) => {
@@ -594,6 +631,8 @@ function bindWizardInteractions() {
       extra: formState.extra,
       proveedor: getProveedorSession(),
       datos: formState.datos,
+      cronogramaEntregasPorRequerimiento: formState.cronogramaEntregasPorRequerimiento,
+      workspace,
     };
   };
 
@@ -755,7 +794,7 @@ function buildPayload() {
   const monto = getMontoTotal();
   const tipo = normalizeTipoCotizacion(workspace.solicitud?.tipo);
   const propuestaTecnica = tipo === 'Bienes'
-    ? { items: formState.items }
+    ? buildPropuestaTecnicaBienesPayload(formState.items, formState.cronogramaEntregasPorRequerimiento)
     : {
       plazo_ejecucion: formState.extra.plazo_ejecucion,
       forma_pago: formState.extra.forma_pago,

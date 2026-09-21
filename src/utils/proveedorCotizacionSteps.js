@@ -12,6 +12,14 @@ import { TEXTO_AUTORIZACION_CORREO, TEXTO_LEY_27444 } from './proveedorPdfCotiza
 import {
   resolveEntregablesCotizacion, mergeEntregablesConPrecios, sumPrecioEntregables,
 } from './entregablesCotizacion.js';
+import {
+  requerimientoTieneCronogramaProgramado,
+  agruparItemsPorRequerimiento,
+  formatPlazoProgramadoLabel,
+  sumCantidadRequeridaCronograma,
+  filasCronogramaParaRequerimiento,
+  filasCronogramaReferencialInferiorBienes,
+} from './bienesCronogramaCotizacion.js';
 
 const CANJE_OPTS = ['Sí', 'No', 'Parcial'];
 const RUBRO_OPTS = [
@@ -156,6 +164,10 @@ export function renderStep1Bienes(ctx) {
         <tbody>
           ${workspace.items.map((it, idx) => {
             const f = formState.items[idx] || {};
+            const usaCrono = requerimientoTieneCronogramaProgramado(workspace, it.requerimiento_id);
+            const plazoCell = usaCrono
+              ? '<td class="text-center text-muted small align-middle">Ver propuesta de entregas</td>'
+              : `<td><input class="form-control form-control-sm prov-f-plazo" type="number" min="0" value="${esc(f.plazo_entrega)}"${ro}></td>`;
             return `<tr data-idx="${idx}">
               <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
               <td>${esc(it.centro || it.centro_nombre || '—')}</td>
@@ -174,13 +186,54 @@ export function renderStep1Bienes(ctx) {
               <td><input class="form-control form-control-sm prov-f-vigencia" value="${esc(f.vigencia_minima)}"${ro}></td>
               <td><select class="form-select form-select-sm prov-f-canje"${ro}>${CANJE_OPTS.map((o) =>
                 `<option ${f.compromiso_canje === o ? 'selected' : ''}>${o}</option>`).join('')}</select></td>
-              <td><input class="form-control form-control-sm prov-f-plazo" type="number" min="0" value="${esc(f.plazo_entrega)}"${ro}></td>
+              ${plazoCell}
               <td><input class="form-control form-control-sm prov-f-doctec" value="${esc(f.doc_tecnica)}"${ro}></td>
             </tr>`;
           }).join('')}
         </tbody>
       </table>
     </div>
+    ${agruparItemsPorRequerimiento(workspace).map((grp) => {
+      const rid = String(grp.requerimiento_id);
+      const filas = filasCronogramaParaRequerimiento(formState.cronogramaEntregasPorRequerimiento, grp.requerimiento_id);
+      if (!filas.length) return '';
+      const umDisplay = filas[0]?.unidad_medida_display ?? filas[0]?.unidad_medida ?? '—';
+      const sumCant = sumCantidadRequeridaCronograma(filas);
+      const titulo = `${grp.requerimiento_codigo || `REQ ${grp.requerimiento_id}`}`;
+      return `
+    <h6 class="fw-bold mb-2 mt-2">Propuesta de entregas — ${esc(titulo)}</h6>
+    <div class="table-responsive mb-3">
+      <table class="table table-bordered table-sm prov-cot-table mb-0">
+        <thead class="table-light text-center align-middle">
+          <tr>
+            <th>N° entrega</th><th>Cantidad requerida</th><th>U.M.</th><th>Plazo programado</th>
+            <th>Condición</th><th>Plazo ofertado</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filas.map((r) => `
+            <tr>
+              <td class="text-center">${esc(r.numero_entrega)}</td>
+              <td class="text-center">${esc(r.cantidad_requerida ?? '—')}</td>
+              <td class="text-center">${esc(r.unidad_medida_display ?? r.unidad_medida ?? umDisplay)}</td>
+              <td class="text-center">${esc(formatPlazoProgramadoLabel(r.plazo_programado))}</td>
+              <td class="small" style="white-space:normal;word-break:break-word;">${esc(r.condicion || '—')}</td>
+              <td><input type="number" min="0" class="form-control form-control-sm prov-crono-plazo-ofertado"
+                data-req-id="${esc(rid)}" data-num="${esc(r.numero_entrega)}"
+                value="${esc(r.plazo_ofertado)}"${ro}></td>
+            </tr>`).join('')}
+        </tbody>
+        <tfoot>
+          <tr class="table-secondary fw-semibold">
+            <td class="text-end">TOTAL</td>
+            <td class="text-center">${esc(sumCant)}</td>
+            <td class="text-center">${esc(umDisplay)}</td>
+            <td colspan="3"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`;
+    }).join('')}
     <div class="prov-firma-bienes mb-3 p-2 border rounded bg-light small">
       <label class="form-label mb-1 fw-semibold">Firma del proveedor</label>
       <div style="min-height:48px;border-bottom:1px solid #adb5bd;"></div>
@@ -216,7 +269,7 @@ export function renderStep1Bienes(ctx) {
     </div>
     <div class="fw-semibold mb-3">Monto total (IGV incl.): S/ <span id="provCotMontoTotal">${money(total)}</span></div>
     ${(() => {
-      const crono = resolveEntregablesFromWorkspace(workspace);
+      const crono = filasCronogramaReferencialInferiorBienes(workspace, resolveEntregablesFromWorkspace);
       if (!crono.length) return '';
       return `
     <h6 class="fw-bold mb-2">Cronograma de entregas programadas</h6>
