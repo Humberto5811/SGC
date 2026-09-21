@@ -58,3 +58,17 @@ export async function enrichRowsPayloadConsultasLegacyDerivacion(rows = []) {
   }
   return list;
 }
+
+/** RC8.17.8H6-B5.2 — Mismo enrich B5.1 para GET, listados y PUT subsanar (solo memoria). */
+export async function enrichPayloadForExpediente(requerimientoId, payload) {
+  const eid = Number(requerimientoId);
+  if (!Number.isFinite(eid)) return parsePayload(payload);
+  const eventMap = await fetchConsultasObservadaEventsByExpedienteIds([eid]);
+  return enrichPayloadConsultasLegacyDerivacion(payload, eventMap.get(eid) || []);
+}
+
+export async function enrichRowForExpediente(row) {
+  if (!row) return row;
+  row.payload = await enrichPayloadForExpediente(row.id, row.payload);
+  return row;
+}

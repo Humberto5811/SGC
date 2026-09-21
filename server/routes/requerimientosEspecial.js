@@ -687,6 +687,8 @@ router.put('/:requerimientoId/subsanar', async (req, res, next) => {
 
     let payload = {};
     try { payload = JSON.parse(reqCheck.rows[0].payload || '{}'); } catch (_) {}
+    const { enrichPayloadForExpediente } = await import('../lib/consultasObservacionLegacyDerivacionEnrich.js');
+    payload = await enrichPayloadForExpediente(requerimientoId, payload);
     const rowBefore = enrichRequerimientoRow(reqCheck.rows[0]);
     const subsArgs = {
       observacion_id,

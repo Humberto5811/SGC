@@ -420,9 +420,8 @@ app.use('/api/requerimientos', crudRouter({
     }
   },
   afterRead: async (_req, row) => {
-    const { enrichRowsPayloadConsultasLegacyDerivacion } = await import('./lib/consultasObservacionLegacyDerivacionEnrich.js');
-    await enrichRowsPayloadConsultasLegacyDerivacion([row]);
-    return row;
+    const { enrichRowForExpediente } = await import('./lib/consultasObservacionLegacyDerivacionEnrich.js');
+    return enrichRowForExpediente(row);
   },
   afterCreate: async (row, body, req) => {
     const { resolveUsuarioCreadorRequerimiento } = await import('./lib/usuarioDisplay.js');
