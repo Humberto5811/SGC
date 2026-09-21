@@ -12,9 +12,6 @@ import { TEXTO_AUTORIZACION_CORREO, TEXTO_LEY_27444 } from './proveedorPdfCotiza
 import {
   resolveEntregablesCotizacion, mergeEntregablesConPrecios, sumPrecioEntregables,
 } from './entregablesCotizacion.js';
-import {
-  bloquesCronogramaSolicitadoBienes,
-} from './bienesCronogramaCotizacion.js';
 
 const CANJE_OPTS = ['Sí', 'No', 'Parcial'];
 const RUBRO_OPTS = [
@@ -130,58 +127,6 @@ function renderDownloadHint(labelTec) {
     </div>`;
 }
 
-function renderCronogramaSolicitadoReferencialBienes(workspace) {
-  const bloques = bloquesCronogramaSolicitadoBienes(workspace);
-  if (bloques.length) {
-    return bloques.map((b) => {
-      const titulo = b.requerimiento_codigo || `REQ ${b.requerimiento_id}`;
-      const heading = bloques.length > 1
-        ? `Cronograma de entregas solicitadas — ${titulo}`
-        : 'Cronograma de entregas solicitadas';
-      return `
-    <h6 class="fw-bold mb-2">${esc(heading)}</h6>
-    <div class="table-responsive mb-3">
-      <table class="table table-bordered table-sm prov-cot-table mb-0">
-        <thead class="table-light text-center">
-          <tr><th>N°</th><th>Entrega</th><th>Cantidad</th><th>U.M.</th><th>Plazo / condición</th></tr>
-        </thead>
-        <tbody>
-          ${b.entregas.map((e, i) => `
-            <tr>
-              <td class="text-center">${esc(e.numero ?? e.numero_entrega ?? i + 1)}</td>
-              <td style="white-space:normal;word-break:break-word;">${esc(e.nombre || e.descripcion || '—')}</td>
-              <td class="text-center">${esc(e.cantidad ?? '—')}</td>
-              <td class="text-center">${esc(e.unidad_medida || unidadMedidaCotizacion(e, 'Bienes'))}</td>
-              <td style="white-space:normal;word-break:break-word;">${esc(e.plazo_texto || e.plazo || e.descripcion || '—')}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
-    }).join('');
-  }
-  const global = resolveEntregablesFromWorkspace(workspace);
-  if (!global.length) return '';
-  return `
-    <h6 class="fw-bold mb-2">Cronograma de entregas solicitadas</h6>
-    <div class="table-responsive mb-3">
-      <table class="table table-bordered table-sm prov-cot-table mb-0">
-        <thead class="table-light text-center">
-          <tr><th>N°</th><th>Entrega</th><th>Cantidad</th><th>U.M.</th><th>Plazo / condición</th></tr>
-        </thead>
-        <tbody>
-          ${global.map((e) => `
-            <tr>
-              <td class="text-center">${e.numero}</td>
-              <td style="white-space:normal;word-break:break-word;">${esc(e.nombre || e.descripcion || '—')}</td>
-              <td class="text-center">${esc(e.cantidad ?? '—')}</td>
-              <td class="text-center">${esc(e.unidad_medida || unidadMedidaCotizacion(e, 'Bienes'))}</td>
-              <td style="white-space:normal;word-break:break-word;">${esc(e.plazo_texto || e.descripcion || '—')}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
-}
-
 export function renderStep1Bienes(ctx) {
   const { workspace, formState, config, readonly, renderDocsColumn, money, formatPriceDisplay } = ctx;
   const sol = workspace.solicitud;
@@ -271,7 +216,6 @@ export function renderStep1Bienes(ctx) {
       <div class="small text-muted mt-1 text-start">Imprima, firme y adjunte en el paso 2.</div>
     </div>
     <div class="fw-semibold mb-3">Monto total (IGV incl.): S/ <span id="provCotMontoTotal">${money(total)}</span></div>
-    ${renderCronogramaSolicitadoReferencialBienes(workspace)}
     ${renderDatosProveedorCard(formState, config, readonly)}`;
 }
 

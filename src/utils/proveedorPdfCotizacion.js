@@ -225,7 +225,6 @@ function appendDatosProveedor(doc, datos, startY) {
     ['Celular:', d.celular || ''],
     ['Correo electrónico:', d.correo || ''],
     ['Validez de la oferta:', d.validez_oferta || ''],
-    ['Firma del Representante legal:', d.firma_representante || ''],
   ];
   rows.forEach(([label, val]) => {
     y = ensureSpace(doc, y, 24);
@@ -250,12 +249,56 @@ export function resolveAnexo05GlosaMaxWidth(doc, options = {}) {
   return doc.internal.pageSize.getWidth() - marginX * 2;
 }
 
+export const ANEXO_05_FECHA_Y = 28;
+export const ANEXO_05_TITULO_Y = 48;
+
+/** Fecha Lima alineada a la derecha (Anexo 05-A / 05-B). */
+export function renderAnexo05FechaLimaDerecha(doc, y = ANEXO_05_FECHA_Y, marginRight = ANEXO_05_GLOSA_MARGIN_X) {
+  const fecha = formatFechaCartaLima();
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'normal');
+  const pageW = doc.internal.pageSize.getWidth();
+  const tw = doc.getTextWidth(fecha);
+  doc.text(fecha, pageW - marginRight - tw, y);
+}
+
+function appendAnexo05FirmaRepresentanteBlock(doc, datos, startY, marginX = ANEXO_05_GLOSA_MARGIN_X) {
+  let y = ensureSpace(doc, startY, 130);
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'normal');
+  y += 64;
+  const lineW = 240;
+  doc.line(marginX, y, marginX + lineW, y);
+  y += 14;
+  doc.text('Firma del Representante Legal', marginX, y);
+  y += 12;
+  doc.setFontSize(8);
+  doc.text('(Nombre, firma y sello)', marginX, y);
+  y += 14;
+  doc.setFontSize(9);
+  const nombre = String(datos?.representante_legal || '').trim();
+  if (nombre) {
+    y = ensureSpace(doc, y, 16);
+    doc.text(nombre, marginX, y);
+    y += 12;
+  }
+  const refFirma = String(datos?.firma_representante || '').trim();
+  if (refFirma) {
+    y = ensureSpace(doc, y, 14);
+    doc.text(refFirma, marginX, y);
+    y += 12;
+  }
+  return y + 10;
+}
+
 /** Cierre institucional compartido Anexo 05-A / 05-B (datos proveedor + glosas). */
 export function appendAnexo05InstitucionalCierre(doc, datos, startY, options = {}) {
   const marginX = options.marginX ?? ANEXO_05_GLOSA_MARGIN_X;
   const glosaMaxWidth = resolveAnexo05GlosaMaxWidth(doc, options);
   let y = ensureSpace(doc, startY, 80);
   y = appendDatosProveedor(doc, datos, y);
+  y = appendAnexo05FirmaRepresentanteBlock(doc, datos, y, marginX);
+  y = ensureSpace(doc, y, 40);
   doc.setFontSize(8);
   y = appendWrappedTextPaginated(doc, TEXTO_AUTORIZACION_CORREO, marginX, y, glosaMaxWidth);
   y += 6;
@@ -269,11 +312,12 @@ export function downloadAnexo05A({
   const jsPDF = ensureJsPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   const codigo = solicitud?.codigo || 'SC';
+  renderAnexo05FechaLimaDerecha(doc, ANEXO_05_FECHA_Y);
   doc.setFontSize(12);
-  doc.text('ANEXO 05-A — INFORMACIÓN TÉCNICA SOLICITADA (CUMPLIMIENTO DEL ÍTEM)', 40, 40);
+  doc.text('ANEXO 05-A — INFORMACIÓN TÉCNICA SOLICITADA (CUMPLIMIENTO DEL ÍTEM)', 40, ANEXO_05_TITULO_Y);
   doc.setFontSize(9);
-  doc.text(`Solicitud: ${codigo} — ${solicitud?.denominacion || solicitud?.objeto || ''}`, 40, 56);
-  doc.text(`Proveedor: ${datos?.razon_social || proveedor?.razon_social || ''} · RUC ${datos?.ruc || proveedor?.ruc || ''}`, 40, 68);
+  doc.text(`Solicitud: ${codigo} — ${solicitud?.denominacion || solicitud?.objeto || ''}`, 40, ANEXO_05_TITULO_Y + 16);
+  doc.text(`Proveedor: ${datos?.razon_social || proveedor?.razon_social || ''} · RUC ${datos?.ruc || proveedor?.ruc || ''}`, 40, ANEXO_05_TITULO_Y + 28);
 
   const head = [[
     'Req.', 'Código SIGA', 'Descripción', 'Cant.', 'Presentación', 'Cant.of.', 'Marca', 'Modelo',
@@ -301,7 +345,7 @@ export function downloadAnexo05A({
   });
 
   doc.autoTable({
-    startY: 82,
+    startY: ANEXO_05_TITULO_Y + 42,
     head,
     body,
     styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak' },
@@ -321,10 +365,11 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
   const jsPDF = ensureJsPdf();
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const codigo = solicitud?.codigo || 'SC';
+  renderAnexo05FechaLimaDerecha(doc, ANEXO_05_FECHA_Y);
   doc.setFontSize(12);
-  doc.text('ANEXO 05-B — OFERTA ECONÓMICA (incluido IGV)', 40, 40);
+  doc.text('ANEXO 05-B — OFERTA ECONÓMICA (incluido IGV)', 40, ANEXO_05_TITULO_Y);
   doc.setFontSize(9);
-  doc.text(`Solicitud: ${codigo}`, 40, 56);
+  doc.text(`Solicitud: ${codigo}`, 40, ANEXO_05_TITULO_Y + 16);
 
   let total = 0;
   const body = (items || []).map((it) => {
@@ -340,7 +385,7 @@ export function downloadAnexo05B({ solicitud, items, precios, proveedor, datos }
   });
 
   doc.autoTable({
-    startY: 72,
+    startY: ANEXO_05_TITULO_Y + 32,
     head: [['Req.', 'Descripción', 'Cant.', 'P.Unitario S/.', 'P.Total S/.']],
     body,
     styles: { fontSize: 9 },

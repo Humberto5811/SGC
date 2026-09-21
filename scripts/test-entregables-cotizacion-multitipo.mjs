@@ -136,7 +136,7 @@ console.log('Entregables cotización multitipo\n');
   const steps = fs.readFileSync(path.join(root, 'src/utils/proveedorCotizacionSteps.js'), 'utf8');
   assert.match(steps, /Precio Unitario/);
   assert.match(steps, /prov-p-unit/);
-  assert.match(steps, /Cronograma de entregas solicitadas/);
+  assert.match(steps, /prov-f-plazo/);
   ok('G. Bienes conserva precio unitario/subtotal normativo');
 }
 
