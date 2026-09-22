@@ -336,47 +336,58 @@ export async function presentarCotizacion(proveedorId, body, req) {
   )).rows[0];
   const yaPresentada = String(prevCot?.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA';
 
-  const { rows } = await query(`
-    INSERT INTO cotizaciones_proveedor (
-      solicitud_id, proveedor_id, requerimiento_id, estado, propuesta_tecnica, propuesta_economica,
-      anexos, certificados, fecha_presentacion
-    ) VALUES ($1, $2, $3, 'COTIZACION_PRESENTADA', $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, NOW())
-    ON CONFLICT (solicitud_id, proveedor_id) DO UPDATE SET
-      estado = 'COTIZACION_PRESENTADA',
-      propuesta_tecnica = EXCLUDED.propuesta_tecnica,
-      propuesta_economica = EXCLUDED.propuesta_economica,
-      anexos = EXCLUDED.anexos,
-      certificados = EXCLUDED.certificados,
-      fecha_presentacion = NOW(),
-      updated_at = NOW()
-    RETURNING *
-  `, [
-    solicitud_id, proveedorId, invRow.requerimiento_id,
-    JSON.stringify(propuesta_tecnica), JSON.stringify(propuesta_economica),
-    JSON.stringify(anexos || {}), JSON.stringify(certificados || []),
-  ]);
+  const { withTransaction } = await import('./workflow/workflowTransaction.js');
+  let cotRow;
+  await withTransaction(async (tx) => {
+    const { rows } = await tx.query(`
+      INSERT INTO cotizaciones_proveedor (
+        solicitud_id, proveedor_id, requerimiento_id, estado, propuesta_tecnica, propuesta_economica,
+        anexos, certificados, fecha_presentacion
+      ) VALUES ($1, $2, $3, 'COTIZACION_PRESENTADA', $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, NOW())
+      ON CONFLICT (solicitud_id, proveedor_id) DO UPDATE SET
+        estado = 'COTIZACION_PRESENTADA',
+        propuesta_tecnica = EXCLUDED.propuesta_tecnica,
+        propuesta_economica = EXCLUDED.propuesta_economica,
+        anexos = EXCLUDED.anexos,
+        certificados = EXCLUDED.certificados,
+        fecha_presentacion = NOW(),
+        updated_at = NOW()
+      RETURNING *
+    `, [
+      solicitud_id, proveedorId, invRow.requerimiento_id,
+      JSON.stringify(propuesta_tecnica), JSON.stringify(propuesta_economica),
+      JSON.stringify(anexos || {}), JSON.stringify(certificados || []),
+    ]);
+    cotRow = rows[0];
 
-  // Vincular adjuntos portal a la cotización
-  await query(`
-    UPDATE cotizaciones_proveedor_adjuntos
-    SET cotizacion_id = $3, updated_at = NOW()
-    WHERE solicitud_id = $1 AND proveedor_id = $2
-  `, [solicitud_id, proveedorId, rows[0].id]).catch(() => {});
+    await tx.query(`
+      UPDATE cotizaciones_proveedor_adjuntos
+      SET cotizacion_id = $3, updated_at = NOW()
+      WHERE solicitud_id = $1 AND proveedor_id = $2
+    `, [solicitud_id, proveedorId, cotRow.id]).catch(() => {});
 
-  await query(`UPDATE invitacion_proveedores SET estado = 'COTIZACION_PRESENTADA', updated_at = NOW()
-    WHERE id = $1`, [invRow.id]);
+    await tx.query(`
+      UPDATE invitacion_proveedores SET estado = 'COTIZACION_PRESENTADA', updated_at = NOW()
+      WHERE id = $1
+    `, [invRow.id]);
 
-  await registrarTrazaPortal({
-    solicitud_id, proveedor_id: proveedorId, requerimiento_id: invRow.requerimiento_id,
-    evento: 'COTIZACION_PRESENTADA', detalle: 'Cotización presentada en portal',
-    usuario: req.portalProveedor?.ruc, ip: clientIp(req),
-  });
+    await registrarTrazaPortal({
+      solicitud_id,
+      proveedor_id: proveedorId,
+      requerimiento_id: invRow.requerimiento_id,
+      evento: 'COTIZACION_PRESENTADA',
+      detalle: 'Cotización presentada en portal',
+      usuario: req.portalProveedor?.ruc,
+      ip: clientIp(req),
+    }, { client: tx });
 
-  await syncRequerimientosSolicitudWorkflow(solicitud_id, {
-    etapaDestino: 'RECEPCION_COTIZACIONES',
-    usuario: req.portalProveedor?.ruc || 'Portal',
-    observacion: 'Cotización presentada — expediente en Recepción de Cotizaciones',
-    etapaEjecutor: 'INVITACIONES',
+    await syncRequerimientosSolicitudWorkflow(solicitud_id, {
+      etapaDestino: 'RECEPCION_COTIZACIONES',
+      usuario: req.portalProveedor?.ruc || 'Portal',
+      observacion: 'Cotización presentada — expediente en Recepción de Cotizaciones',
+      etapaEjecutor: 'INVITACIONES',
+      client: tx,
+    });
   });
 
   const datosProveedor = propuesta_economica?.datos_proveedor || propuesta_economica?.datos || {};
@@ -394,7 +405,7 @@ export async function presentarCotizacion(proveedorId, body, req) {
     }
   }
 
-  return rows[0];
+  return cotRow;
 }
 
 /** Guarda borrador sin presentar cotización final */

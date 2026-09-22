@@ -13,6 +13,26 @@ import { FUENTE_RESPONSABLE } from './expedienteEstadoPersistido.js';
 
 export const ETAPA_CONSULTAS = 'CONSULTAS_OBSERVACIONES';
 
+/** RC8.17.8H6-C3-A1 — metadata normalizada desde fila ERV (metadata o metadata_json). */
+export function parseErvMetadata(estadoVigente = null) {
+  const ev = estadoVigente || null;
+  if (!ev) return {};
+  if (ev.metadata && typeof ev.metadata === 'object' && !Array.isArray(ev.metadata)) {
+    return ev.metadata;
+  }
+  const raw = ev.metadata_json ?? ev.metadata;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  return {};
+}
+
 /**
  * Analista de Invitaciones previo (PERSONA en ERV, operativo en metadata o última asignación).
  */
@@ -28,12 +48,7 @@ export async function resolveAnalistaInvitacionesPrevio(requerimientoId, estadoV
     }
   }
 
-  const metaRaw = ev?.metadata;
-  let meta = {};
-  if (metaRaw && typeof metaRaw === 'object') meta = metaRaw;
-  else if (typeof metaRaw === 'string') {
-    try { meta = JSON.parse(metaRaw); } catch (_) { meta = {}; }
-  }
+  const meta = parseErvMetadata(ev);
   const operativo = meta.responsable_operativo_id ?? meta.analista_invitaciones_previo_id;
   if (operativo != null && Number.isFinite(Number(operativo))) {
     return Number(operativo);
@@ -108,6 +123,51 @@ export function applyErvPostConsultaProveedorRegistrada({
   return { labels: nextLabels, resp, metaPatch, usuarioDestinoEfectivo: uid };
 }
 
+/** RC8.17.8H6-C3-A — Post COTIZACION_PRESENTADA: Recepción / EN_TRAMITE / PERSONA(analista). */
+export function applyErvPostCotizacionPresentada({
+  labels = {},
+  analistaUsuarioId = null,
+  analistaPrevioId = null,
+} = {}) {
+  const etapaCodigo = 'RECEPCION_COTIZACIONES';
+  const previo = analistaPrevioId ?? analistaUsuarioId;
+  const uid = analistaUsuarioId != null && Number.isFinite(Number(analistaUsuarioId))
+    ? Number(analistaUsuarioId)
+    : (previo != null && Number.isFinite(Number(previo)) ? Number(previo) : null);
+
+  const nextLabels = {
+    ...labels,
+    etapaCodigo,
+    etapaLabel: labels.etapaLabel || getLabelEtapa(etapaCodigo) || 'Recepción de Cotizaciones',
+    estadoCodigo: ESTADO_PILOT_EN_TRAMITE,
+    estadoLabel: getLabelEstado(ESTADO_PILOT_EN_TRAMITE) || LABEL_PILOT_EN_TRAMITE,
+  };
+
+  let resp = {
+    responsableTipo: TIPO_RESPONSABLE.PENDIENTE,
+    responsableUsuarioId: null,
+    responsableUnidad: null,
+    responsableFuente: FUENTE_RESPONSABLE.PENDIENTE,
+  };
+  if (uid) {
+    resp = {
+      responsableTipo: TIPO_RESPONSABLE.PERSONA,
+      responsableUsuarioId: uid,
+      responsableUnidad: getLabelEtapa(etapaCodigo) || 'Recepción de Cotizaciones',
+      responsableFuente: FUENTE_RESPONSABLE.ASIGNACION_EXPLICITA,
+    };
+  }
+
+  const metaPatch = {
+    via_erv: 'COTIZACION_PRESENTADA',
+  };
+  if (previo != null && Number.isFinite(Number(previo))) {
+    metaPatch.analista_invitaciones_previo_id = Number(previo);
+  }
+
+  return { labels: nextLabels, resp, metaPatch, usuarioDestinoEfectivo: uid };
+}
+
 /** Sin consultas pendientes: vuelve a Invitaciones / ESPERANDO_COTIZACIONES / Proveedores. */
 export function applyErvPostConsultaProveedorAbsuelta({
   labels = {},
@@ -172,8 +232,10 @@ export function applyPilotConsultasObservada({
 
 export default {
   ETAPA_CONSULTAS,
+  parseErvMetadata,
   resolveAnalistaInvitacionesPrevio,
   applyErvPostConsultaProveedorRegistrada,
+  applyErvPostCotizacionPresentada,
   applyErvPostConsultaProveedorAbsuelta,
   applyPilotConsultasObservada,
 };

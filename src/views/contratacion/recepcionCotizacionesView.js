@@ -19,7 +19,6 @@ import {
   formatRequerimientosBandeja,
   formatCentrosBandeja,
   consolidarExpedientesRecepcion,
-  renderBadgeEstadoRecepcionHtml,
   labelEstadoCotizacion,
   badgeEstadoCotizacion,
   fechaPrincipalCotizacion,
@@ -30,9 +29,13 @@ import {
   renderActionMenuCell,
   bindActionMenus,
 } from '../../utils/bandejaUi.js';
-import { renderBandejaCanonicoResponsableCell } from '../../utils/bandejaExpedienteColumns.js';
+import {
+  renderBandejaCanonicoEtapaCell,
+  renderBandejaCanonicoEstadoCell,
+  renderBandejaCanonicoResponsableCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { recepcionExpedienteMenuItems } from '../../utils/bandejaActions.js';
-import { renderBadgeEstadoVigenteHtml } from '../../ui/workflow/index.js';
+import { getEtapaDisplayLabel } from '../../ui/workflow/getEtapaDisplayLabel.js';
 import {
   createViewLifecycle,
   createRequestSequenceGuard,
@@ -97,6 +100,14 @@ function badgeEstadoRecepcion(cOrValidacion) {
     return badgeEstadoCotizacion(cOrValidacion);
   }
   return badgeEstadoCotizacion({ validacion_estado: cOrValidacion });
+}
+
+/** ERV canónico (Etapa / Estado / Responsable) — separado del estado documental de cotización. */
+function renderErvCanonicoHtml(row) {
+  return `
+    <div class="small text-muted mt-1">Etapa: ${esc(getEtapaDisplayLabel(row))}</div>
+    <div class="small text-muted">Estado: ${esc(getEstadoVigenteLabel(row))}</div>
+    <div class="small text-muted">Responsable: ${esc(getResponsableVigenteLabel(row))}</div>`;
 }
 
 async function openCotizacionDoc(cotId, ref, inline = false) {
@@ -312,8 +323,7 @@ async function showCotizacionDetalleModal(cotId) {
               <div class="mt-1">
                 <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(labelEstadoCotizacion(c))}</span>
               </div>
-              <div class="text-muted mt-1">Estado: ${esc(getEstadoVigenteLabel(c))}</div>
-              <div class="text-muted">Responsable: ${esc(getResponsableVigenteLabel(c))}</div>
+              ${renderErvCanonicoHtml(c)}
             </div>
             <div class="col-md-4">
               <span class="text-muted d-block">Monto total ofertado</span>
@@ -437,7 +447,7 @@ function showExpedienteDetalleModal(expediente) {
               <table class="table table-sm table-hover table-bordered mb-0">
                 <thead class="table-light"><tr>
                   <th>Proveedor</th><th>Monto ofertado</th>
-                  <th>Fecha recepción</th><th>Estado</th><th>Responsable</th><th class="text-center">Acciones</th>
+                  <th>Fecha recepción</th><th>Estado cotización</th><th>ERV expediente</th><th class="text-center">Acciones</th>
                 </tr></thead>
                 <tbody>
                   ${cots.map((c) => {
@@ -449,9 +459,8 @@ function showExpedienteDetalleModal(expediente) {
                       <td class="small">${esc(fmtFecha(c))}</td>
                       <td>
                         <span class="badge bg-${badgeEstadoRecepcion(c)}">${esc(estadoLabel)}</span>
-                        <div class="small text-muted">${esc(getEstadoVigenteLabel(c))}</div>
                       </td>
-                      <td class="small">${esc(getResponsableVigenteLabel(c))}</td>
+                      <td class="small">${renderErvCanonicoHtml(c)}</td>
                       <td class="text-center">${renderAccionCotizacion(c)}</td>
                     </tr>`;
                   }).join('') || '<tr><td colspan="6" class="text-muted text-center">Sin cotizaciones</td></tr>'}
@@ -566,23 +575,11 @@ const RECEPCION_THEAD = `<tr>
   <th>Requerimiento</th>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
+  <th>Etapa</th>
   <th>Estado</th>
   <th>Responsable</th>
   <th class="text-center">Acciones</th>
 </tr>`;
-
-function badgeEstadoBandejaRecepcion(exp) {
-  // RC8.7 — preferir estado_responsable_vigente (mismo color en todas las bandejas).
-  const erv = exp?.estado_responsable_vigente;
-  if (erv && (erv.estadoCodigo || erv.estado_codigo)) {
-    return renderBadgeEstadoVigenteHtml({
-      ...exp,
-      estado_vigente: erv.estadoCodigo || erv.estado_codigo,
-      estado_vigente_label: erv.estadoLabel || erv.estado_label,
-    }, esc);
-  }
-  return renderBadgeEstadoRecepcionHtml(exp, esc);
-}
 
 function buildRecepcionRowHtml(exp) {
   const n = Number(exp.cantidad_cotizaciones) || (exp.cotizaciones || []).length || 0;
@@ -596,7 +593,8 @@ function buildRecepcionRowHtml(exp) {
       <td class="small">${formatRequerimientosBandeja(exp, esc)}</td>
       <td class="small">${formatCentrosBandeja(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
-      <td>${badgeEstadoBandejaRecepcion(exp)}</td>
+      <td class="small">${renderBandejaCanonicoEtapaCell(exp)}</td>
+      <td class="small">${renderBandejaCanonicoEstadoCell(exp)}</td>
       <td class="small">${renderBandejaCanonicoResponsableCell(exp)}</td>
       ${renderActionMenuCell(sid, recepcionExpedienteMenuItems(exp), '')}
     </tr>`;

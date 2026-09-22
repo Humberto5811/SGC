@@ -494,6 +494,32 @@ export async function transicionarExpediente({
       resp = applied.resp;
       Object.assign(metaTransicion, applied.metaPatch);
       usuarioDestinoEfectivo = null;
+    } else if (eventoCodigo === 'COTIZACION_PRESENTADA') {
+      const {
+        applyErvPostCotizacionPresentada,
+        resolveAnalistaInvitacionesPrevio,
+      } = await import('./consultasExpedienteEstado.js');
+      const analistaPrevio = metaTransicion.analista_invitaciones_previo_id != null
+        ? Number(metaTransicion.analista_invitaciones_previo_id)
+        : await resolveAnalistaInvitacionesPrevio(rid, estadoVigentePrevio, tx);
+      const uid = usuarioDestinoIdNorm ?? analistaPrevio;
+      const applied = applyErvPostCotizacionPresentada({
+        labels,
+        analistaUsuarioId: uid,
+        analistaPrevioId: analistaPrevio,
+      });
+      Object.assign(labels, applied.labels);
+      resp = applied.resp;
+      Object.assign(metaTransicion, applied.metaPatch);
+      if (applied.usuarioDestinoEfectivo != null) {
+        usuarioDestinoEfectivo = applied.usuarioDestinoEfectivo;
+      }
+      if (!resp.responsableUsuarioId) {
+        const err = new Error('No se pudo resolver analista de Invitaciones para recepción de cotización');
+        err.code = 'COTIZACION_SIN_ANALISTA';
+        err.status = 409;
+        throw err;
+      }
     }
 
     // 1. Mutación de dominio PRIMERO (misma tx) — si falla, nada se confirma
