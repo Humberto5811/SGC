@@ -303,3 +303,128 @@ export function hasExplicitItemsCotizadosContract(cotizacion) {
     ?? parseJson(cot.propuesta_economica, {}).items_cotizados;
   return Array.isArray(raw);
 }
+
+/** Alias B2 — snapshot SC listo para persistir (sin BD). */
+export function persistDetalleItemsSnapshot(detalleItems) {
+  return normalizeDetalleItemsSc(detalleItems);
+}
+
+/**
+ * Restaura mapa item_key → cotizar (portal B3).
+ * Cotización nueva sin borrador → todos true; explícito/legacy vía listItemsCotizados.
+ */
+export function resolveCotizaByKeyFromCotizacion(workspaceItems, cotizacionExistente = null) {
+  const items = Array.isArray(workspaceItems) ? workspaceItems : [];
+  const cot = cotizacionExistente && typeof cotizacionExistente === 'object'
+    ? cotizacionExistente
+    : {};
+  const hasDraft = !!(cot.propuesta_tecnica || cot.propuesta_economica || cot.estado);
+  const listed = listItemsCotizados(cot, items);
+  const cotizaByKey = {};
+  items.forEach((it) => {
+    const key = normalizeItemKey(it);
+    if (!hasDraft) {
+      cotizaByKey[key] = true;
+    } else {
+      cotizaByKey[key] = listed.item_keys.includes(key);
+    }
+  });
+  return { cotizaByKey, listed, hasDraft };
+}
+
+export function countItemsCotizadosSeleccionados(cotizaByKey = {}) {
+  return Object.values(cotizaByKey).filter((v) => v === true).length;
+}
+
+/** @returns {{ ok: boolean, error?: string, count?: number }} */
+export function validatePortalCotizacionSelection(cotizaByKey = {}) {
+  const count = countItemsCotizadosSeleccionados(cotizaByKey);
+  if (count < 1) {
+    return { ok: false, error: 'Seleccione al menos un ítem para cotizar' };
+  }
+  return { ok: true, count };
+}
+
+export function sumPreciosItemKeys(precios = {}, itemKeys = []) {
+  return (itemKeys || []).reduce((acc, k) => {
+    const t = Number(precios?.[k]?.total ?? precios?.[k]?.precio_total ?? 0);
+    return acc + (Number.isFinite(t) ? t : 0);
+  }, 0);
+}
+
+/**
+ * Payload parcial B3 — propuesta técnica/económica solo ítems cotizados.
+ * items_cotizados en propuesta_tecnica y propuesta_economica (misma lista).
+ */
+export function buildPortalPartialCotizacionPayload({
+  workspaceItems = [],
+  formItems = [],
+  cotizaByKey = {},
+  precios = {},
+  entregablesEco = {},
+  tipo = 'Bienes',
+  extraTecnica = {},
+  unidadMedidaFn = null,
+}) {
+  const um = typeof unidadMedidaFn === 'function'
+    ? unidadMedidaFn
+    : (it) => it.unidad_medida || it.um || 'UND';
+
+  const selectedPairs = [];
+  workspaceItems.forEach((it, idx) => {
+    const key = normalizeItemKey(it, idx);
+    if (cotizaByKey[key] === true) {
+      selectedPairs.push({ ws: { ...it, item_key: key }, form: formItems[idx] || {}, idx });
+    }
+  });
+
+  const items_cotizados = selectedPairs.map((p) => p.ws.item_key);
+
+  const preciosFiltered = {};
+  items_cotizados.forEach((k) => {
+    if (precios[k] != null) preciosFiltered[k] = precios[k];
+  });
+
+  const entregablesFiltered = {};
+  items_cotizados.forEach((k) => {
+    if (entregablesEco[k]) entregablesFiltered[k] = entregablesEco[k];
+  });
+
+  const propItemsBienes = selectedPairs.map(({ form, ws }) => ({
+    ...form,
+    item_key: ws.item_key,
+    cotiza: true,
+  }));
+
+  let propuesta_tecnica;
+  if (String(tipo).toLowerCase() === 'bienes') {
+    propuesta_tecnica = {
+      items: propItemsBienes,
+      items_cotizados,
+    };
+  } else {
+    propuesta_tecnica = {
+      ...extraTecnica,
+      items: selectedPairs.map(({ ws }) => ({
+        item_key: ws.item_key,
+        cotiza: true,
+        requerimiento_codigo: ws.requerimiento_codigo,
+        descripcion: ws.descripcion,
+        cantidad: ws.cantidad ?? 1,
+        unidad_medida: um(ws, tipo),
+      })),
+      items_cotizados,
+    };
+  }
+
+  const montoBienes = sumPreciosItemKeys(preciosFiltered, items_cotizados);
+
+  return {
+    items_cotizados,
+    propuesta_tecnica,
+    precios: preciosFiltered,
+    entregablesEco: entregablesFiltered,
+    montoBienes,
+    selectedCount: items_cotizados.length,
+  };
+}

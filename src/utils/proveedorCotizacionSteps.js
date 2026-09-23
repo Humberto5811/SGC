@@ -23,6 +23,16 @@ function roAttr(readonly) {
   return readonly ? ' disabled readonly' : '';
 }
 
+function cotizaChecked(formState, it) {
+  return formState.cotizaByKey?.[it.item_key] === true;
+}
+
+function rowCotizaDisabledAttr(formState, it, readonly) {
+  if (readonly) return ' disabled readonly';
+  if (!cotizaChecked(formState, it)) return ' disabled';
+  return '';
+}
+
 /** Resuelve entregables programados desde workspace (fuentes TDR / cronograma). */
 export function resolveEntregablesFromWorkspace(workspace) {
   const tipo = workspace?.solicitud?.tipo;
@@ -143,9 +153,10 @@ export function renderStep1Bienes(ctx) {
       <table class="table table-bordered table-sm prov-cot-table mb-0">
         <thead class="table-primary text-center align-middle">
           <tr>
-            <th rowspan="2">Req.</th><th rowspan="2">Centro</th><th rowspan="2">Código SIGA</th>
+            <th rowspan="2">Cotizar</th><th rowspan="2">Req.</th><th rowspan="2">N.° Pedido SIGAMEF</th>
+            <th rowspan="2">Centro</th><th rowspan="2">Código SIGA</th>
             <th rowspan="2">Descripción</th><th rowspan="2">Cant.</th><th rowspan="2">U.M.</th>
-            <th rowspan="2">Requerimiento/Pedidos</th>
+            <th rowspan="2">Docs. requerimiento</th>
             <th colspan="11">Cumplimiento del Ítem</th>
           </tr>
           <tr>
@@ -156,27 +167,35 @@ export function renderStep1Bienes(ctx) {
         <tbody>
           ${workspace.items.map((it, idx) => {
             const f = formState.items[idx] || {};
-            return `<tr data-idx="${idx}">
+            const cotiza = cotizaChecked(formState, it);
+            const rowDis = rowCotizaDisabledAttr(formState, it, readonly);
+            const rowCls = cotiza ? '' : 'table-secondary opacity-75';
+            return `<tr data-idx="${idx}" data-item-key="${esc(it.item_key)}" class="${rowCls}">
+              <td class="text-center align-middle">
+                <input type="checkbox" class="form-check-input prov-cotiza-item" data-item-key="${esc(it.item_key)}"
+                  ${cotiza ? 'checked' : ''}${readonly ? ' disabled' : ''} title="Cotizar este ítem">
+              </td>
               <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
+              <td class="small">${esc(it.pedido_sigamef || '—')}</td>
               <td>${esc(it.centro || it.centro_nombre || '—')}</td>
               <td>${esc(it.codigo_sigamef || '—')}</td>
               <td>${esc(it.descripcion || '—')}</td>
               <td class="text-center">${esc(it.cantidad ?? 1)}</td>
               <td class="text-center">${esc(unidadMedidaCotizacion(it, 'Bienes'))}</td>
               ${renderDocsColumn(it, sid)}
-              <td><input class="form-control form-control-sm prov-f-presentacion" value="${esc(f.presentacion)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-cant" type="number" min="0" value="${esc(f.cantidad_ofertada)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-marca" value="${esc(f.marca)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-modelo" value="${esc(f.modelo)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-pais" value="${esc(f.pais)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-anio" value="${esc(f.anio_fabricacion)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-garantia" value="${esc(f.garantia)}"${ro}></td>
-              <td><input class="form-control form-control-sm prov-f-vigencia" value="${esc(f.vigencia_minima)}"${ro}></td>
-              <td><select class="form-select form-select-sm prov-f-canje"${ro}>${CANJE_OPTS.map((o) =>
+              <td><input class="form-control form-control-sm prov-f-presentacion" value="${esc(f.presentacion)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-cant" type="number" min="0" value="${esc(f.cantidad_ofertada)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-marca" value="${esc(f.marca)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-modelo" value="${esc(f.modelo)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-pais" value="${esc(f.pais)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-anio" value="${esc(f.anio_fabricacion)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-garantia" value="${esc(f.garantia)}"${rowDis}></td>
+              <td><input class="form-control form-control-sm prov-f-vigencia" value="${esc(f.vigencia_minima)}"${rowDis}></td>
+              <td><select class="form-select form-select-sm prov-f-canje"${rowDis}>${CANJE_OPTS.map((o) =>
                 `<option ${f.compromiso_canje === o ? 'selected' : ''}>${o}</option>`).join('')}</select></td>
               <td><textarea class="form-control form-control-sm prov-f-plazo" rows="2"
-                style="min-width:160px;resize:vertical;" placeholder="Plazo de entrega"${ro}>${esc(f.plazo_entrega)}</textarea></td>
-              <td><input class="form-control form-control-sm prov-f-doctec" value="${esc(f.doc_tecnica)}"${ro}></td>
+                style="min-width:160px;resize:vertical;" placeholder="Plazo de entrega"${rowDis}>${esc(f.plazo_entrega)}</textarea></td>
+              <td><input class="form-control form-control-sm prov-f-doctec" value="${esc(f.doc_tecnica)}"${rowDis}></td>
             </tr>`;
           }).join('')}
         </tbody>
@@ -196,12 +215,15 @@ export function renderStep1Bienes(ctx) {
         <tbody>
           ${workspace.items.map((it, idx) => {
             const p = formState.precios[it.item_key] || { unitario: 0, total: 0 };
-            return `<tr data-pidx="${idx}">
+            const cotiza = cotizaChecked(formState, it);
+            const rowDis = rowCotizaDisabledAttr(formState, it, readonly);
+            const rowCls = cotiza ? '' : 'table-secondary opacity-75';
+            return `<tr data-pidx="${idx}" data-item-key="${esc(it.item_key)}" class="${rowCls}">
               <td>${esc(it.requerimiento_codigo || it.requerimiento_id)}</td>
               <td>${esc(it.descripcion || '—')}</td>
               <td class="text-center">${esc(it.cantidad ?? 1)}</td>
               <td><input class="form-control form-control-sm prov-p-unit text-end" type="text" inputmode="decimal"
-                placeholder="0.00" value="${esc(formatPriceDisplay(p.unitario))}"${ro}></td>
+                placeholder="0.00" value="${esc(formatPriceDisplay(p.unitario))}"${rowDis}></td>
               <td><input class="form-control form-control-sm prov-p-total text-end" type="text" readonly
                 value="${esc(formatPriceDisplay(p.total))}"></td>
             </tr>`;

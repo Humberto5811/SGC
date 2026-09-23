@@ -6,6 +6,7 @@ import {
   INVITACION_VIGENTE_ORDER_SQL,
 } from './cronogramaDatetime.js';
 import { enrichDetalleItemsCentro, resolveCentroDisplay } from './centroDisplay.js';
+import { normalizeDetalleItemsSc } from '../../shared/cotizacionItemRequisitos.js';
 
 /**
  * UM para ítems del workspace portal.
@@ -374,7 +375,9 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
 export async function getCotizacionWorkspace(proveedorId, solicitudId) {
   const acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
   const { rows: reqRows, map: reqById } = await loadRequerimientosCentroMap(solicitudId);
-  const items = enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById);
+  const items = normalizeDetalleItemsSc(
+    enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById),
+  );
   if (!items.length) throw new Error('La solicitud no tiene ítems configurados');
 
   const reqIds = [...new Set(items.map((it) => it.requerimiento_id).filter(Boolean))];

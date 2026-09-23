@@ -21,8 +21,10 @@ import {
 import { renderStep1ByTipo, initEntregablesEco, resolveEntregablesFromWorkspace } from '../../utils/proveedorCotizacionSteps.js';
 import { sumPrecioEntregables } from '../../utils/entregablesCotizacion.js';
 import {
-  buildPropuestaTecnicaBienesPayload,
-} from '../../utils/bienesCronogramaCotizacion.js';
+  buildPortalPartialCotizacionPayload,
+  resolveCotizaByKeyFromCotizacion,
+  validatePortalCotizacionSelection,
+} from '../../../shared/cotizacionItemRequisitos.js';
 
 const STEP_LABELS = ['Información técnica', 'Documentos técnicos', 'Resumen y envío'];
 
@@ -32,6 +34,7 @@ let wizardBusy = false;
 let isReadonly = false;
 let formState = {
   items: [], precios: {}, entregablesEco: {}, extra: {},
+  cotizaByKey: {},
   datos: {},
   adjuntos: { docs: {}, requisitos: {}, anexoTecnico: null, anexoEconomico: null },
 };
@@ -52,12 +55,24 @@ function usesEntregablesEco(tipo) {
   return t === 'Locadores' || t === 'Servicios';
 }
 
+function isItemCotizado(itemKey) {
+  return formState.cotizaByKey?.[itemKey] === true;
+}
+
 function getMontoTotal() {
   const tipo = normalizeTipoCotizacion(workspace?.solicitud?.tipo);
   if (usesEntregablesEco(tipo)) {
-    return sumPrecioEntregables(Object.values(formState.entregablesEco || {}).flat());
+    let sum = 0;
+    (workspace?.items || []).forEach((it) => {
+      if (!isItemCotizado(it.item_key)) return;
+      sum += sumPrecioEntregables(formState.entregablesEco?.[it.item_key] || []);
+    });
+    return sum;
   }
-  return Object.values(formState.precios).reduce((a, p) => a + parseNum(p.total), 0);
+  return (workspace?.items || []).reduce((a, it) => {
+    if (!isItemCotizado(it.item_key)) return a;
+    return a + parseNum(formState.precios[it.item_key]?.total);
+  }, 0);
 }
 
 export function renderMisCotizacionesView() {
@@ -129,6 +144,9 @@ function initFormFromWorkspace(ws) {
   const prevPrecios = prevEco.precios || {};
   const prevAnexos = ws.cotizacion_existente?.anexos || {};
   const tipo = normalizeTipoCotizacion(ws.solicitud?.tipo);
+
+  const { cotizaByKey } = resolveCotizaByKeyFromCotizacion(ws.items, ws.cotizacion_existente);
+  formState.cotizaByKey = { ...cotizaByKey };
 
   formState.items = ws.items.map((it, idx) => {
     const saved = prevItems.find((p) => p.item_key === it.item_key) || prevItems[idx] || {};
@@ -420,6 +438,10 @@ function renderWizardStep() {
 }
 
 function collectStep1FromDom() {
+  document.querySelectorAll('#provCotWizardBody .prov-cotiza-item').forEach((cb) => {
+    const key = cb.dataset.itemKey;
+    if (key) formState.cotizaByKey[key] = cb.checked;
+  });
   document.querySelectorAll('#provCotWizardBody tr[data-idx]').forEach((tr) => {
     const idx = parseInt(tr.dataset.idx, 10);
     if (!formState.items[idx]) return;
@@ -460,7 +482,7 @@ function recalcPrecios() {
       const iidx = parseInt(tr.dataset.eidx, 10);
       const enidx = parseInt(tr.dataset.enidx, 10);
       const it = workspace.items[iidx];
-      if (!it) return;
+      if (!it || !isItemCotizado(it.item_key)) return;
       const unit = parseNum(tr.querySelector('.prov-e-unit')?.value);
       const total = unit;
       if (!formState.entregablesEco[it.item_key]) formState.entregablesEco[it.item_key] = [];
@@ -484,6 +506,7 @@ function recalcPrecios() {
     });
   } else {
     workspace.items.forEach((it, idx) => {
+      if (!isItemCotizado(it.item_key)) return;
       const tr = document.querySelector(`#provCotWizardBody tr[data-pidx="${idx}"]`);
       if (!tr) return;
       const unit = parseNum(tr.querySelector('.prov-p-unit')?.value);
@@ -514,6 +537,9 @@ function validateStep1() {
   const tipo = normalizeTipoCotizacion(workspace.solicitud?.tipo);
   const config = getCotConfig();
 
+  const sel = validatePortalCotizacionSelection(formState.cotizaByKey);
+  if (!sel.ok) errors.push(sel.error);
+
   if (tipo === 'Bienes') {
     const labelsBase = {
       presentacion: 'Presentación', marca: 'Marca', modelo: 'Modelo', pais: 'País',
@@ -521,15 +547,20 @@ function validateStep1() {
       doc_tecnica: 'Documentación técnica', plazo_entrega: 'Plazo de entrega',
     };
     formState.items.forEach((f, idx) => {
+      const it = workspace.items[idx];
+      if (!it || !isItemCotizado(it.item_key)) return;
       const labels = { ...labelsBase };
+      const labelOrd = it.sc_ordinal != null ? it.sc_ordinal + 1 : idx + 1;
       Object.entries(labels).forEach(([k, lbl]) => {
-        if (!String(f[k] ?? '').trim()) errors.push(`Ítem ${idx + 1}: falta ${lbl}`);
+        if (!String(f[k] ?? '').trim()) errors.push(`Ítem ${labelOrd}: falta ${lbl}`);
       });
-      if (!f.cantidad_ofertada || f.cantidad_ofertada <= 0) errors.push(`Ítem ${idx + 1}: cantidad ofertada inválida`);
+      if (!f.cantidad_ofertada || f.cantidad_ofertada <= 0) errors.push(`Ítem ${labelOrd}: cantidad ofertada inválida`);
     });
     workspace.items.forEach((it, idx) => {
+      if (!isItemCotizado(it.item_key)) return;
+      const labelOrd = it.sc_ordinal != null ? it.sc_ordinal + 1 : idx + 1;
       const p = formState.precios[it.item_key];
-      if (!p?.unitario || p.unitario <= 0) errors.push(`Ítem ${idx + 1}: ingrese precio unitario en ${config.labelEconomica}`);
+      if (!p?.unitario || p.unitario <= 0) errors.push(`Ítem ${labelOrd}: ingrese precio unitario en ${config.labelEconomica}`);
     });
     const datosReq = {
       razon_social: 'Razón Social', ruc: 'RUC', domicilio_fiscal: 'Dirección Fiscal',
@@ -550,15 +581,21 @@ function validateStep1() {
     Object.entries(datos06A).forEach(([k, lbl]) => {
       if (!String(formState.datos[k] ?? '').trim()) errors.push(`${config.labelTecnica}: falta ${lbl}`);
     });
-    const ents = Object.values(formState.entregablesEco || {}).flat();
-    if (!ents.length) {
-      errors.push(`${config.labelEconomica}: no hay entregables programados en el TDR`);
-    } else {
+    const selectedItems = (workspace.items || []).filter((it) => isItemCotizado(it.item_key));
+    if (!selectedItems.length && sel.ok) {
+      errors.push(`${config.labelEconomica}: seleccione al menos un ítem`);
+    }
+    selectedItems.forEach((it) => {
+      const ents = formState.entregablesEco?.[it.item_key] || [];
+      if (!ents.length) {
+        errors.push(`${config.labelEconomica}: no hay entregables para ${it.requerimiento_codigo || it.item_key}`);
+        return;
+      }
       ents.forEach((e, i) => {
         const precio = Number(e.precio ?? e.precio_unitario ?? e.total ?? 0);
         if (!(precio > 0)) errors.push(`${config.labelEconomica}: falta precio del entregable ${e.numero || i + 1}`);
       });
-    }
+    });
   }
   return errors;
 }
@@ -621,6 +658,12 @@ function bindWizardInteractions() {
   });
 
   if (!isReadonly) {
+    body.querySelectorAll('.prov-cotiza-item').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        collectStep1FromDom();
+        renderWizardStep();
+      });
+    });
     body.querySelectorAll('.prov-p-unit, .prov-e-unit').forEach((inp) => {
       inp.addEventListener('input', recalcPrecios);
       inp.addEventListener('blur', () => { recalcPrecios(); formatPriceInputsOnBlur(); });
@@ -759,31 +802,34 @@ function buildPayload() {
   recalcPrecios();
   const monto = getMontoTotal();
   const tipo = normalizeTipoCotizacion(workspace.solicitud?.tipo);
-  const propuestaTecnica = tipo === 'Bienes'
-    ? buildPropuestaTecnicaBienesPayload(formState.items)
-    : {
+  const partial = buildPortalPartialCotizacionPayload({
+    workspaceItems: workspace.items,
+    formItems: formState.items,
+    cotizaByKey: formState.cotizaByKey,
+    precios: formState.precios,
+    entregablesEco: formState.entregablesEco,
+    tipo,
+    extraTecnica: {
       plazo_ejecucion: formState.extra.plazo_ejecucion,
       forma_pago: formState.extra.forma_pago,
-      items: workspace.items.map((it) => ({
-        item_key: it.item_key,
-        requerimiento_codigo: it.requerimiento_codigo,
-        descripcion: it.descripcion,
-        cantidad: it.cantidad ?? 1,
-        unidad_medida: unidadMedidaCotizacion(it, tipo),
-      })),
-    };
+    },
+    unidadMedidaFn: (it, t) => unidadMedidaCotizacion(it, t),
+  });
+
+  const propuestaTecnica = partial.propuesta_tecnica;
 
   let propuestaEconomica;
   if (tipo === 'Bienes') {
     propuestaEconomica = {
-      precios: formState.precios,
+      precios: partial.precios,
+      items_cotizados: partial.items_cotizados,
       monto,
       precio_total: monto,
       moneda: 'PEN',
       datos_proveedor: formState.datos,
     };
   } else {
-    const flat = Object.values(formState.entregablesEco || {}).flat();
+    const flat = Object.values(partial.entregablesEco || {}).flat();
     const entregables_cotizados = flat.map((e, i) => ({
       id_fuente: e.id_fuente ?? e.nro ?? e.numero ?? i + 1,
       numero: e.numero ?? e.nro ?? i + 1,
@@ -797,10 +843,10 @@ function buildPayload() {
       precio: Number(e.precio ?? e.precio_unitario ?? e.total ?? 0) || 0,
     }));
     propuestaEconomica = {
-      // Compatibilidad con borradores previos
-      entregables: formState.entregablesEco,
+      entregables: partial.entregablesEco,
       entregables_cotizados,
-      precios: formState.precios,
+      precios: partial.precios,
+      items_cotizados: partial.items_cotizados,
       plazo_ejecucion: formState.extra.plazo_ejecucion,
       forma_pago: formState.extra.forma_pago,
       plazos_entregables: formState.extra.plazos_entregables,

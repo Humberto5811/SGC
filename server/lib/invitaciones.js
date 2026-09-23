@@ -9,6 +9,7 @@ import { enviarInvitacionProveedorEmail } from './emailService.js';
 import { listarBandejaInvitaciones, SUBMODULO_INVITACIONES } from './invitacionesBandeja.js';
 import { prepararInvitacionPortal } from './proveedorPortal.js';
 import { normalizeCronogramaRow } from './cronogramaDatetime.js';
+import { normalizeDetalleItemsSc } from '../../shared/cotizacionItemRequisitos.js';
 
 export { listarBandejaInvitaciones, SUBMODULO_INVITACIONES };
 
@@ -267,7 +268,8 @@ export async function crearSolicitudCotizacion(body = {}, usuario = '') {
 
   const anio = body.anio || new Date().getFullYear();
   const auto = buildDatosAutomaticos(requerimientos);
-  const detalleItems = body.detalle_items || await obtenerItemsRequerimientos(requerimientoIds);
+  const detalleRaw = body.detalle_items || await obtenerItemsRequerimientos(requerimientoIds);
+  const detalleItems = normalizeDetalleItemsSc(detalleRaw);
   const lugares = body.lugares_entrega_item || detalleItems.map((it) => ({
     ...it,
     region: '', provincia: '', distrito: '',
@@ -947,7 +949,9 @@ export async function actualizarSolicitudCotizacion(solicitudId, body = {}) {
     params.push(json ? JSON.stringify(val) : val);
     fields.push(`${col} = $${params.length}${json ? '::jsonb' : ''}`);
   };
-  if (body.detalle_items != null) setField('detalle_items', body.detalle_items, true);
+  if (body.detalle_items != null) {
+    setField('detalle_items', normalizeDetalleItemsSc(body.detalle_items), true);
+  }
   if (body.lugares_entrega_item != null) setField('lugares_entrega_item', body.lugares_entrega_item, true);
   if (body.docs_solicitados != null) setField('docs_solicitados', body.docs_solicitados, true);
   if (body.requisitos_tecnicos != null) setField('requisitos_tecnicos', body.requisitos_tecnicos, true);
