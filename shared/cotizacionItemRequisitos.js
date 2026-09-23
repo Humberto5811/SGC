@@ -428,3 +428,147 @@ export function buildPortalPartialCotizacionPayload({
     selectedCount: items_cotizados.length,
   };
 }
+
+/** Ref manifiesto / Ver-Descargar para RTM por ítem (no colisiona con req-N). */
+export function encodeReqitemManifiestoRef(itemKey, reqKey) {
+  const ik = String(itemKey ?? '').trim();
+  const rk = String(reqKey ?? '').trim();
+  if (!ik || !rk) return '';
+  return `reqitem--${encodeURIComponent(ik)}--${encodeURIComponent(rk)}`;
+}
+
+/** @returns {{ item_key: string, req_key: string } | null} */
+export function decodeReqitemManifiestoRef(ref) {
+  const s = String(ref ?? '');
+  const prefix = 'reqitem--';
+  if (!s.startsWith(prefix)) return null;
+  const body = s.slice(prefix.length);
+  const sepIndexes = [];
+  for (let i = 0; i < body.length - 1; i += 1) {
+    if (body[i] === '-' && body[i + 1] === '-') sepIndexes.push(i);
+  }
+  for (let j = sepIndexes.length - 1; j >= 0; j -= 1) {
+    const pos = sepIndexes[j];
+    try {
+      const item_key = decodeURIComponent(body.slice(0, pos));
+      const req_key = decodeURIComponent(body.slice(pos + 2));
+      if (item_key && req_key) return { item_key, req_key };
+    } catch (_) {
+      /* probar separador anterior */
+    }
+  }
+  return null;
+}
+
+/**
+ * Archivo realmente presentado en portal (mismo criterio que manifiesto/resolver).
+ * Metadatos key/slot_key/item_key/req_key solos NO cuentan.
+ */
+export function isPortalCotizacionAdjuntoPresentado(meta) {
+  if (!meta || typeof meta !== 'object') return false;
+  const id = meta.adjunto_id ?? meta.id;
+  if (id != null && Number.isFinite(Number(id)) && Number(id) > 0) return true;
+  if (meta.contenido_base64 || meta.base64) return true;
+  return false;
+}
+
+/** Parsea slot_key = requisitoItemSlotKey(item_key, req_key). */
+export function parseRequisitoItemSlotKey(slotKey) {
+  const s = String(slotKey ?? '');
+  const idx = s.indexOf('|');
+  if (idx <= 0) return null;
+  const item_key = s.slice(0, idx);
+  const req_key = s.slice(idx + 1);
+  if (!item_key || !req_key) return null;
+  return { item_key, req_key };
+}
+
+export function lookupRequisitoPorItemAdjunto(anexos, itemKey, reqKey) {
+  const rpi = anexos?.requisitos_por_item;
+  if (!rpi || typeof rpi !== 'object') return null;
+  const byItem = rpi[itemKey];
+  if (!byItem || typeof byItem !== 'object') return null;
+  const entry = byItem[reqKey];
+  return entry && typeof entry === 'object' ? entry : null;
+}
+
+function hasLegacyGlobalRequisitosFiles(anexos) {
+  const list = anexos?.requisitos;
+  if (!Array.isArray(list)) return false;
+  return list.some((f) => f && (f.adjunto_id || f.key || f.nombre || f.nombre_archivo));
+}
+
+/**
+ * Portal paso 2: RTM por ítem (B3/B4) vs bloque global legacy.
+ * No infiere ítem desde anexos.requisitos[].
+ */
+export function shouldUseRequisitosPorItemPortal(cotizacionExistente = null) {
+  if (!cotizacionExistente) return true;
+  const anexos = parseJson(cotizacionExistente.anexos, {});
+  const rpi = anexos.requisitos_por_item;
+  if (rpi && typeof rpi === 'object' && Object.keys(rpi).length > 0) return true;
+  if (hasExplicitItemsCotizadosContract(cotizacionExistente)) return true;
+  if (hasLegacyGlobalRequisitosFiles(anexos)) return false;
+  return false;
+}
+
+function resolveRtmIdentityFromSlotMeta(slot, rawMeta) {
+  const ik = String(rawMeta?.item_key ?? '').trim();
+  const rk = String(rawMeta?.req_key ?? '').trim();
+  if (ik && rk) return { item_key: ik, req_key: rk };
+  return parseRequisitoItemSlotKey(slot);
+}
+
+/** @param {object} flatBySlot — clave opaca (típ. requisitoItemSlotKey) → metadatos adjunto */
+export function buildRequisitosPorItemPayloadFromFlat(flatBySlot, cotizaByKey = {}) {
+  const nested = {};
+  for (const [slot, rawMeta] of Object.entries(flatBySlot || {})) {
+    if (!rawMeta || typeof rawMeta !== 'object') continue;
+    if (!isPortalCotizacionAdjuntoPresentado(rawMeta)) continue;
+    const parsed = resolveRtmIdentityFromSlotMeta(slot, rawMeta);
+    if (!parsed) continue;
+    const { item_key, req_key } = parsed;
+    if (cotizaByKey[item_key] !== true) continue;
+    if (!nested[item_key]) nested[item_key] = {};
+    nested[item_key][req_key] = {
+      ...rawMeta,
+      key: rawMeta.key || slot,
+      item_key,
+      req_key,
+    };
+  }
+  return nested;
+}
+
+/**
+ * Valida obligatorios solo para filas de matriz (ítems cotizados).
+ * getEntryMeta(item_key, req_key) → metadatos; debe cumplir isPortalCotizacionAdjuntoPresentado.
+ */
+export function validateRequisitosObligatoriosPorItemMatrix(matrixRows, getEntryMeta) {
+  const errors = [];
+  for (const row of matrixRows || []) {
+    for (const req of row.requisitos || []) {
+      if (!req.obligatorio) continue;
+      const meta = getEntryMeta(row.item_key, req.req_key);
+      const present = isPortalCotizacionAdjuntoPresentado(meta);
+      if (!present) {
+        const itemLbl = row.requerimiento_codigo || row.item_key;
+        errors.push(`Falta adjuntar requisito "${req.requisito}" para ítem ${itemLbl}`);
+      }
+    }
+  }
+  return errors;
+}
+
+/** Filtra requisitos_por_item anidado a ítems cotizados. */
+export function filterRequisitosPorItemForCotizados(requisitosPorItem, itemKeysCotizados) {
+  const allow = new Set((itemKeysCotizados || []).map(String));
+  const src = requisitosPorItem && typeof requisitosPorItem === 'object' ? requisitosPorItem : {};
+  const out = {};
+  for (const [itemKey, byReq] of Object.entries(src)) {
+    if (!allow.has(String(itemKey))) continue;
+    if (!byReq || typeof byReq !== 'object') continue;
+    out[itemKey] = { ...byReq };
+  }
+  return out;
+}

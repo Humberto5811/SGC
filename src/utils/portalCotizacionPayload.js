@@ -2,11 +2,21 @@
  * Payload ligero de cotización Portal Proveedores.
  * Nunca serializa base64 / File / Blob / data-URL en borrador ni presentación.
  */
+import {
+  isPortalCotizacionAdjuntoPresentado,
+  requisitoItemSlotKey,
+} from '../../shared/cotizacionItemRequisitos.js';
+
+export { isPortalCotizacionAdjuntoPresentado };
 
 const HEAVY_KEYS = new Set([
   'file', 'blob', 'base64', 'dataurl', 'data_url', 'contenido', 'contenido_base64',
   'buffer', 'bytes', 'arraybuffer', 'array_buffer', 'preview', 'previewurl', 'preview_url',
   'objecturl', 'object_url', 'raw', 'binary', 'stream', 'arraybuffer',
+]);
+
+const META_DROP = new Set([
+  'ruta', 'url', 'href', 'path', 'filepath', 'cotizacion_id', 'solicitud_id', 'proveedor_id',
 ]);
 
 const META_KEEP = new Set([
@@ -15,6 +25,7 @@ const META_KEEP = new Set([
   'archivo', 'archivo_nombre', 'mime_type', 'tamano', 'tamaño_bytes', 'size',
   'ruta', 'ref', 'fecha_registro', 'uploaded_at', 'estado', 'comentario',
   'group', 'tipo_anexo_tecnico', 'tipo_anexo_economico',
+  'item_key', 'req_key', 'requisito', 'obligatorio',
 ]);
 
 const MAX_SAFE_JSON_BYTES = 1024 * 1024; // 1 MB
@@ -43,7 +54,7 @@ export function sanitizePortalAdjuntoMeta(raw = {}) {
   for (const [k, v] of Object.entries(raw)) {
     const key = String(k);
     const low = key.toLowerCase();
-    if (HEAVY_KEYS.has(low)) continue;
+    if (HEAVY_KEYS.has(low) || META_DROP.has(low)) continue;
     if (isHeavyValue(v)) continue;
     if (!META_KEEP.has(key) && !META_KEEP.has(low)) {
       if (v && typeof v === 'object') continue;
@@ -74,9 +85,33 @@ function sanitizeAnexos(anexos = {}) {
   const requisitos = Array.isArray(src.requisitos)
     ? src.requisitos.map(sanitizePortalAdjuntoMeta).filter(Boolean)
     : [];
+  let requisitos_por_item = null;
+  if (src.requisitos_por_item && typeof src.requisitos_por_item === 'object' && !Array.isArray(src.requisitos_por_item)) {
+    requisitos_por_item = {};
+    for (const [parentItemKey, byReq] of Object.entries(src.requisitos_por_item)) {
+      if (!byReq || typeof byReq !== 'object') continue;
+      const item_key = String(parentItemKey);
+      const bucket = {};
+      for (const [parentReqKey, meta] of Object.entries(byReq)) {
+        const req_key = String(parentReqKey);
+        const clean = sanitizePortalAdjuntoMeta(meta);
+        if (!clean || !isPortalCotizacionAdjuntoPresentado(clean)) continue;
+        if (clean.req_key != null && String(clean.req_key) !== req_key) continue;
+        bucket[req_key] = {
+          ...clean,
+          item_key,
+          req_key,
+          key: clean.key || requisitoItemSlotKey(item_key, req_key),
+        };
+      }
+      if (Object.keys(bucket).length) requisitos_por_item[item_key] = bucket;
+    }
+    if (!Object.keys(requisitos_por_item).length) requisitos_por_item = null;
+  }
   return {
     docs_solicitados: docs,
     requisitos,
+    ...(requisitos_por_item ? { requisitos_por_item } : {}),
     anexo_tecnico_firmado: sanitizePortalAdjuntoMeta(src.anexo_tecnico_firmado || src.anexo05a_firmado),
     anexo_economico_firmado: sanitizePortalAdjuntoMeta(src.anexo_economico_firmado || src.anexo05b_firmado),
     anexo05a_firmado: sanitizePortalAdjuntoMeta(src.anexo05a_firmado || src.anexo_tecnico_firmado),

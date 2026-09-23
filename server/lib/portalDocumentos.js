@@ -6,7 +6,17 @@ import {
   INVITACION_VIGENTE_ORDER_SQL,
 } from './cronogramaDatetime.js';
 import { enrichDetalleItemsCentro, resolveCentroDisplay } from './centroDisplay.js';
-import { normalizeDetalleItemsSc } from '../../shared/cotizacionItemRequisitos.js';
+import {
+  normalizeDetalleItemsSc,
+  encodeReqitemManifiestoRef,
+  decodeReqitemManifiestoRef,
+  lookupRequisitoPorItemAdjunto,
+  listItemsCotizados,
+  listRequisitosConfig,
+  buildItemRequirementMatrix,
+  isPortalCotizacionAdjuntoPresentado,
+  requisitoItemSlotKey,
+} from '../../shared/cotizacionItemRequisitos.js';
 
 /**
  * UM para ítems del workspace portal.
@@ -554,7 +564,7 @@ function fileFromEntry(f, fallbackNombre = 'documento') {
   };
 }
 
-async function resolveFileContent(f, fallbackNombre = 'documento') {
+async function resolveFileContent(f, fallbackNombre = 'documento', opts = {}) {
   const entry = fileFromEntry(f, fallbackNombre);
   if (!entry) return null;
   if (entry.contenido_base64) return entry;
@@ -562,12 +572,96 @@ async function resolveFileContent(f, fallbackNombre = 'documento') {
     const { loadCotizacionAdjuntoById } = await import('./portalCotizacionAdjuntos.js');
     const row = await loadCotizacionAdjuntoById(entry.adjunto_id);
     if (!row?.contenido_base64) return null;
+    if (opts.proveedorId != null && Number(row.proveedor_id) !== Number(opts.proveedorId)) return null;
+    if (opts.expectedSlotKey) {
+      const slot = String(row.slot_key || '');
+      const want = String(opts.expectedSlotKey);
+      const entryKey = String(f?.key || f?.slot_key || '');
+      if (slot !== want && entryKey !== want) return null;
+    }
     return {
       nombre_archivo: row.nombre_archivo || entry.nombre_archivo,
       mime_type: row.mime_type || entry.mime_type,
       contenido_base64: row.contenido_base64,
       adjunto_id: row.id,
     };
+  }
+  return null;
+}
+
+function pushRequisitosPorItemManifiesto(cot, anexos, pushMeta) {
+  const rpi = anexos.requisitos_por_item;
+  if (!rpi || typeof rpi !== 'object' || !Object.keys(rpi).length) return;
+  const detalle = normalizeDetalleItemsSc(
+    cot?.detalle_items ?? parseJson(cot?.propuesta_tecnica, {}).detalle_items,
+  );
+  const { items } = listItemsCotizados(cot || {}, detalle);
+  const reqsSc = listRequisitosConfig(
+    parseJson(cot?.sc_requisitos_tecnicos, parseJson(cot?.requisitos_tecnicos_sc, [])),
+  );
+  const matrix = buildItemRequirementMatrix(items, reqsSc);
+  const cotizedKeys = new Set(items.map((r) => String(r.item_key)));
+  const pushed = new Set();
+  const pushOne = (itemKey, reqKey, f, reqMeta = {}) => {
+    if (!cotizedKeys.has(String(itemKey))) return;
+    if (!isPortalCotizacionAdjuntoPresentado(f)) return;
+    const ref = encodeReqitemManifiestoRef(itemKey, reqKey);
+    if (!ref || pushed.has(ref)) return;
+    pushed.add(ref);
+    const hasBin = !!(f.base64 || f.contenido_base64 || f.adjunto_id);
+    pushMeta(f, ref, 'Requisitos técnicos', {
+      item_key: itemKey,
+      req_key: reqKey,
+      requisito: f.requisito || reqMeta.requisito || reqKey,
+      obligatorio: f.obligatorio ?? reqMeta.obligatorio,
+      presentado: hasBin,
+      rtm_por_item: true,
+      legacy_global: false,
+    });
+  };
+  if (matrix.length) {
+    matrix.forEach((row) => {
+      row.requisitos.forEach((req) => {
+        const f = lookupRequisitoPorItemAdjunto(anexos, row.item_key, req.req_key);
+        if (f) pushOne(row.item_key, req.req_key, f, req);
+      });
+    });
+  }
+  for (const [itemKey, byReq] of Object.entries(rpi)) {
+    if (!cotizedKeys.has(String(itemKey))) continue;
+    for (const [reqKey, f] of Object.entries(byReq || {})) {
+      const ref = encodeReqitemManifiestoRef(itemKey, reqKey);
+      if (pushed.has(ref)) continue;
+      if (f && typeof f === 'object') pushOne(itemKey, reqKey, f);
+    }
+  }
+}
+
+/** Resuelve entrada de anexos por ref de manifiesto (sin cargar binario). */
+export function findCotizacionAnexoEntryByRef(anexos, cot, docRef) {
+  const ref = String(docRef || '');
+  const docsMatch = ref.match(/^docs-(\d+)$/);
+  if (docsMatch) {
+    return (anexos.docs_solicitados || [])[parseInt(docsMatch[1], 10)] || null;
+  }
+  const reqMatch = ref.match(/^req-(\d+)$/);
+  if (reqMatch) {
+    return (anexos.requisitos || [])[parseInt(reqMatch[1], 10)] || null;
+  }
+  const reqItem = decodeReqitemManifiestoRef(ref);
+  if (reqItem) {
+    return lookupRequisitoPorItemAdjunto(anexos, reqItem.item_key, reqItem.req_key);
+  }
+  if (ref === 'anexo05a' || ref === 'anexo05a_firmado' || ref === 'anexo_tecnico_firmado') {
+    return anexos.anexo05a_firmado || anexos.anexo_tecnico_firmado || anexos.anexo05a || null;
+  }
+  if (ref === 'anexo05b' || ref === 'anexo05b_firmado' || ref === 'anexo_economico_firmado') {
+    return anexos.anexo05b_firmado || anexos.anexo_economico_firmado || anexos.anexo05b || null;
+  }
+  const certMatch = ref.match(/^cert-(\d+)$/);
+  if (certMatch) {
+    const certs = parseJson(cot?.certificados, []);
+    return (Array.isArray(certs) ? certs : [])[parseInt(certMatch[1], 10)] || null;
   }
   return null;
 }
@@ -593,8 +687,13 @@ export function buildManifiestoCotizacion(cot) {
   (anexos.docs_solicitados || []).forEach((f, i) => {
     pushMeta(f, `docs-${i}`, 'Documentos solicitados');
   });
+  pushRequisitosPorItemManifiesto(cot, anexos, pushMeta);
   (anexos.requisitos || []).forEach((f, i) => {
-    pushMeta(f, `req-${i}`, 'Requisitos técnicos');
+    pushMeta(f, `req-${i}`, 'Requisitos técnicos', {
+      legacy_global: true,
+      rtm_por_item: false,
+      presentado: !!(f.base64 || f.contenido_base64 || f.adjunto_id),
+    });
   });
   pushMeta(
     anexos.anexo05a_firmado || anexos.anexo_tecnico_firmado,
@@ -715,40 +814,21 @@ export async function resolverDocumentoCotizacionAnalista(cotizacionId, docRef) 
   const anexos = parseCotizacionAnexos(cot.anexos);
   const ref = String(docRef || '');
 
-  const docsMatch = ref.match(/^docs-(\d+)$/);
-  if (docsMatch) {
-    const f = (anexos.docs_solicitados || [])[parseInt(docsMatch[1], 10)];
-    const file = await resolveFileContent(f);
-    if (file) return file;
-  }
-
-  const reqMatch = ref.match(/^req-(\d+)$/);
-  if (reqMatch) {
-    const f = (anexos.requisitos || [])[parseInt(reqMatch[1], 10)];
-    const file = await resolveFileContent(f);
-    if (file) return file;
-  }
-
-  if (ref === 'anexo05a' || ref === 'anexo05a_firmado' || ref === 'anexo_tecnico_firmado') {
-    const file = await resolveFileContent(
-      anexos.anexo05a_firmado || anexos.anexo_tecnico_firmado || anexos.anexo05a,
-      'Anexo_05-A_firmado.pdf',
-    );
-    if (file) return file;
-  }
-  if (ref === 'anexo05b' || ref === 'anexo05b_firmado' || ref === 'anexo_economico_firmado') {
-    const file = await resolveFileContent(
-      anexos.anexo05b_firmado || anexos.anexo_economico_firmado || anexos.anexo05b,
-      'Anexo_05-B_firmado.pdf',
-    );
-    if (file) return file;
-  }
-
-  const certMatch = ref.match(/^cert-(\d+)$/);
-  if (certMatch) {
-    const certs = parseJson(cot.certificados, []);
-    const f = (Array.isArray(certs) ? certs : [])[parseInt(certMatch[1], 10)];
-    const file = await resolveFileContent(f);
+  const reqItem = decodeReqitemManifiestoRef(ref);
+  const entry = findCotizacionAnexoEntryByRef(anexos, cot, ref);
+  if (entry && isPortalCotizacionAdjuntoPresentado(entry)) {
+    const defaultName = ref.startsWith('anexo05a') || ref === 'anexo_tecnico_firmado'
+      ? 'Anexo_05-A_firmado.pdf'
+      : ref.startsWith('anexo05b') || ref === 'anexo_economico_firmado'
+        ? 'Anexo_05-B_firmado.pdf'
+        : undefined;
+    const expectedSlotKey = reqItem
+      ? requisitoItemSlotKey(reqItem.item_key, reqItem.req_key)
+      : null;
+    const file = await resolveFileContent(entry, defaultName, {
+      proveedorId: cot.proveedor_id,
+      expectedSlotKey,
+    });
     if (file) return file;
   }
 

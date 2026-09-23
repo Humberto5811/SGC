@@ -24,6 +24,14 @@ import {
   buildPortalPartialCotizacionPayload,
   resolveCotizaByKeyFromCotizacion,
   validatePortalCotizacionSelection,
+  listRequisitosConfig,
+  buildItemRequirementMatrix,
+  requisitoItemSlotKey,
+  shouldUseRequisitosPorItemPortal,
+  buildRequisitosPorItemPayloadFromFlat,
+  validateRequisitosObligatoriosPorItemMatrix,
+  parseRequisitoItemSlotKey,
+  isPortalCotizacionAdjuntoPresentado,
 } from '../../../shared/cotizacionItemRequisitos.js';
 
 const STEP_LABELS = ['Información técnica', 'Documentos técnicos', 'Resumen y envío'];
@@ -36,7 +44,7 @@ let formState = {
   items: [], precios: {}, entregablesEco: {}, extra: {},
   cotizaByKey: {},
   datos: {},
-  adjuntos: { docs: {}, requisitos: {}, anexoTecnico: null, anexoEconomico: null },
+  adjuntos: { docs: {}, requisitos: {}, requisitosPorItem: {}, anexoTecnico: null, anexoEconomico: null },
 };
 
 function docKey(d, i) { return `doc-${i}-${d.documento || d.archivo || i}`; }
@@ -57,6 +65,24 @@ function usesEntregablesEco(tipo) {
 
 function isItemCotizado(itemKey) {
   return formState.cotizaByKey?.[itemKey] === true;
+}
+
+function usesPerItemRtm() {
+  return shouldUseRequisitosPorItemPortal(workspace?.cotizacion_existente);
+}
+
+function getRtmMatrixRows() {
+  const cotized = (workspace?.items || []).filter((it) => isItemCotizado(it.item_key));
+  const reqs = listRequisitosConfig(workspace?.solicitud?.requisitos_tecnicos || []);
+  return buildItemRequirementMatrix(cotized, reqs);
+}
+
+function itemRtmBlockTitle(row) {
+  const req = row.requerimiento_codigo || row.item_key;
+  const pedido = row.pedido_sigamef ? ` · N.° Pedido SIGAMEF: ${row.pedido_sigamef}` : '';
+  const desc = String(row.descripcion || '').trim();
+  const descShort = desc.length > 140 ? `${desc.slice(0, 137)}…` : desc;
+  return `${req}${pedido}${descShort ? ` — ${descShort}` : ''}`;
 }
 
 function getMontoTotal() {
@@ -234,6 +260,7 @@ function initFormFromWorkspace(ws) {
   formState.adjuntos = {
     docs: {},
     requisitos: {},
+    requisitosPorItem: {},
     // Conservar base64 antiguo en memoria para migrar al primer guardado; el payload lo sanea.
     anexoTecnico: prevAnexos.anexo_tecnico_firmado || prevAnexos.anexo05a_firmado || null,
     anexoEconomico: prevAnexos.anexo_economico_firmado || prevAnexos.anexo05b_firmado || null,
@@ -243,6 +270,19 @@ function initFormFromWorkspace(ws) {
   });
   (prevAnexos.requisitos || []).forEach((a) => {
     if (a?.key) formState.adjuntos.requisitos[a.key] = a;
+  });
+  const rpi = prevAnexos.requisitos_por_item || {};
+  Object.entries(rpi).forEach(([itemKey, byReq]) => {
+    Object.entries(byReq || {}).forEach(([reqKey, meta]) => {
+      if (!meta || typeof meta !== 'object') return;
+      const slot = requisitoItemSlotKey(itemKey, reqKey);
+      formState.adjuntos.requisitosPorItem[slot] = {
+        ...meta,
+        key: meta.key || slot,
+        item_key: itemKey,
+        req_key: reqKey,
+      };
+    });
   });
   isReadonly = cotizacionPresentada(ws);
 }
@@ -321,11 +361,34 @@ function renderStep2() {
     return renderUploadSlot(documentoFuncionalLabel(d), formState.adjuntos.docs[key], key);
   }).join('') : '<p class="small text-muted">No hay documentos solicitados en la convocatoria.</p>';
 
-  const reqHtml = requisitos.length ? requisitos.map((r, i) => {
-    const key = reqKey(r, i);
-    const label = `${documentoFuncionalLabel({ documento: r.requisito, requisito: r.requisito })}${r.obligatorio !== false ? ' *' : ''}`;
-    return renderUploadSlot(label, formState.adjuntos.requisitos[key], key);
-  }).join('') : '<p class="small text-muted">No hay requisitos técnicos mínimos.</p>';
+  let reqHtml;
+  if (usesPerItemRtm()) {
+    const matrix = getRtmMatrixRows();
+    if (!matrix.length) {
+      reqHtml = '<p class="small text-muted">Seleccione al menos un ítem en el paso anterior para adjuntar requisitos técnicos.</p>';
+    } else if (!requisitos.length) {
+      reqHtml = '<p class="small text-muted">No hay requisitos técnicos mínimos.</p>';
+    } else {
+      reqHtml = matrix.map((row) => {
+        const slots = row.requisitos.map((req) => {
+          const slot = requisitoItemSlotKey(row.item_key, req.req_key);
+          const label = `${documentoFuncionalLabel({ documento: req.requisito, requisito: req.requisito })}${req.obligatorio ? ' *' : ''}`;
+          return renderUploadSlot(label, formState.adjuntos.requisitosPorItem[slot], slot);
+        }).join('');
+        return `
+          <div class="border rounded p-2 mb-2 prov-rtm-item-block">
+            <div class="small fw-bold mb-1">${esc(itemRtmBlockTitle(row))}</div>
+            ${slots}
+          </div>`;
+      }).join('');
+    }
+  } else {
+    reqHtml = requisitos.length ? requisitos.map((r, i) => {
+      const key = reqKey(r, i);
+      const label = `${documentoFuncionalLabel({ documento: r.requisito, requisito: r.requisito })}${r.obligatorio !== false ? ' *' : ''}`;
+      return renderUploadSlot(label, formState.adjuntos.requisitos[key], key);
+    }).join('') : '<p class="small text-muted">No hay requisitos técnicos mínimos.</p>';
+  }
 
   const readonlyNote = isReadonly
     ? '<div class="alert alert-secondary small py-2 mb-2">Documentación enviada — no se puede modificar.</div>'
@@ -372,6 +435,10 @@ function listAllAdjuntos() {
   });
   Object.entries(formState.adjuntos.requisitos).forEach(([key, f]) => {
     if (f) list.push({ ...f, key, tipo: 'Requisito técnico', group: 'requisitos' });
+  });
+  Object.entries(formState.adjuntos.requisitosPorItem || {}).forEach(([key, f]) => {
+    if (!f || !isItemCotizado(f.item_key || parseRequisitoItemSlotKey(key)?.item_key)) return;
+    list.push({ ...f, key, tipo: 'Requisito técnico (ítem)', group: 'requisitosPorItem' });
   });
   if (formState.adjuntos.anexoTecnico) {
     list.push({ ...formState.adjuntos.anexoTecnico, key: 'anexoTecnico', tipo: `${getCotConfig().labelTecnica} firmado`, group: 'anexoTecnico' });
@@ -608,11 +675,19 @@ function validateStep2() {
     const key = docKey(d, i);
     if (!formState.adjuntos.docs[key]) errors.push(`Falta adjuntar: ${documentoFuncionalLabel(d)}`);
   });
-  (workspace.solicitud.requisitos_tecnicos || []).forEach((r, i) => {
-    if (r.obligatorio === false) return;
-    const key = reqKey(r, i);
-    if (!formState.adjuntos.requisitos[key]) errors.push(`Falta adjuntar requisito: ${r.requisito}`);
-  });
+  if (usesPerItemRtm()) {
+    const matrix = getRtmMatrixRows();
+    errors.push(...validateRequisitosObligatoriosPorItemMatrix(matrix, (itemKey, reqKey) => {
+      const slot = requisitoItemSlotKey(itemKey, reqKey);
+      return formState.adjuntos.requisitosPorItem[slot];
+    }));
+  } else {
+    (workspace.solicitud.requisitos_tecnicos || []).forEach((r, i) => {
+      if (r.obligatorio === false) return;
+      const key = reqKey(r, i);
+      if (!formState.adjuntos.requisitos[key]) errors.push(`Falta adjuntar requisito: ${r.requisito}`);
+    });
+  }
   if (!formState.adjuntos.anexoTecnico) errors.push(`Falta adjuntar ${config.labelTecnica} firmado`);
   if (!formState.adjuntos.anexoEconomico) errors.push(`Falta adjuntar ${config.labelEconomica} firmado`);
   return errors;
@@ -680,7 +755,27 @@ function bindWizardInteractions() {
             if (target === 'anexoTecnico') formState.adjuntos.anexoTecnico = uploaded;
             else if (target === 'anexoEconomico') formState.adjuntos.anexoEconomico = uploaded;
             else if (target.startsWith('doc-')) formState.adjuntos.docs[target] = { ...uploaded, key: target };
-            else if (target.startsWith('req-')) formState.adjuntos.requisitos[target] = { ...uploaded, key: target };
+            else if (target.includes('|')) {
+              const parsed = parseRequisitoItemSlotKey(target);
+              let requisitoLabel = '';
+              let obligatorio = true;
+              if (parsed) {
+                const row = getRtmMatrixRows().find((r) => r.item_key === parsed.item_key);
+                const req = row?.requisitos?.find((r) => r.req_key === parsed.req_key);
+                if (req) {
+                  requisitoLabel = req.requisito;
+                  obligatorio = req.obligatorio;
+                }
+              }
+              formState.adjuntos.requisitosPorItem[target] = {
+                ...uploaded,
+                key: target,
+                item_key: parsed?.item_key,
+                req_key: parsed?.req_key,
+                requisito: requisitoLabel,
+                obligatorio,
+              };
+            } else if (target.startsWith('req-')) formState.adjuntos.requisitos[target] = { ...uploaded, key: target };
             renderWizardStep();
             showWizardMsg('Archivo cargado correctamente.', 'success');
           } catch (err) {
@@ -695,6 +790,7 @@ function bindWizardInteractions() {
         const { group, key } = btn.dataset;
         if (group === 'docs') delete formState.adjuntos.docs[key];
         else if (group === 'requisitos') delete formState.adjuntos.requisitos[key];
+        else if (group === 'requisitosPorItem') delete formState.adjuntos.requisitosPorItem[key];
         else if (group === 'anexoTecnico') formState.adjuntos.anexoTecnico = null;
         else if (group === 'anexoEconomico') formState.adjuntos.anexoEconomico = null;
         renderWizardStep();
@@ -714,6 +810,7 @@ function bindWizardInteractions() {
 function slotTipo(target) {
   if (target === 'anexoTecnico') return 'anexo_tecnico';
   if (target === 'anexoEconomico') return 'anexo_economico';
+  if (String(target).includes('|')) return 'requisitos_por_item';
   if (String(target).startsWith('req-')) return 'requisitos';
   return 'docs_solicitados';
 }
@@ -771,6 +868,9 @@ async function migrateEmbeddedAdjuntosIfNeeded() {
   Object.entries(formState.adjuntos.requisitos || {}).forEach(([key, meta]) => {
     enqueue(key, () => meta, (u) => { formState.adjuntos.requisitos[key] = u; });
   });
+  Object.entries(formState.adjuntos.requisitosPorItem || {}).forEach(([key, meta]) => {
+    enqueue(key, () => meta, (u) => { formState.adjuntos.requisitosPorItem[key] = u; });
+  });
   enqueue('anexoTecnico', () => formState.adjuntos.anexoTecnico, (u) => { formState.adjuntos.anexoTecnico = u; });
   enqueue('anexoEconomico', () => formState.adjuntos.anexoEconomico, (u) => { formState.adjuntos.anexoEconomico = u; });
   for (const job of jobs) await job();
@@ -778,15 +878,42 @@ async function migrateEmbeddedAdjuntosIfNeeded() {
 
 function buildAnexosPayload() {
   const config = getCotConfig();
+  const perItem = usesPerItemRtm();
+  let requisitos_por_item = perItem
+    ? buildRequisitosPorItemPayloadFromFlat(formState.adjuntos.requisitosPorItem, formState.cotizaByKey)
+    : undefined;
+  if (requisitos_por_item && Object.keys(requisitos_por_item).length) {
+    const nested = {};
+    Object.entries(requisitos_por_item).forEach(([ik, byReq]) => {
+      Object.entries(byReq || {}).forEach(([rk, meta]) => {
+        const c = sanitizePortalAdjuntoMeta(meta);
+        if (!c || !isPortalCotizacionAdjuntoPresentado(c)) return;
+        nested[ik] = nested[ik] || {};
+        nested[ik][rk] = {
+          ...c,
+          item_key: ik,
+          req_key: rk,
+          key: c.key || requisitoItemSlotKey(ik, rk),
+        };
+      });
+    });
+    requisitos_por_item = Object.keys(nested).length ? nested : undefined;
+  }
+  const requisitosLegacy = perItem
+    ? []
+    : Object.entries(formState.adjuntos.requisitos).map(([key, f]) => ({
+      ...sanitizePortalAdjuntoMeta(f),
+      key,
+    })).filter(Boolean);
   return {
     docs_solicitados: Object.entries(formState.adjuntos.docs).map(([key, f]) => ({
       ...sanitizePortalAdjuntoMeta(f),
       key,
     })).filter(Boolean),
-    requisitos: Object.entries(formState.adjuntos.requisitos).map(([key, f]) => ({
-      ...sanitizePortalAdjuntoMeta(f),
-      key,
-    })).filter(Boolean),
+    requisitos: requisitosLegacy,
+    ...(requisitos_por_item && Object.keys(requisitos_por_item).length
+      ? { requisitos_por_item }
+      : {}),
     anexo_tecnico_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoTecnico),
     anexo_economico_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoEconomico),
     anexo05a_firmado: sanitizePortalAdjuntoMeta(formState.adjuntos.anexoTecnico),
