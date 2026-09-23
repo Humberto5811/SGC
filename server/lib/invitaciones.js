@@ -10,8 +10,26 @@ import { listarBandejaInvitaciones, SUBMODULO_INVITACIONES } from './invitacione
 import { prepararInvitacionPortal } from './proveedorPortal.js';
 import { normalizeCronogramaRow } from './cronogramaDatetime.js';
 import { normalizeDetalleItemsSc } from '../../shared/cotizacionItemRequisitos.js';
+import { withTransaction } from './workflow/workflowTransaction.js';
 
 export { listarBandejaInvitaciones, SUBMODULO_INVITACIONES };
+
+/** Etapas ERV posteriores a Invitaciones: no crear SC ni retroceder vía ensureInvitacionesEtapa. */
+export const ETAPAS_ERV_POST_INVITACIONES_SC = Object.freeze([
+  'CONSULTAS_OBSERVACIONES',
+  'RECEPCION_COTIZACIONES',
+  'VALIDACION_USUARIO',
+  'VALIDACIONES',
+  'CUADRO_COMPARATIVO',
+  'CCP',
+  'REGISTRO_ORDEN',
+  'ORDEN',
+  'EN_EJECUCION',
+  'EJECUCION',
+  'RECEPCION_BIENES',
+  'PRESENTACION_ENTREGABLES',
+  'FINALIZADO',
+]);
 
 const ESTADOS_INVITACION_ENVIADA = ['ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA'];
 
@@ -256,6 +274,70 @@ export async function obtenerItemsRequerimientos(requerimientoIds) {
   return items;
 }
 
+/**
+ * Valida elegibilidad para nueva SC (ERV canónico + ausencia de SC vigente).
+ * @throws Error con code REQUERIMIENTO_ETAPA_NO_ELEGIBLE_SC | REQUERIMIENTO_SC_VIGENTE
+ */
+export async function validarRequerimientosElegiblesNuevaSolicitudCotizacion(requerimientoIds, client = null) {
+  const ids = [...new Set((requerimientoIds || []).map(Number).filter(Boolean))];
+  if (!ids.length) {
+    const err = new Error('Seleccione al menos un requerimiento');
+    err.code = 'REQUERIMIENTOS_VACIOS';
+    throw err;
+  }
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  const { rows: reqRows } = await runDb(client, `
+    SELECT r.id, r.codigo,
+      UPPER(COALESCE(ev.etapa_codigo, r.estado_actual, '')) AS etapa_erv
+    FROM requerimientos r
+    LEFT JOIN expediente_estado_vigente ev ON ev.requerimiento_id = r.id
+    WHERE r.id IN (${placeholders})
+    FOR UPDATE OF r
+  `, ids);
+  if (reqRows.length !== ids.length) {
+    const err = new Error('Uno o más requerimientos no existen');
+    err.code = 'REQUERIMIENTO_NO_ENCONTRADO';
+    throw err;
+  }
+
+  const postInv = new Set(ETAPAS_ERV_POST_INVITACIONES_SC);
+
+  for (const row of reqRows) {
+    const etapa = String(row.etapa_erv || '').toUpperCase();
+    const codigo = row.codigo || `REQ-${row.id}`;
+
+    if (etapa !== 'INVITACIONES') {
+      const err = new Error(
+        postInv.has(etapa)
+          ? `${codigo} ya avanzó fuera de Invitaciones (${etapa}). No puede vincularse a una nueva solicitud de cotización.`
+          : `${codigo} debe estar en Invitaciones para crear solicitud de cotización (ERV: ${etapa || 'desconocida'}). Derive desde Actos Preparatorios (COORDINACION_CM_APROBADA) si aplica.`,
+      );
+      err.code = 'REQUERIMIENTO_ETAPA_NO_ELEGIBLE_SC';
+      err.status = 409;
+      throw err;
+    }
+
+    const { rows: scRows } = await runDb(client, `
+      SELECT sc.codigo, sc.estado
+      FROM solicitud_requerimientos sr
+      JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
+      WHERE sr.requerimiento_id = $1
+      ORDER BY sc.id DESC
+      LIMIT 1
+    `, [row.id]);
+    if (scRows.length) {
+      const sc = scRows[0];
+      const err = new Error(
+        `${codigo} ya tiene solicitud de cotización ${sc.codigo} (${sc.estado || 'vigente'}). Use reinvitación sobre la SC existente.`,
+      );
+      err.code = 'REQUERIMIENTO_SC_VIGENTE';
+      err.status = 409;
+      throw err;
+    }
+  }
+  return reqRows;
+}
+
 export async function crearSolicitudCotizacion(body = {}, usuario = '') {
   const requerimientoIds = [...new Set((body.requerimiento_ids || []).map(Number).filter(Boolean))];
   if (!requerimientoIds.length) throw new Error('Seleccione al menos un requerimiento');
@@ -266,6 +348,8 @@ export async function crearSolicitudCotizacion(body = {}, usuario = '') {
   validarCronograma(body);
   if (!body.tipo_evaluacion) throw new Error('El tipo de evaluación es obligatorio');
 
+  await validarRequerimientosElegiblesNuevaSolicitudCotizacion(requerimientoIds);
+
   const anio = body.anio || new Date().getFullYear();
   const auto = buildDatosAutomaticos(requerimientos);
   const detalleRaw = body.detalle_items || await obtenerItemsRequerimientos(requerimientoIds);
@@ -275,30 +359,7 @@ export async function crearSolicitudCotizacion(body = {}, usuario = '') {
     region: '', provincia: '', distrito: '',
   }));
 
-  const { rows } = await query(`
-    WITH next_corr AS (
-      SELECT COALESCE(MAX(correlativo), 0) + 1 AS n FROM solicitudes_cotizacion WHERE anio = $1
-    ),
-    sig AS (
-      SELECT COALESCE(
-        (SELECT NULLIF(TRIM(siglas), '') FROM entidad ORDER BY id LIMIT 1),
-        'INS'
-      ) AS sigla
-    )
-    INSERT INTO solicitudes_cotizacion (
-      codigo, anio, correlativo, sigla_entidad, estado, tipo, objeto, area_usuaria, cmn, denominacion,
-      tipo_evaluacion, consultas_inicio, consultas_fin, cotizaciones_inicio, cotizaciones_fin,
-      lugar_entrega, docs_convocatoria, docs_solicitados, requisitos_tecnicos,
-      detalle_items, lugares_entrega_item, responsable, created_by
-    )
-    SELECT
-      'SC-' || LPAD(next_corr.n::text, 5, '0') || '-' || $1::text || '-' || sig.sigla,
-      $1, next_corr.n, sig.sigla, 'BORRADOR',
-      $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11,
-      $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
-    FROM next_corr, sig
-    RETURNING *
-  `, [
+  const insertParams = [
     anio,
     body.tipo || auto.tipo,
     body.area_usuaria || auto.area_usuaria,
@@ -317,33 +378,62 @@ export async function crearSolicitudCotizacion(body = {}, usuario = '') {
     JSON.stringify(lugares),
     body.responsable || requerimientos[0].responsable_actual || ETAPAS.INVITACIONES.responsable,
     usuario,
-  ]);
+  ];
 
-  const solicitud = rows[0];
-  if (!solicitud) throw new Error('No se pudo generar la solicitud de cotización');
-  const codigo = solicitud.codigo;
-  for (const reqId of requerimientoIds) {
-    await query(
-      'INSERT INTO solicitud_requerimientos (solicitud_id, requerimiento_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-      [solicitud.id, reqId],
-    );
-    await ensureInvitacionesEtapa(reqId, usuario);
-    await appendHistorialInvitacion(reqId, {
-      tipo: 'solicitud_creada',
-      usuario,
-      codigo,
-      solicitud_id: solicitud.id,
-    });
-    await registrarTrazaPortal({
-      solicitud_id: solicitud.id,
-      requerimiento_id: reqId,
-      evento: 'SOLICITUD_CREADA',
-      detalle: `Solicitud ${codigo} creada`,
-      usuario,
-    });
-  }
+  return withTransaction(async (tx) => {
+    await validarRequerimientosElegiblesNuevaSolicitudCotizacion(requerimientoIds, tx);
 
-  return solicitud;
+    const { rows } = await tx.query(`
+      WITH next_corr AS (
+        SELECT COALESCE(MAX(correlativo), 0) + 1 AS n FROM solicitudes_cotizacion WHERE anio = $1
+      ),
+      sig AS (
+        SELECT COALESCE(
+          (SELECT NULLIF(TRIM(siglas), '') FROM entidad ORDER BY id LIMIT 1),
+          'INS'
+        ) AS sigla
+      )
+      INSERT INTO solicitudes_cotizacion (
+        codigo, anio, correlativo, sigla_entidad, estado, tipo, objeto, area_usuaria, cmn, denominacion,
+        tipo_evaluacion, consultas_inicio, consultas_fin, cotizaciones_inicio, cotizaciones_fin,
+        lugar_entrega, docs_convocatoria, docs_solicitados, requisitos_tecnicos,
+        detalle_items, lugares_entrega_item, responsable, created_by
+      )
+      SELECT
+        'SC-' || LPAD(next_corr.n::text, 5, '0') || '-' || $1::text || '-' || sig.sigla,
+        $1, next_corr.n, sig.sigla, 'BORRADOR',
+        $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11,
+        $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
+      FROM next_corr, sig
+      RETURNING *
+    `, insertParams);
+
+    const solicitud = rows[0];
+    if (!solicitud) throw new Error('No se pudo generar la solicitud de cotización');
+    const codigo = solicitud.codigo;
+    for (const reqId of requerimientoIds) {
+      await tx.query(
+        'INSERT INTO solicitud_requerimientos (solicitud_id, requerimiento_id) VALUES ($1, $2)',
+        [solicitud.id, reqId],
+      );
+      await ensureInvitacionesEtapa(reqId, usuario, { client: tx });
+      await appendHistorialInvitacion(reqId, {
+        tipo: 'solicitud_creada',
+        usuario,
+        codigo,
+        solicitud_id: solicitud.id,
+      }, tx);
+      await registrarTrazaPortal({
+        solicitud_id: solicitud.id,
+        requerimiento_id: reqId,
+        evento: 'SOLICITUD_CREADA',
+        detalle: `Solicitud ${codigo} creada`,
+        usuario,
+      }, { client: tx });
+    }
+
+    return solicitud;
+  });
 }
 
 function validarCronograma(body) {
@@ -360,49 +450,51 @@ function validarCronograma(body) {
   if (cf && tf && cf > tf) throw new Error(msg);
 }
 
-async function appendHistorialInvitacion(requerimientoId, entry) {
-  const { rows } = await query('SELECT payload FROM requerimientos WHERE id = $1', [requerimientoId]);
+async function appendHistorialInvitacion(requerimientoId, entry, client = null) {
+  const { rows } = await runDb(client, 'SELECT payload FROM requerimientos WHERE id = $1', [requerimientoId]);
   if (!rows.length) return;
   let payload = parsePayload(rows[0]);
   if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
   payload.historial_invitaciones.push({ ...entry, fecha: entry.fecha || new Date().toISOString() });
-  await query('UPDATE requerimientos SET payload = $2 WHERE id = $1', [requerimientoId, JSON.stringify(payload)]);
+  await runDb(client, 'UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
+    requerimientoId,
+    JSON.stringify(payload),
+  ]);
 }
 
-async function ensureInvitacionesEtapa(requerimientoId, usuario) {
-  const { rows } = await query('SELECT id, estado, estado_actual, payload FROM requerimientos WHERE id = $1', [requerimientoId]);
-  if (!rows.length) return;
-  const row = rows[0];
-  if (String(row.estado_actual || '').toUpperCase() === 'INVITACIONES') return;
+function buildEnsureInvitacionesEtapaError(codigo, etapaErv) {
+  const postInv = new Set(ETAPAS_ERV_POST_INVITACIONES_SC);
+  let message;
+  if (postInv.has(etapaErv)) {
+    message = `${codigo} ya avanzó fuera de Invitaciones (${etapaErv}). ensureInvitacionesEtapa no puede retroceder el expediente.`;
+  } else if (etapaErv === 'COORDINACION_CM' || etapaErv === 'ACTOS_PREPARATORIOS') {
+    message = `${codigo} está en ${etapaErv}. Derive a Invitaciones vía Actos Preparatorios (COORDINACION_CM_APROBADA con persona destino) antes de crear SC.`;
+  } else {
+    message = `${codigo}: ensureInvitacionesEtapa no aplica (ERV ${etapaErv || 'desconocida'}). El requerimiento debe estar en Invitaciones.`;
+  }
+  const err = new Error(message);
+  err.code = 'ENSURE_INVITACIONES_ETAPA_NO_PERMITIDA';
+  err.status = 409;
+  return err;
+}
 
-  let payload = parsePayload(row);
-  if (!Array.isArray(payload.historial_invitaciones)) payload.historial_invitaciones = [];
-  payload.historial_invitaciones.push({ tipo: 'ingreso_invitaciones', usuario, fecha: new Date().toISOString() });
-
-  const { transicionarExpediente } = await import('./expedienteTransicion.js');
-  const etapaOrigen = String(row.estado_actual || 'ACTOS_PREPARATORIOS').toUpperCase();
-  const evento = (etapaOrigen === 'ACTOS_PREPARATORIOS' || etapaOrigen === 'COORDINACION_CM')
-    ? 'COORDINACION_CM_APROBADA'
-    : 'COORDINACION_CM_APROBADA';
-  await transicionarExpediente({
-    requerimientoId,
-    evento,
-    unidadDestino: row.responsable_actual || ETAPAS.INVITACIONES.responsable,
-    motivo: 'Expediente en bandeja Invitaciones',
-    metadata: {
-      client_request_id: `ensure-inv:${requerimientoId}`,
-      via: 'ensureInvitacionesEtapa',
-      origen: 'BOOTSTRAP',
-    },
-    actorRol: usuario || SUBMODULO_INVITACIONES,
-    domainMutator: async (tx) => {
-      await tx.query('UPDATE requerimientos SET payload = $2::jsonb WHERE id = $1', [
-        requerimientoId,
-        JSON.stringify(payload),
-      ]);
-      return { ingreso_invitaciones: true };
-    },
-  });
+/**
+ * Verifica coherencia de etapa al crear SC. No deriva CM→I (canónico: aprobarActosInvitaciones / modal workflow).
+ * Único caller productivo: crearSolicitudCotizacion (misma tx).
+ */
+async function ensureInvitacionesEtapa(requerimientoId, usuario, opts = {}) {
+  const client = opts.client || null;
+  const { rows: reqRows } = await runDb(client, `
+    SELECT codigo, estado_actual FROM requerimientos WHERE id = $1
+  `, [requerimientoId]);
+  if (!reqRows.length) return;
+  const { rows: evRows } = await runDb(client, `
+    SELECT etapa_codigo FROM expediente_estado_vigente WHERE requerimiento_id = $1 LIMIT 1
+  `, [requerimientoId]);
+  const etapaErv = String(evRows[0]?.etapa_codigo || reqRows[0].estado_actual || '').toUpperCase();
+  const codigo = reqRows[0].codigo || `REQ-${requerimientoId}`;
+  if (etapaErv === 'INVITACIONES') return;
+  throw buildEnsureInvitacionesEtapaError(codigo, etapaErv);
 }
 
 import {
