@@ -268,7 +268,7 @@ async function showCotizacionDetalleModal(cotId) {
   const wrap = document.createElement('div');
   wrap.innerHTML = `
     <div class="modal fade" id="${id}" tabindex="-1">
-      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable rc-cot-det-modal" style="max-width:min(96vw,1600px);width:96vw;">
         <div class="modal-content">
           <div class="modal-header bg-light">
             <h5 class="modal-title"><i class="bi bi-inbox"></i> Cotización recibida</h5>

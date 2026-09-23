@@ -17,6 +17,10 @@ import {
   isPortalCotizacionAdjuntoPresentado,
   requisitoItemSlotKey,
 } from '../../shared/cotizacionItemRequisitos.js';
+import {
+  buildRecepcionMatrizContract,
+  filterDocumentosRecepcionTab,
+} from '../../shared/recepcionCotizacionMatriz.js';
 
 /**
  * UM para ítems del workspace portal.
@@ -766,6 +770,20 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     cotizaciones: [cotRow],
   });
   const tipoResuelto = cot.tipo_resuelto || cot.tipo || '';
+  const scRequisitos = parseJson(cot.sc_requisitos_tecnicos, []);
+  const cotRecepcionInput = {
+    ...cot,
+    detalle_items: parseJson(cot.detalle_items, []),
+    propuesta_tecnica: parseJson(cot.propuesta_tecnica, {}),
+    propuesta_economica: propuestaEconomica,
+    anexos,
+  };
+  const recepcion_matriz = buildRecepcionMatrizContract(
+    cotRecepcionInput,
+    { requisitos_tecnicos_sc: scRequisitos },
+  );
+  const documentosManifiesto = buildManifiestoCotizacion(cot);
+  const documentos = filterDocumentosRecepcionTab(documentosManifiesto, recepcion_matriz);
 
   return {
     id: cot.id,
@@ -788,13 +806,17 @@ export async function getCotizacionRecepcionDetalle(cotizacionId) {
     propuesta_tecnica: parseJson(cot.propuesta_tecnica, {}),
     propuesta_economica: propuestaEconomica,
     datos_proveedor: datosProveedor,
-    documentos: buildManifiestoCotizacion(cot),
+    documentos,
+    recepcion_matriz,
     docs_solicitados_sc: parseJson(cot.sc_docs_solicitados, []),
-    requisitos_tecnicos_sc: parseJson(cot.sc_requisitos_tecnicos, []),
+    requisitos_tecnicos_sc: scRequisitos,
     ...contract,
     anexos_meta: {
       docs_solicitados: (anexos.docs_solicitados || []).map(stripFile),
       requisitos: (anexos.requisitos || []).map(stripFile),
+      requisitos_por_item: recepcion_matriz.requisitos_por_item,
+      contrato_rtm_por_item: recepcion_matriz.contrato_rtm_por_item,
+      legacy_global_rtm: recepcion_matriz.legacy_global_rtm,
       tiene_anexo_tecnico: !!(
         anexos.anexo05a_firmado?.adjunto_id || anexos.anexo05a_firmado?.base64 || anexos.anexo05a_firmado?.contenido_base64
         || anexos.anexo_tecnico_firmado?.adjunto_id || anexos.anexo_tecnico_firmado?.base64 || anexos.anexo_tecnico_firmado?.contenido_base64
