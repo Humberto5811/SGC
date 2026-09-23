@@ -489,6 +489,7 @@ export async function transicionarExpediente({
       const applied = applyErvExpedientePostEnvioInvitacion({
         labels,
         usuarioOrigenId,
+        estadoVigentePrevio,
       });
       Object.assign(labels, applied.labels);
       resp = applied.resp;

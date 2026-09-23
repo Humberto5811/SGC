@@ -116,6 +116,10 @@ const DEFS = [
   [B, I, 'REINVITACION_ENVIADA', I, false, 'invitaciones:reenviar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_REINVITAR', null],
   [S, I, 'REINVITACION_ENVIADA', I, false, 'invitaciones:reenviar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_REINVITAR', null],
   [L, I, 'REINVITACION_ENVIADA', I, false, 'invitaciones:reenviar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_REINVITAR', null],
+  // RC8.17.8H6-C3-C — Segunda convocatoria sobre SC existente sin retroceder etapa (ERV documental).
+  [B, RC, 'REINVITACION_ENVIADA', RC, false, 'invitaciones:reenviar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_REINVITAR_RECEPCION', null],
+  [S, RC, 'REINVITACION_ENVIADA', RC, false, 'invitaciones:reenviar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_REINVITAR_RECEPCION', null],
+  [L, RC, 'REINVITACION_ENVIADA', RC, false, 'invitaciones:reenviar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_REINVITAR_RECEPCION', null],
   [B, I, 'INVITACIONES_OBSERVADA', I, false, 'invitaciones:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_INVITACIONES', null],
   [S, I, 'INVITACIONES_OBSERVADA', I, false, 'invitaciones:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_INVITACIONES', null],
   [L, I, 'INVITACIONES_OBSERVADA', I, false, 'invitaciones:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_INVITACIONES', null],
