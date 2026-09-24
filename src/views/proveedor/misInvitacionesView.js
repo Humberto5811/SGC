@@ -30,7 +30,7 @@ export function renderMisInvitacionesView() {
     </div>`);
 }
 
-async function showDetalleInvitacion(solicitudId, codigo) {
+async function showDetalleInvitacion(solicitudId, codigo, invitacionId = null) {
   const modal = document.getElementById('provInvDetModal');
   const body = document.getElementById('provInvDetBody');
   const title = document.getElementById('provInvDetTitle');
@@ -83,8 +83,12 @@ async function showDetalleInvitacion(solicitudId, codigo) {
       irCot.onclick = () => {
         dismissProveedorModal(modal);
         sessionStorage.setItem('provCotSolId', String(solicitudId));
+        if (invitacionId) sessionStorage.setItem('provCotInvId', String(invitacionId));
+        else sessionStorage.removeItem('provCotInvId');
         sessionStorage.setItem('provCotAutoOpen', '1');
-        window.location.hash = `#/proveedor/mis-cotizaciones?solicitud_id=${encodeURIComponent(solicitudId)}`;
+        const q = new URLSearchParams({ solicitud_id: String(solicitudId) });
+        if (invitacionId) q.set('invitacion_id', String(invitacionId));
+        window.location.hash = `#/proveedor/mis-cotizaciones?${q.toString()}`;
         window.dispatchEvent(new HashChangeEvent('hashchange'));
       };
     }
@@ -110,18 +114,20 @@ export async function initMisInvitacionesView() {
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
           <thead class="table-light"><tr>
-            <th>N° Solicitud</th><th>Descripción</th><th>Estado</th><th>Consultas</th><th>Cotización</th><th>Acciones</th>
+            <th>N° Solicitud</th><th>N° Inv.</th><th>Descripción</th><th>Estado</th><th>Consultas</th><th>Cotización</th><th>Acciones</th>
           </tr></thead>
           <tbody>${rows.map((r) => `
             <tr>
               <td><strong>${esc(r.codigo)}</strong></td>
+              <td class="text-center">${esc(r.nro_invitacion ?? '—')}</td>
               <td>${esc(r.denominacion || r.objeto || '—')}</td>
-              <td><span class="badge bg-info">${esc(r.estado_invitacion || r.estado)}</span></td>
+              <td><span class="badge bg-info">${esc(r.estado || r.estado_invitacion || '—')}</span></td>
               <td class="small">${fmtCronogramaRango(r.consultas_inicio, r.consultas_fin)}</td>
               <td class="small">${fmtCronogramaRango(r.cotizaciones_inicio, r.cotizaciones_fin)}</td>
               <td class="text-nowrap">
                 <button type="button" class="btn btn-sm btn-outline-primary prov-inv-ver"
-                  data-id="${r.solicitud_id}" data-codigo="${esc(r.codigo)}">Ver solicitud</button>
+                  data-id="${r.solicitud_id}" data-invitacion-id="${r.invitacion_id ?? r.id ?? ''}"
+                  data-codigo="${esc(r.codigo)}">Ver solicitud</button>
               </td>
             </tr>`).join('')}</tbody>
         </table>
@@ -129,7 +135,8 @@ export async function initMisInvitacionesView() {
 
     cont.querySelectorAll('.prov-inv-ver').forEach((btn) => {
       btn.addEventListener('click', () => {
-        showDetalleInvitacion(parseInt(btn.dataset.id, 10), btn.dataset.codigo);
+        const invId = btn.dataset.invitacionId ? parseInt(btn.dataset.invitacionId, 10) : null;
+        showDetalleInvitacion(parseInt(btn.dataset.id, 10), btn.dataset.codigo, invId);
       });
     });
   } catch (err) {

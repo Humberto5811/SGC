@@ -87,15 +87,24 @@ export function parseCronogramaDate(val) {
  * @param {object} solicitud
  * @param {Date|string|number} [now] — inyectable en pruebas
  */
-export function isConvocatoriaCerrada(solicitud, now = new Date()) {
-  if (!solicitud?.cotizaciones_fin) return false;
+export function isPlazoCronogramaCerrada(solicitud, fieldFin, now = new Date()) {
+  const finRaw = solicitud?.[fieldFin];
+  if (!finRaw) return false;
   const estadoSol = String(solicitud.solicitud_estado || solicitud.estado || '').toUpperCase();
   if (estadoSol === 'CERRADA') return true;
-  const fin = formatTimestampNaive(solicitud.cotizaciones_fin);
+  const fin = formatTimestampNaive(finRaw);
   if (!fin) return false;
   const ahora = limaNowNaive(now);
   if (!ahora) return false;
   return ahora > fin;
+}
+
+export function isConvocatoriaCerrada(solicitud, now = new Date()) {
+  return isPlazoCronogramaCerrada(solicitud, 'cotizaciones_fin', now);
+}
+
+export function isConsultasPlazoCerrada(solicitud, now = new Date()) {
+  return isPlazoCronogramaCerrada(solicitud, 'consultas_fin', now);
 }
 
 /**

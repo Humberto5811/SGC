@@ -147,8 +147,10 @@ export function sanitizeDeep(value, depth = 0) {
  */
 export function buildPortalCotizacionPayload(body = {}) {
   const src = body || {};
+  const invitacion_id = src.invitacion_id != null ? parseInt(src.invitacion_id, 10) : null;
   return {
     solicitud_id: src.solicitud_id,
+    invitacion_id: Number.isFinite(invitacion_id) && invitacion_id > 0 ? invitacion_id : undefined,
     propuesta_tecnica: sanitizeDeep(src.propuesta_tecnica || {}),
     propuesta_economica: sanitizeDeep(src.propuesta_economica || {}),
     anexos: sanitizeAnexos(src.anexos || {}),

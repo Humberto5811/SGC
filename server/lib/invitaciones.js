@@ -687,12 +687,20 @@ export async function persistirInvitaciones(client, { requerimientoId, solicitud
       }]),
     ]);
 
+    const ppSnap = (await runDb(client, `
+      SELECT primer_ingreso FROM proveedor_portal WHERE proveedor_id = $1
+    `, [inv.proveedor_id])).rows[0];
+    const cuentaExistente = ppSnap && ppSnap.primer_ingreso === false;
+    const credenciales = cuentaExistente
+      ? { usuario: inv.ruc, cuentaExistente: true }
+      : { usuario: inv.ruc, clave };
+
     if (typeof onEmail === 'function') {
       await onEmail({
         proveedor: inv,
         solicitud: solicitudDigest,
         correos,
-        credenciales: { usuario: inv.ruc, clave },
+        credenciales,
         urlInvitacion: portalPrep.url,
         token: portalPrep.token,
       });
@@ -983,6 +991,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
   const { rows } = await query(`
     SELECT sc.*,
       COALESCE(inv_stats.proveedores, 0)::int AS cantidad_proveedores,
+      COALESCE(inv_stats.invitaciones, 0)::int AS cantidad_invitaciones,
       COALESCE(inv_stats.enviados, 0)::int AS proveedores_enviados,
       COALESCE(cot_stats.cotizaciones, 0)::int AS cotizaciones_recibidas,
       COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
@@ -993,7 +1002,7 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
         WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_codigo,
       COALESCE(sc.contador_envios, 0)::int AS contador_envios,
       CASE
-        WHEN COALESCE(sc.contador_envios, 0) > 0 THEN 'Sol.Cot. Enviada (' || sc.contador_envios || ')'
+        WHEN COALESCE(sc.contador_envios, 0) > 0 THEN 'Envíos: ' || sc.contador_envios
         WHEN COALESCE(inv_stats.proveedores, 0) = 0 THEN 'Sin invitar'
         WHEN COALESCE(inv_stats.enviados, 0) >= COALESCE(inv_stats.proveedores, 0) AND inv_stats.proveedores > 0 THEN 'Enviado'
         WHEN COALESCE(inv_stats.enviados, 0) > 0 THEN 'Parcial'
@@ -1001,7 +1010,8 @@ export async function listarSolicitudesBandeja(page, pageSize, queryParams = {})
       END AS estado_invitacion
     FROM solicitudes_cotizacion sc
     LEFT JOIN LATERAL (
-      SELECT COUNT(*)::int AS proveedores,
+      SELECT COUNT(DISTINCT ip.proveedor_id)::int AS proveedores,
+        COUNT(*)::int AS invitaciones,
         COUNT(*) FILTER (WHERE ip.estado IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA'))::int AS enviados
       FROM invitacion_proveedores ip WHERE ip.solicitud_id = sc.id
     ) inv_stats ON TRUE

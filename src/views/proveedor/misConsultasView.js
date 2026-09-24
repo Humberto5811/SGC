@@ -96,20 +96,27 @@ export function showRespuestaCompleta(c) {
   bootstrap.Modal.getOrCreateInstance(modal).show();
 }
 
-function abrirFormularioNuevaConsulta({ solicitudId = null, titulo = 'Registrar consulta' } = {}) {
+function abrirFormularioNuevaConsulta({ solicitudId = null, invitacionId = null, titulo = 'Registrar consulta' } = {}) {
   const card = document.getElementById('provConsFormCard');
   const titleEl = document.getElementById('provConsFormTitle');
   const sel = document.getElementById('provConsSol');
   const asuntoEl = document.getElementById('provConsAsunto');
   const textoEl = document.getElementById('provConsTexto');
 
-  if (sel && solicitudId != null) {
-    const optionValues = [...sel.options].map((o) => o.value).filter(Boolean);
-    if (!solicitudIdEnOpcionesFormulario(solicitudId, optionValues)) {
+  if (sel && invitacionId != null) {
+    const match = [...sel.options].find((o) => o.value === String(invitacionId));
+    if (!match) {
       alert(MSG_SOLICITUD_NO_DISPONIBLE_CONSULTA);
       return;
     }
-    sel.value = String(solicitudId);
+    sel.value = String(invitacionId);
+  } else if (sel && solicitudId != null) {
+    const match = [...sel.options].find((o) => o.dataset.solicitudId === String(solicitudId));
+    if (!match) {
+      alert(MSG_SOLICITUD_NO_DISPONIBLE_CONSULTA);
+      return;
+    }
+    sel.value = match.value;
   }
 
   if (titleEl) titleEl.textContent = titulo;
@@ -132,6 +139,7 @@ async function loadConsultas() {
       <table class="table table-sm table-bordered table-hover mb-0">
         <thead class="table-light"><tr>
           <th>N° Solicitud de Cotización</th>
+          <th>N° Inv.</th>
           <th>Descripción</th>
           <th>Asunto</th>
           <th>Fecha</th>
@@ -141,6 +149,9 @@ async function loadConsultas() {
         </tr></thead>
         <tbody>${rows.map((c, i) => {
           const desc = c.denominacion || c.objeto || '—';
+          const invLabel = c.invitacion_id
+            ? (c.invitacion_nro != null ? String(c.invitacion_nro) : '—')
+            : 'Legacy';
           const visible = consultaRespuestaAnalistaVisible(c);
           const preview = visible ? esc(consultaPreviewRespuesta(c, 80) || '—') : '—';
           const acciones = [];
@@ -148,11 +159,12 @@ async function loadConsultas() {
             acciones.push(`<button type="button" class="btn btn-outline-primary btn-sm py-0 prov-cons-ver" data-i="${i}">Ver respuesta</button>`);
           }
           if (puedeVolverAConsultar(c)) {
-            acciones.push(`<button type="button" class="btn btn-outline-secondary btn-sm py-0 prov-cons-reconsultar" data-sol="${esc(c.solicitud_id)}" data-i="${i}">Volver a consultar</button>`);
+            acciones.push(`<button type="button" class="btn btn-outline-secondary btn-sm py-0 prov-cons-reconsultar" data-sol="${esc(c.solicitud_id)}" data-inv="${esc(c.invitacion_id || '')}" data-i="${i}">Volver a consultar</button>`);
           }
           return `
           <tr>
             <td class="small">${esc(c.solicitud_codigo || '—')}</td>
+            <td class="small text-center">${esc(invLabel)}</td>
             <td class="small">${esc(desc)}</td>
             <td>${esc(c.asunto || '—')}</td>
             <td class="small text-nowrap">${fmtDt(c.created_at)}</td>
@@ -174,6 +186,7 @@ async function loadConsultas() {
     btn.addEventListener('click', () => {
       abrirFormularioNuevaConsulta({
         solicitudId: parseInt(btn.dataset.sol, 10),
+        invitacionId: btn.dataset.inv ? parseInt(btn.dataset.inv, 10) : null,
         titulo: 'Nueva consulta relacionada',
       });
     });
@@ -191,8 +204,10 @@ export async function initMisConsultasView() {
     const inv = await portalService.listMisInvitaciones();
     const sel = document.getElementById('provConsSol');
     if (sel) {
-      sel.innerHTML = (inv.data || []).map((i) =>
-        `<option value="${i.solicitud_id}">${esc(i.codigo)} — ${esc(i.denominacion || '')}</option>`).join('')
+      sel.innerHTML = (inv.data || []).map((i) => {
+        const nro = i.nro_invitacion_presentacion ?? i.nro_invitacion ?? '—';
+        return `<option value="${i.id}" data-solicitud-id="${i.solicitud_id}">${esc(i.codigo)} — Inv.${esc(String(nro))}</option>`;
+      }).join('')
         || '<option value="">Sin convocatorias</option>';
     }
   } catch (err) {
@@ -204,8 +219,11 @@ export async function initMisConsultasView() {
   });
   document.getElementById('provConsEnviar')?.addEventListener('click', async () => {
     try {
+      const sel = document.getElementById('provConsSol');
+      const opt = sel?.selectedOptions?.[0];
       await portalService.crearConsulta({
-        solicitud_id: parseInt(document.getElementById('provConsSol')?.value, 10),
+        solicitud_id: parseInt(opt?.dataset?.solicitudId || '', 10),
+        invitacion_id: parseInt(sel?.value, 10),
         asunto: document.getElementById('provConsAsunto')?.value,
         consulta: document.getElementById('provConsTexto')?.value,
       });

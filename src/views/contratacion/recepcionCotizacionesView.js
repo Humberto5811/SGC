@@ -446,7 +446,7 @@ function showExpedienteDetalleModal(expediente) {
             <div class="table-responsive">
               <table class="table table-sm table-hover table-bordered mb-0">
                 <thead class="table-light"><tr>
-                  <th>Proveedor</th><th>Monto ofertado</th>
+                  <th>Proveedor</th><th>N° Inv.</th><th>Monto ofertado</th>
                   <th>Fecha recepción</th><th>Estado cotización</th><th>ERV expediente</th><th class="text-center">Acciones</th>
                 </tr></thead>
                 <tbody>
@@ -455,6 +455,7 @@ function showExpedienteDetalleModal(expediente) {
                     return `
                     <tr>
                       <td><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
+                      <td class="text-center">${esc(c.nro_invitacion_presentacion ?? (c.invitacion_id ? '—' : 'Legacy'))}</td>
                       <td class="text-end">${fmtMonto(c.monto, c.moneda)}</td>
                       <td class="small">${esc(fmtFecha(c))}</td>
                       <td>
@@ -463,7 +464,7 @@ function showExpedienteDetalleModal(expediente) {
                       <td class="small">${renderErvCanonicoHtml(c)}</td>
                       <td class="text-center">${renderAccionCotizacion(c)}</td>
                     </tr>`;
-                  }).join('') || '<tr><td colspan="6" class="text-muted text-center">Sin cotizaciones</td></tr>'}
+                  }).join('') || '<tr><td colspan="7" class="text-muted text-center">Sin cotizaciones</td></tr>'}
                 </tbody>
               </table>
             </div>

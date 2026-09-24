@@ -18,6 +18,7 @@ import {
   aplicarFechasInicioTrasNotificacion,
 } from './ordenesContratacion.js';
 import { normalizeEstadoOrden } from '../../shared/estadoExpedienteVigente.js';
+import { loadCotizacionParaOrdenAdjudicada } from './cotizacionInvitacionContract.js';
 import { assertCronogramaListoParaEnvio, recalcularFechasEntregas, listarEntregas } from './ordenesEntregas.js';
 
 function hashToken(token) {
@@ -108,12 +109,14 @@ export async function enviarOrdenProveedor(ordenId, payload, usuario, rol) {
   }
 
   const ctx = await loadContextoExpediente(orden.requerimiento_id);
-  const { rows: cots } = await query(`
-    SELECT id FROM cotizaciones_proveedor
-    WHERE solicitud_id = $1 AND proveedor_id = $2
-    ORDER BY id DESC LIMIT 1
-  `, [orden.solicitud_cotizacion_id, orden.proveedor_id]);
-  if (!cots.length) {
+  let cot;
+  try {
+    cot = await loadCotizacionParaOrdenAdjudicada(orden, { context: 'Envío orden al proveedor' });
+  } catch (e) {
+    if (e.code === 'COTIZACION_AMBIGUA') throw httpError(e.message, 409, e.code);
+    throw e;
+  }
+  if (!cot) {
     throw httpError('No existe la cotización del proveedor adjudicado.', 409, 'SIN_COTIZACION');
   }
 

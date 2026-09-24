@@ -459,6 +459,7 @@ async function loadSolicitudesTab(resetPage = false) {
             <th>Fecha de invitación</th>
             <th>Fecha culminación</th>
             <th class="text-center">Cant. proveedores</th>
+            <th class="text-center">Cant. invitaciones</th>
             <th class="text-center">Cant. cotizaciones</th>
             <th class="req-col-acc"></th>
           </tr></thead>
@@ -471,6 +472,7 @@ async function loadSolicitudesTab(resetPage = false) {
               <td class="small">${fmtInvitacionDt(s.fecha_publicacion)}</td>
               <td class="small">${fmtDt(s.fecha_culminacion || s.cotizaciones_fin)}</td>
               <td class="text-center">${s.cantidad_proveedores ?? s.invitados ?? 0}</td>
+              <td class="text-center">${s.cantidad_invitaciones ?? 0}</td>
               <td class="text-center">${s.cotizaciones_recibidas ?? 0}</td>
               ${renderActionMenuCell(s.id, solicitudesMenuItems(s), [])}
             </tr>`).join('')}</tbody>

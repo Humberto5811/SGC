@@ -3,13 +3,19 @@ import bcrypt from 'bcrypt';
 import { query } from '../db.js';
 import { registrarTrazaPortal } from './invitaciones.js';
 import {
-  CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada,
+  CRONOGRAMA_SELECT_SQL, normalizeCronogramaRow, isConvocatoriaCerrada, isConsultasPlazoCerrada,
   INVITACION_VIGENTE_ORDER_SQL,
 } from './cronogramaDatetime.js';
 import { syncRequerimientosSolicitudWorkflow } from './cotizacionWorkflowSync.js';
 import { getPortalAccountByRuc, getInvitacionByToken, marcarPasswordCambiada } from './proveedorPortal.js';
 import { sincronizarProveedorDesdePortal } from './proveedoresMaestro.js';
 import { prepareCotizacionPortalBody } from './portalCotizacionAdjuntos.js';
+import {
+  assertInvitacionParaCotizacion,
+  loadCotizacionByInvitacionId,
+  linkAdjuntosPortalToCotizacion,
+  resolveInvitacionParaPortalAccion,
+} from './cotizacionInvitacionContract.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 
 function clientIp(req) {
@@ -86,7 +92,11 @@ export async function portalChangePassword(proveedorId, { actual, nueva }) {
   const acc = rows[0];
   if (acc.password_hash) {
     const ok = await bcrypt.compare(actual || '', acc.password_hash);
-    if (!ok) throw new Error('Contraseña actual incorrecta');
+    if (!ok) {
+      const err = new Error('Contraseña actual incorrecta');
+      err.status = 401;
+      throw err;
+    }
   }
   const hash = await bcrypt.hash(nueva, 10);
   await marcarPasswordCambiada(proveedorId, hash);
@@ -131,30 +141,37 @@ export async function requirePortalProveedor(req, res, next) {
 
 export async function listMisInvitaciones(proveedorId) {
   const { rows } = await query(`
-    SELECT DISTINCT ON (ip.solicitud_id)
+    SELECT
       ip.id AS invitacion_id,
       ip.solicitud_id, ip.proveedor_id, ip.requerimiento_id, ip.estado, ip.estado_invitacion,
       ip.nro_invitacion, ip.fecha_envio, ip.fecha_ultimo_envio,
       ip.url_invitacion, ip.token_acceso, ip.correos, ip.historial,
       sc.codigo, sc.objeto, sc.denominacion, sc.estado AS solicitud_estado, sc.tipo,
+      cot.id AS cotizacion_id, cot.estado AS cotizacion_estado,
       ${CRONOGRAMA_SELECT_SQL},
       sc.docs_solicitados, sc.requisitos_tecnicos, sc.lugar_entrega
     FROM invitacion_proveedores ip
     JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    LEFT JOIN cotizaciones_proveedor cot ON cot.invitacion_id = ip.id
     WHERE ip.proveedor_id = $1
       AND UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
       AND UPPER(COALESCE(sc.estado, '')) NOT IN ('ANULADA', 'ANULADO')
-    ORDER BY ip.solicitud_id, ${INVITACION_VIGENTE_ORDER_SQL}
+    ORDER BY sc.codigo DESC, ip.nro_invitacion ASC NULLS LAST, ip.id ASC
   `, [proveedorId]);
   return rows.map((r) => {
     const norm = normalizeCronogramaRow(r);
     const cerrada = convocatoriaCerrada(norm);
+    const cotEst = String(r.cotizacion_estado || '').toUpperCase();
     return {
       ...norm,
       id: r.invitacion_id,
+      invitacion_id: r.invitacion_id,
+      cotizacion_id: r.cotizacion_id || null,
+      cotizacion_estado: r.cotizacion_estado || null,
       convocatoria_cerrada: cerrada,
+      puede_cotizar: !cerrada && cotEst !== 'COTIZACION_PRESENTADA',
     };
-  }).sort((a, b) => String(a.cotizaciones_fin || '').localeCompare(String(b.cotizaciones_fin || '')));
+  });
 }
 
 export async function getDocumentosConvocatoria(proveedorId, solicitudId) {
@@ -169,21 +186,18 @@ export async function getDocumentosConvocatoria(proveedorId, solicitudId) {
 }
 
 export async function registrarConsulta(proveedorId, body, req) {
-  const { solicitud_id, asunto, consulta, adjuntos } = body || {};
+  const { solicitud_id, invitacion_id, asunto, consulta, adjuntos } = body || {};
   if (!solicitud_id || !consulta) throw new Error('Solicitud y consulta requeridos');
 
-  const { rows: inv } = await query(`
-    SELECT ip.*, sc.consultas_fin, sc.estado AS solicitud_estado, sc.cotizaciones_fin
-    FROM invitacion_proveedores ip
-    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
-    WHERE ip.proveedor_id = $1 AND ip.solicitud_id = $2
-    ORDER BY ${INVITACION_VIGENTE_ORDER_SQL}
-    LIMIT 1
-  `, [proveedorId, solicitud_id]);
-  if (!inv.length) throw new Error('Sin acceso a esta convocatoria');
-  if (convocatoriaCerrada(normalizeCronogramaRow(inv[0]))) throw new Error('Convocatoria cerrada — no se aceptan consultas');
+  const invRaw = await resolveInvitacionParaPortalAccion(proveedorId, solicitud_id, invitacion_id);
+  const invRow = normalizeCronogramaRow(invRaw);
+  if (isConsultasPlazoCerrada(invRow)) {
+    const err = new Error('Plazo de consultas vencido — no se aceptan consultas');
+    err.status = 409;
+    throw err;
+  }
 
-  const requerimientoId = parseInt(inv[0].requerimiento_id, 10);
+  const requerimientoId = parseInt(invRow.requerimiento_id, 10);
   if (!Number.isFinite(requerimientoId) || requerimientoId <= 0) {
     throw new Error('Requerimiento no asociado a la invitación');
   }
@@ -206,11 +220,14 @@ export async function registrarConsulta(proveedorId, body, req) {
 
     const domainInsert = async (dbTx) => {
       const { rows } = await dbTx.query(`
-        INSERT INTO consultas_proveedor (solicitud_id, proveedor_id, requerimiento_id, asunto, consulta, adjuntos, estado, responsable_actual)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'PENDIENTE', 'Analista CM')
+        INSERT INTO consultas_proveedor (
+          solicitud_id, proveedor_id, requerimiento_id, invitacion_id,
+          asunto, consulta, adjuntos, estado, responsable_actual
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'PENDIENTE', 'Analista CM')
         RETURNING *
       `, [
-        solicitud_id, proveedorId, requerimientoId,
+        solicitud_id, proveedorId, requerimientoId, invRow.id || null,
         asunto || 'Consulta', consulta,
         JSON.stringify(adjuntos || []),
       ]);
@@ -245,6 +262,7 @@ export async function registrarConsulta(proveedorId, body, req) {
         via: 'registrarConsulta',
         solicitud_id,
         proveedor_id: proveedorId,
+        invitacion_id: invRow.id || null,
         analista_invitaciones_previo_id: analistaPrevio,
       },
       actorRol: req.portalProveedor?.ruc || 'PORTAL_PROVEEDOR',
@@ -268,14 +286,20 @@ export async function registrarConsulta(proveedorId, body, req) {
   return enriched[0] || consultaRow;
 }
 
-export async function listConsultasProveedor(proveedorId, solicitudId) {
+export async function listConsultasProveedor(proveedorId, solicitudId, invitacionId) {
+  const sid = solicitudId != null && solicitudId !== '' ? parseInt(solicitudId, 10) : null;
+  const invId = invitacionId != null && invitacionId !== '' ? parseInt(invitacionId, 10) : null;
   const { rows } = await query(`
-    SELECT c.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto
+    SELECT c.*, sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto,
+      ip.nro_invitacion AS invitacion_nro
     FROM consultas_proveedor c
     LEFT JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
-    WHERE c.proveedor_id = $1 AND ($2::int IS NULL OR c.solicitud_id = $2)
+    LEFT JOIN invitacion_proveedores ip ON ip.id = c.invitacion_id
+    WHERE c.proveedor_id = $1
+      AND ($2::int IS NULL OR c.solicitud_id = $2)
+      AND ($3::int IS NULL OR c.invitacion_id = $3)
     ORDER BY c.created_at DESC
-  `, [proveedorId, solicitudId || null]);
+  `, [proveedorId, Number.isFinite(sid) ? sid : null, Number.isFinite(invId) ? invId : null]);
   return rows;
 }
 
@@ -290,18 +314,24 @@ export async function listAbsolucionesPublicas(solicitudId) {
 }
 
 export async function registrarObservacion(proveedorId, body, req) {
-  const { solicitud_id, asunto, observacion, adjuntos } = body || {};
+  const { solicitud_id, invitacion_id, asunto, observacion, adjuntos } = body || {};
   if (!solicitud_id || !observacion) throw new Error('Solicitud y observación requeridos');
 
-  const invRow = await loadInvitacionVigente(proveedorId, solicitud_id);
-  if (!invRow) throw new Error('Sin acceso');
+  const invRaw = await resolveInvitacionParaPortalAccion(proveedorId, solicitud_id, invitacion_id);
+  const invRow = normalizeCronogramaRow(invRaw);
   if (convocatoriaCerrada(invRow)) throw new Error('Convocatoria cerrada');
 
   const { rows } = await query(`
-    INSERT INTO observaciones_proveedor (solicitud_id, proveedor_id, requerimiento_id, asunto, observacion, adjuntos, estado, responsable_actual)
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'PENDIENTE', 'Analista CM')
+    INSERT INTO observaciones_proveedor (
+      solicitud_id, proveedor_id, requerimiento_id, invitacion_id,
+      asunto, observacion, adjuntos, estado, responsable_actual
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'PENDIENTE', 'Analista CM')
     RETURNING *
-  `, [solicitud_id, proveedorId, invRow.requerimiento_id, asunto || 'Observación', observacion, JSON.stringify(adjuntos || [])]);
+  `, [
+    solicitud_id, proveedorId, invRow.requerimiento_id, invRow.id || null,
+    asunto || 'Observación', observacion, JSON.stringify(adjuntos || []),
+  ]);
 
   await registrarTrazaPortal({
     solicitud_id, proveedor_id: proveedorId, requerimiento_id: invRow.requerimiento_id,
@@ -322,18 +352,15 @@ export async function presentarCotizacion(proveedorId, body, req) {
     }
     throw e;
   }
-  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos, certificados } = light;
+  const { solicitud_id, invitacion_id, propuesta_tecnica, propuesta_economica, anexos, certificados } = light;
   if (!solicitud_id) throw new Error('Solicitud requerida');
   if (!propuesta_tecnica || !propuesta_economica) throw new Error('Propuesta técnica y económica obligatorias');
 
-  const invRow = await loadInvitacionVigente(proveedorId, solicitud_id);
-  if (!invRow) throw new Error('Sin acceso');
+  const invRow = await assertInvitacionParaCotizacion(proveedorId, solicitud_id, invitacion_id);
   if (convocatoriaCerrada(invRow)) throw new Error('Plazo vencido — no se aceptan cotizaciones');
 
-  const prevCot = (await query(
-    'SELECT estado FROM cotizaciones_proveedor WHERE solicitud_id = $1 AND proveedor_id = $2',
-    [solicitud_id, proveedorId],
-  )).rows[0];
+  const nroPresentacion = Number(invRow.nro_invitacion) || 1;
+  const prevCot = await loadCotizacionByInvitacionId(invRow.id);
   const yaPresentada = String(prevCot?.estado || '').toUpperCase() === 'COTIZACION_PRESENTADA';
 
   const { withTransaction } = await import('./workflow/workflowTransaction.js');
@@ -341,10 +368,10 @@ export async function presentarCotizacion(proveedorId, body, req) {
   await withTransaction(async (tx) => {
     const { rows } = await tx.query(`
       INSERT INTO cotizaciones_proveedor (
-        solicitud_id, proveedor_id, requerimiento_id, estado, propuesta_tecnica, propuesta_economica,
-        anexos, certificados, fecha_presentacion
-      ) VALUES ($1, $2, $3, 'COTIZACION_PRESENTADA', $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, NOW())
-      ON CONFLICT (solicitud_id, proveedor_id) DO UPDATE SET
+        solicitud_id, proveedor_id, requerimiento_id, invitacion_id, nro_invitacion_presentacion,
+        estado, propuesta_tecnica, propuesta_economica, anexos, certificados, fecha_presentacion
+      ) VALUES ($1, $2, $3, $4, $5, 'COTIZACION_PRESENTADA', $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, NOW())
+      ON CONFLICT (invitacion_id) WHERE invitacion_id IS NOT NULL DO UPDATE SET
         estado = 'COTIZACION_PRESENTADA',
         propuesta_tecnica = EXCLUDED.propuesta_tecnica,
         propuesta_economica = EXCLUDED.propuesta_economica,
@@ -354,17 +381,13 @@ export async function presentarCotizacion(proveedorId, body, req) {
         updated_at = NOW()
       RETURNING *
     `, [
-      solicitud_id, proveedorId, invRow.requerimiento_id,
+      solicitud_id, proveedorId, invRow.requerimiento_id, invRow.id, nroPresentacion,
       JSON.stringify(propuesta_tecnica), JSON.stringify(propuesta_economica),
       JSON.stringify(anexos || {}), JSON.stringify(certificados || []),
     ]);
     cotRow = rows[0];
 
-    await tx.query(`
-      UPDATE cotizaciones_proveedor_adjuntos
-      SET cotizacion_id = $3, updated_at = NOW()
-      WHERE solicitud_id = $1 AND proveedor_id = $2
-    `, [solicitud_id, proveedorId, cotRow.id]).catch(() => {});
+    await linkAdjuntosPortalToCotizacion(invRow.id, cotRow.id, tx);
 
     await tx.query(`
       UPDATE invitacion_proveedores SET estado = 'COTIZACION_PRESENTADA', updated_at = NOW()
@@ -419,35 +442,32 @@ export async function guardarBorradorCotizacion(proveedorId, body, req) {
     }
     throw e;
   }
-  const { solicitud_id, propuesta_tecnica, propuesta_economica, anexos } = light;
+  const { solicitud_id, invitacion_id, propuesta_tecnica, propuesta_economica, anexos } = light;
   if (!solicitud_id) throw new Error('Solicitud requerida');
 
-  const invRow = await loadInvitacionVigente(proveedorId, solicitud_id);
-  if (!invRow) throw new Error('Sin acceso');
+  const invRow = await assertInvitacionParaCotizacion(proveedorId, solicitud_id, invitacion_id);
   if (convocatoriaCerrada(invRow)) throw new Error('Convocatoria cerrada');
+
+  const nroPresentacion = Number(invRow.nro_invitacion) || 1;
 
   const { rows } = await query(`
     INSERT INTO cotizaciones_proveedor (
-      solicitud_id, proveedor_id, requerimiento_id, estado, propuesta_tecnica, propuesta_economica,
-      anexos, certificados
-    ) VALUES ($1, $2, $3, 'BORRADOR', $4::jsonb, $5::jsonb, $6::jsonb, '[]'::jsonb)
-    ON CONFLICT (solicitud_id, proveedor_id) DO UPDATE SET
+      solicitud_id, proveedor_id, requerimiento_id, invitacion_id, nro_invitacion_presentacion,
+      estado, propuesta_tecnica, propuesta_economica, anexos, certificados
+    ) VALUES ($1, $2, $3, $4, $5, 'BORRADOR', $6::jsonb, $7::jsonb, $8::jsonb, '[]'::jsonb)
+    ON CONFLICT (invitacion_id) WHERE invitacion_id IS NOT NULL DO UPDATE SET
       propuesta_tecnica = EXCLUDED.propuesta_tecnica,
       propuesta_economica = EXCLUDED.propuesta_economica,
       anexos = EXCLUDED.anexos,
       updated_at = NOW()
     RETURNING *
   `, [
-    solicitud_id, proveedorId, invRow.requerimiento_id,
+    solicitud_id, proveedorId, invRow.requerimiento_id, invRow.id, nroPresentacion,
     JSON.stringify(propuesta_tecnica || {}), JSON.stringify(propuesta_economica || {}),
     JSON.stringify(anexos || {}),
   ]);
 
-  await query(`
-    UPDATE cotizaciones_proveedor_adjuntos
-    SET cotizacion_id = $3, updated_at = NOW()
-    WHERE solicitud_id = $1 AND proveedor_id = $2
-  `, [solicitud_id, proveedorId, rows[0].id]).catch(() => {});
+  await linkAdjuntosPortalToCotizacion(invRow.id, rows[0].id);
 
   return rows[0];
 }
@@ -464,40 +484,38 @@ function labelEstadoCotizacionPortal({ cotEstado, validacionEstado, convocatoria
 }
 
 /**
- * Mis Cotizaciones: fuente = invitaciones del proveedor + cotización opcional (LEFT JOIN).
- * No exige fila en cotizaciones_proveedor para listar la solicitud.
+ * Mis Cotizaciones: una fila por cotizaciones_proveedor (canónica o legacy).
  */
 export async function listMisCotizaciones(proveedorId) {
   const { rows } = await query(`
-    SELECT DISTINCT ON (ip.solicitud_id)
-      cot.id, ip.solicitud_id, ip.proveedor_id, ip.requerimiento_id,
+    SELECT
+      cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id,
       cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
       cot.validacion_estado, cot.validacion_observacion, cot.validacion_informe,
       cot.validacion_responsable, cot.historial,
-      COALESCE(cot.created_at, ip.created_at) AS created_at,
-      COALESCE(cot.updated_at, ip.updated_at) AS updated_at,
-      cot.fecha_presentacion,
+      cot.created_at, cot.updated_at, cot.fecha_presentacion,
       cot.estado AS cotizacion_estado,
+      cot.invitacion_id, cot.nro_invitacion_presentacion,
       sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo,
       sc.estado AS solicitud_estado,
-      ip.estado AS estado_invitacion,
-      ip.id AS invitacion_id,
-      ip.nro_invitacion,
-      ip.fecha_envio,
+      ip.estado AS estado_invitacion, ip.fecha_envio,
       ${CRONOGRAMA_SELECT_SQL}
-    FROM invitacion_proveedores ip
-    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
-    LEFT JOIN cotizaciones_proveedor cot
-      ON cot.solicitud_id = sc.id AND cot.proveedor_id = ip.proveedor_id
-    WHERE ip.proveedor_id = $1
-      AND UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
+    FROM cotizaciones_proveedor cot
+    JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    LEFT JOIN invitacion_proveedores ip ON ip.id = cot.invitacion_id
+    WHERE cot.proveedor_id = $1
       AND UPPER(COALESCE(sc.estado, '')) NOT IN ('ANULADA', 'ANULADO')
-    ORDER BY ip.solicitud_id, ${INVITACION_VIGENTE_ORDER_SQL}
+      AND (
+        cot.invitacion_id IS NULL
+        OR UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
+      )
+    ORDER BY cot.updated_at DESC NULLS LAST, cot.id DESC
   `, [proveedorId]);
 
   return rows.map((r) => {
     const norm = normalizeCronogramaRow(r);
     const cerrada = convocatoriaCerrada(norm);
+    const isLegacy = r.invitacion_id == null && r.nro_invitacion_presentacion == null;
     const estadoUi = labelEstadoCotizacionPortal({
       cotEstado: r.cotizacion_estado,
       validacionEstado: r.validacion_estado,
@@ -505,21 +523,20 @@ export async function listMisCotizaciones(proveedorId) {
     });
     return {
       ...norm,
-      id: r.id || null,
-      invitacion_id: r.invitacion_id,
-      nro_invitacion: r.nro_invitacion ?? 1,
+      id: r.id,
+      cotizacion_id: r.id,
+      invitacion_id: r.invitacion_id ?? null,
+      nro_invitacion: isLegacy ? null : r.nro_invitacion_presentacion,
+      nro_invitacion_presentacion: r.nro_invitacion_presentacion ?? null,
+      es_legacy: isLegacy,
       fecha_envio: r.fecha_envio,
       estado: r.cotizacion_estado || (cerrada ? 'CERRADA' : 'DISPONIBLE'),
       cotizacion_estado: r.cotizacion_estado || null,
-      estado_participacion: estadoUi,
+      estado_participacion: isLegacy && !r.cotizacion_estado ? 'Legacy' : estadoUi,
       convocatoria_cerrada: cerrada,
       puede_presentar: !cerrada || String(r.cotizacion_estado || '').toUpperCase() === 'COTIZACION_PRESENTADA',
-      puede_crear_borrador: !cerrada,
+      puede_crear_borrador: !cerrada && String(r.cotizacion_estado || '').toUpperCase() !== 'COTIZACION_PRESENTADA',
     };
-  }).sort((a, b) => {
-    const ta = a.cotizaciones_fin || a.updated_at || '';
-    const tb = b.cotizaciones_fin || b.updated_at || '';
-    return String(ta).localeCompare(String(tb));
   });
 }
 
@@ -533,25 +550,21 @@ export async function getEstadoParticipacion(proveedorId) {
       cot.created_at AS cotizacion_created_at
     FROM invitacion_proveedores ip
     JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
-    LEFT JOIN cotizaciones_proveedor cot ON cot.solicitud_id = sc.id AND cot.proveedor_id = ip.proveedor_id
+    LEFT JOIN cotizaciones_proveedor cot ON cot.invitacion_id = ip.id
     WHERE ip.proveedor_id = $1
-    ORDER BY ip.solicitud_id, ${INVITACION_VIGENTE_ORDER_SQL}
+      AND UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
+    ORDER BY sc.codigo DESC, ip.nro_invitacion ASC NULLS LAST, ip.id ASC
   `, [proveedorId]);
 
-  // Una fila vigente por solicitud (+ historial completo en campo aparte)
-  const bySol = new Map();
-  const historial = [];
-  for (const r of raw) {
-    historial.push(normalizeCronogramaRow(r));
-    const key = r.solicitud_id;
-    if (!bySol.has(key)) {
-      const norm = normalizeCronogramaRow(r);
-      bySol.set(key, {
-        ...norm,
-        convocatoria_cerrada: convocatoriaCerrada(norm),
-      });
-    }
-  }
+  const historial = raw.map((r) => normalizeCronogramaRow(r));
+  const invitaciones = raw.map((r) => {
+    const norm = normalizeCronogramaRow(r);
+    return {
+      ...norm,
+      invitacion_id: r.invitacion_id,
+      convocatoria_cerrada: convocatoriaCerrada(norm),
+    };
+  });
 
   const { rows: stats } = await query(`
     SELECT
@@ -566,7 +579,7 @@ export async function getEstadoParticipacion(proveedorId) {
 
   return {
     resumen: stats[0] || {},
-    invitaciones: [...bySol.values()],
+    invitaciones,
     historial_invitaciones: historial,
   };
 }
@@ -745,6 +758,7 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
   }
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado,
+      cot.invitacion_id, cot.nro_invitacion_presentacion,
       cot.fecha_presentacion,
       COALESCE(
         cot.requerimiento_id,
@@ -882,8 +896,11 @@ export async function listarRecepcionCotizaciones(queryParams = {}) {
     }
     const base = applyCcpFlagsToRow({
       id: r.id,
+      cotizacion_id: r.id,
       solicitud_id: r.solicitud_id,
       proveedor_id: r.proveedor_id,
+      invitacion_id: r.invitacion_id ?? null,
+      nro_invitacion_presentacion: r.nro_invitacion_presentacion ?? null,
       requerimiento_id: r.requerimiento_id || null,
       estado: r.estado,
       validacion_estado: valEst,

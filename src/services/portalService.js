@@ -58,8 +58,9 @@ export const portalService = {
   async getSolicitudDetalle(solicitudId) {
     return portalRequest(`/solicitud/${solicitudId}/detalle`);
   },
-  async getCotizacionWorkspace(solicitudId) {
-    return portalRequest(`/solicitud/${solicitudId}/cotizacion-workspace`);
+  async getCotizacionWorkspace(solicitudId, invitacionId = null) {
+    const q = invitacionId ? `?invitacion_id=${encodeURIComponent(invitacionId)}` : '';
+    return portalRequest(`/solicitud/${solicitudId}/cotizacion-workspace${q}`);
   },
   async fetchDocumentoBlob(solicitudId, docRef, accion = 'ver') {
     const res = await fetch(
@@ -92,8 +93,11 @@ export const portalService = {
   async listAbsoluciones(solicitudId) {
     return portalRequest(`/solicitud/${solicitudId}/absoluciones`);
   },
-  async listConsultas(solicitudId) {
-    const q = solicitudId ? `?solicitud_id=${solicitudId}` : '';
+  async listConsultas(solicitudId, invitacionId) {
+    const params = new URLSearchParams();
+    if (solicitudId) params.set('solicitud_id', String(solicitudId));
+    if (invitacionId) params.set('invitacion_id', String(invitacionId));
+    const q = params.toString() ? `?${params.toString()}` : '';
     return portalRequest(`/consultas${q}`);
   },
   async listMisCotizaciones() {

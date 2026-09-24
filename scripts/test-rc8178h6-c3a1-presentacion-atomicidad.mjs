@@ -74,9 +74,10 @@ function portalReq(ruc) {
   return { portalProveedor: { id: null, ruc }, headers: {}, socket: {} };
 }
 
-function cotBody(sid) {
+function cotBody(sid, invitacionId) {
   return {
     solicitud_id: sid,
+    invitacion_id: invitacionId,
     propuesta_tecnica: { items: [{ item_key: '1-0', descripcion: 'Item test' }] },
     propuesta_economica: { monto: 100, moneda: 'PEN' },
     anexos: {},
@@ -102,7 +103,7 @@ try {
   const fxA = await seedFixture({ analistaId, withOperativoMeta: true, suffix: 'A' });
   const reqA = portalReq(fxA.ruc);
   reqA.portalProveedor.id = fxA.proveedorId;
-  await presentarCotizacion(fxA.proveedorId, cotBody(fxA.sid), reqA);
+  await presentarCotizacion(fxA.proveedorId, cotBody(fxA.sid, fxA.invId), reqA);
 
   const cotA = (await query(
     'SELECT estado FROM cotizaciones_proveedor WHERE solicitud_id = $1 AND proveedor_id = $2',
@@ -130,7 +131,7 @@ try {
   reqB.portalProveedor.id = fxB.proveedorId;
   let errB = null;
   try {
-    await presentarCotizacion(fxB.proveedorId, cotBody(fxB.sid), reqB);
+    await presentarCotizacion(fxB.proveedorId, cotBody(fxB.sid, fxB.invId), reqB);
   } catch (e) {
     errB = e;
   }

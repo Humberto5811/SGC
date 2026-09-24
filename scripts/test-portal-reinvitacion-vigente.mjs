@@ -132,20 +132,25 @@ console.log('\n=== Portal reinvitación vigente ===\n');
   ok('J: Bienes / Servicios / Locadores');
 }
 
-// K — mismos helpers en listado / workspace / POST
+// K — C3-D2: listados sin DISTINCT ON; workspace por invitacion_id explícito
 {
   const pp = read('server/lib/portalProveedores.js');
   const pd = read('server/lib/portalDocumentos.js');
-  assert.match(pp, /INVITACION_VIGENTE_ORDER_SQL/);
-  assert.match(pd, /INVITACION_VIGENTE_ORDER_SQL/);
-  assert.match(pp, /loadInvitacionVigente/);
-  assert.match(INVITACION_VIGENTE_ORDER_SQL, /nro_invitacion/);
-  assert.match(pp, /ORDER BY ip\.solicitud_id, \$\{INVITACION_VIGENTE_ORDER_SQL\}/);
-  assert.doesNotMatch(
-    pp.slice(pp.indexOf('export async function listMisCotizaciones'), pp.indexOf('export async function getEstadoParticipacion')),
-    /cot\.fecha_presentacion DESC/,
+  const misInvBlock = pp.slice(
+    pp.indexOf('export async function listMisInvitaciones'),
+    pp.indexOf('export async function getDocumentosConvocatoria'),
   );
-  ok('K: Mis Cotizaciones / workspace / POST usan invitación vigente');
+  const misCotBlock = pp.slice(
+    pp.indexOf('export async function listMisCotizaciones'),
+    pp.indexOf('export async function getEstadoParticipacion'),
+  );
+  assert.doesNotMatch(misInvBlock, /DISTINCT ON \(ip\.solicitud_id\)/);
+  assert.doesNotMatch(misCotBlock, /DISTINCT ON \(ip\.solicitud_id\)/);
+  assert.match(misCotBlock, /FROM cotizaciones_proveedor cot/);
+  assert.match(misCotBlock, /nro_invitacion_presentacion/);
+  assert.match(pd, /invitacionId/);
+  assert.match(pp, /loadInvitacionVigente/);
+  ok('K: Mis Invitaciones/Cotizaciones listan actos independientes; workspace exige invitacion_id');
 }
 
 // L — vigencia no depende de sessionStorage; backend recalcula
@@ -164,16 +169,15 @@ console.log('\n=== Portal reinvitación vigente ===\n');
   ok('L: plazo recalculado en API (Lima); FE no usa solo caché local');
 }
 
-// Extra: select vigente por solicitud no usa la primera
+// Extra: pickInvitacionVigente sigue siendo helper puntual (consultas legacy), no colapsa bandejas D2
 {
-  const list = selectVigentePorSolicitud([
+  const vig = pickInvitacionVigente([
     { id: 1, solicitud_id: 6, nro_invitacion: 1, fecha_envio: '2026-07-30T10:00:00Z' },
     { id: 2, solicitud_id: 6, nro_invitacion: 2, fecha_envio: '2026-07-31T18:00:00Z' },
-    { id: 3, solicitud_id: 7, nro_invitacion: 1, fecha_envio: '2026-07-31T12:00:00Z' },
   ]);
-  assert.equal(list.find((r) => r.solicitud_id === 6).id, 2);
+  assert.equal(vig.id, 2);
   assert.equal(formatTimestampNaive('2026-07-31 20:00'), '2026-07-31T20:00');
-  ok('extra: DISTINCT semántica + plazo naive de solicitudes_cotizacion');
+  ok('extra: pickInvitacionVigente helper puntual + plazo naive SC');
 }
 
 console.log('\nPortal reinvitación vigente OK\n');

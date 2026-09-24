@@ -95,6 +95,29 @@ export async function assertAccesoSolicitud(proveedorId, solicitudId) {
   return normalizeCronogramaRow(rows[0]);
 }
 
+/** Acceso documental/cronograma para una invitacion_id explícita (C3-D1). */
+export async function assertAccesoInvitacionById(proveedorId, solicitudId, invitacionId) {
+  const { rows } = await query(`
+    SELECT
+      ip.id AS invitacion_id,
+      ip.nro_invitacion,
+      ip.fecha_envio,
+      ip.estado AS estado_invitacion,
+      ip.token_acceso,
+      ip.proveedor_id,
+      ip.requerimiento_id,
+      sc.id, sc.codigo, sc.objeto, sc.denominacion, sc.estado, sc.tipo,
+      sc.estado AS solicitud_estado,
+      sc.tipo_evaluacion, sc.docs_solicitados, sc.requisitos_tecnicos, sc.detalle_items,
+      ${CRONOGRAMA_SELECT_SQL}
+    FROM invitacion_proveedores ip
+    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    WHERE ip.id = $1 AND ip.proveedor_id = $2 AND ip.solicitud_id = $3
+  `, [invitacionId, proveedorId, solicitudId]);
+  if (!rows.length) throw new Error('Sin acceso a esta invitación');
+  return normalizeCronogramaRow(rows[0]);
+}
+
 async function loadAdjuntosPorRequerimiento(requerimientoIds) {
   if (!requerimientoIds.length) return {};
   const { rows } = await query(`
@@ -386,8 +409,31 @@ export async function getSolicitudDetalleProveedor(proveedorId, solicitudId) {
   };
 }
 
-export async function getCotizacionWorkspace(proveedorId, solicitudId) {
-  const acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
+export async function getCotizacionWorkspace(proveedorId, solicitudId, options = {}) {
+  const { assertInvitacionParaCotizacion, loadCotizacionByInvitacionId, loadLegacyCotizacion, parseInvitacionId } =
+    await import('./cotizacionInvitacionContract.js');
+
+  const invitacionIdParam = options.invitacionId ?? options.invitacion_id ?? null;
+  let acceso;
+  let cotRows;
+
+  const invParsed = parseInvitacionId(invitacionIdParam);
+  if (invParsed) {
+    await assertInvitacionParaCotizacion(proveedorId, solicitudId, invParsed);
+    acceso = await assertAccesoInvitacionById(proveedorId, solicitudId, invParsed);
+    const cot = await loadCotizacionByInvitacionId(invParsed);
+    cotRows = cot ? [cot] : [];
+  } else {
+    const legacy = await loadLegacyCotizacion(proveedorId, solicitudId);
+    if (legacy) {
+      acceso = await assertAccesoSolicitud(proveedorId, solicitudId);
+      cotRows = [legacy];
+    } else {
+      const err = new Error('invitacion_id requerido para abrir el workspace de cotización');
+      err.status = 400;
+      throw err;
+    }
+  }
   const { rows: reqRows, map: reqById } = await loadRequerimientosCentroMap(solicitudId);
   const items = normalizeDetalleItemsSc(
     enrichDetalleItemsCentro(parseJson(acceso.detalle_items), reqById),
@@ -425,11 +471,6 @@ export async function getCotizacionWorkspace(proveedorId, solicitudId) {
 
   // Fuentes agregadas para el normalizador del portal (FE)
   const entregables_sources = itemsConDocs.map((it) => it.entregables_source).filter(Boolean);
-
-  const { rows: cotRows } = await query(`
-    SELECT * FROM cotizaciones_proveedor
-    WHERE solicitud_id = $1 AND proveedor_id = $2
-  `, [solicitudId, proveedorId]);
 
   const { rows: provRows } = await query(`
     SELECT id, ruc, razon_social, direccion, telefono, correo, persona_contacto, rubro, emails

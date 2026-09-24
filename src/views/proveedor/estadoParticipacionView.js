@@ -46,7 +46,7 @@ export async function initEstadoParticipacionView() {
           <tbody>${inv.map((i) => `
             <tr>
               <td><strong>${esc(i.codigo)}</strong><br><small>${esc(i.denominacion || '')}</small></td>
-              <td>${esc(i.estado_invitacion || i.estado)}</td>
+              <td class="text-center">${esc(i.nro_invitacion ?? '—')}<br><small>${esc(i.estado_invitacion || i.estado)}</small></td>
               <td>${badgeEstadoCot(i.cotizacion_estado, i.validacion_estado)}</td>
               <td>${esc(i.validacion_estado || '—')}</td>
               <td class="small">${fmtDt(i.fecha_presentacion)}</td>
@@ -54,7 +54,7 @@ export async function initEstadoParticipacionView() {
               <td class="text-nowrap">
                 ${!i.cotizacion_estado || i.cotizacion_estado !== 'COTIZACION_PRESENTADA' ? `
                   <button type="button" class="btn btn-sm btn-outline-primary prov-est-cotizar"
-                    data-id="${i.solicitud_id}">Presentar cotización</button>` : '<span class="small text-muted">Enviada</span>'}
+                    data-id="${i.solicitud_id}" data-invitacion-id="${i.invitacion_id ?? ''}">Presentar cotización</button>` : '<span class="small text-muted">Enviada</span>'}
               </td>
             </tr>`).join('')}</tbody>
         </table>
@@ -63,8 +63,11 @@ export async function initEstadoParticipacionView() {
     document.querySelectorAll('.prov-est-cotizar').forEach((btn) => {
       btn.addEventListener('click', () => {
         sessionStorage.setItem('provCotSolId', btn.dataset.id);
+        if (btn.dataset.invitacionId) sessionStorage.setItem('provCotInvId', btn.dataset.invitacionId);
         sessionStorage.setItem('provCotAutoOpen', '1');
-        window.location.hash = `#/proveedor/mis-cotizaciones?solicitud_id=${encodeURIComponent(btn.dataset.id)}`;
+        const q = new URLSearchParams({ solicitud_id: btn.dataset.id });
+        if (btn.dataset.invitacionId) q.set('invitacion_id', btn.dataset.invitacionId);
+        window.location.hash = `#/proveedor/mis-cotizaciones?${q.toString()}`;
         window.dispatchEvent(new HashChangeEvent('hashchange'));
       });
     });

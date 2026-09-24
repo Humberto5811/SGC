@@ -46,7 +46,8 @@ ok(
     === 'Esta solicitud ya no está disponible para registrar nuevas consultas.',
   'reconsulta — texto mensaje canónico',
 );
-ok(viewSrc.includes('solicitudIdEnOpcionesFormulario'), 'reconsulta — valida contra options existentes');
+ok(viewSrc.includes('solicitudIdEnOpcionesFormulario') || viewSrc.includes('data-solicitud-id'), 'reconsulta — valida contra options / invitación');
+ok(viewSrc.includes('invitacion_id'), 'D3 — POST consulta incluye invitacion_id');
 ok(solicitudIdEnOpcionesFormulario(5, ['3', '5', '7']), 'reconsulta — preselección solo si option existe');
 ok(!solicitudIdEnOpcionesFormulario(99, ['3', '5']), 'reconsulta — SC ausente no pasa validación FE');
 ok(solicitudIdEnOpcionesFormulario(null, []), 'G — Nueva consulta sin solicitudId no exige option');
@@ -71,6 +72,7 @@ let rid = null;
 let sid = null;
 let proveedorId = null;
 let consulta1Id = null;
+let invitacionId = null;
 
 async function erv() {
   const { rows } = await query(
@@ -122,20 +124,23 @@ async function seedStack() {
     `INSERT INTO solicitud_requerimientos (solicitud_id, requerimiento_id) VALUES ($1, $2)`,
     [sid, rid],
   );
-  await query(`
-    INSERT INTO invitacion_proveedores (solicitud_id, requerimiento_id, proveedor_id, estado)
-    VALUES ($1, $2, $3, 'ENVIADA')
+  const invIns = await query(`
+    INSERT INTO invitacion_proveedores (solicitud_id, requerimiento_id, proveedor_id, estado, nro_invitacion)
+    VALUES ($1, $2, $3, 'ENVIADA', 1)
+    RETURNING id
   `, [sid, rid, proveedorId]);
+  return invIns.rows[0].id;
 }
 
 const fakeReq = { portalProveedor: { id: null, ruc: 'TEST-RUC' } };
 
 try {
-  await seedStack();
+  invitacionId = await seedStack();
   fakeReq.portalProveedor.id = proveedorId;
 
   const c1 = await registrarConsulta(proveedorId, {
     solicitud_id: sid,
+    invitacion_id: invitacionId,
     asunto: 'Primera consulta',
     consulta: 'Texto consulta uno',
   }, fakeReq);
@@ -168,6 +173,7 @@ try {
 
   const c2 = await registrarConsulta(proveedorId, {
     solicitud_id: sid,
+    invitacion_id: invitacionId,
     asunto: 'Segunda consulta',
     consulta: 'Texto consulta dos',
   }, fakeReq);

@@ -15,6 +15,11 @@ import { calcularFechaMaxima, calcularFechaMaximaEntrega, normalizeTipoDias, toI
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 import { resolverCentroDesdeRequerimiento, validarResponsableCentro } from './recepcionBienesAlcance.js';
 import { hasFunctionalProfile, PERFILES_FUNCIONALES } from '../utils/userRoleCatalog.js';
+import {
+  loadCotizacionParaOrdenAdjudicada,
+  resolveCotizacionUnicaPorSolicitudProveedor,
+  resolveCotizacionPresentadaExpediente,
+} from './cotizacionInvitacionContract.js';
 
 export const REGLAS_INICIO_PLAZO = Object.freeze({
   INICIO_PLAZO_FECHA_ORDEN: 'INICIO_PLAZO_FECHA_ORDEN',
@@ -570,7 +575,7 @@ export async function loadContextoExpediente(requerimientoId, client = null) {
         sc.id AS solicitud_id, sc.codigo AS solicitud_codigo, sc.estado AS solicitud_estado,
         sc.objeto, sc.tipo AS solicitud_tipo,
         NULL::int AS cuadro_id, NULL::text AS cuadro_estado,
-        cot.id AS cotizacion_id, cot.propuesta_economica, cot.proveedor_id AS proveedor_ganador_id,
+        NULL::int AS cotizacion_id, NULL::jsonb AS propuesta_economica, NULL::int AS proveedor_ganador_id,
         cod.id AS codigo_id, cod.codigo_ccp, cod.estado AS codigo_estado,
         cf.id AS ccp_firmado_id, cf.nombre_archivo AS ccp_firmado_nombre,
         cf.version AS ccp_firmado_version, cf.subido_at AS ccp_firmado_at,
@@ -578,15 +583,6 @@ export async function loadContextoExpediente(requerimientoId, client = null) {
       FROM requerimientos r
       JOIN solicitud_requerimientos sr ON sr.requerimiento_id = r.id
       JOIN solicitudes_cotizacion sc ON sc.id = sr.solicitud_id
-      LEFT JOIN LATERAL (
-        SELECT c.* FROM cotizaciones_proveedor c
-        WHERE c.solicitud_id = sc.id AND c.estado = 'COTIZACION_PRESENTADA'
-        ORDER BY
-          CASE WHEN COALESCE(c.validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
-          c.fecha_presentacion DESC NULLS LAST,
-          c.id DESC
-        LIMIT 1
-      ) cot ON TRUE
       LEFT JOIN LATERAL (
         SELECT c.* FROM ccp_codigos c
         WHERE c.requerimiento_id = r.id AND c.estado = 'ACTIVO'
@@ -598,9 +594,12 @@ export async function loadContextoExpediente(requerimientoId, client = null) {
         ORDER BY f.version DESC, f.id DESC LIMIT 1
       ) cf ON TRUE
       WHERE r.id = $1
-        AND cot.id IS NOT NULL
         AND cod.codigo_ccp IS NOT NULL
         AND UPPER(COALESCE(sc.estado, '')) IN ('EN_CCP', 'EN_ORDEN', 'EN_EJECUCION')
+        AND EXISTS (
+          SELECT 1 FROM cotizaciones_proveedor c
+          WHERE c.solicitud_id = sc.id AND c.estado = 'COTIZACION_PRESENTADA'
+        )
       ORDER BY sc.id DESC
       LIMIT 1
     `, [id]);
@@ -609,6 +608,23 @@ export async function loadContextoExpediente(requerimientoId, client = null) {
       throw httpError('Expediente no encontrado o sin pertenencia CCP para Registro de Órdenes', 404);
     }
     row = locRows[0];
+    let cotLoc;
+    try {
+      cotLoc = await resolveCotizacionPresentadaExpediente(
+        row.solicitud_id,
+        { context: 'loadContextoExpediente locación' },
+        run,
+      );
+    } catch (e) {
+      if (e.code === 'COTIZACION_AMBIGUA') throw httpError(e.message, 409, e.code);
+      throw e;
+    }
+    if (!cotLoc) {
+      throw httpError('Expediente no encontrado o sin cotización presentada', 404);
+    }
+    row.cotizacion_id = cotLoc.id;
+    row.proveedor_ganador_id = cotLoc.proveedor_id;
+    row.propuesta_economica = cotLoc.propuesta_economica;
     const estadoAct = String(row.estado_actual || '').toUpperCase();
     if (estadoAct === 'ANULADO' || estadoAct.includes('ANUL')) {
       throw httpError('Expediente anulado', 409, 'EXPEDIENTE_ANULADO');
@@ -2024,7 +2040,7 @@ function formatLugarDesdeItem(it = {}) {
  * exacta de que apareciera el centro organizacional en vez de la ubicación contractual.
  * El centro organizacional nunca debe ganarle a una ubicación geográfica contractual.
  */
-export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimientoId } = {}) {
+export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimientoId, cotizacionId } = {}) {
   let sid = solicitudId != null ? parseInt(solicitudId, 10) : null;
   if (!Number.isFinite(sid) && requerimientoId) {
     const { rows: link } = await query(`
@@ -2058,14 +2074,32 @@ export async function resolverLugarEntrega({ solicitudId, proveedorId, requerimi
     }
 
     if (proveedorId) {
-      const { rows: cots } = await query(`
-        SELECT propuesta_tecnica, anexos FROM cotizaciones_proveedor
-        WHERE solicitud_id = $1 AND proveedor_id = $2
-        ORDER BY id DESC LIMIT 1
-      `, [sid, proveedorId]);
-      if (cots.length) {
-        const tec = parseJson(cots[0].propuesta_tecnica, {});
-        const anex = parseJson(cots[0].anexos, {});
+      let cotRow = null;
+      try {
+        const cid = cotizacionId != null ? parseInt(cotizacionId, 10) : null;
+        if (Number.isFinite(cid) && cid > 0) {
+          const { rows: cots } = await query(`
+            SELECT propuesta_tecnica, anexos FROM cotizaciones_proveedor
+            WHERE id = $1 AND proveedor_id = $2
+          `, [cid, proveedorId]);
+          cotRow = cots[0] || null;
+        } else {
+          const u = await resolveCotizacionUnicaPorSolicitudProveedor(sid, proveedorId, {
+            context: 'resolverLugarEntrega',
+          });
+          if (u) {
+            const { rows: cots } = await query(`
+              SELECT propuesta_tecnica, anexos FROM cotizaciones_proveedor WHERE id = $1
+            `, [u.id]);
+            cotRow = cots[0] || null;
+          }
+        }
+      } catch (e) {
+        if (e.code !== 'COTIZACION_AMBIGUA') throw e;
+      }
+      if (cotRow) {
+        const tec = parseJson(cotRow.propuesta_tecnica, {});
+        const anex = parseJson(cotRow.anexos, {});
         // RC8.13.4 — el domicilio fiscal/dirección del PROVEEDOR (RUC) fue removido
         // como candidato: es la dirección de la empresa que presta el servicio, no el
         // lugar contractual donde debe ejecutarse/entregarse la prestación. Usarlo como
@@ -2123,17 +2157,19 @@ export async function reconciliarItemsContractuales(orden, itemsFisicos, client 
       `, [orden.cuadro_comparativo_id]);
       if (rows[0]) itemsCanonicos = extractItemsAdjudicados(rows[0], orden.proveedor_id);
     } else if (orden.solicitud_cotizacion_id) {
-      const { rows: cots } = await run(`
-        SELECT propuesta_economica FROM cotizaciones_proveedor
-        WHERE solicitud_id = $1 AND proveedor_id = $2 AND estado = 'COTIZACION_PRESENTADA'
-        ORDER BY
-          CASE WHEN COALESCE(validacion_informe, '{}'::jsonb) ? 'derivacion_ccp' THEN 0 ELSE 1 END,
-          fecha_presentacion DESC NULLS LAST, id DESC
-        LIMIT 1
-      `, [orden.solicitud_cotizacion_id, orden.proveedor_id]);
-      if (cots[0]) {
+      let cotAdj;
+      try {
+        cotAdj = await loadCotizacionParaOrdenAdjudicada(
+          orden,
+          { context: 'reconciliarItemsContractuales' },
+          run,
+        );
+      } catch (e) {
+        if (e.code !== 'COTIZACION_AMBIGUA') throw e;
+      }
+      if (cotAdj?.estado === 'COTIZACION_PRESENTADA') {
         const { rows: reqRows } = await run('SELECT denominacion FROM requerimientos WHERE id = $1', [orden.requerimiento_id]);
-        itemsCanonicos = extractItemsDesdePropuestaEconomica(cots[0].propuesta_economica, {
+        itemsCanonicos = extractItemsDesdePropuestaEconomica(cotAdj.propuesta_economica, {
           denominacion: reqRows[0]?.denominacion || '',
         });
       }
@@ -3114,19 +3150,19 @@ export async function listarDocsNotificacion(ordenId) {
     ORDER BY id DESC LIMIT 1
   `, [orden.requerimiento_id]);
 
-  const { rows: cots } = await query(`
-    SELECT id, estado, fecha_presentacion
-    FROM cotizaciones_proveedor
-    WHERE solicitud_id = $1 AND proveedor_id = $2
-    ORDER BY id DESC LIMIT 1
-  `, [orden.solicitud_cotizacion_id, orden.proveedor_id]);
+  let cotRow = null;
+  try {
+    cotRow = await loadCotizacionParaOrdenAdjudicada(orden, { context: 'listarDocsNotificacion' });
+  } catch (e) {
+    if (e.code === 'COTIZACION_AMBIGUA') throw httpError(e.message, 409, e.code);
+    throw e;
+  }
 
   let cotDoc = null;
-  if (cots.length) {
+  if (cotRow) {
     try {
       const { buildManifiestoCotizacion } = await import('./portalDocumentos.js');
-      const { rows: full } = await query('SELECT * FROM cotizaciones_proveedor WHERE id = $1', [cots[0].id]);
-      const manif = buildManifiestoCotizacion(full[0] || {});
+      const manif = buildManifiestoCotizacion(cotRow);
       cotDoc = manif.find((d) => d.ref === 'anexo05b') || manif.find((d) => d.economico) || manif[0] || null;
     } catch (_) {
       cotDoc = { nombre: 'Cotización del proveedor adjudicado', ref: 'meta' };
@@ -3154,10 +3190,10 @@ export async function listarDocsNotificacion(ordenId) {
   const cotizacionDoc = {
       tipo: 'COTIZACION',
       nombre: cotDoc?.nombre || 'Cotización del proveedor adjudicado',
-      version: cots[0]?.id || null,
-      estado: cots.length ? 'Disponible' : 'Falta',
-      disponible: !!cots.length,
-      documento_id: cots[0]?.id || null,
+      version: cotRow?.id || null,
+      estado: cotRow ? 'Disponible' : 'Falta',
+      disponible: !!cotRow,
+      documento_id: cotRow?.id || null,
       ref: cotDoc?.ref || null,
       mime_type: 'application/pdf',
     };
@@ -3239,14 +3275,16 @@ export async function getDocNotificacion(ordenId, tipo, { includeContent = false
   }
 
   if (t === 'COTIZACION') {
-    const { rows: cots } = await query(`
-      SELECT * FROM cotizaciones_proveedor
-      WHERE solicitud_id = $1 AND proveedor_id = $2
-      ORDER BY id DESC LIMIT 1
-    `, [orden.solicitud_cotizacion_id, orden.proveedor_id]);
-    if (!cots.length) throw httpError('No existe la cotización del proveedor adjudicado.', 409, 'SIN_COTIZACION');
+    let cotN;
+    try {
+      cotN = await loadCotizacionParaOrdenAdjudicada(orden, { context: 'getDocNotificacion' });
+    } catch (e) {
+      if (e.code === 'COTIZACION_AMBIGUA') throw httpError(e.message, 409, e.code);
+      throw e;
+    }
+    if (!cotN) throw httpError('No existe la cotización del proveedor adjudicado.', 409, 'SIN_COTIZACION');
     const { buildManifiestoCotizacion, resolverDocumentoCotizacionAnalista } = await import('./portalDocumentos.js');
-    const manif = buildManifiestoCotizacion(cots[0]);
+    const manif = buildManifiestoCotizacion(cotN);
     const pref = manif.find((d) => d.ref === 'anexo05b') || manif.find((d) => d.economico) || manif[0];
     if (!pref) throw httpError('No existe la cotización del proveedor adjudicado.', 409, 'SIN_COTIZACION');
     if (!includeContent) {
@@ -3254,17 +3292,17 @@ export async function getDocNotificacion(ordenId, tipo, { includeContent = false
         tipo: 'COTIZACION',
         nombre_archivo: pref.nombre || 'cotizacion.pdf',
         mime_type: pref.mime_type || 'application/pdf',
-        version: cots[0].id,
+        version: cotN.id,
         estado: 'Disponible',
         ref: pref.ref,
       };
     }
-    const file = await resolverDocumentoCotizacionAnalista(cots[0].id, pref.ref);
+    const file = await resolverDocumentoCotizacionAnalista(cotN.id, pref.ref);
     return {
       tipo: 'COTIZACION',
       nombre_archivo: file.nombre || pref.nombre || 'cotizacion.pdf',
       mime_type: file.mime_type || 'application/pdf',
-      version: cots[0].id,
+      version: cotN.id,
       estado: 'Disponible',
       contenido_base64: file.base64 || file.contenido_base64,
     };

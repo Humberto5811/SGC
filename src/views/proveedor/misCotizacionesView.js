@@ -40,6 +40,8 @@ let workspace = null;
 let wizardStep = 1;
 let wizardBusy = false;
 let isReadonly = false;
+/** Última lista de convocatorias (para resolver invitacion_id al abrir wizard). */
+let cotListRows = [];
 let formState = {
   items: [], precios: {}, entregablesEco: {}, extra: {},
   cotizaByKey: {},
@@ -824,7 +826,9 @@ function hasEmbeddedBinary(meta) {
 async function uploadAdjuntoToPortal(target, fileMeta) {
   const solicitudId = workspace?.solicitud?.id;
   if (!solicitudId) throw new Error('Solicitud no disponible');
+  const invitacionId = workspace?.invitacion_vigente?.id ?? workspace?.invitacion_id ?? null;
   const resp = await portalService.uploadCotizacionAdjunto(solicitudId, {
+    invitacion_id: invitacionId,
     key: target,
     slot_key: target,
     tipo: slotTipo(target),
@@ -987,6 +991,7 @@ function buildPayload() {
   }
   return buildPortalCotizacionPayload({
     solicitud_id: workspace.solicitud.id,
+    invitacion_id: workspace.invitacion_vigente?.id,
     propuesta_tecnica: propuestaTecnica,
     propuesta_economica: propuestaEconomica,
     anexos: buildAnexosPayload(),
@@ -1005,6 +1010,7 @@ async function loadCotizacionesList() {
   if (!cont) return;
   const resp = await portalService.listMisCotizaciones();
   const rows = resp.data || [];
+  cotListRows = rows;
   if (!rows.length) {
     cont.innerHTML = '<div class="small text-muted mb-0">No tiene convocatorias disponibles para cotizar.</div>';
     return;
@@ -1019,12 +1025,13 @@ async function loadCotizacionesList() {
         const puede = c.convocatoria_cerrada === false || presentada;
         return `<tr>
           <td><strong>${esc(c.solicitud_codigo)}</strong> — ${esc(c.denominacion || c.objeto || '')}</td>
-          <td class="text-center">${esc(c.nro_invitacion ?? '—')}</td>
+          <td class="text-center">${esc(c.es_legacy ? 'Legacy' : (c.nro_invitacion ?? '—'))}</td>
           <td>${esc(c.estado_participacion || c.estado || '—')}</td>
           <td class="small">${esc(formatCronogramaDisplay(c.cotizaciones_fin))}</td>
           <td class="small">${esc(formatDateTimeLima(c.fecha_envio || c.fecha_presentacion))}</td>
           <td class="text-nowrap">
-            <button type="button" class="btn btn-sm btn-outline-primary prov-cot-ver" data-id="${c.solicitud_id}"
+            <button type="button" class="btn btn-sm btn-outline-primary prov-cot-ver"
+              data-id="${c.solicitud_id}" data-invitacion-id="${c.invitacion_id ?? ''}"
               ${puede ? '' : 'disabled title="Convocatoria cerrada"'}>
               ${presentada ? 'Ver' : (c.cotizacion_estado === 'BORRADOR' ? 'Ver / Editar' : 'Presentar cotización')}
             </button>
@@ -1033,51 +1040,73 @@ async function loadCotizacionesList() {
       }).join('')}</tbody>
     </table>`;
   cont.querySelectorAll('.prov-cot-ver').forEach((btn) => {
-    btn.addEventListener('click', () => openWizardFor(parseInt(btn.dataset.id, 10)));
+    btn.addEventListener('click', () => {
+      const invId = btn.dataset.invitacionId ? parseInt(btn.dataset.invitacionId, 10) : null;
+      openWizardFor(parseInt(btn.dataset.id, 10), invId);
+    });
   });
 }
 
-function readSolicitudIdFromHash() {
+function readQueryFromHash() {
   try {
     const hash = String(window.location.hash || '');
     const qIdx = hash.indexOf('?');
-    if (qIdx < 0) return null;
+    if (qIdx < 0) return {};
     const params = new URLSearchParams(hash.slice(qIdx + 1));
-    const sid = params.get('solicitud_id') || params.get('solicitudId');
-    return sid ? String(sid) : null;
+    return {
+      solicitudId: params.get('solicitud_id') || params.get('solicitudId') || null,
+      invitacionId: params.get('invitacion_id') || params.get('invitacionId') || null,
+    };
   } catch (_) {
-    return null;
+    return {};
   }
 }
 
-function resolveTargetSolicitudId(rows = []) {
-  const fromHash = readSolicitudIdFromHash();
-  const fromSession = sessionStorage.getItem('provCotSolId');
-  const target = fromHash || fromSession;
-  if (!target) return null;
-  if (rows.some((r) => String(r.solicitud_id) === String(target))) return String(target);
-  return null;
+function resolveTargetFromNavigation(rows = []) {
+  const fromHash = readQueryFromHash();
+  const sid = fromHash.solicitudId || sessionStorage.getItem('provCotSolId');
+  if (!sid) return { solicitudId: null, invitacionId: null };
+  const invFromHash = fromHash.invitacionId || sessionStorage.getItem('provCotInvId');
+  const matchRows = rows.filter((r) => String(r.solicitud_id) === String(sid));
+  if (!matchRows.length) return { solicitudId: null, invitacionId: null };
+  if (invFromHash) {
+    const invId = parseInt(invFromHash, 10);
+    const hit = matchRows.find((r) => Number(r.invitacion_id) === invId);
+    if (hit) return { solicitudId: String(sid), invitacionId: invId };
+  }
+  if (matchRows.length === 1) {
+    return {
+      solicitudId: String(sid),
+      invitacionId: matchRows[0].invitacion_id ? Number(matchRows[0].invitacion_id) : null,
+    };
+  }
+  return { solicitudId: String(sid), invitacionId: invFromHash ? parseInt(invFromHash, 10) : null };
 }
 
 async function loadConvocatoriasSelect() {
   const resp = await portalService.listMisCotizaciones();
   const rows = resp.data || [];
+  cotListRows = rows;
   const sel = document.getElementById('provCotSelSol');
   if (sel) {
     sel.innerHTML = rows.map((i) => {
+      const nro = i.es_legacy ? 'Legacy' : (i.nro_invitacion != null ? `Inv. ${i.nro_invitacion}` : '—');
       const label = i.estado_participacion ? ` [${i.estado_participacion}]` : '';
-      return `<option value="${i.solicitud_id}">${esc(i.solicitud_codigo)} — ${esc(i.denominacion || i.objeto || '')}${esc(label)}</option>`;
+      return `<option value="${i.solicitud_id}" data-invitacion-id="${i.invitacion_id ?? ''}">${esc(i.solicitud_codigo)} · ${esc(nro)} — ${esc(i.denominacion || i.objeto || '')}${esc(label)}</option>`;
     }).join('') || '<option value="">Sin convocatorias disponibles</option>';
-    const saved = resolveTargetSolicitudId(rows);
-    if (saved) sel.value = saved;
+    const saved = resolveTargetFromNavigation(rows);
+    if (saved.solicitudId) sel.value = saved.solicitudId;
+    if (saved.invitacionId) sessionStorage.setItem('provCotInvId', String(saved.invitacionId));
   }
   return rows;
 }
 
-async function openWizardFor(solicitudId) {
+async function openWizardFor(solicitudId, invitacionId = null) {
   const sel = document.getElementById('provCotSelSol');
   if (sel) sel.value = String(solicitudId);
   sessionStorage.setItem('provCotSolId', String(solicitudId));
+  if (invitacionId) sessionStorage.setItem('provCotInvId', String(invitacionId));
+  else sessionStorage.removeItem('provCotInvId');
   await openWizard();
 }
 
@@ -1085,7 +1114,18 @@ async function openWizard() {
   const sid = parseInt(document.getElementById('provCotSelSol')?.value, 10);
   if (!sid) { alert('Seleccione una convocatoria abierta'); return; }
   try {
-    const resp = await portalService.getCotizacionWorkspace(sid);
+    let invId = sessionStorage.getItem('provCotInvId');
+    invId = invId ? parseInt(invId, 10) : null;
+    if (!invId) {
+      const opt = document.getElementById('provCotSelSol')?.selectedOptions?.[0];
+      const fromOpt = opt?.dataset?.invitacionId ? parseInt(opt.dataset.invitacionId, 10) : null;
+      if (fromOpt) invId = fromOpt;
+      else {
+        const matches = cotListRows.filter((r) => Number(r.solicitud_id) === sid);
+        if (matches.length === 1) invId = matches[0].invitacion_id ? Number(matches[0].invitacion_id) : null;
+      }
+    }
+    const resp = await portalService.getCotizacionWorkspace(sid, invId || undefined);
     if (resp.convocatoria_cerrada && !cotizacionPresentada(resp)) {
       alert('La convocatoria está cerrada');
       return;
@@ -1198,12 +1238,17 @@ export async function initMisCotizacionesView() {
     await loadCotizacionesList();
     const rows = await loadConvocatoriasSelect();
     const auto = sessionStorage.getItem('provCotAutoOpen');
-    const target = resolveTargetSolicitudId(rows);
-    if (auto || target) {
+    const nav = resolveTargetFromNavigation(rows);
+    const hashQ = readQueryFromHash();
+    const sid = nav.solicitudId || hashQ.solicitudId;
+    const invId = nav.invitacionId
+      || (hashQ.invitacionId ? parseInt(hashQ.invitacionId, 10) : null);
+    if (auto || sid) {
       sessionStorage.removeItem('provCotAutoOpen');
-      if (target) {
-        sessionStorage.setItem('provCotSolId', target);
-        setTimeout(() => openWizardFor(parseInt(target, 10)), 100);
+      if (sid) {
+        sessionStorage.setItem('provCotSolId', sid);
+        if (invId) sessionStorage.setItem('provCotInvId', String(invId));
+        setTimeout(() => openWizardFor(parseInt(sid, 10), invId || null), 100);
       } else {
         sessionStorage.removeItem('provCotSolId');
       }

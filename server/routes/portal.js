@@ -101,7 +101,10 @@ router.post('/cambiar-password', requirePortalProveedor, async (req, res, next) 
   try {
     await portalChangePassword(req.portalProveedor.id, req.body || {});
     res.json({ success: true });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ success: false, error: err.message });
+    next(err);
+  }
 });
 
 router.get('/mis-invitaciones', requirePortalProveedor, async (req, res, next) => {
@@ -127,9 +130,13 @@ router.get('/solicitud/:id/detalle', requirePortalProveedor, async (req, res, ne
 
 router.get('/solicitud/:id/cotizacion-workspace', requirePortalProveedor, async (req, res, next) => {
   try {
-    const data = await getCotizacionWorkspace(req.portalProveedor.id, req.params.id);
+    const invitacionId = req.query.invitacion_id || req.query.invitacionId || null;
+    const data = await getCotizacionWorkspace(req.portalProveedor.id, req.params.id, { invitacionId });
     res.json({ success: true, ...data });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.get('/solicitud/:id/documento/:ref/ver', requirePortalProveedor, async (req, res, next) => {
@@ -177,7 +184,11 @@ router.get('/solicitud/:id/absoluciones', requirePortalProveedor, async (req, re
 
 router.get('/consultas', requirePortalProveedor, async (req, res, next) => {
   try {
-    const data = await listConsultasProveedor(req.portalProveedor.id, req.query.solicitud_id);
+    const data = await listConsultasProveedor(
+      req.portalProveedor.id,
+      req.query.solicitud_id,
+      req.query.invitacion_id,
+    );
     res.json({ data });
   } catch (err) { next(err); }
 });
@@ -186,14 +197,20 @@ router.post('/consultas', requirePortalProveedor, async (req, res, next) => {
   try {
     const row = await registrarConsulta(req.portalProveedor.id, req.body, req);
     res.status(201).json({ success: true, consulta: row });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.post('/observaciones', requirePortalProveedor, async (req, res, next) => {
   try {
     const row = await registrarObservacion(req.portalProveedor.id, req.body, req);
     res.status(201).json({ success: true, observacion: row });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ success: false, error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 router.post('/cotizaciones/borrador', requirePortalProveedor, async (req, res, next) => {

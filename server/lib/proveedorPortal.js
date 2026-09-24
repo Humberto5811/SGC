@@ -20,12 +20,42 @@ function primaryEmail(emails) {
   return '';
 }
 
-/** Crea o actualiza cuenta portal del proveedor (usuario = RUC, clave temporal = RUC). */
+/** Crea cuenta portal (clave temporal) o actualiza solo metadatos si ya existe (reinvitación). */
 export async function ensureProveedorPortalAccount(proveedor, { passwordTemporal, estadoInvitacion, fechaEnvio } = {}) {
   const ruc = String(proveedor.ruc || '').replace(/\D/g, '').slice(0, 11);
+  const correo = primaryEmail(proveedor.emails) || proveedor.correo || '';
+  const envio = fechaEnvio || new Date();
+  const estadoInv = estadoInvitacion || 'ENVIADA';
+
+  const { rows: existing } = await query(
+    'SELECT * FROM proveedor_portal WHERE proveedor_id = $1',
+    [proveedor.id],
+  );
+
+  if (existing.length) {
+    const { rows } = await query(`
+      UPDATE proveedor_portal SET
+        razon_social = $2,
+        correo = $3,
+        telefono = $4,
+        fecha_ultimo_envio = COALESCE($5, fecha_ultimo_envio),
+        estado_invitacion = COALESCE($6, estado_invitacion),
+        updated_at = NOW()
+      WHERE proveedor_id = $1
+      RETURNING *
+    `, [
+      proveedor.id,
+      proveedor.razon_social || '',
+      correo,
+      proveedor.telefono || '',
+      envio,
+      estadoInv,
+    ]);
+    return rows[0];
+  }
+
   const clave = String(passwordTemporal || ruc);
   const hash = await bcrypt.hash(clave, 10);
-  const correo = primaryEmail(proveedor.emails) || proveedor.correo || '';
 
   const { rows } = await query(`
     INSERT INTO proveedor_portal (
@@ -33,19 +63,6 @@ export async function ensureProveedorPortalAccount(proveedor, { passwordTemporal
       usuario, usuario_portal, password_temporal, password_hash,
       primer_ingreso, estado, fecha_ultimo_envio, estado_invitacion
     ) VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, TRUE, 'ACTIVO', $9, $10)
-    ON CONFLICT (proveedor_id) DO UPDATE SET
-      razon_social = EXCLUDED.razon_social,
-      correo = EXCLUDED.correo,
-      telefono = EXCLUDED.telefono,
-      usuario = EXCLUDED.usuario,
-      usuario_portal = EXCLUDED.usuario_portal,
-      password_temporal = EXCLUDED.password_temporal,
-      password_hash = EXCLUDED.password_hash,
-      primer_ingreso = TRUE,
-      estado = 'ACTIVO',
-      fecha_ultimo_envio = COALESCE(EXCLUDED.fecha_ultimo_envio, proveedor_portal.fecha_ultimo_envio),
-      estado_invitacion = COALESCE(EXCLUDED.estado_invitacion, proveedor_portal.estado_invitacion),
-      updated_at = NOW()
     RETURNING *
   `, [
     proveedor.id,
@@ -56,11 +73,10 @@ export async function ensureProveedorPortalAccount(proveedor, { passwordTemporal
     ruc,
     clave,
     hash,
-    fechaEnvio || new Date(),
-    estadoInvitacion || 'ENVIADA',
+    envio,
+    estadoInv,
   ]);
 
-  // Mantener compatibilidad con proveedor_acceso existente
   await query(`
     INSERT INTO proveedor_acceso (proveedor_id, password_hash, debe_cambiar_password, clave_temporal, clave_temporal_expira)
     VALUES ($1, $2, TRUE, $3, NOW() + INTERVAL '30 days')

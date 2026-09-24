@@ -640,29 +640,28 @@ export async function getDetalleRecepcionBienes(id, userCtx = null) {
   let cotizacionAdjudicadaId = null;
   try {
     const { rows: ordMeta } = await query(`
-      SELECT oc.proveedor_id, oc.solicitud_cotizacion_id
+      SELECT oc.id, oc.proveedor_id, oc.solicitud_cotizacion_id, oc.cuadro_comparativo_id
       FROM ordenes_contratacion oc WHERE oc.id = $1
     `, [exp.orden_id]);
-    const proveedorId = ordMeta[0]?.proveedor_id;
-    const solicitudId = ordMeta[0]?.solicitud_cotizacion_id;
+    const orden = ordMeta[0];
+    const proveedorId = orden?.proveedor_id;
+    const solicitudId = orden?.solicitud_cotizacion_id;
     if (proveedorId != null) {
-      let cots = [];
       let docsSolSc = [];
       let reqsSc = [];
-      const loadCots = async (whereSql, params) => {
-        const { rows } = await query(`
-          SELECT cot.id, cot.proveedor_id, cot.anexos, cot.certificados,
-            cot.updated_at, cot.created_at, cot.fecha_presentacion,
-            p.razon_social, p.ruc
-          FROM cotizaciones_proveedor cot
-          LEFT JOIN proveedores p ON p.id = cot.proveedor_id
-          WHERE ${whereSql}
-          ORDER BY cot.id DESC
-        `, params);
-        return rows;
-      };
+      let cotAdjudicada = null;
+      if (orden) {
+        const { loadCotizacionParaOrdenAdjudicada } = await import('./cotizacionInvitacionContract.js');
+        try {
+          cotAdjudicada = await loadCotizacionParaOrdenAdjudicada(
+            orden,
+            { context: 'recepcionBienes documentos cotización' },
+          );
+        } catch (e) {
+          if (e.code !== 'COTIZACION_AMBIGUA') throw e;
+        }
+      }
       if (solicitudId) {
-        cots = await loadCots('cot.solicitud_id = $1 AND cot.proveedor_id = $2', [solicitudId, proveedorId]);
         try {
           const { rows: sc } = await query(`
             SELECT docs_solicitados, requisitos_tecnicos FROM solicitudes_cotizacion WHERE id = $1
@@ -677,16 +676,24 @@ export async function getDetalleRecepcionBienes(id, userCtx = null) {
           }
         } catch (_) { /* ok */ }
       }
-      if (!cots.length) {
-        cots = await loadCots('cot.requerimiento_id = $1 AND cot.proveedor_id = $2', [
-          exp.requerimiento_id, proveedorId,
-        ]);
+      if (!cotAdjudicada && proveedorId != null && exp.requerimiento_id) {
+        const { rows: legacyCots } = await query(`
+          SELECT cot.id, cot.proveedor_id, cot.anexos, cot.certificados,
+            cot.updated_at, cot.created_at, cot.fecha_presentacion,
+            p.razon_social, p.ruc
+          FROM cotizaciones_proveedor cot
+          LEFT JOIN proveedores p ON p.id = cot.proveedor_id
+          WHERE cot.requerimiento_id = $1 AND cot.proveedor_id = $2
+          ORDER BY cot.id ASC
+        `, [exp.requerimiento_id, proveedorId]);
+        if (legacyCots.length === 1) cotAdjudicada = legacyCots[0];
       }
+      const cots = cotAdjudicada ? [cotAdjudicada] : [];
       documentosCotizacion = buildDocsCotizacionAdjudicada(cots, proveedorId, {
         docsSolicitadosSc: docsSolSc,
         requisitosTecnicosSc: reqsSc,
       });
-      cotizacionAdjudicadaId = cots[0]?.id || null;
+      cotizacionAdjudicadaId = cotAdjudicada?.id || null;
     }
   } catch (_) { /* ok */ }
 

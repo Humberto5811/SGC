@@ -72,6 +72,23 @@ export { PORTAL_PUBLIC_BASE, buildInvitacionUrl };
 export function buildInvitacionEmailContent({ proveedor, solicitud, credenciales, urlInvitacion, token }) {
   const portalLoginUrl = getPortalBaseUrl();
   const urlToken = urlInvitacion || (token ? buildInvitacionUrl(token) : portalLoginUrl);
+  const cuentaExistente = !!(credenciales?.cuentaExistente || !credenciales?.clave);
+  const credencialesText = cuentaExistente
+    ? [
+      `Usuario portal: ${credenciales.usuario}`,
+      '',
+      'Su cuenta en el Portal de Proveedores ya está activa. Ingrese con la contraseña que usted definió.',
+    ]
+    : [
+      `Usuario portal: ${credenciales.usuario}`,
+      `Contraseña temporal: ${credenciales.clave}`,
+      '',
+      'Debe cambiar su contraseña en el primer ingreso.',
+    ];
+  const credencialesHtml = cuentaExistente
+    ? `<p>Usuario: <strong>${credenciales.usuario}</strong><br>
+Use la contraseña que definió en el portal (cuenta ya activa).</p>`
+    : `<p>Usuario: <strong>${credenciales.usuario}</strong><br>Clave temporal: <strong>${credenciales.clave}</strong></p>`;
   return {
     subject: `[SGC] Invitación a cotizar — ${solicitud.codigo || ''}`,
     text: [
@@ -88,17 +105,14 @@ export function buildInvitacionEmailContent({ proveedor, solicitud, credenciales
       'Portal de Proveedores:',
       portalLoginUrl,
       '',
-      `Usuario portal: ${credenciales.usuario}`,
-      `Contraseña temporal: ${credenciales.clave}`,
-      '',
-      'Debe cambiar su contraseña en el primer ingreso.',
+      ...credencialesText,
       '',
       '[SMTP no habilitado — correo simulado en consola del servidor]',
     ].join('\n'),
     html: `<p>Convocatoria <strong>${solicitud.codigo || ''}</strong></p>
 <p>Enlace de invitación: <a href="${urlToken}">${urlToken}</a></p>
 <p>Portal: <a href="${portalLoginUrl}">${portalLoginUrl}</a></p>
-<p>Usuario: <strong>${credenciales.usuario}</strong><br>Clave temporal: <strong>${credenciales.clave}</strong></p>`,
+${credencialesHtml}`,
     meta: { urlInvitacion: urlToken, token, smtpReady: true, smtpSent: false },
   };
 }
