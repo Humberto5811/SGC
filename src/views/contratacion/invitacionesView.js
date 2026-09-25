@@ -78,9 +78,33 @@ function hasOpenModal() {
 }
 
 function solicitudEstadoBadge(s) {
-  const label = s.estado_invitacion || s.estado || '—';
-  const cls = String(label).includes('Enviada') ? 'bg-primary' : (label === 'Enviado' ? 'bg-success' : 'bg-secondary');
+  const label = s.estado_invitacion || s.invitacion_estado || s.estado || '—';
+  const cls = String(label).includes('Enviada') || String(label).includes('ENVIADA')
+    ? 'bg-primary'
+    : (label === 'Enviado' ? 'bg-success' : 'bg-secondary');
   return `<span class="badge ${cls}">${esc(label)}</span>`;
+}
+
+function fmtCronogramaConsultas(s) {
+  const ini = s.consultas_inicio;
+  const fin = s.consultas_fin;
+  if (!ini && !fin) return '—';
+  return `${fmtDt(ini)} — ${fmtDt(fin)}`;
+}
+
+function solicitudBandejaRowKey(s) {
+  if (s.invitacion_id != null && s.invitacion_id !== '') return `inv-${s.invitacion_id}`;
+  return `sc-${s.solicitud_id || s.id}`;
+}
+
+function findSolicitudBandejaRow(rows, menuKey) {
+  const key = String(menuKey || '');
+  if (key.startsWith('inv-')) {
+    const invId = key.slice(4);
+    return rows.find((r) => String(r.invitacion_id) === invId);
+  }
+  const scId = key.startsWith('sc-') ? key.slice(3) : key;
+  return rows.find((r) => !r.invitacion_id && String(r.solicitud_id || r.id) === String(scId));
 }
 
 export function renderInvitacionesView() {
@@ -453,28 +477,32 @@ async function loadSolicitudesTab(resetPage = false) {
         <table class="table table-sm table-hover table-bordered req-list-table mb-0">
           <thead class="table-light"><tr>
             <th>Solicitud de Cotización</th>
+            <th class="text-center">N° Inv.</th>
             <th>N° Requerimiento</th>
             <th>Descripción de la contratación</th>
-            <th>Estado de invitación</th>
-            <th>Fecha de invitación</th>
+            <th>Proveedor</th>
+            <th>Estado invitación</th>
+            <th>Fecha envío</th>
+            <th>Consultas (cronograma)</th>
             <th>Fecha culminación</th>
-            <th class="text-center">Cant. proveedores</th>
-            <th class="text-center">Cant. invitaciones</th>
-            <th class="text-center">Cant. cotizaciones</th>
+            <th class="text-center">Cotizaciones</th>
             <th class="req-col-acc"></th>
           </tr></thead>
           <tbody>${rows.map((s) => `
-            <tr data-sol-id="${s.id}">
+            <tr data-sol-id="${s.solicitud_id || s.id}" data-invitacion-id="${s.invitacion_id ?? ''}">
               <td><strong>${esc(s.codigo)}</strong></td>
+              <td class="text-center">${s.invitacion_id != null ? esc(String(s.nro_invitacion ?? '—')) : '—'}</td>
               <td><strong>${esc(s.requerimiento_codigo || '—')}</strong></td>
               <td>${esc(s.descripcion_contratacion || s.denominacion || s.objeto || '—')}</td>
+              <td class="small">${s.proveedor_ruc
+    ? `<span class="text-muted">${esc(s.proveedor_ruc)}</span><br>${esc(s.proveedor_razon_social || '')}`
+    : '—'}</td>
               <td>${solicitudEstadoBadge(s)}</td>
-              <td class="small">${fmtInvitacionDt(s.fecha_publicacion)}</td>
+              <td class="small">${fmtInvitacionDt(s.fecha_envio || s.fecha_ultimo_envio || s.fecha_publicacion)}</td>
+              <td class="small">${fmtCronogramaConsultas(s)}</td>
               <td class="small">${fmtDt(s.fecha_culminacion || s.cotizaciones_fin)}</td>
-              <td class="text-center">${s.cantidad_proveedores ?? s.invitados ?? 0}</td>
-              <td class="text-center">${s.cantidad_invitaciones ?? 0}</td>
               <td class="text-center">${s.cotizaciones_recibidas ?? 0}</td>
-              ${renderActionMenuCell(s.id, solicitudesMenuItems(s), [])}
+              ${renderActionMenuCell(solicitudBandejaRowKey(s), solicitudesMenuItems(s), [])}
             </tr>`).join('')}</tbody>
         </table>
         </div>
@@ -483,11 +511,11 @@ async function loadSolicitudesTab(resetPage = false) {
 
     solPagination.renderControls('invSolOuter', () => loadSolicitudesTab(false));
     bindActionMenus(cont, {
-      detalle: (id) => handleSolicitudAction('detalle', rows.find((r) => String(r.id) === String(id))),
-      timeline: (id) => handleSolicitudAction('timeline', rows.find((r) => String(r.id) === String(id))),
-      editar: (id) => handleSolicitudAction('editar', rows.find((r) => String(r.id) === String(id))),
-      eliminar: (id) => handleSolicitudAction('eliminar', rows.find((r) => String(r.id) === String(id))),
-      invitar: (id) => handleSolicitudAction('invitar', rows.find((r) => String(r.id) === String(id))),
+      detalle: (id) => handleSolicitudAction('detalle', findSolicitudBandejaRow(rows, id)),
+      timeline: (id) => handleSolicitudAction('timeline', findSolicitudBandejaRow(rows, id)),
+      editar: (id) => handleSolicitudAction('editar', findSolicitudBandejaRow(rows, id)),
+      eliminar: (id) => handleSolicitudAction('eliminar', findSolicitudBandejaRow(rows, id)),
+      invitar: (id) => handleSolicitudAction('invitar', findSolicitudBandejaRow(rows, id)),
     });
     persistViewMeta();
     refreshIndicator?.hide();
@@ -510,10 +538,15 @@ function solicitudesMenuItems() {
 
 async function handleSolicitudAction(act, s) {
   if (!s) return;
-  const id = s.id;
+  const id = s.solicitud_id || s.id;
+  const invitacionId = s.invitacion_id != null && s.invitacion_id !== '' ? Number(s.invitacion_id) : null;
   if (act === 'detalle' || act === 'editar') {
     const reqIds = s.requerimiento_id ? [s.requerimiento_id] : [];
-    await showSolicitudCotizacionModal(reqIds, [], { solicitudId: id, initialTab: 'general' });
+    await showSolicitudCotizacionModal(reqIds, [], {
+      solicitudId: id,
+      invitacionId,
+      initialTab: 'general',
+    });
     loadSolicitudesTab();
     return;
   }

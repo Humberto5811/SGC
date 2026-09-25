@@ -206,6 +206,7 @@ export async function registrarConsulta(proveedorId, body, req) {
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
   const {
     resolveAnalistaInvitacionesPrevio,
+    esReinvitacionPosteriorEnRecepcion,
     ETAPA_CONSULTAS,
   } = await import('./consultasExpedienteEstado.js');
   const { getEstadoVigenteForUpdate } = await import('./expedienteEstadoPersistido.js');
@@ -213,23 +214,42 @@ export async function registrarConsulta(proveedorId, body, req) {
   const clientRequestId = `portal-consulta:${solicitud_id}:${proveedorId}:${Date.now()}`;
   let consultaRow = null;
 
+  const emitTrazaConsultaRegistrada = async (tx) => {
+    await registrarTrazaPortal({
+      solicitud_id,
+      proveedor_id: proveedorId,
+      requerimiento_id: requerimientoId,
+      evento: 'CONSULTA_REGISTRADA',
+      detalle: asunto || consulta.slice(0, 120),
+      usuario: req.portalProveedor?.ruc,
+      ip: clientIp(req),
+    }, { client: tx });
+  };
+
   await withTransaction(async (tx) => {
     const ev = await getEstadoVigenteForUpdate(tx, requerimientoId);
     const etapaActual = String(ev?.etapa_codigo || '').toUpperCase();
     const analistaPrevio = await resolveAnalistaInvitacionesPrevio(requerimientoId, ev, tx);
 
-    const domainInsert = async (dbTx) => {
+    const domainInsert = async (dbTx, { preservarErvRecepcion = false } = {}) => {
+      const historialRegistro = [{
+        tipo: 'registro_portal',
+        fecha: new Date().toISOString(),
+        invitacion_id: invRow.id || null,
+        ...(preservarErvRecepcion ? { preservar_erv_recepcion: true } : {}),
+      }];
       const { rows } = await dbTx.query(`
         INSERT INTO consultas_proveedor (
           solicitud_id, proveedor_id, requerimiento_id, invitacion_id,
-          asunto, consulta, adjuntos, estado, responsable_actual
+          asunto, consulta, adjuntos, estado, responsable_actual, historial
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'PENDIENTE', 'Analista CM')
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'PENDIENTE', 'Analista CM', $8::jsonb)
         RETURNING *
       `, [
         solicitud_id, proveedorId, requerimientoId, invRow.id || null,
         asunto || 'Consulta', consulta,
         JSON.stringify(adjuntos || []),
+        JSON.stringify(historialRegistro),
       ]);
       consultaRow = rows[0];
       return consultaRow;
@@ -237,7 +257,25 @@ export async function registrarConsulta(proveedorId, body, req) {
 
     if (etapaActual === ETAPA_CONSULTAS) {
       consultaRow = await domainInsert(tx);
+      await emitTrazaConsultaRegistrada(tx);
       return;
+    }
+
+    if (etapaActual === 'RECEPCION_COTIZACIONES') {
+      const posterior = await esReinvitacionPosteriorEnRecepcion(
+        solicitud_id,
+        invRow.id,
+        invRow.nro_invitacion,
+        tx,
+      );
+      if (posterior) {
+        consultaRow = await domainInsert(tx, { preservarErvRecepcion: true });
+        await emitTrazaConsultaRegistrada(tx);
+        return;
+      }
+      const err = new Error('La convocatoria no admite consultas en la etapa actual del expediente');
+      err.status = 409;
+      throw err;
     }
 
     if (etapaActual !== 'INVITACIONES') {
@@ -269,12 +307,7 @@ export async function registrarConsulta(proveedorId, body, req) {
       client: tx,
       domainMutator: async (dbTx) => domainInsert(dbTx),
     });
-  });
-
-  await registrarTrazaPortal({
-    solicitud_id, proveedor_id: proveedorId, requerimiento_id: requerimientoId,
-    evento: 'CONSULTA_REGISTRADA', detalle: asunto || consulta.slice(0, 120),
-    usuario: req.portalProveedor?.ruc, ip: clientIp(req),
+    await emitTrazaConsultaRegistrada(tx);
   });
 
   const { rows: enriched } = await query(`
@@ -674,7 +707,7 @@ export async function responderConsultaAnalista(consultaId, body, usuario) {
 
   const { withTransaction } = await import('./workflow/workflowTransaction.js');
   const { transicionarExpediente } = await import('./expedienteTransicion.js');
-  const { ETAPA_CONSULTAS } = await import('./consultasExpedienteEstado.js');
+  const { ETAPA_CONSULTAS, consultaPreservaErvRecepcion } = await import('./consultasExpedienteEstado.js');
   const { getEstadoVigenteForUpdate } = await import('./expedienteEstadoPersistido.js');
 
   let c = null;
@@ -698,6 +731,10 @@ export async function responderConsultaAnalista(consultaId, body, usuario) {
       throw err;
     }
     c = rows[0];
+
+    if (consultaPreservaErvRecepcion(c)) {
+      return;
+    }
 
     const { rows: pend } = await tx.query(
       `SELECT COUNT(*)::int AS n FROM consultas_proveedor

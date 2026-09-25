@@ -133,10 +133,10 @@ try {
   ok(Number(after3[0].nro_invitacion_presentacion) === 1 && Number(after3[1].nro_invitacion_presentacion) === 2, '14. Inv.3 no renumera');
 
   const bandeja = await listarSolicitudesBandeja(1, 50, { search: `SC-D2-${ts}` });
-  const scRow = (bandeja.data || []).find((s) => s.id === base.sid);
-  ok(scRow && Number(scRow.cantidad_proveedores) === 1, '15. Cant. proveedores = 1');
-  ok(scRow && Number(scRow.cantidad_invitaciones) === 3, '16. Cant. invitaciones = 3 actos');
-  ok(String(scRow.estado_invitacion || '').startsWith('Envíos:'), '16b. contador_envios etiquetado Envíos');
+  const mine = (bandeja.data || []).filter((r) => Number(r.solicitud_id || r.id) === Number(base.sid));
+  ok(mine.length === 3, '15. Bandeja solicitudes: 3 filas (una por invitación)');
+  ok(mine.every((r) => r.invitacion_id != null), '15b. Cada fila tiene invitacion_id');
+  ok(mine.every((r) => Number(r.cotizaciones_recibidas || 0) <= 1), '16. Cotización contada por invitacion_id');
 
   const recep = await listarRecepcionCotizaciones({});
   const recepMine = recep.filter((r) => r.solicitud_id === base.sid && r.proveedor_id === base.proveedorId);

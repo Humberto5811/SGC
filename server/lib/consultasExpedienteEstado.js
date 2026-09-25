@@ -34,8 +34,62 @@ export function parseErvMetadata(estadoVigente = null) {
 }
 
 /**
- * Analista de Invitaciones previo (PERSONA en ERV, operativo en metadata o última asignación).
+ * Reinvitación posterior en Recepción: exige cotización COTIZACION_PRESENTADA canónica
+ * (invitacion_id NOT NULL) de otra invitación de la misma SC, y que la invitación actual
+ * sea estrictamente posterior a esa invitación previa (nro/fecha/id — sin atajo nro>1 solo).
  */
+export async function esReinvitacionPosteriorEnRecepcion(
+  solicitudId,
+  invitacionId,
+  _nroInvitacion,
+  client = null,
+) {
+  const sid = parseInt(solicitudId, 10);
+  const iid = parseInt(invitacionId, 10);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(iid) || iid <= 0) return false;
+  const q = client?.query ? client.query.bind(client) : query;
+  const { rows } = await q(
+    `SELECT 1
+     FROM cotizaciones_proveedor cp
+     INNER JOIN invitacion_proveedores ip_prev ON ip_prev.id = cp.invitacion_id
+     INNER JOIN invitacion_proveedores ip_curr ON ip_curr.id = $2
+     WHERE cp.solicitud_id = $1
+       AND cp.estado = 'COTIZACION_PRESENTADA'
+       AND cp.invitacion_id IS NOT NULL
+       AND cp.invitacion_id <> $2
+       AND ip_prev.solicitud_id = $1
+       AND ip_curr.solicitud_id = $1
+       AND (
+         COALESCE(ip_curr.nro_invitacion, 1) > COALESCE(ip_prev.nro_invitacion, 1)
+         OR (
+           COALESCE(ip_curr.nro_invitacion, 1) = COALESCE(ip_prev.nro_invitacion, 1)
+           AND (
+             ip_curr.fecha_envio > ip_prev.fecha_envio
+             OR (
+               ip_curr.fecha_envio IS NOT DISTINCT FROM ip_prev.fecha_envio
+               AND ip_curr.id > ip_prev.id
+             )
+           )
+         )
+       )
+     LIMIT 1`,
+    [sid, iid],
+  );
+  return rows.length > 0;
+}
+
+/** true si la consulta se registró sin mover ERV desde Recepción (historial JSON). */
+export function consultaPreservaErvRecepcion(consultaRow) {
+  if (!consultaRow) return false;
+  let historial = consultaRow.historial;
+  if (typeof historial === 'string') {
+    try { historial = JSON.parse(historial); } catch (_) { return false; }
+  }
+  if (!Array.isArray(historial)) return false;
+  return historial.some((e) => e && e.preservar_erv_recepcion === true);
+}
+
+/** Analista de Invitaciones previo (PERSONA en ERV, operativo en metadata o última asignación). */
 export async function resolveAnalistaInvitacionesPrevio(requerimientoId, estadoVigente = null, client = null) {
   const rid = parseInt(requerimientoId, 10);
   if (!Number.isFinite(rid) || rid <= 0) return null;
@@ -233,6 +287,8 @@ export function applyPilotConsultasObservada({
 export default {
   ETAPA_CONSULTAS,
   parseErvMetadata,
+  esReinvitacionPosteriorEnRecepcion,
+  consultaPreservaErvRecepcion,
   resolveAnalistaInvitacionesPrevio,
   applyErvPostConsultaProveedorRegistrada,
   applyErvPostCotizacionPresentada,

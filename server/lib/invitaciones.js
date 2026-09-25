@@ -8,7 +8,7 @@ import {
 import { enviarInvitacionProveedorEmail } from './emailService.js';
 import { listarBandejaInvitaciones, SUBMODULO_INVITACIONES } from './invitacionesBandeja.js';
 import { prepararInvitacionPortal } from './proveedorPortal.js';
-import { normalizeCronogramaRow } from './cronogramaDatetime.js';
+import { normalizeCronogramaRow, CRONOGRAMA_SELECT_SQL } from './cronogramaDatetime.js';
 import { normalizeDetalleItemsSc } from '../../shared/cotizacionItemRequisitos.js';
 import { withTransaction } from './workflow/workflowTransaction.js';
 
@@ -974,58 +974,151 @@ export async function seedProveedoresDemo() {
 export async function listarSolicitudesBandeja(page, pageSize, queryParams = {}) {
   const offset = (page - 1) * pageSize;
   const params = [];
-  let where = 'WHERE 1=1';
+  let scFilter = 'WHERE 1=1';
   if (queryParams.estado) {
     params.push(queryParams.estado);
-    where += ` AND sc.estado = $${params.length}`;
+    scFilter += ` AND sc.estado = $${params.length}`;
   }
   if (queryParams.search) {
     params.push(`%${queryParams.search}%`);
-    where += ` AND (sc.codigo ILIKE $${params.length} OR sc.denominacion ILIKE $${params.length})`;
+    scFilter += ` AND (sc.codigo ILIKE $${params.length} OR sc.denominacion ILIKE $${params.length})`;
   }
 
-  const countRes = await query(`SELECT COUNT(*)::int AS total FROM solicitudes_cotizacion sc ${where}`, params);
+  const countSql = `
+    SELECT COUNT(*)::int AS total FROM (
+      SELECT ip.id AS row_key
+      FROM invitacion_proveedores ip
+      JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+      ${scFilter}
+      UNION ALL
+      SELECT sc.id AS row_key
+      FROM solicitudes_cotizacion sc
+      ${scFilter}
+        AND NOT EXISTS (SELECT 1 FROM invitacion_proveedores ip0 WHERE ip0.solicitud_id = sc.id)
+    ) bandeja_filas`;
+  const countRes = await query(countSql, params);
   const total = countRes.rows[0].total;
 
   params.push(pageSize, offset);
+  const lim = params.length - 1;
+  const off = params.length;
   const { rows } = await query(`
-    SELECT sc.*,
-      COALESCE(inv_stats.proveedores, 0)::int AS cantidad_proveedores,
-      COALESCE(inv_stats.invitaciones, 0)::int AS cantidad_invitaciones,
-      COALESCE(inv_stats.enviados, 0)::int AS proveedores_enviados,
-      COALESCE(cot_stats.cotizaciones, 0)::int AS cotizaciones_recibidas,
-      COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
-      to_char(sc.cotizaciones_fin, 'YYYY-MM-DD"T"HH24:MI') AS fecha_culminacion,
-      (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_id,
-      (SELECT r.codigo FROM solicitud_requerimientos sr
-        JOIN requerimientos r ON r.id = sr.requerimiento_id
-        WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_codigo,
-      COALESCE(sc.contador_envios, 0)::int AS contador_envios,
-      CASE
-        WHEN COALESCE(sc.contador_envios, 0) > 0 THEN 'Envíos: ' || sc.contador_envios
-        WHEN COALESCE(inv_stats.proveedores, 0) = 0 THEN 'Sin invitar'
-        WHEN COALESCE(inv_stats.enviados, 0) >= COALESCE(inv_stats.proveedores, 0) AND inv_stats.proveedores > 0 THEN 'Enviado'
-        WHEN COALESCE(inv_stats.enviados, 0) > 0 THEN 'Parcial'
-        ELSE 'Pendiente'
-      END AS estado_invitacion
-    FROM solicitudes_cotizacion sc
-    LEFT JOIN LATERAL (
-      SELECT COUNT(DISTINCT ip.proveedor_id)::int AS proveedores,
-        COUNT(*)::int AS invitaciones,
-        COUNT(*) FILTER (WHERE ip.estado IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA'))::int AS enviados
-      FROM invitacion_proveedores ip WHERE ip.solicitud_id = sc.id
-    ) inv_stats ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT COUNT(*)::int AS cotizaciones FROM cotizaciones_proveedor cp
-      WHERE cp.solicitud_id = sc.id AND cp.estado = 'COTIZACION_PRESENTADA'
-    ) cot_stats ON TRUE
-    ${where}
-    ORDER BY sc.anio DESC, sc.correlativo DESC, sc.id DESC
-    LIMIT $${params.length - 1} OFFSET $${params.length}
+    SELECT * FROM (
+      SELECT
+        sc.id AS solicitud_id,
+        sc.id AS id,
+        ip.id AS invitacion_id,
+        ip.nro_invitacion,
+        ip.proveedor_id,
+        p.ruc AS proveedor_ruc,
+        p.razon_social AS proveedor_razon_social,
+        COALESCE(NULLIF(TRIM(ip.estado_invitacion), ''), ip.estado, 'PENDIENTE') AS estado_invitacion,
+        ip.estado AS invitacion_estado,
+        ip.fecha_envio,
+        ip.fecha_ultimo_envio,
+        sc.codigo,
+        sc.anio,
+        sc.correlativo,
+        sc.estado,
+        sc.objeto,
+        sc.denominacion,
+        sc.tipo,
+        sc.fecha_publicacion,
+        COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
+        to_char(sc.cotizaciones_fin, 'YYYY-MM-DD"T"HH24:MI') AS fecha_culminacion,
+        (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr
+          WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_id,
+        (SELECT r.codigo FROM solicitud_requerimientos sr
+          JOIN requerimientos r ON r.id = sr.requerimiento_id
+          WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_codigo,
+        COALESCE(sc.contador_envios, 0)::int AS contador_envios,
+        COALESCE(cot_inv.cotizaciones, 0)::int AS cotizaciones_recibidas,
+        cot_inv.cotizacion_id,
+        ${CRONOGRAMA_SELECT_SQL},
+        1 AS _sort_tipo,
+        sc.anio AS _sort_anio,
+        sc.correlativo AS _sort_corr,
+        sc.id AS _sort_sc_id,
+        COALESCE(ip.nro_invitacion, 0) AS _sort_nro_inv,
+        ip.id AS _sort_inv_id
+      FROM invitacion_proveedores ip
+      JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+      JOIN proveedores p ON p.id = ip.proveedor_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS cotizaciones, MAX(cp.id) AS cotizacion_id
+        FROM cotizaciones_proveedor cp
+        WHERE cp.invitacion_id = ip.id AND UPPER(COALESCE(cp.estado, '')) = 'COTIZACION_PRESENTADA'
+      ) cot_inv ON TRUE
+      ${scFilter}
+
+      UNION ALL
+
+      SELECT
+        sc.id AS solicitud_id,
+        sc.id AS id,
+        NULL::int AS invitacion_id,
+        NULL::int AS nro_invitacion,
+        NULL::int AS proveedor_id,
+        NULL::text AS proveedor_ruc,
+        NULL::text AS proveedor_razon_social,
+        CASE
+          WHEN COALESCE(sc.contador_envios, 0) > 0 THEN 'Envíos: ' || sc.contador_envios
+          ELSE 'Sin invitar'
+        END AS estado_invitacion,
+        NULL::text AS invitacion_estado,
+        sc.fecha_publicacion AS fecha_envio,
+        NULL::timestamptz AS fecha_ultimo_envio,
+        sc.codigo,
+        sc.anio,
+        sc.correlativo,
+        sc.estado,
+        sc.objeto,
+        sc.denominacion,
+        sc.tipo,
+        sc.fecha_publicacion,
+        COALESCE(sc.denominacion, sc.objeto, '') AS descripcion_contratacion,
+        to_char(sc.cotizaciones_fin, 'YYYY-MM-DD"T"HH24:MI') AS fecha_culminacion,
+        (SELECT sr.requerimiento_id FROM solicitud_requerimientos sr
+          WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_id,
+        (SELECT r.codigo FROM solicitud_requerimientos sr
+          JOIN requerimientos r ON r.id = sr.requerimiento_id
+          WHERE sr.solicitud_id = sc.id ORDER BY sr.requerimiento_id LIMIT 1) AS requerimiento_codigo,
+        COALESCE(sc.contador_envios, 0)::int AS contador_envios,
+        COALESCE(cot_legacy.cotizaciones, 0)::int AS cotizaciones_recibidas,
+        cot_legacy.cotizacion_id,
+        ${CRONOGRAMA_SELECT_SQL},
+        0 AS _sort_tipo,
+        sc.anio AS _sort_anio,
+        sc.correlativo AS _sort_corr,
+        sc.id AS _sort_sc_id,
+        0 AS _sort_nro_inv,
+        0 AS _sort_inv_id
+      FROM solicitudes_cotizacion sc
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS cotizaciones, MAX(cp.id) AS cotizacion_id
+        FROM cotizaciones_proveedor cp
+        WHERE cp.solicitud_id = sc.id
+          AND cp.invitacion_id IS NULL
+          AND UPPER(COALESCE(cp.estado, '')) = 'COTIZACION_PRESENTADA'
+      ) cot_legacy ON TRUE
+      ${scFilter}
+        AND NOT EXISTS (SELECT 1 FROM invitacion_proveedores ip0 WHERE ip0.solicitud_id = sc.id)
+    ) bandeja
+    ORDER BY _sort_anio DESC, _sort_corr DESC, _sort_sc_id DESC, _sort_nro_inv DESC, _sort_inv_id DESC
+    LIMIT $${lim} OFFSET $${off}
   `, params);
 
   return {
-    data: rows.map(normalizeCronogramaRow),
+    data: rows.map((r) => {
+      const row = normalizeCronogramaRow(r);
+      delete row._sort_tipo;
+      delete row._sort_anio;
+      delete row._sort_corr;
+      delete row._sort_sc_id;
+      delete row._sort_nro_inv;
+      delete row._sort_inv_id;
+      return row;
+    }),
     total,
     page,
     pageSize,
