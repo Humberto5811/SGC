@@ -115,6 +115,17 @@ export function buildObservacionEntry(payload, fields = {}) {
     actuaciones: [],
     estado: fields.estado || 'EMITIDA',
     cerrada: false,
+    ...(fields.consulta_id != null ? { consulta_id: Number(fields.consulta_id) } : {}),
+    ...(fields.consulta_invitacion_id != null
+      ? { consulta_invitacion_id: Number(fields.consulta_invitacion_id) }
+      : {}),
+    ...(fields.nro_invitacion_consulta != null
+      ? { nro_invitacion_consulta: fields.nro_invitacion_consulta }
+      : {}),
+    ...(fields.etapa_expediente_origen
+      ? { etapa_expediente_origen: String(fields.etapa_expediente_origen) }
+      : {}),
+    ...(fields.derivacion_explicita === true ? { derivacion_explicita: true } : {}),
   };
 }
 

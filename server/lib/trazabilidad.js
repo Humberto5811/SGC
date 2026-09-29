@@ -826,9 +826,21 @@ export async function registrarSubsanacionDerivacion({
     resolveUsuarioDestinoRetornoSubsanacion,
     resolveUsuarioIdDesdeActor,
     buildErrorSubsanacionSinPersona,
+    resolveRetornoSubsanacionDerivacionExplicita,
   } = await import('./pilotRegistroEvaluacion.js');
-  const etapaDest = mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo)
+
+  const retornoDerivacionExplicita = await resolveRetornoSubsanacionDerivacionExplicita(
+    requerimientoId,
+    observacionId,
+  );
+
+  let destinoSubmoduloEfectivo = destinoSubmodulo;
+  const etapaDest = retornoDerivacionExplicita?.etapaCodigo
+    || mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo)
     || String(destinoEtapa || etapaDestinoLabel || '').toUpperCase().replace('REGISTRADO', 'REGISTRO');
+  if (retornoDerivacionExplicita) {
+    destinoSubmoduloEfectivo = retornoDerivacionExplicita.submoduloLabel;
+  }
 
   let uid = await resolveUsuarioDestinoRetornoSubsanacion({
     requerimientoId,
@@ -840,14 +852,14 @@ export async function registrarSubsanacionDerivacion({
   });
 
   const cambiaUbicacion = etapaDest && etapaDest !== etapaCanon;
-  const destinoSoportado = mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmodulo) != null;
+  const destinoSoportado = mapDestinoSubmoduloAEtapaSubsanacion(destinoSubmoduloEfectivo) != null;
 
   if (cambiaUbicacion) {
     if (!uid) throw buildErrorSubsanacionSinPersona();
-    if (destinoSoportado && destinoSubmodulo) {
+    if (!retornoDerivacionExplicita && destinoSoportado && destinoSubmoduloEfectivo) {
       await assertUsuarioDestinoSubsanacionElegible(
         requerimientoId,
-        destinoSubmodulo,
+        destinoSubmoduloEfectivo,
         uid,
         observacionId,
       );
@@ -861,6 +873,9 @@ export async function registrarSubsanacionDerivacion({
 
   let evento = 'OBSERVACION_SUBSANADA';
   if (etapaCanon === 'COORDINACION_CM') evento = 'COORDINACION_CM_SUBSANADA';
+  else if (retornoDerivacionExplicita && etapaCanon === 'REGISTRO') {
+    evento = 'CONSULTA_DERIVACION_EXPLICITA_SUBSANADA';
+  }
 
   const { getEtapaMeta } = await import('../../shared/workflow/etapas.js');
   const metaDest = etapaDest ? getEtapaMeta(etapaDest) : null;
@@ -877,13 +892,16 @@ export async function registrarSubsanacionDerivacion({
     metadata: {
       client_request_id: `subsanar:${requerimientoId}:${Date.now()}`,
       origen_submodulo: origenSubmodulo,
-      destino_submodulo: destinoSubmodulo || '',
+      destino_submodulo: destinoSubmoduloEfectivo || '',
       destino_etapa: etapaDest || etapaDestinoLabel || '',
       destino_persona: destinoPersona || '',
       responsable_emisor_id: uid,
       observacion_id: observacionId,
       usuario_destino_id: uid,
       via: 'registrarSubsanacionDerivacion',
+      derivacion_explicita_retorno: retornoDerivacionExplicita ? true : undefined,
+      etapa_expediente_origen: retornoDerivacionExplicita?.etapaCodigo || undefined,
+      consulta_id: retornoDerivacionExplicita?.obs?.consulta_id ?? undefined,
     },
     actorRol: usuario || 'Sistema',
     domainMutator: async (tx) => {

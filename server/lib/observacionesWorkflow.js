@@ -4,6 +4,7 @@
  */
 import { submoduloLabelToEtapa } from './observacionDestino.js';
 import { mapDestinoSubmoduloAEtapaSubsanacion } from './candidatosObservacionDestino.js';
+import { getEtapaMeta } from '../../shared/workflow/etapas.js';
 import { buildObservacionEntry } from './observacionesExpediente.js';
 import {
   ESTADOS_OBS,
@@ -216,6 +217,20 @@ export function emitirObservacion(payload, fields = {}) {
   return { observacion: entry, esNueva: true };
 }
 
+function resolveRetornoDerivacionExplicitaDesdeObs(obs) {
+  if (!obs || obs.derivacion_explicita !== true) return null;
+  const etapaCodigo = String(obs.etapa_expediente_origen || '')
+    .trim()
+    .toUpperCase()
+    .replace(/^REGISTRADO$/, 'REGISTRO');
+  if (!etapaCodigo) return null;
+  const meta = getEtapaMeta(etapaCodigo) || {};
+  return {
+    etapaCodigo,
+    submoduloLabel: meta.label || meta.submoduloLabel || etapaCodigo,
+  };
+}
+
 /** Registra subsanación en el hilo indicado; retorna al emisor del hilo. */
 export function registrarSubsanacionObservacion(payload, {
   observacion_id,
@@ -245,10 +260,15 @@ export function registrarSubsanacionObservacion(payload, {
 
   const now = new Date().toISOString();
   const origenMod = origen_submodulo || obs.moduloReceptor || 'Registro de Requerimiento';
-  const destinoEmisor = obs.origen_submodulo || obs.moduloEmisor || obs.moduloOrigen || 'DEC';
-  const destinoEtapa = mapDestinoSubmoduloAEtapaSubsanacion(destinoEmisor)
+  const retornoExplicito = resolveRetornoDerivacionExplicitaDesdeObs(obs);
+  let destinoEmisor = obs.origen_submodulo || obs.moduloEmisor || obs.moduloOrigen || 'DEC';
+  let destinoEtapa = mapDestinoSubmoduloAEtapaSubsanacion(destinoEmisor)
     || submoduloLabelToEtapa(destinoEmisor)
     || 'DEC';
+  if (retornoExplicito) {
+    destinoEtapa = retornoExplicito.etapaCodigo;
+    destinoEmisor = retornoExplicito.submoduloLabel;
+  }
 
   obs.subsanacion = texto;
   obs.respuesta = texto;
@@ -261,6 +281,9 @@ export function registrarSubsanacionObservacion(payload, {
   obs.subsanacion_destino_submodulo = destinoEmisor;
   obs.subsanacion_destino_etapa = destinoEtapa;
   obs.subsanacion_destino_persona = obs.gerente || obs.usuarioOrigen || '';
+  if (retornoExplicito) {
+    obs.subsanacion_derivacion_explicita_retorno = true;
+  }
 
   pushActuacion(obs, { tipo: 'subsanacion', modulo: origenMod, usuario: usuario || 'Sistema', texto });
   pushActuacion(obs, {
@@ -282,6 +305,7 @@ export function registrarSubsanacionObservacion(payload, {
     destinoSubmodulo: destinoEmisor,
     destinoEtapa,
     destinoPersona: obs.gerente || obs.usuarioOrigen || '',
+    derivacionExplicitaRetorno: !!retornoExplicito,
   };
 }
 

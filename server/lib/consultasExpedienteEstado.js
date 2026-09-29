@@ -12,6 +12,34 @@ import {
 import { FUENTE_RESPONSABLE } from './expedienteEstadoPersistido.js';
 
 export const ETAPA_CONSULTAS = 'CONSULTAS_OBSERVACIONES';
+export const ETAPA_RECEPCION_COTIZACIONES = 'RECEPCION_COTIZACIONES';
+export const EVENTO_CONSULTA_DERIVADA_EXPLICITA = 'CONSULTA_DERIVADA_EXPLICITA';
+
+/** RC8.17.8H6-C3-D5.1 — evento workflow para Observar/Derivar desde consulta en RC → Registro. */
+export function resolveEventoObservacionConsultasExpediente(etapaVigenteCodigo, {
+  consultaId = null,
+  destinoEtapa = '',
+  destinoSubmodulo = '',
+} = {}) {
+  const etapa = String(etapaVigenteCodigo || '').trim().toUpperCase();
+  const destEtapa = String(destinoEtapa || '').trim().toUpperCase().replace(/^REGISTRADO$/, 'REGISTRO');
+  const destSub = String(destinoSubmodulo || '').trim();
+  const destinoEsRegistro = destEtapa === 'REGISTRO'
+    || /registro de requerimiento/i.test(destSub);
+
+  if (
+    etapa === ETAPA_RECEPCION_COTIZACIONES
+    && consultaId != null
+    && Number.isFinite(Number(consultaId))
+    && destinoEsRegistro
+  ) {
+    return EVENTO_CONSULTA_DERIVADA_EXPLICITA;
+  }
+  if (etapa === ETAPA_CONSULTAS) {
+    return 'CONSULTAS_OBSERVADA';
+  }
+  return 'CONSULTAS_OBSERVADA';
+}
 
 /** RC8.17.8H6-C3-A1 — metadata normalizada desde fila ERV (metadata o metadata_json). */
 export function parseErvMetadata(estadoVigente = null) {
@@ -294,4 +322,7 @@ export default {
   applyErvPostCotizacionPresentada,
   applyErvPostConsultaProveedorAbsuelta,
   applyPilotConsultasObservada,
+  resolveEventoObservacionConsultasExpediente,
+  EVENTO_CONSULTA_DERIVADA_EXPLICITA,
+  ETAPA_RECEPCION_COTIZACIONES,
 };

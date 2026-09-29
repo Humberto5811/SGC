@@ -80,8 +80,8 @@ const viewSrc = readFileSync(
 ok(viewSrc.includes('data-consulta-id'), 'I — Ver usa consulta.id en bandeja');
 ok(viewSrc.includes('showConsultaDetalleModal'), 'I — detalle directo por consulta');
 ok(!viewSrc.includes('cantidad_consultas'), 'A — FE sin columna Cantidad agrupada');
-ok(viewSrc.includes('Estado consulta'), 'G — columnas estado consulta vs expediente');
-ok(viewSrc.includes('Estado expediente'), 'G — columna estado expediente');
+ok(viewSrc.includes('Estado consulta'), 'G — columnas estado consulta vs ERV');
+ok(viewSrc.includes('<th>Estado</th>'), 'G — columna Estado (ERV)');
 
 // A, B, C, F — misma SC: legacy respondida + Inv.7 pendiente
 const base = await seedSc('main');

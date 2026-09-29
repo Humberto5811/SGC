@@ -133,6 +133,14 @@ const DEFS = [
   [B, CO, 'CONSULTAS_OBSERVADA', CO, false, 'consultas:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_CONSULTAS', null],
   [S, CO, 'CONSULTAS_OBSERVADA', CO, false, 'consultas:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_CONSULTAS', null],
   [L, CO, 'CONSULTAS_OBSERVADA', CO, false, 'consultas:observar', 'USUARIO_AU', 'GUARD_OBSERVAR_CONSULTAS', null],
+  // RC8.17.8H6-C3-D5.1 — derivación explícita consulta en Recepción → Registro (operador).
+  [B, RC, 'CONSULTA_DERIVADA_EXPLICITA', R, true, 'consultas:derivar_explicita', 'USUARIO_AU', 'GUARD_CONSULTA_DERIVADA_EXPLICITA', null],
+  [S, RC, 'CONSULTA_DERIVADA_EXPLICITA', R, true, 'consultas:derivar_explicita', 'USUARIO_AU', 'GUARD_CONSULTA_DERIVADA_EXPLICITA', null],
+  [L, RC, 'CONSULTA_DERIVADA_EXPLICITA', R, true, 'consultas:derivar_explicita', 'USUARIO_AU', 'GUARD_CONSULTA_DERIVADA_EXPLICITA', null],
+  // RC8.17.8H6-C3-D5.2 — retorno subsanación derivación explícita RC → Registro.
+  [B, R, 'CONSULTA_DERIVACION_EXPLICITA_SUBSANADA', RC, true, 'consultas:subsanar_derivacion_explicita', 'DIRECTOR_GERENTE', 'GUARD_CONSULTA_DERIVACION_EXPLICITA_SUBSANADA', null],
+  [S, R, 'CONSULTA_DERIVACION_EXPLICITA_SUBSANADA', RC, true, 'consultas:subsanar_derivacion_explicita', 'DIRECTOR_GERENTE', 'GUARD_CONSULTA_DERIVACION_EXPLICITA_SUBSANADA', null],
+  [L, R, 'CONSULTA_DERIVACION_EXPLICITA_SUBSANADA', RC, true, 'consultas:subsanar_derivacion_explicita', 'DIRECTOR_GERENTE', 'GUARD_CONSULTA_DERIVACION_EXPLICITA_SUBSANADA', null],
   [B, CO, 'OBSERVACION_SUBSANADA', CO, false, 'observacion:subsanar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_SUBSANAR_OBS', null],
   [S, CO, 'OBSERVACION_SUBSANADA', CO, false, 'observacion:subsanar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_SUBSANAR_OBS', null],
   [L, CO, 'OBSERVACION_SUBSANADA', CO, false, 'observacion:subsanar', 'ESPECIALISTA_CONTRATACIONES', 'GUARD_SUBSANAR_OBS', null],

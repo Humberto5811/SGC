@@ -352,6 +352,13 @@ export async function resolveUsuarioDestinoRetornoSubsanacion({
   if (!Number.isFinite(rid) || rid <= 0) return null;
 
   const etapaRetorno = normalizeEtapaRetornoSubsanacion(destinoEtapa, metadata);
+  if (etapaRetorno === 'RECEPCION_COTIZACIONES') {
+    const { obs } = await resolveObservacionPayload(rid, observacionId, client);
+    if (obs?.derivacion_explicita === true && obs?.usuario_origen_id != null
+      && Number.isFinite(Number(obs.usuario_origen_id))) {
+      return Number(obs.usuario_origen_id);
+    }
+  }
   if (etapaRetorno === ETAPA_CONSULTAS_RETORNO) {
     const emisorCo = await resolveEmisorConsultasRetornoInterno(rid, observacionId, client);
     if (emisorCo != null) return emisorCo;
@@ -690,7 +697,36 @@ const PILOT_SUBSANACION_RETORNO_ETAPAS = Object.freeze([
   'REGISTRO_ORDEN',
 ]);
 
+/** RC8.17.8H6-C3-D5.2 — retorno subsanación cuando derivacion_explicita + etapa_expediente_origen. */
+export async function resolveRetornoSubsanacionDerivacionExplicita(
+  requerimientoId,
+  observacionId = null,
+  client = null,
+) {
+  const rid = Number(requerimientoId);
+  if (!Number.isFinite(rid) || rid <= 0) return null;
+  const { obs } = await resolveObservacionPayload(rid, observacionId, client);
+  if (!obs || obs.derivacion_explicita !== true) return null;
+  const etapaCodigo = String(obs.etapa_expediente_origen || '')
+    .trim()
+    .toUpperCase()
+    .replace(/^REGISTRADO$/, 'REGISTRO');
+  if (!etapaCodigo || !PILOT_SUBSANACION_RETORNO_ETAPAS.includes(etapaCodigo)) return null;
+  const meta = getEtapaMeta(etapaCodigo) || {};
+  return {
+    obs,
+    etapaCodigo,
+    submoduloLabel: meta.label || meta.submoduloLabel || etapaCodigo,
+  };
+}
+
 export function resolveDestinoEtapaSubsanacion(metadata = {}) {
+  if (metadata.derivacion_explicita_retorno === true) {
+    const origen = String(
+      metadata.etapa_expediente_origen || metadata.etapaExpedienteOrigen || '',
+    ).trim().toUpperCase().replace(/^REGISTRADO$/, 'REGISTRO');
+    if (origen) return origen;
+  }
   const raw = metadata.destino_etapa || metadata.destinoEtapa || '';
   const etapa = String(raw || '').trim().toUpperCase();
   if (etapa === 'REGISTRADO') return 'REGISTRO';
@@ -718,7 +754,8 @@ export async function applyPilotObservacionSubsanada({
   }
   if (destinoEtapa === etapaEfectiva) {
     const retornoInternoConsultas = destinoEtapa === 'CONSULTAS_OBSERVACIONES';
-    if (!retornoInternoConsultas) {
+    const retornoDerivacionExplicita = metadata.derivacion_explicita_retorno === true;
+    if (!retornoInternoConsultas && !retornoDerivacionExplicita) {
       return { resp, etapaEfectiva, labels, metaExtra: {}, usuarioDestinoEfectivo: usuarioDestinoId };
     }
   }
@@ -771,6 +808,11 @@ export async function applyPilotObservacionSubsanada({
     responsable_seleccionado_id: uid,
     observacion_id: obsId,
   };
+  if (metadata.derivacion_explicita_retorno === true) {
+    metaExtra.derivacion_explicita_retorno = true;
+    metaExtra.etapa_expediente_origen = metadata.etapa_expediente_origen || destinoEtapa;
+    if (metadata.consulta_id != null) metaExtra.consulta_id = metadata.consulta_id;
+  }
   if (destinoEtapa === 'DEC') metaExtra.pilot_observacion_subsanada_retorno_dec = true;
 
   return {
@@ -844,6 +886,7 @@ export default {
   resolveEmisorObservacionRetorno,
   resolveEmisorConsultasRetornoInterno,
   resolveUsuarioDestinoRetornoSubsanacion,
+  resolveRetornoSubsanacionDerivacionExplicita,
   resolveUsuarioIdDesdeNombreCompletoInequivoco,
   buildErrorSubsanacionSinPersona,
   resolveDirectorEvaluacionParaRequerimiento,

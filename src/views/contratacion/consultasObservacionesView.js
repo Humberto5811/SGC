@@ -382,6 +382,7 @@ function showConsultaDetalleModal(consulta) {
         modal.hide();
         loadConsultas(true);
       },
+      consultaId: consulta.id,
     });
 
     bindActionMenus(body, {
@@ -455,7 +456,7 @@ const CONSULTAS_THEAD = `<tr>
   <th class="co-col-fecha">Fecha</th>
   <th class="co-col-est-cons">Estado consulta</th>
   <th>Etapa</th>
-  <th>Estado expediente</th>
+  <th>Estado</th>
   <th>Responsable</th>
   <th class="text-center">Ver</th>
 </tr>`;

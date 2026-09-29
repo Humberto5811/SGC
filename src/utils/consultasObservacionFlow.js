@@ -34,7 +34,7 @@ export function usuarioPuedeSubsanarConsultas(reqRow) {
   return puedeSubsanar(CONSULTAS_SUBMODULO_LABEL, reqRow, uid);
 }
 
-export function buildConsultasObservacionModalConfig({ onReload } = {}) {
+export function buildConsultasObservacionModalConfig({ onReload, consultaId = null } = {}) {
   const userName = getUserDisplayName(authService.getCurrentUser?.() || {});
   return {
     submoduloLabel: CONSULTAS_SUBMODULO_LABEL,
@@ -53,6 +53,7 @@ export function buildConsultasObservacionModalConfig({ onReload } = {}) {
         destino_persona: data.destino_persona,
         destino_submodulo: data.destino_submodulo,
         destino_etapa: data.destino_etapa,
+        ...(consultaId != null ? { consulta_id: consultaId } : {}),
       });
       onReload?.();
     },
