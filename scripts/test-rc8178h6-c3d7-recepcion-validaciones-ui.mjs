@@ -1,5 +1,5 @@
 /**
- * RC8.17.8H6-C3-D7 — Compactación PT + responsable en Enviar a Validaciones.
+ * RC8.17.8H6-C3-D7 / D7.1 — Compactación PT + responsable + assert derivación.
  *
  *   node scripts/test-rc8178h6-c3d7-recepcion-validaciones-ui.mjs
  */
@@ -18,7 +18,8 @@ import {
   listarCandidatosTransicion,
   assertUsuarioDestinoTransicionElegible,
 } from '../server/lib/workflowTransicionResponsable.js';
-import { query } from '../server/db.js';
+import { resolverCentroDesdeRequerimiento } from '../server/lib/recepcionBienesAlcance.js';
+import { query, getClient } from '../server/db.js';
 import { runMigrations } from '../server/migrate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,8 +39,96 @@ console.log('\n=== RC8.17.8H6-C3-D7 ===\n');
   ok(rowsSrc.includes('data-cot-id') && rowsSrc.includes('data-ref'), 'A. conserva data-*');
   ok(rowsSrc.includes('rc-propuesta-doc-actions') && rowsSrc.includes('bi-eye') && rowsSrc.includes('bi-download'),
     'A. iconos compactos');
+  ok(rowsSrc.includes('text-danger rc-doc-dl'), 'D7.1 descarga text-danger');
   ok(rowsSrc.includes('aria-label="Ver documento"') && rowsSrc.includes('aria-label="Descargar documento"'),
     'A. accesibilidad');
+}
+
+{
+  const css = read('src/styles/recepcion-cotizacion-detalle.css');
+  ok(css.includes('.rc-propuesta-doc-actions .btn') && css.includes('background: transparent'), 'D7.1 override btn global');
+  ok(css.includes('min-width: 92px') && css.includes('word-break: normal'), 'D7.1 RTM col wrap moderado');
+}
+
+{
+  const valSrc = read('server/lib/validacionesCotizacion.js');
+  ok(
+    /assertUsuarioDestinoTransicionElegible\(\s*\n\s*rid,\s*\n\s*'COTIZACIONES_DERIVADAS_VALIDACION',\s*\n\s*responsableId,\s*\n\s*null,\s*\n\s*\)/.test(valSrc),
+    'D7.1 derivar assert usa null (requerimiento completo vía loadReqRow)',
+  );
+  ok(!valSrc.includes("estado_actual: 'RECEPCION_COTIZACIONES' }"), 'D7.1 sin stub RECEPCION en derivar');
+}
+
+console.log('\n— D7.1 regresión stub vs null (fixture transaccional REQ-D71-*, ROLLBACK) —');
+{
+  const ev = 'COTIZACIONES_DERIVADAS_VALIDACION';
+  const stubDerivar = (rid, tipo) => ({ id: rid, tipo, estado_actual: 'RECEPCION_COTIZACIONES' });
+  let stubSinCentro = false;
+  try {
+    resolverCentroDesdeRequerimiento(stubDerivar(1, 'Bienes'));
+  } catch (e) {
+    stubSinCentro = e.code === 'CENTRO_NO_RESUELTO';
+  }
+  ok(stubSinCentro, 'D7.1 stub derivar no resuelve centro (PRE-D7.1)');
+
+  await runMigrations();
+  const pgClient = await getClient();
+  try {
+    await pgClient.query('BEGIN');
+    const { rows: wRows } = await pgClient.query(
+      `SELECT id FROM usuarios WHERE LOWER(username)='wvasquez' AND activo = TRUE LIMIT 1`,
+    );
+    ok(!!wRows[0], 'D7.1 wvasquez activo en BD fixture');
+    const wvId = wRows[0].id;
+    const codigo = `REQ-D71-${Date.now()}`;
+    const payload = JSON.stringify({ area: { responsable: 'CNCC' } });
+    const ins = await pgClient.query(`
+      INSERT INTO requerimientos (tipo, codigo, denominacion, area, responsable, estado, payload, estado_actual)
+      VALUES ('bienes', $1, 'Test D7.1 assert', 'CNCC', 'CNCC', 'En tramite', $2::jsonb, 'RECEPCION_COTIZACIONES')
+      RETURNING id, tipo
+    `, [codigo, payload]);
+    const rid = ins.rows[0].id;
+    const reqTipo = ins.rows[0].tipo || 'bienes';
+    await pgClient.query(`
+      INSERT INTO expediente_estado_vigente (
+        requerimiento_id, etapa_codigo, etapa_label, estado_codigo, estado_label,
+        responsable_tipo, responsable_usuario_id, version, actualizado_at
+      ) VALUES ($1, 'RECEPCION_COTIZACIONES', 'Recepción de cotizaciones', 'EN_TRAMITE', 'En trámite',
+        'PERSONA', $2, 1, NOW())
+    `, [rid, wvId]);
+
+    const listaGet = await listarCandidatosTransicion(rid, ev, {}, null, pgClient);
+    const pickGet = listaGet.recomendado || listaGet.candidatos?.[0] || null;
+    ok(pickGet?.id === wvId, 'GET(null) recomienda wvasquez (centro CNCC + VALIDACIONES)');
+    ok(!!listaGet.centro?.codigo, 'GET(null) resuelve centro');
+
+    const stub = stubDerivar(rid, reqTipo);
+    const listaStub = await listarCandidatosTransicion(rid, ev, {}, stub, pgClient);
+    const poolStub = [...(listaStub.recomendado ? [listaStub.recomendado] : []), ...(listaStub.candidatos || [])];
+    ok(poolStub.length === 0, 'GET(stub derivar) pool vacío — regresión PRE-D7.1');
+
+    await assertUsuarioDestinoTransicionElegible(rid, ev, wvId, null, pgClient);
+    ok(true, 'assert(null) acepta wvasquez igual que GET');
+    let stubAssertFail = false;
+    try {
+      await assertUsuarioDestinoTransicionElegible(rid, ev, wvId, stub, pgClient);
+    } catch (e) {
+      stubAssertFail = e.code === 'RESPONSABLE_TRANSICION_INVALIDO';
+    }
+    ok(stubAssertFail, 'assert(stub derivar) rechaza wvasquez — fallaba PRE-D7.1');
+    let rej = false;
+    try {
+      await assertUsuarioDestinoTransicionElegible(rid, ev, 999999994, null, pgClient);
+    } catch (e) { rej = e.code === 'RESPONSABLE_TRANSICION_INVALIDO'; }
+    ok(rej, 'assert(null) no elegible sigue RESPONSABLE_TRANSICION_INVALIDO');
+    ok(
+      read('src/utils/derivarValidacionModal.js').includes('usuario_destino_id: seleccion.usuario_destino_id'),
+      'payload D7 derivar sin cambios',
+    );
+  } finally {
+    try { await pgClient.query('ROLLBACK'); } catch (_) { /* noop */ }
+    pgClient.release();
+  }
 }
 
 {
@@ -71,7 +160,6 @@ ok(read('src/styles.css').includes('recepcion-cotizacion-detalle.css'), ' estilo
 
 console.log('\n— wvasquez / candidatos (read-only) —');
 try {
-  await runMigrations();
   const { rows: wRows } = await query(`SELECT id, username, activo, centro FROM usuarios WHERE LOWER(username)='wvasquez' LIMIT 1`);
   const wvasquez = wRows[0];
   const { rows: scRows } = await query(`
@@ -118,4 +206,4 @@ try {
   process.exitCode = 1;
 }
 
-console.log('\nC3-D7 OK\n');
+console.log('\nC3-D7 / D7.1 OK\n');

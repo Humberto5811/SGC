@@ -82,7 +82,7 @@ function renderRtmCell(cotId, cell, esc) {
   return `<span class="rc-propuesta-doc-actions">
     <button type="button" class="btn btn-link btn-sm p-0 text-secondary rc-doc-ver" data-cot-id="${id}" data-ref="${ref}"
       title="Ver documento" aria-label="Ver documento"><i class="bi bi-eye" aria-hidden="true"></i></button>
-    <button type="button" class="btn btn-link btn-sm p-0 text-primary rc-doc-dl" data-cot-id="${id}" data-ref="${ref}"
+    <button type="button" class="btn btn-link btn-sm p-0 text-danger rc-doc-dl" data-cot-id="${id}" data-ref="${ref}"
       title="Descargar documento" aria-label="Descargar documento"><i class="bi bi-download" aria-hidden="true"></i></button>
   </span>`;
 }

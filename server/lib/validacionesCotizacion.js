@@ -1328,7 +1328,7 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
       rid,
       'COTIZACIONES_DERIVADAS_VALIDACION',
       responsableId,
-      { id: rid, tipo: cot.solicitud_tipo, estado_actual: 'RECEPCION_COTIZACIONES' },
+      null,
     );
   }
   if (String(cot.estado) !== 'COTIZACION_PRESENTADA') throw new Error('La cotización no está presentada');

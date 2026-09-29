@@ -6,10 +6,12 @@
 }
 
 .rc-propuesta-matriz-table .rc-rtm-col {
-  min-width: 76px;
-  max-width: 112px;
+  min-width: 92px;
+  max-width: 128px;
   white-space: normal;
-  word-break: break-word;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: auto;
 }
 
 .rc-propuesta-matriz-table .rc-desc-col,
@@ -26,9 +28,34 @@
   white-space: nowrap;
 }
 
+.rc-propuesta-doc-actions .btn,
 .rc-propuesta-doc-actions .btn-link {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  min-width: 0;
   line-height: 1;
-  text-decoration: none;
+  font-size: 1rem;
+  text-decoration: none !important;
+  transform: none !important;
+}
+
+.rc-propuesta-doc-actions .btn:hover,
+.rc-propuesta-doc-actions .btn-link:hover {
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+  opacity: 0.85;
+}
+
+.rc-propuesta-doc-actions .rc-doc-ver {
+  color: var(--text-secondary, #5f6368) !important;
+}
+
+.rc-propuesta-doc-actions .rc-doc-dl {
+  color: var(--bs-danger, #dc3545) !important;
 }
 
 .rc-cot-det-modal .rc-cot-resumen-card .card-body {
