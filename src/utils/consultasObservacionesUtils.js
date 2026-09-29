@@ -46,6 +46,7 @@ function fechaSortKey(iso) {
 /**
  * Consolida consultas planas en una fila por solicitud.
  * Detalle en `consultas` para el modal Ver.
+ * @deprecated C3-D5 — bandeja principal usa una fila por consulta; conservado para tests/legacy.
  */
 function pickBandejaContratoFromConsultas(consultas = []) {
   for (const c of consultas || []) {

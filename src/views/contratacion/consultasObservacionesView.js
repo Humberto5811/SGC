@@ -1,4 +1,4 @@
-// Consultas y Observaciones — bandeja consolidada por Solicitud (RC8.0 refresh no destructivo)
+// Consultas y Observaciones — una fila por consulta (RC8.17.8H6-C3-D5)
 import { contratacionesService } from '../../services/contratacionesService.js';
 import { authService } from '../../services/authService.js';
 import { getUserDisplayName } from '../../utils/userDisplay.js';
@@ -14,7 +14,6 @@ import {
 import { renderBandejaCanonicoEtapaEstadoRespCells } from '../../utils/bandejaExpedienteColumns.js';
 import { formatDateTimeLima } from '../../utils/dateTimeLima.js';
 import {
-  consolidarExpedientesConsultas,
   formatCentrosConsultas,
   formatRequerimientosConsultas,
 } from '../../utils/consultasObservacionesUtils.js';
@@ -42,7 +41,7 @@ const loadGuard = createRequestSequenceGuard();
 let lifecycle = null;
 let refreshIndicator = null;
 let consultasCache = [];
-let expedientesCache = [];
+let consultasBandejaRows = [];
 let filtroEstado = '';
 
 function esc(s) {
@@ -58,6 +57,50 @@ function labelEstadoConsulta(estado) {
   if (v === 'RESPONDIDA') return 'Respondida';
   if (v === 'PENDIENTE') return 'Pendiente';
   return estado || 'Pendiente';
+}
+
+function nroInvitacionDisplay(c) {
+  if (c?.invitacion_id == null) {
+    return { text: 'Legacy', cls: 'text-muted' };
+  }
+  const nro = c.nro_invitacion;
+  if (nro != null && String(nro).trim() !== '') {
+    return { text: String(nro), cls: 'fw-semibold' };
+  }
+  return { text: '—', cls: 'text-muted' };
+}
+
+function formatProveedorCompact(c) {
+  const ruc = String(c.ruc || '').trim();
+  const rs = String(c.razon_social || '').trim();
+  if (!ruc && !rs) return '—';
+  const title = [ruc, rs].filter(Boolean).join(' — ');
+  const line = ruc
+    ? `<span class="text-muted">${esc(ruc)}</span> ${esc(rs)}`
+    : esc(rs);
+  return `<span class="co-prov-cell small d-inline-block text-truncate" style="max-width:11rem;" title="${esc(title)}">${line}</span>`;
+}
+
+function formatAsuntoCell(c) {
+  const asunto = String(c.asunto || '—');
+  return `<span class="co-asunto-cell d-inline-block text-truncate" style="max-width:10rem;" title="${esc(asunto)}">${esc(asunto)}</span>`;
+}
+
+function consultasBandejaCompactStyles() {
+  return `
+    .co-bandeja-page .co-bandeja-table th,
+    .co-bandeja-page .co-bandeja-table td {
+      padding: 0.32rem 0.42rem;
+      line-height: 1.25;
+      vertical-align: middle;
+    }
+    .co-bandeja-page .co-col-inv { width: 3.25rem; text-align: center; white-space: nowrap; }
+    .co-bandeja-page .co-col-fecha { width: 6.5rem; white-space: nowrap; font-size: 0.75rem; }
+    .co-bandeja-page .co-col-est-cons { width: 6.5rem; }
+    .co-bandeja-page .req-col-etapa { max-width: 9.5rem; }
+    .co-bandeja-page .req-col-estado-cell { max-width: 9.5rem; }
+    .co-bandeja-page .req-col-resp { max-width: 10rem; }
+  `;
 }
 
 function badgeEstadoConsulta(estado) {
@@ -85,32 +128,32 @@ function renderConsultasSummaryCards(containerId) {
     <div id="${containerId}" class="row g-2 mb-3 traza-summary-cards">
       <div class="col-4">
         <div class="sgc-kpi-card">
-          <div class="kpi-label">Expedientes</div>
+          <div class="kpi-label">Consultas</div>
           <div class="kpi-value text-dark" data-consulta-kpi="total">0</div>
         </div>
       </div>
       <div class="col-4">
         <div class="sgc-kpi-card">
-          <div class="kpi-label">Con pendientes</div>
+          <div class="kpi-label">Pendientes</div>
           <div class="kpi-value text-warning" data-consulta-kpi="pendiente">0</div>
         </div>
       </div>
       <div class="col-4">
         <div class="sgc-kpi-card">
-          <div class="kpi-label">Todas respondidas</div>
+          <div class="kpi-label">Respondidas</div>
           <div class="kpi-value text-success" data-consulta-kpi="respondida">0</div>
         </div>
       </div>
     </div>`;
 }
 
-function updateConsultasSummaryCards(expedientes, containerId) {
+function updateConsultasSummaryCards(rows, containerId) {
   const root = document.getElementById(containerId);
   if (!root) return;
-  const all = Array.isArray(expedientes) ? expedientes : [];
-  const pendiente = all.filter((e) => (e.consultas || []).some((c) => String(c.estado || '').toUpperCase() === 'PENDIENTE')).length;
-  const respondida = all.filter((e) => (e.consultas || []).length
-    && (e.consultas || []).every((c) => String(c.estado || '').toUpperCase() === 'RESPONDIDA')).length;
+  const all = Array.isArray(rows) ? rows : [];
+  const norm = (c) => String(c?.estado || '').trim().toUpperCase();
+  const pendiente = all.filter((c) => norm(c) === 'PENDIENTE').length;
+  const respondida = all.filter((c) => norm(c) === 'RESPONDIDA').length;
   const map = { total: all.length, respondida, pendiente };
   Object.entries(map).forEach(([k, v]) => {
     const el = root.querySelector(`[data-consulta-kpi="${k}"]`);
@@ -166,6 +209,10 @@ function showResponderConsultaModal(consulta) {
                       <strong>${esc(consulta.solicitud_codigo || '—')}</strong>
                     </div>
                     <div class="col-md-4">
+                      <span class="text-muted d-block">N° Invitación</span>
+                      <strong>${esc(nroInvitacionDisplay(consulta).text)}</strong>
+                    </div>
+                    <div class="col-md-4">
                       <span class="text-muted d-block">Requerimiento</span>
                       <strong>${esc(consulta.requerimiento_codigo || '—')}</strong>
                     </div>
@@ -174,7 +221,7 @@ function showResponderConsultaModal(consulta) {
                       <strong>${esc(fmtFecha(consulta.created_at))}</strong>
                     </div>
                     <div class="col-md-4">
-                      <span class="text-muted d-block">Estado</span>
+                      <span class="text-muted d-block">Estado consulta</span>
                       ${badgeEstadoConsulta(consulta.estado)}
                     </div>
                     <div class="col-12">
@@ -262,64 +309,57 @@ function showResponderConsultaModal(consulta) {
   });
 }
 
-function showExpedienteConsultasModal(expediente) {
+function showConsultaDetalleModal(consulta) {
+  if (!consulta?.id) return;
   closeBandejaActionMenus();
   const id = `coExpModal_${Date.now()}`;
-  const consultas = expediente?.consultas || [];
-  const reqId = expediente.requerimiento_id || consultas[0]?.requerimiento_id;
+  const reqId = consulta.requerimiento_id;
+  const inv = nroInvitacionDisplay(consulta);
+  const pendiente = String(consulta.estado || '').toUpperCase() === 'PENDIENTE';
+  const respondida = String(consulta.estado || '').toUpperCase() === 'RESPONDIDA';
 
   const renderModalBody = (reqRow, canSubsanar) => {
+    const menuItems = [
+      ...(pendiente ? [{ act: 'responder', label: 'Responder', icon: 'bi-reply-fill' }] : []),
+      { act: 'adjuntos', label: 'Adjuntos', icon: 'bi-paperclip' },
+      ...(pendiente ? [{ act: 'observar', label: 'Observar/Derivar', icon: 'bi-exclamation-circle' }] : []),
+      ...(canSubsanar ? [{ act: 'subsanar', label: 'Subsanar', icon: 'bi-arrow-return-left' }] : []),
+    ];
     const wrap = document.createElement('div');
     wrap.innerHTML = `
       <style>${consultasDetalleModalStyles()}</style>
       <div class="modal fade co-exp-modal" id="${id}" tabindex="-1">
-        <div class="modal-dialog modal-xl">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
           <div class="modal-content">
             <div class="modal-header bg-light">
               <h5 class="modal-title">
-                <i class="bi bi-chat-square-text"></i> Consultas — ${esc(expediente.solicitud_codigo || '')}
+                <i class="bi bi-chat-square-text"></i> Consulta #${esc(String(consulta.id))} — ${esc(consulta.solicitud_codigo || '')}
               </h5>
               <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" id="${id}_body">
-              <div class="mb-3 small">
-                <div><strong>${esc(expediente.solicitud_codigo || '')}</strong></div>
-                <div class="text-muted mt-1">
-                  Requerimiento(s): ${esc(expediente.requerimientos_texto || '—')}
-                  · Centro: ${esc(expediente.centros_texto || '—')}
-                  · Consultas: <strong>${consultas.length}</strong>
+              <div class="card border-0 bg-light mb-3">
+                <div class="card-body py-3 small">
+                  <div class="row g-2">
+                    <div class="col-md-4"><span class="text-muted d-block">Solicitud</span><strong>${esc(consulta.solicitud_codigo || '—')}</strong></div>
+                    <div class="col-md-4"><span class="text-muted d-block">N° Inv.</span><strong class="${inv.cls}">${esc(inv.text)}</strong></div>
+                    <div class="col-md-4"><span class="text-muted d-block">Estado consulta</span>${badgeEstadoConsulta(consulta.estado)}</div>
+                    <div class="col-md-6"><span class="text-muted d-block">Proveedor</span><strong>${esc(consulta.razon_social || '—')}</strong> <span class="text-muted">RUC ${esc(consulta.ruc || '—')}</span></div>
+                    <div class="col-md-6"><span class="text-muted d-block">Fecha</span><strong>${esc(fmtFecha(consulta.created_at))}</strong></div>
+                    <div class="col-12"><span class="text-muted d-block">Asunto</span><strong>${esc(consulta.asunto || '—')}</strong></div>
+                  </div>
                 </div>
               </div>
-              <div class="sgc-bandeja-wrap table-responsive co-exp-bandeja-wrap">
-                <table class="table table-sm table-hover table-bordered mb-0 co-exp-detail-table">
-                  <thead class="table-light"><tr>
-                    <th class="co-exp-col-proveedor">Proveedor</th>
-                    <th class="co-exp-col-asunto">Asunto</th>
-                    <th>Estado</th>
-                    <th>Fecha</th>
-                    <th class="text-center req-col-acc">Acciones</th>
-                  </tr></thead>
-                  <tbody>
-                    ${consultas.map((c) => {
-                      const pendiente = String(c.estado || '').toUpperCase() === 'PENDIENTE';
-                      const menuItems = [
-                        ...(pendiente ? [{ act: 'responder', label: 'Responder', icon: 'bi-reply-fill' }] : []),
-                        { act: 'adjuntos', label: 'Adjuntos', icon: 'bi-paperclip' },
-                        ...(pendiente ? [{ act: 'observar', label: 'Observar/Derivar', icon: 'bi-exclamation-circle' }] : []),
-                        ...(canSubsanar ? [{ act: 'subsanar', label: 'Subsanar', icon: 'bi-arrow-return-left' }] : []),
-                      ];
-                      return `
-                      <tr data-consulta-id="${c.id}">
-                        <td class="co-exp-col-proveedor"><small>${esc(c.ruc)}</small><br>${esc(c.razon_social)}</td>
-                        <td class="co-exp-col-asunto">${esc(c.asunto)}<div class="small text-muted">${esc((c.consulta || '').slice(0, 120))}</div></td>
-                        <td>${badgeEstadoConsulta(c.estado)}</td>
-                        <td class="small text-nowrap">${esc(fmtFecha(c.created_at))}</td>
-                        ${renderActionMenuCell(`co_${c.id}`, menuItems)}
-                      </tr>`;
-                    }).join('') || '<tr><td colspan="5" class="text-muted text-center">Sin consultas</td></tr>'}
-                  </tbody>
-                </table>
+              <div class="mb-3">
+                <label class="form-label fw-semibold">Consulta</label>
+                <div class="border rounded p-3 bg-white" style="white-space:pre-wrap;max-height:240px;overflow-y:auto;">${esc(consulta.consulta || '—')}</div>
               </div>
+              ${respondida && (consulta.respuesta || '').trim() ? `
+              <div class="mb-3">
+                <label class="form-label fw-semibold">Respuesta</label>
+                <div class="border rounded p-3 bg-white" style="white-space:pre-wrap;max-height:240px;overflow-y:auto;">${esc(consulta.respuesta)}</div>
+              </div>` : ''}
+              <div class="d-flex justify-content-end">${renderActionMenuCell(`co_${consulta.id}`, menuItems)}</div>
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
@@ -337,7 +377,6 @@ function showExpedienteConsultasModal(expediente) {
     modal.show();
 
     const body = document.getElementById(`${id}_body`);
-
     const obsConfig = buildConsultasObservacionModalConfig({
       onReload: () => {
         modal.hide();
@@ -346,20 +385,15 @@ function showExpedienteConsultasModal(expediente) {
     });
 
     bindActionMenus(body, {
-      responder: async (menuId) => {
-        const cid = String(menuId).replace(/^co_/, '');
-        const consulta = consultasCache.find((c) => String(c.id) === String(cid));
-        if (!consulta) return;
+      responder: async () => {
         const ok = await showResponderConsultaModal(consulta);
         if (ok) {
           modal.hide();
           loadConsultas(true);
         }
       },
-      adjuntos: (menuId) => {
-        const cid = String(menuId).replace(/^co_/, '');
-        const consulta = consultas.find((c) => String(c.id) === String(cid));
-        const sid = consulta?.solicitud_id;
+      adjuntos: () => {
+        const sid = consulta.solicitud_id;
         if (sid) openAdjuntosSolicitudModal(sid, true);
       },
       observar: async () => {
@@ -400,6 +434,11 @@ function showExpedienteConsultasModal(expediente) {
   }
 }
 
+function showExpedienteConsultasModal(expediente) {
+  const first = expediente?.consultas?.[0];
+  if (first) showConsultaDetalleModal(first);
+}
+
 function buildLoadParams() {
   const params = {};
   if (filtroEstado) params.estado = filtroEstado;
@@ -407,30 +446,41 @@ function buildLoadParams() {
 }
 
 const CONSULTAS_THEAD = `<tr>
-  <th>Solicitud de cotización</th>
+  <th>Solicitud</th>
+  <th class="co-col-inv">N° Inv.</th>
+  <th>Proveedor</th>
   <th>Requerimiento</th>
   <th>Centro</th>
-  <th class="text-center">Cantidad</th>
+  <th>Consulta / Asunto</th>
+  <th class="co-col-fecha">Fecha</th>
+  <th class="co-col-est-cons">Estado consulta</th>
   <th>Etapa</th>
-  <th>Estado</th>
+  <th>Estado expediente</th>
   <th>Responsable</th>
   <th class="text-center">Ver</th>
 </tr>`;
 
-function buildConsultaRowHtml(exp) {
-  const n = Number(exp.cantidad_consultas) || (exp.consultas || []).length || 0;
+function buildConsultaRowHtml(c) {
+  const inv = nroInvitacionDisplay(c);
+  const rowForErv = {
+    ...c,
+    requerimientos_texto: c.requerimientos_texto || c.requerimiento_codigo || '',
+    centros_texto: c.centros_texto || c.centro || '',
+  };
   return `
-    <tr data-row-id="${esc(exp.solicitud_id)}">
-      <td>
-        <strong>${esc(exp.solicitud_codigo || '—')}</strong>
-      </td>
-      <td class="small">${formatRequerimientosConsultas(exp, esc)}</td>
-      <td class="small">${formatCentrosConsultas(exp, esc)}</td>
-      <td class="text-center small">${esc(String(n))} consulta${n === 1 ? '' : 's'}</td>
-      ${renderBandejaCanonicoEtapaEstadoRespCells(exp)}
+    <tr data-row-id="${esc(c.id)}" data-consulta-id="${esc(c.id)}">
+      <td><strong class="small">${esc(c.solicitud_codigo || '—')}</strong></td>
+      <td class="co-col-inv"><span class="${inv.cls}">${esc(inv.text)}</span></td>
+      <td>${formatProveedorCompact(c)}</td>
+      <td class="small">${formatRequerimientosConsultas(rowForErv, esc)}</td>
+      <td class="small">${formatCentrosConsultas(rowForErv, esc)}</td>
+      <td>${formatAsuntoCell(c)}</td>
+      <td class="co-col-fecha small text-muted">${esc(fmtFecha(c.created_at))}</td>
+      <td class="co-col-est-cons">${badgeEstadoConsulta(c.estado)}</td>
+      ${renderBandejaCanonicoEtapaEstadoRespCells(rowForErv)}
       <td class="text-center">
-        <button type="button" class="btn btn-sm btn-outline-primary co-exp-ver"
-          data-solicitud-id="${esc(exp.solicitud_id)}">
+        <button type="button" class="btn btn-sm btn-outline-primary co-consulta-ver"
+          data-consulta-id="${esc(c.id)}" title="Ver consulta #${esc(String(c.id))}">
           <i class="bi bi-eye"></i> Ver
         </button>
       </td>
@@ -454,12 +504,12 @@ async function loadConsultas(resetPage = false) {
     emptyId: 'consultasObsEmpty',
     outerClass: 'sgc-bandeja-wrap',
     wrapClass: 'table-responsive',
-    tableClass: 'table table-sm table-hover table-bordered mb-0',
+    tableClass: 'table table-sm table-hover table-bordered mb-0 co-bandeja-table',
   });
 
   const request = loadGuard.begin();
   if (lifecycle) lifecycle.addAbortController(request.controller);
-  const isBg = hadShell && expedientesCache.length > 0;
+  const isBg = hadShell && consultasBandejaRows.length > 0;
   if (isBg) refreshIndicator?.show('Actualizando…');
 
   try {
@@ -469,12 +519,12 @@ async function loadConsultas(resetPage = false) {
 
     const flat = result.allData || result.data || [];
     consultasCache = flat;
-    expedientesCache = consolidarExpedientesConsultas(flat);
-    updateConsultasSummaryCards(expedientesCache, `${VIEW_CONFIG.prefix}TrazaSummary`);
+    consultasBandejaRows = flat;
+    updateConsultasSummaryCards(flat, `${VIEW_CONFIG.prefix}TrazaSummary`);
 
     if (!shell?.tbody || !shell?.thead) return;
 
-    if (!expedientesCache.length) {
+    if (!consultasBandejaRows.length) {
       shell.thead.innerHTML = CONSULTAS_THEAD;
       shell.tbody.innerHTML = '';
       setEmptyState(shell, { empty: true, message: 'No hay consultas registradas.' });
@@ -483,25 +533,25 @@ async function loadConsultas(resetPage = false) {
     }
 
     const state = getPaginationState('consultas');
-    const totalPages = Math.max(1, Math.ceil(expedientesCache.length / state.pageSize));
+    const totalPages = Math.max(1, Math.ceil(consultasBandejaRows.length / state.pageSize));
     if (state.page > totalPages) state.page = totalPages;
     updatePaginationState('consultas', {
-      total: expedientesCache.length,
+      total: consultasBandejaRows.length,
       totalPages,
       isVirtual: true,
     });
     const start = (state.page - 1) * state.pageSize;
-    const pageExpedientes = expedientesCache.slice(start, start + state.pageSize);
+    const pageRows = consultasBandejaRows.slice(start, start + state.pageSize);
 
     setEmptyState(shell, { empty: false });
     shell.thead.innerHTML = CONSULTAS_THEAD;
-    shell.tbody.innerHTML = pageExpedientes.map(buildConsultaRowHtml).join('');
+    shell.tbody.innerHTML = pageRows.map(buildConsultaRowHtml).join('');
 
-    cont.querySelectorAll('.co-exp-ver').forEach((btn) => {
+    cont.querySelectorAll('.co-consulta-ver').forEach((btn) => {
       btn.onclick = () => {
-        const sid = btn.dataset.solicitudId;
-        const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
-        if (exp) showExpedienteConsultasModal(exp);
+        const cid = btn.dataset.consultaId;
+        const row = consultasCache.find((c) => String(c.id) === String(cid));
+        if (row) showConsultaDetalleModal(row);
       };
     });
     consultasPagination.renderControls('consultasObsOuter', () => loadConsultas(false));
@@ -510,7 +560,7 @@ async function loadConsultas(resetPage = false) {
   } catch (err) {
     if (isAbortError(err) || !request.isCurrent()) return;
     if (lifecycle && !lifecycle.isActive()) return;
-    if (hadShell && expedientesCache.length) {
+    if (hadShell && consultasBandejaRows.length) {
       refreshIndicator?.error('No se pudo actualizar. Se conservan los datos actuales.');
     } else {
       cont.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
@@ -521,12 +571,12 @@ async function loadConsultas(resetPage = false) {
 export function renderConsultasObservacionesView() {
   const { prefix, title, icon, description, listId } = VIEW_CONFIG;
   return `
-    <div class="container-fluid actos-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-          <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
-          <p class="text-muted mb-0">${esc(description)}</p>
+    <div class="container-fluid actos-bandeja-page co-bandeja-page sgc-registro-compact">
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}${consultasBandejaCompactStyles()}</style>
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+        <div class="d-flex flex-wrap align-items-baseline gap-2">
+          <h3 class="mb-0 fs-5"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
+          <p class="text-muted mb-0 small">${esc(description)}</p>
         </div>
         <div class="d-flex gap-2 align-items-center">
           <span id="consultasObsBgRefreshHost"></span>

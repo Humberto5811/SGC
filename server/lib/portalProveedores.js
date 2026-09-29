@@ -631,6 +631,7 @@ export async function listarConsultasBandeja(queryParams = {}) {
     SELECT c.*, p.ruc, p.razon_social, sc.codigo AS solicitud_codigo,
       sc.denominacion, sc.objeto,
       r.codigo AS requerimiento_codigo,
+      ip_inv.nro_invitacion,
       COALESCE((
         SELECT string_agg(DISTINCT r2.codigo, ', ' ORDER BY r2.codigo)
         FROM solicitud_requerimientos sr
@@ -662,6 +663,7 @@ export async function listarConsultasBandeja(queryParams = {}) {
     JOIN proveedores p ON p.id = c.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = c.solicitud_id
     LEFT JOIN requerimientos r ON r.id = c.requerimiento_id
+    LEFT JOIN invitacion_proveedores ip_inv ON ip_inv.id = c.invitacion_id
     ${where}
     ORDER BY c.created_at DESC
     LIMIT 500
