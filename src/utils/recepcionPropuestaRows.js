@@ -78,9 +78,12 @@ function renderRtmCell(cotId, cell, esc) {
     return '<span class="text-muted small">No presentado</span>';
   }
   const id = esc(String(cotId ?? ''));
-  return `<span class="btn-group btn-group-sm">
-    <button type="button" class="btn btn-outline-secondary btn-sm rc-doc-ver" data-cot-id="${id}" data-ref="${esc(cell.ref)}">Ver</button>
-    <button type="button" class="btn btn-outline-primary btn-sm rc-doc-dl" data-cot-id="${id}" data-ref="${esc(cell.ref)}">Descargar</button>
+  const ref = esc(cell.ref);
+  return `<span class="rc-propuesta-doc-actions">
+    <button type="button" class="btn btn-link btn-sm p-0 text-secondary rc-doc-ver" data-cot-id="${id}" data-ref="${ref}"
+      title="Ver documento" aria-label="Ver documento"><i class="bi bi-eye" aria-hidden="true"></i></button>
+    <button type="button" class="btn btn-link btn-sm p-0 text-primary rc-doc-dl" data-cot-id="${id}" data-ref="${ref}"
+      title="Descargar documento" aria-label="Descargar documento"><i class="bi bi-download" aria-hidden="true"></i></button>
   </span>`;
 }
 
@@ -162,9 +165,9 @@ function renderCondicionesTecnicas(propTec, esc) {
   const plazo = readText(propTec, 'plazo_ejecucion', 'plazoEjecucion') || '—';
   const forma = readText(propTec, 'forma_pago', 'formaPago') || '—';
   return `
-    <div class="card border-0 bg-light mt-3">
-      <div class="card-body py-3">
-        <h6 class="fw-semibold mb-3">Condiciones de la propuesta técnica</h6>
+    <div class="card border-0 bg-light mt-2">
+      <div class="card-body py-2">
+        <h6 class="fw-semibold mb-2">Condiciones de la propuesta técnica</h6>
         <div class="mb-3">
           <label class="form-label small text-muted mb-1">Plazo de ejecución</label>
           <div class="border rounded p-2 bg-white small" style="white-space:pre-wrap;">${esc(plazo)}</div>
@@ -180,7 +183,7 @@ function renderCondicionesTecnicas(propTec, esc) {
 function renderTecnicaBienes(filas, cot, esc) {
   if (!filas.length) return '<div class="text-muted small">Sin información técnica registrada.</div>';
   const cols = getRtmColumnasRecepcion(cot);
-  const minWidth = 900 + cols.length * 130;
+  const minWidth = 720 + cols.length * 80;
   const cotId = cot?.id;
   return `
     <div class="${RC_PROPUESTA_TABLE_WRAP}" style="overflow-x:auto;">
@@ -189,22 +192,22 @@ function renderTecnicaBienes(filas, cot, esc) {
           <tr>
             <th>Requerimiento</th>
             <th>N.° Pedido SIGAMEF</th>
-            <th>Descripción</th><th>Cantidad</th><th>Marca</th><th>Modelo</th>
-            <th>País</th><th>Garantía</th><th>Plazo de entrega</th>
-            ${cols.map((c) => `<th class="small text-wrap" style="min-width:110px;">${esc(c.requisito)}</th>`).join('')}
+            <th class="rc-desc-col">Descripción</th><th>Cantidad</th><th>Marca</th><th>Modelo</th>
+            <th>País</th><th>Garantía</th><th class="rc-plazo-col">Plazo de entrega</th>
+            ${cols.map((c) => `<th class="small text-wrap rc-rtm-col">${esc(c.requisito)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>${filas.map((r) => `
           <tr>
             <td class="small">${esc(r.requerimiento_codigo)}</td>
             <td class="small">${esc(r.pedido_sigamef || '—')}</td>
-            <td class="small">${esc(r.descripcion)}</td>
+            <td class="small rc-desc-col">${esc(r.descripcion)}</td>
             <td class="text-center small">${esc(r.cantidad)}</td>
             <td class="small">${esc(r.marca || '—')}</td>
             <td class="small">${esc(r.modelo || '—')}</td>
             <td class="small">${esc(r.pais || '—')}</td>
             <td class="small">${esc(r.garantia || '—')}</td>
-            <td class="small">${esc(r.plazo_entrega || '—')}</td>
+            <td class="small rc-plazo-col">${esc(r.plazo_entrega || '—')}</td>
             ${cols.map((c) => `<td class="small text-center align-middle">${renderRtmCell(cotId, getCeldaRtmRecepcion(cot, r.item_key, c.req_key), esc)}</td>`).join('')}
           </tr>`).join('')}</tbody>
       </table>
@@ -217,15 +220,15 @@ function renderTecnicaServiciosLocadores(propTec, tipo, filas, cot, esc) {
     return `<div class="text-muted small">Sin información técnica registrada.</div>${renderCondicionesTecnicas(propTec, esc)}`;
   }
   const cols = getRtmColumnasRecepcion(cot);
-  const minWidth = 700 + cols.length * 130;
+  const minWidth = 560 + cols.length * 80;
   const cotId = cot?.id;
   return `
     <div class="${RC_PROPUESTA_TABLE_WRAP}" style="overflow-x:auto;">
       <table class="table table-sm table-bordered mb-0 ${RC_PROPUESTA_TABLE_CLASS}" style="min-width:${minWidth}px;">
         <thead class="table-light text-center">
           <tr>
-            <th>Ítem</th><th>N.° REQ</th><th>N.° Pedido SIGAMEF</th><th>${esc(descCol)}</th><th>Cantidad</th><th>Unidad de medida</th>
-            ${cols.map((c) => `<th class="small text-wrap" style="min-width:110px;">${esc(c.requisito)}</th>`).join('')}
+            <th>Ítem</th><th>N.° REQ</th><th>N.° Pedido SIGAMEF</th><th class="rc-desc-col">${esc(descCol)}</th><th>Cantidad</th><th>Unidad de medida</th>
+            ${cols.map((c) => `<th class="small text-wrap rc-rtm-col">${esc(c.requisito)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>${filas.map((r, idx) => `
@@ -233,7 +236,7 @@ function renderTecnicaServiciosLocadores(propTec, tipo, filas, cot, esc) {
             <td class="text-center small">${idx + 1}</td>
             <td class="small">${esc(r.requerimiento_codigo)}</td>
             <td class="small">${esc(r.pedido_sigamef || '—')}</td>
-            <td class="small">${esc(r.descripcion)}</td>
+            <td class="small rc-desc-col">${esc(r.descripcion)}</td>
             <td class="text-center small">${esc(r.cantidad)}</td>
             <td class="text-center small">${esc(r.unidad_medida)}</td>
             ${cols.map((c) => `<td class="small text-center align-middle">${renderRtmCell(cotId, getCeldaRtmRecepcion(cot, r.item_key, c.req_key), esc)}</td>`).join('')}
@@ -271,7 +274,7 @@ function renderEcoBienes(filas, monto, moneda, datos, fmtMonto, esc) {
           <tr>
             <td class="small">${esc(r.requerimiento_codigo)}</td>
             <td class="small">${esc(r.pedido_sigamef || '—')}</td>
-            <td class="small">${esc(r.descripcion)}</td>
+            <td class="small rc-desc-col">${esc(r.descripcion)}</td>
             <td class="text-center small">${esc(r.cantidad)}</td>
             <td class="text-end small">${fmtPrecioVal(r.precio_unitario, moneda, fmtMonto)}</td>
             <td class="text-end small">${fmtPrecioVal(r.precio_total, moneda, fmtMonto)}</td>
@@ -297,7 +300,7 @@ function renderEcoServicios(filas, monto, moneda, datos, fmtMonto, esc) {
           <tr>
             <td class="small">${esc(r.requerimiento_codigo)}</td>
             <td class="small">${esc(r.pedido_sigamef || '—')}</td>
-            <td class="small">${esc(r.descripcion)}</td>
+            <td class="small rc-desc-col">${esc(r.descripcion)}</td>
             <td class="small text-center">${esc(r.nro_entregable)}</td>
             <td class="text-center small">${esc(r.unidad_medida)}</td>
             <td class="text-end small">${fmtPrecioVal(r.precio_unitario, moneda, fmtMonto)}</td>

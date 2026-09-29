@@ -1,0 +1,37 @@
+/* RC8.17.8H6-C3-D7 — Matriz propuesta técnica (Recepción) */
+.rc-propuesta-matriz-table th,
+.rc-propuesta-matriz-table td {
+  padding: 0.25rem 0.35rem;
+  vertical-align: middle;
+}
+
+.rc-propuesta-matriz-table .rc-rtm-col {
+  min-width: 76px;
+  max-width: 112px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.rc-propuesta-matriz-table .rc-desc-col,
+.rc-propuesta-matriz-table .rc-plazo-col {
+  min-width: 120px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.rc-propuesta-doc-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  white-space: nowrap;
+}
+
+.rc-propuesta-doc-actions .btn-link {
+  line-height: 1;
+  text-decoration: none;
+}
+
+.rc-cot-det-modal .rc-cot-resumen-card .card-body {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}

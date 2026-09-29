@@ -43,16 +43,16 @@ for (const { evento } of EVENTOS) {
   ok(labels?.estadoCodigo === 'EN_TRAMITE', `${evento} → EN_TRAMITE`);
 }
 
-console.log('\nFrontend — showWorkflowTransicionModal');
+console.log('\nFrontend — selector PERSONA (workflow / picker embebido)');
 const feChecks = [
-  ['src/utils/derivarValidacionModal.js', 'COTIZACIONES_DERIVADAS_VALIDACION'],
-  ['src/utils/validacionesModal.js', 'VALIDACION_COMPLETADA'],
-  ['src/utils/cuadroComparativoModal.js', 'CUADRO_APROBADO_DEC'],
-  ['src/views/contratacion/ccpView.js', 'CCP_REGISTRADA'],
+  ['src/utils/derivarValidacionModal.js', 'COTIZACIONES_DERIVADAS_VALIDACION', 'wireTransicionPicker'],
+  ['src/utils/validacionesModal.js', 'VALIDACION_COMPLETADA', 'showWorkflowTransicionModal'],
+  ['src/utils/cuadroComparativoModal.js', 'CUADRO_APROBADO_DEC', 'showWorkflowTransicionModal'],
+  ['src/views/contratacion/ccpView.js', 'CCP_REGISTRADA', 'showWorkflowTransicionModal'],
 ];
-for (const [rel, ev] of feChecks) {
+for (const [rel, ev, needle] of feChecks) {
   const src = readFileSync(join(root, rel), 'utf8');
-  ok(src.includes('showWorkflowTransicionModal') && src.includes(ev), `${rel} → ${ev}`);
+  ok(src.includes(needle) && src.includes(ev), `${rel} → ${ev} (${needle})`);
 }
 
 console.log('\nBackend — assertUsuarioDestinoTransicionElegible');

@@ -1,4 +1,5 @@
 @import url('./styles/workflow-status.css');
+@import url('./styles/recepcion-cotizacion-detalle.css');
 
 :root {
   --primary-color: #1a73e8;    /* Azul Google más moderno */

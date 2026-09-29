@@ -304,8 +304,8 @@ async function showCotizacionDetalleModal(cotId) {
     const datos = c.datos_proveedor || {};
     const body = document.getElementById(`${id}_body`);
     body.innerHTML = `
-      <div class="card border-0 bg-light mb-3">
-        <div class="card-body py-3">
+      <div class="card border-0 bg-light mb-2 rc-cot-resumen-card">
+        <div class="card-body py-2">
           <div class="row g-2 small">
             <div class="col-md-4">
               <span class="text-muted d-block">Solicitud</span>

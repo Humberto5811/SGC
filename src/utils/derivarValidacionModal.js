@@ -4,9 +4,13 @@
 import { contratacionesService } from '../services/contratacionesService.js';
 import { authService } from '../services/authService.js';
 import { getUserDisplayName } from './userDisplay.js';
-import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
+import {
+  renderTransicionPickerFieldsHtml,
+  wireTransicionPicker,
+} from './workflowTransicionPicker.js';
 
 const API_BASE = '/api';
+const EVENTO_DERIVAR_VALIDACION = 'COTIZACIONES_DERIVADAS_VALIDACION';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -85,7 +89,7 @@ function bindDocButtons(container) {
 /**
  * Abre modal para enviar cotización a validación AU.
  * @param {string|number} cotId
- * @param {{ title?: string, submitLabel?: string, onSuccess?: () => void }} opts
+ * @param {{ title?: string, submitLabel?: string, requireObservacion?: boolean, onSuccess?: () => void }} opts
  */
 export async function showEnviarValidarModal(cotId, opts = {}) {
   const title = opts.title || 'Enviar a Validaciones';
@@ -118,6 +122,7 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
   const btnEnviar = document.getElementById(`${id}_enviar`);
   let submodulos = [];
   let previewData = null;
+  let readSeleccion = null;
 
   try {
     const [prevResp, subResp] = await Promise.all([
@@ -126,38 +131,35 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
     ]);
     const preview = prevResp.data;
     previewData = preview;
-    // Obs 05_02 — desde Recepción solo destino Validaciones (no Registro/Evaluación).
     submodulos = (subResp.data || []).filter((s) => String(s.code || '').toUpperCase() === 'VALIDACIONES');
     if (!submodulos.length) {
       submodulos = [{ code: 'VALIDACIONES', label: 'Validaciones' }];
     }
+    const rid = preview?.requerimiento_id;
     body.innerHTML = `
       <div class="alert alert-info small py-2">
         <i class="bi bi-info-circle"></i> ${esc(preview.nota || 'La propuesta económica no se envía al área usuaria.')}
       </div>
-      <div class="card border-0 bg-light mb-3">
+      <div class="card border-0 bg-light mb-2">
         <div class="card-body py-2 small">
           <strong>${esc(preview.solicitud_codigo)}</strong> — ${esc(preview.razon_social)} (RUC ${esc(preview.ruc)})
         </div>
       </div>
-      <h6 class="fw-semibold">Expediente documental (técnico — sin propuesta económica)</h6>
+      <h6 class="fw-semibold mb-2">Expediente documental (técnico — sin propuesta económica)</h6>
       <div id="${id}_docs">${renderDocsList(cotId, preview.documentos_tecnicos)}</div>
-      <hr/>
+      <hr class="my-2"/>
       <div class="row g-2">
         <div class="col-md-6">
-          <label class="form-label fw-semibold">Área usuaria / Submódulo destino</label>
+          <label class="form-label fw-semibold small mb-1">Área usuaria / Submódulo destino</label>
           <select class="form-select form-select-sm" id="${id}_sub">
             ${submodulos.map((s) => `<option value="${esc(s.code)}" selected>${esc(s.label)}</option>`).join('')}
           </select>
         </div>
         <div class="col-md-6">
-          <div class="form-label fw-semibold">Responsable de validación</div>
-          <div class="small text-muted border rounded p-2 bg-white">
-            Se seleccionará al confirmar (recomendado primero; puede elegir otra persona elegible).
-          </div>
+          ${renderTransicionPickerFieldsHtml(`${id}_pick`, { label: 'Responsable de validación', showEtapaSelect: false })}
         </div>
         <div class="col-12">
-          <label class="form-label fw-semibold">Observación ${opts.requireObservacion ? '(obligatoria)' : '(opcional al devolver)'}</label>
+          <label class="form-label fw-semibold small mb-1">Observación ${opts.requireObservacion ? '(obligatoria)' : '(opcional al devolver)'}</label>
           <textarea class="form-control form-control-sm" id="${id}_obs" rows="2"
             placeholder="Motivo de devolución / observación para el Área Usuaria"></textarea>
         </div>
@@ -167,7 +169,20 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
 
     const selSub = document.getElementById(`${id}_sub`);
     const errBox = document.getElementById(`${id}_err`);
-    btnEnviar.disabled = false;
+
+    if (rid) {
+      readSeleccion = wireTransicionPicker(`${id}_pick`, {
+        requerimientoId: rid,
+        eventoCodigo: EVENTO_DERIVAR_VALIDACION,
+        alertOnMissingSelection: false,
+        onAvailabilityChange: ({ canSubmit }) => {
+          btnEnviar.disabled = !canSubmit;
+        },
+      });
+    } else {
+      errBox.textContent = 'No se encontró el requerimiento del expediente';
+      errBox.classList.remove('d-none');
+    }
 
     btnEnviar.onclick = async () => {
       const sub = submodulos.find((s) => s.code === selSub.value);
@@ -178,20 +193,17 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
         errBox.classList.remove('d-none');
         return;
       }
-      const rid = previewData?.requerimiento_id;
-      if (!rid) {
+      if (!previewData?.requerimiento_id) {
         errBox.textContent = 'No se encontró el requerimiento del expediente';
         errBox.classList.remove('d-none');
         return;
       }
-      const seleccion = await showWorkflowTransicionModal({
-        requerimientoId: rid,
-        eventoCodigo: 'COTIZACIONES_DERIVADAS_VALIDACION',
-        title: 'Enviar a Validaciones',
-        message: 'Seleccione la persona responsable en Validaciones. Etapa destino: Validación Usuario, estado: En trámite.',
-        buttonText: 'Confirmar envío',
-      });
-      if (!seleccion) return;
+      const seleccion = readSeleccion?.();
+      if (!seleccion) {
+        errBox.textContent = 'Seleccione la persona responsable de validación';
+        errBox.classList.remove('d-none');
+        return;
+      }
       btnEnviar.disabled = true;
       errBox.classList.add('d-none');
       try {
@@ -216,3 +228,5 @@ export async function showEnviarValidarModal(cotId, opts = {}) {
     body.innerHTML = `<div class="alert alert-danger">${esc(err.message)}</div>`;
   }
 }
+
+export { EVENTO_DERIVAR_VALIDACION };
