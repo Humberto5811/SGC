@@ -140,9 +140,10 @@ console.log('\n=== Portal Mis Cotizaciones / Centro ===\n');
   const invSrc = read('src/views/proveedor/misInvitacionesView.js');
   const cotSrc = read('src/views/proveedor/misCotizacionesView.js');
   const routerSrc = read('src/router.js');
-  assert.match(invSrc, /solicitud_id=\$\{encodeURIComponent\(solicitudId\)\}/);
-  assert.match(cotSrc, /readSolicitudIdFromHash|solicitud_id/);
-  assert.match(cotSrc, /openWizardFor\(parseInt\(target/);
+  assert.match(invSrc, /solicitud_id: String\(solicitudId\)/);
+  assert.match(invSrc, /invitacion_id.*String\(invitacionId\)/);
+  assert.match(cotSrc, /readQueryFromHash|solicitud_id/);
+  assert.match(cotSrc, /openWizardFor\(parseInt\(sid/);
   assert.match(routerSrc, /hash\.includes\('\?'\)/);
   assert.match(cotSrc, /listMisCotizaciones/);
   assert.doesNotMatch(
@@ -155,12 +156,13 @@ console.log('\n=== Portal Mis Cotizaciones / Centro ===\n');
 // SQL / endpoints
 {
   const pp = read('server/lib/portalProveedores.js');
+  const cotSrc = read('src/views/proveedor/misCotizacionesView.js');
   assert.match(pp, /FROM invitacion_proveedores ip/);
   assert.match(pp, /LEFT JOIN cotizaciones_proveedor cot/);
-  assert.doesNotMatch(
-    pp.slice(pp.indexOf('export async function listMisCotizaciones'), pp.indexOf('export async function getEstadoParticipacion')),
-    /FROM cotizaciones_proveedor cot\s+JOIN solicitudes_cotizacion/,
-  );
+  const listMisBlock = pp.slice(pp.indexOf('export async function listMisCotizaciones'), pp.indexOf('export async function getEstadoParticipacion'));
+  assert.match(listMisBlock, /FROM invitacion_proveedores ip[\s\S]*LEFT JOIN cotizaciones_proveedor cot/);
+  assert.match(listMisBlock, /cot\.invitacion_id IS NULL/);
+  assert.match(cotSrc, /misCotRowKey/);
   const invView = read('src/views/proveedor/misInvitacionesView.js');
   assert.match(invView, /it\.centro \|\| it\.centro_nombre/);
   assert.doesNotMatch(invView, /it\.paquete \|\| '—'/);

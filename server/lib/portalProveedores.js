@@ -516,61 +516,94 @@ function labelEstadoCotizacionPortal({ cotEstado, validacionEstado, convocatoria
   return 'Disponible para cotizar';
 }
 
+function mapListMisCotizacionesRow(r) {
+  const norm = normalizeCronogramaRow(r);
+  const cerrada = convocatoriaCerrada(norm);
+  const isLegacy = r.invitacion_id == null && r.nro_invitacion_presentacion == null;
+  const nroInv = isLegacy ? null : (r.nro_invitacion_presentacion ?? r.nro_invitacion ?? null);
+  const estadoUi = labelEstadoCotizacionPortal({
+    cotEstado: r.cotizacion_estado,
+    validacionEstado: r.validacion_estado,
+    convocatoriaCerrada: cerrada,
+  });
+  const cotId = r.cotizacion_id ?? null;
+  return {
+    ...norm,
+    id: cotId,
+    cotizacion_id: cotId,
+    invitacion_id: r.invitacion_id ?? null,
+    nro_invitacion: nroInv,
+    nro_invitacion_presentacion: r.nro_invitacion_presentacion ?? null,
+    estado_invitacion: r.estado_invitacion ?? null,
+    es_legacy: isLegacy,
+    fecha_envio: r.fecha_envio,
+    fecha_presentacion: r.fecha_presentacion ?? null,
+    estado: r.cotizacion_estado || (cerrada ? 'CERRADA' : 'DISPONIBLE'),
+    cotizacion_estado: r.cotizacion_estado || null,
+    estado_participacion: isLegacy && !r.cotizacion_estado ? 'Legacy' : estadoUi,
+    convocatoria_cerrada: cerrada,
+    puede_presentar: !cerrada || String(r.cotizacion_estado || '').toUpperCase() === 'COTIZACION_PRESENTADA',
+    puede_crear_borrador: !cerrada && String(r.cotizacion_estado || '').toUpperCase() !== 'COTIZACION_PRESENTADA',
+  };
+}
+
 /**
- * Mis Cotizaciones: una fila por cotizaciones_proveedor (canónica o legacy).
+ * Mis Cotizaciones: una fila lógica por invitacion_proveedores (0..1 cotización),
+ * más filas legacy sin invitacion_id.
  */
 export async function listMisCotizaciones(proveedorId) {
-  const { rows } = await query(`
+  const { rows: invRows } = await query(`
     SELECT
-      cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id,
+      cot.id AS cotizacion_id,
+      ip.id AS invitacion_id,
+      ip.solicitud_id, ip.proveedor_id, ip.requerimiento_id,
       cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
       cot.validacion_estado, cot.validacion_observacion, cot.validacion_informe,
       cot.validacion_responsable, cot.historial,
       cot.created_at, cot.updated_at, cot.fecha_presentacion,
       cot.estado AS cotizacion_estado,
-      cot.invitacion_id, cot.nro_invitacion_presentacion,
+      cot.nro_invitacion_presentacion,
+      ip.nro_invitacion,
       sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo,
       sc.estado AS solicitud_estado,
       ip.estado AS estado_invitacion, ip.fecha_envio,
       ${CRONOGRAMA_SELECT_SQL}
+    FROM invitacion_proveedores ip
+    JOIN solicitudes_cotizacion sc ON sc.id = ip.solicitud_id
+    LEFT JOIN cotizaciones_proveedor cot
+      ON cot.invitacion_id = ip.id AND cot.proveedor_id = ip.proveedor_id
+    WHERE ip.proveedor_id = $1
+      AND UPPER(COALESCE(sc.estado, '')) NOT IN ('ANULADA', 'ANULADO')
+      AND UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
+    ORDER BY ip.fecha_envio DESC NULLS LAST, ip.nro_invitacion DESC NULLS LAST, ip.id DESC
+  `, [proveedorId]);
+
+  const { rows: legacyRows } = await query(`
+    SELECT
+      cot.id AS cotizacion_id,
+      NULL::int AS invitacion_id,
+      cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id,
+      cot.propuesta_tecnica, cot.propuesta_economica, cot.anexos, cot.certificados,
+      cot.validacion_estado, cot.validacion_observacion, cot.validacion_informe,
+      cot.validacion_responsable, cot.historial,
+      cot.created_at, cot.updated_at, cot.fecha_presentacion,
+      cot.estado AS cotizacion_estado,
+      cot.nro_invitacion_presentacion,
+      NULL::int AS nro_invitacion,
+      sc.codigo AS solicitud_codigo, sc.denominacion, sc.objeto, sc.tipo,
+      sc.estado AS solicitud_estado,
+      NULL::text AS estado_invitacion, NULL::timestamptz AS fecha_envio,
+      ${CRONOGRAMA_SELECT_SQL}
     FROM cotizaciones_proveedor cot
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
-    LEFT JOIN invitacion_proveedores ip ON ip.id = cot.invitacion_id
     WHERE cot.proveedor_id = $1
+      AND cot.invitacion_id IS NULL
+      AND cot.nro_invitacion_presentacion IS NULL
       AND UPPER(COALESCE(sc.estado, '')) NOT IN ('ANULADA', 'ANULADO')
-      AND (
-        cot.invitacion_id IS NULL
-        OR UPPER(COALESCE(ip.estado, '')) IN ('ENVIADA', 'ENVIADO', 'ABIERTA', 'PARTICIPANDO', 'COTIZACION_PRESENTADA')
-      )
     ORDER BY cot.updated_at DESC NULLS LAST, cot.id DESC
   `, [proveedorId]);
 
-  return rows.map((r) => {
-    const norm = normalizeCronogramaRow(r);
-    const cerrada = convocatoriaCerrada(norm);
-    const isLegacy = r.invitacion_id == null && r.nro_invitacion_presentacion == null;
-    const estadoUi = labelEstadoCotizacionPortal({
-      cotEstado: r.cotizacion_estado,
-      validacionEstado: r.validacion_estado,
-      convocatoriaCerrada: cerrada,
-    });
-    return {
-      ...norm,
-      id: r.id,
-      cotizacion_id: r.id,
-      invitacion_id: r.invitacion_id ?? null,
-      nro_invitacion: isLegacy ? null : r.nro_invitacion_presentacion,
-      nro_invitacion_presentacion: r.nro_invitacion_presentacion ?? null,
-      es_legacy: isLegacy,
-      fecha_envio: r.fecha_envio,
-      estado: r.cotizacion_estado || (cerrada ? 'CERRADA' : 'DISPONIBLE'),
-      cotizacion_estado: r.cotizacion_estado || null,
-      estado_participacion: isLegacy && !r.cotizacion_estado ? 'Legacy' : estadoUi,
-      convocatoria_cerrada: cerrada,
-      puede_presentar: !cerrada || String(r.cotizacion_estado || '').toUpperCase() === 'COTIZACION_PRESENTADA',
-      puede_crear_borrador: !cerrada && String(r.cotizacion_estado || '').toUpperCase() !== 'COTIZACION_PRESENTADA',
-    };
-  });
+  return [...invRows, ...legacyRows].map(mapListMisCotizacionesRow);
 }
 
 export async function getEstadoParticipacion(proveedorId) {

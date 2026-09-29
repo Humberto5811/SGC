@@ -1062,25 +1062,93 @@ function readQueryFromHash() {
   }
 }
 
+/** Clave única de fila en selector (no repetir solo solicitud_id). */
+function misCotRowKey(row) {
+  if (row?.es_legacy && (row.cotizacion_id || row.id)) {
+    return `legacy:${row.cotizacion_id || row.id}`;
+  }
+  if (row?.invitacion_id != null) return `inv:${row.invitacion_id}`;
+  return `sol:${row.solicitud_id}`;
+}
+
+function parseMisCotSelectValue(value) {
+  const v = String(value || '');
+  if (v.startsWith('inv:')) {
+    return { solicitudId: null, invitacionId: parseInt(v.slice(4), 10), rowKey: v };
+  }
+  if (v.startsWith('legacy:')) {
+    return {
+      solicitudId: null,
+      invitacionId: null,
+      legacyCotizacionId: parseInt(v.slice(7), 10),
+      rowKey: v,
+    };
+  }
+  if (v.startsWith('sol:')) {
+    return { solicitudId: parseInt(v.slice(4), 10), invitacionId: null, rowKey: v };
+  }
+  const n = parseInt(v, 10);
+  return Number.isFinite(n)
+    ? { solicitudId: n, invitacionId: null, rowKey: v }
+    : { solicitudId: null, invitacionId: null, rowKey: null };
+}
+
+/** invitacion_id explícito: hash primero, luego sessionStorage (canónico C3-D6). */
+function parseExplicitInvitacionId() {
+  const fromHash = readQueryFromHash();
+  const raw = fromHash.invitacionId || sessionStorage.getItem('provCotInvId');
+  if (raw == null || raw === '') return null;
+  const invId = parseInt(String(raw), 10);
+  return Number.isFinite(invId) && invId > 0 ? invId : null;
+}
+
+/**
+ * Prioridad: (a) invitacion_id hash/navegación; (b) sessionStorage; (c) única fila legacy;
+ * (d) compat. una sola fila para la SC sin inv explícito. Nunca sustituir inv explícito por otra inv.
+ */
 function resolveTargetFromNavigation(rows = []) {
   const fromHash = readQueryFromHash();
   const sid = fromHash.solicitudId || sessionStorage.getItem('provCotSolId');
-  if (!sid) return { solicitudId: null, invitacionId: null };
-  const invFromHash = fromHash.invitacionId || sessionStorage.getItem('provCotInvId');
+  if (!sid) return { solicitudId: null, invitacionId: null, rowKey: null };
+  const explicitInv = parseExplicitInvitacionId();
   const matchRows = rows.filter((r) => String(r.solicitud_id) === String(sid));
-  if (!matchRows.length) return { solicitudId: null, invitacionId: null };
-  if (invFromHash) {
-    const invId = parseInt(invFromHash, 10);
-    const hit = matchRows.find((r) => Number(r.invitacion_id) === invId);
-    if (hit) return { solicitudId: String(sid), invitacionId: invId };
+
+  if (explicitInv) {
+    const hit = matchRows.find((r) => Number(r.invitacion_id) === explicitInv);
+    const rowKey = hit ? misCotRowKey(hit) : `inv:${explicitInv}`;
+    return { solicitudId: String(sid), invitacionId: explicitInv, rowKey };
+  }
+
+  if (!matchRows.length) {
+    return { solicitudId: String(sid), invitacionId: null, rowKey: null };
   }
   if (matchRows.length === 1) {
+    const r = matchRows[0];
     return {
       solicitudId: String(sid),
-      invitacionId: matchRows[0].invitacion_id ? Number(matchRows[0].invitacion_id) : null,
+      invitacionId: r.invitacion_id ? Number(r.invitacion_id) : null,
+      rowKey: misCotRowKey(r),
     };
   }
-  return { solicitudId: String(sid), invitacionId: invFromHash ? parseInt(invFromHash, 10) : null };
+  return { solicitudId: String(sid), invitacionId: null, rowKey: null };
+}
+
+function applyNavigationToSelect(sel, rows) {
+  if (!sel) return;
+  const saved = resolveTargetFromNavigation(rows);
+  const explicitInv = parseExplicitInvitacionId();
+  const options = [...sel.options];
+  if (saved.rowKey && options.some((o) => o.value === saved.rowKey)) {
+    sel.value = saved.rowKey;
+  } else if (explicitInv) {
+    const byInv = options.find((o) => Number(o.dataset.invitacionId) === explicitInv);
+    if (byInv) sel.value = byInv.value;
+  } else if (saved.solicitudId) {
+    const solOpts = options.filter((o) => o.dataset.solicitudId === String(saved.solicitudId));
+    if (solOpts.length === 1) sel.value = solOpts[0].value;
+  }
+  if (explicitInv) sessionStorage.setItem('provCotInvId', String(explicitInv));
+  else if (saved.invitacionId) sessionStorage.setItem('provCotInvId', String(saved.invitacionId));
 }
 
 async function loadConvocatoriasSelect() {
@@ -1092,39 +1160,71 @@ async function loadConvocatoriasSelect() {
     sel.innerHTML = rows.map((i) => {
       const nro = i.es_legacy ? 'Legacy' : (i.nro_invitacion != null ? `Inv. ${i.nro_invitacion}` : '—');
       const label = i.estado_participacion ? ` [${i.estado_participacion}]` : '';
-      return `<option value="${i.solicitud_id}" data-invitacion-id="${i.invitacion_id ?? ''}">${esc(i.solicitud_codigo)} · ${esc(nro)} — ${esc(i.denominacion || i.objeto || '')}${esc(label)}</option>`;
+      return `<option value="${misCotRowKey(i)}" data-solicitud-id="${i.solicitud_id}" data-invitacion-id="${i.invitacion_id ?? ''}">${esc(i.solicitud_codigo)} · ${esc(nro)} — ${esc(i.denominacion || i.objeto || '')}${esc(label)}</option>`;
     }).join('') || '<option value="">Sin convocatorias disponibles</option>';
-    const saved = resolveTargetFromNavigation(rows);
-    if (saved.solicitudId) sel.value = saved.solicitudId;
-    if (saved.invitacionId) sessionStorage.setItem('provCotInvId', String(saved.invitacionId));
+    applyNavigationToSelect(sel, rows);
   }
   return rows;
 }
 
 async function openWizardFor(solicitudId, invitacionId = null) {
-  const sel = document.getElementById('provCotSelSol');
-  if (sel) sel.value = String(solicitudId);
   sessionStorage.setItem('provCotSolId', String(solicitudId));
   if (invitacionId) sessionStorage.setItem('provCotInvId', String(invitacionId));
   else sessionStorage.removeItem('provCotInvId');
-  await openWizard();
+  const sel = document.getElementById('provCotSelSol');
+  if (sel) {
+    let opt = null;
+    if (invitacionId) {
+      opt = [...sel.options].find((o) => Number(o.dataset.invitacionId) === Number(invitacionId));
+      if (!opt) opt = [...sel.options].find((o) => o.value === `inv:${invitacionId}`);
+    }
+    if (!opt) {
+      const candidates = [...sel.options].filter((o) => o.dataset.solicitudId === String(solicitudId));
+      if (candidates.length === 1) opt = candidates[0];
+    }
+    if (opt) sel.value = opt.value;
+  }
+  await openWizard(invitacionId);
 }
 
-async function openWizard() {
-  const sid = parseInt(document.getElementById('provCotSelSol')?.value, 10);
-  if (!sid) { alert('Seleccione una convocatoria abierta'); return; }
-  try {
-    let invId = sessionStorage.getItem('provCotInvId');
-    invId = invId ? parseInt(invId, 10) : null;
-    if (!invId) {
-      const opt = document.getElementById('provCotSelSol')?.selectedOptions?.[0];
-      const fromOpt = opt?.dataset?.invitacionId ? parseInt(opt.dataset.invitacionId, 10) : null;
-      if (fromOpt) invId = fromOpt;
-      else {
-        const matches = cotListRows.filter((r) => Number(r.solicitud_id) === sid);
-        if (matches.length === 1) invId = matches[0].invitacion_id ? Number(matches[0].invitacion_id) : null;
-      }
+async function openWizard(explicitInvitacionId = null) {
+  const sel = document.getElementById('provCotSelSol');
+  let sid = null;
+  let invId = (explicitInvitacionId != null && Number(explicitInvitacionId) > 0)
+    ? Number(explicitInvitacionId)
+    : parseExplicitInvitacionId();
+
+  if (sel?.value) {
+    const row = cotListRows.find((r) => misCotRowKey(r) === sel.value);
+    if (row) sid = Number(row.solicitud_id);
+    const parsed = parseMisCotSelectValue(sel.value);
+    if (parsed.invitacionId && !invId) invId = parsed.invitacionId;
+    if (parsed.solicitudId && !sid) sid = parsed.solicitudId;
+  }
+  if (!sid) sid = parseInt(sessionStorage.getItem('provCotSolId'), 10);
+  if (!Number.isFinite(sid)) { alert('Seleccione una convocatoria abierta'); return; }
+
+  if (!invId) {
+    const opt = sel?.selectedOptions?.[0];
+    const fromOpt = opt?.dataset?.invitacionId ? parseInt(opt.dataset.invitacionId, 10) : null;
+    if (fromOpt) invId = fromOpt;
+  }
+
+  if (!invId) {
+    const matches = cotListRows.filter((r) => Number(r.solicitud_id) === sid);
+    if (matches.length === 1) {
+      invId = matches[0].invitacion_id ? Number(matches[0].invitacion_id) : null;
+    } else if (matches.length > 1) {
+      alert('Seleccione la invitación correspondiente en el listado.');
+      return;
     }
+  }
+
+  sessionStorage.setItem('provCotSolId', String(sid));
+  if (invId) sessionStorage.setItem('provCotInvId', String(invId));
+  else sessionStorage.removeItem('provCotInvId');
+
+  try {
     const resp = await portalService.getCotizacionWorkspace(sid, invId || undefined);
     if (resp.convocatoria_cerrada && !cotizacionPresentada(resp)) {
       alert('La convocatoria está cerrada');
@@ -1242,7 +1342,7 @@ export async function initMisCotizacionesView() {
     const hashQ = readQueryFromHash();
     const sid = nav.solicitudId || hashQ.solicitudId;
     const invId = nav.invitacionId
-      || (hashQ.invitacionId ? parseInt(hashQ.invitacionId, 10) : null);
+      ?? (hashQ.invitacionId ? parseInt(hashQ.invitacionId, 10) : null);
     if (auto || sid) {
       sessionStorage.removeItem('provCotAutoOpen');
       if (sid) {
