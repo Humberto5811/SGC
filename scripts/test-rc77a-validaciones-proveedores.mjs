@@ -83,11 +83,14 @@ try {
     assert(a.solicitud_id === b.solicitud_id, 'misma solicitud');
     const filas = a.matriz_v2?.filas || [];
     const cotIdsMatriz = new Set(filas.map((f) => f.cotizacion_id).filter(Boolean));
-    assert(cotIdsMatriz.size >= Math.min(2, provs.length), 'matriz incluye ≥2 cotizaciones del expediente');
-    assert((a.proveedores_solicitud || []).length >= provs.length, 'proveedores_solicitud trae todas las empresas');
+    assert(
+      cotIdsMatriz.size === 1 && cotIdsMatriz.has(Number(ancla.cotizacion_id)),
+      'matriz anclada a la cotización abierta (D8-A)',
+    );
+    assert((a.proveedores_solicitud || []).length === 1, 'proveedores_solicitud solo cotización ancla (D8-A)');
     const cantAuto = filas[0]?.automaticos?.cant_cotizaciones;
     if (cantAuto != null) {
-      assert(Number(cantAuto) >= cotIdsMatriz.size, 'N.º Cot. coincide con cotizaciones en matriz');
+      assert(Number(cantAuto) === 1, 'N.º Cot. refleja una sola cotización en trabajo (D8-A)');
     }
     // Documentos de cotización pertenecen a cada cotización (refs locales)
     const refsA = new Set((a.documentos_cotizacion || []).map((d) => `${a.id}:${d.ref}`));
