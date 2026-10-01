@@ -9,7 +9,10 @@ import {
 } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { bindBandejaToolbar, closeBandejaActionMenus } from '../../utils/bandejaUi.js';
-import { renderBandejaCanonicoResponsableCell } from '../../utils/bandejaExpedienteColumns.js';
+import {
+  renderBandejaCanonicoEtapaCell,
+  renderBandejaCanonicoResponsableCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { usePagination, getPaginationState, updatePaginationState } from '../../utils/paginacion.js';
 import { showValidarModal } from '../../utils/validacionesModal.js';
 import {
@@ -67,10 +70,28 @@ const VALIDACIONES_THEAD = `<tr>
   <th>Requerimiento</th>
   <th>Centro</th>
   <th class="text-center">Cantidad</th>
-  <th>Estado</th>
-  <th>Responsable</th>
+  <th class="req-col-etapa">Etapa</th>
+  <th class="req-col-estado-cell">Estado</th>
+  <th class="req-col-resp">Responsable</th>
   <th class="text-center">Ver</th>
 </tr>`;
+
+const VALIDACIONES_ERV_COL_STYLES = `
+  #validacionesWrap .req-col-etapa { width: 9rem; max-width: 9.5rem; }
+  #validacionesWrap .req-col-estado-cell { width: 9.5rem; max-width: 10rem; }
+  #validacionesWrap .req-col-resp { width: 10rem; max-width: 11rem; }
+  #validacionesWrap .req-col-etapa .sgc-etapa-badge,
+  #validacionesWrap .req-col-estado-cell .sgc-estado-badge,
+  #validacionesWrap .req-col-resp .sgc-responsable-badge {
+    max-width: 100%; min-height: 24px; max-height: 26px;
+  }
+  #validacionesWrap .sgc-etapa-badge__text,
+  #validacionesWrap .sgc-estado-badge__text,
+  #validacionesWrap .sgc-responsable-badge__text {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: inline-block; vertical-align: bottom; max-width: 100%;
+  }
+`;
 
 /** Abre Validar expediente directamente (sin ventana intermedia). */
 function openValidarExpediente(expediente) {
@@ -101,10 +122,9 @@ function buildValidacionRowHtml(exp) {
       <td class="small">${formatRequerimientosValidacion(exp, esc)}</td>
       <td class="small">${formatCentrosValidacion(exp, esc)}</td>
       <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
-      <td>
-        ${renderBadgeEstadoValidacionHtml(exp, esc)}
-      </td>
-      <td class="small">${renderBandejaCanonicoResponsableCell(exp)}</td>
+      <td class="req-col-etapa">${renderBandejaCanonicoEtapaCell(exp)}</td>
+      <td class="req-col-estado-cell">${renderBadgeEstadoValidacionHtml(exp, esc)}</td>
+      <td class="req-col-resp small">${renderBandejaCanonicoResponsableCell(exp)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary val-exp-ver"
           data-solicitud-id="${esc(exp.solicitud_id)}">
@@ -209,7 +229,7 @@ export function renderValidacionesView() {
   const statsHtml = renderValidacionesStatsHtml(buildValidacionesStats([]), 'validacionesStats');
   return `
     <div class="container-fluid actos-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}${VALIDACIONES_ERV_COL_STYLES}</style>
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
