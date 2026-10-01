@@ -23,6 +23,7 @@ import {
   consolidarExpedientesValidacion,
   formatRequerimientosValidacion,
   formatCentrosValidacion,
+  formatInvitacionBandejaLabel,
   renderBadgeEstadoValidacionHtml,
 } from '../../utils/validacionesUtils.js';
 import {
@@ -69,7 +70,7 @@ const VALIDACIONES_THEAD = `<tr>
   <th>Solicitud de cotización</th>
   <th>Requerimiento</th>
   <th>Centro</th>
-  <th class="text-center">Cantidad</th>
+  <th class="text-center">Invitación</th>
   <th class="req-col-etapa">Etapa</th>
   <th class="req-col-estado-cell">Estado</th>
   <th class="req-col-resp">Responsable</th>
@@ -96,38 +97,35 @@ const VALIDACIONES_ERV_COL_STYLES = `
 /** Abre Validar expediente directamente (sin ventana intermedia). */
 function openValidarExpediente(expediente) {
   closeBandejaActionMenus();
-  const cots = expediente?.cotizaciones || [];
-  if (!cots.length) {
+  const cotId = expediente?.cotizacion_id
+    || expediente?.cotizaciones?.[0]?.id
+    || expediente?.id;
+  if (!cotId) {
     alert('No hay cotizaciones en validación para este expediente.');
     return;
   }
   const esAdmin = isAdminUser(authService.getCurrentUser());
-  const enFlujo = (c) => ['DERIVADA', 'EN_PROCESO', 'APTO', 'NO_APTO', 'OBSERVADO']
-    .includes(String(c.validacion_estado || '').toUpperCase());
-  const preferida = cots.find((c) => c.puede_validar && enFlujo(c))
-    || cots.find((c) => c.puede_ver && enFlujo(c))
-    || cots.find((c) => enFlujo(c))
-    || cots[0];
-  showValidarModal(preferida.id, () => loadValidaciones(false), { esAdmin });
+  showValidarModal(cotId, () => loadValidaciones(false), { esAdmin });
 }
 
 function buildValidacionRowHtml(exp) {
-  const n = Number(exp.cantidad_cotizaciones) || (exp.cotizaciones || []).length || 0;
+  const invLabel = exp.invitacion_label || formatInvitacionBandejaLabel(exp.cotizaciones?.[0] || exp);
+  const rowCotId = exp.cotizacion_id || exp.cotizaciones?.[0]?.id || exp.id;
   return `
-    <tr data-row-id="${esc(exp.solicitud_id)}">
+    <tr data-row-id="${esc(rowCotId)}">
       <td>
         <strong>${esc(exp.solicitud_codigo)}</strong>
         <div class="small text-muted">${esc((exp.denominacion || exp.objeto || '').slice(0, 80))}</div>
       </td>
       <td class="small">${formatRequerimientosValidacion(exp, esc)}</td>
       <td class="small">${formatCentrosValidacion(exp, esc)}</td>
-      <td class="text-center small">${esc(String(n))} cotizaci${n === 1 ? 'ón' : 'ones'}</td>
+      <td class="text-center small">${esc(invLabel)}</td>
       <td class="req-col-etapa">${renderBandejaCanonicoEtapaCell(exp)}</td>
       <td class="req-col-estado-cell">${renderBadgeEstadoValidacionHtml(exp, esc)}</td>
       <td class="req-col-resp small">${renderBandejaCanonicoResponsableCell(exp)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary val-exp-ver"
-          data-solicitud-id="${esc(exp.solicitud_id)}">
+          data-cotizacion-id="${esc(rowCotId)}">
           <i class="bi bi-eye"></i> Ver
         </button>
       </td>
@@ -205,8 +203,8 @@ async function loadValidaciones(resetPage = false) {
 
     cont.querySelectorAll('.val-exp-ver').forEach((btn) => {
       btn.onclick = () => {
-        const sid = btn.dataset.solicitudId;
-        const exp = expedientesCache.find((e) => String(e.solicitud_id) === String(sid));
+        const cotId = btn.dataset.cotizacionId;
+        const exp = expedientesCache.find((e) => String(e.cotizacion_id || e.cotizaciones?.[0]?.id) === String(cotId));
         if (exp) openValidarExpediente(exp);
       };
     });

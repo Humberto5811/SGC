@@ -72,6 +72,46 @@ function tieneResponsableAsignado(cot) {
   return !!(responsableIdDeCot(cot) || responsableNombreDeCot(cot));
 }
 
+function candidatosUsuarioAuth(usuario, opts = {}) {
+  return [
+    usuario,
+    opts.usuarioNombre,
+    opts.usuarioApellidosNombres,
+    opts.usuarioUsername,
+    opts.usuarioDni,
+  ].filter(Boolean);
+}
+
+/**
+ * Participación histórica REAL en la derivación a Validaciones (solo lectura; no edición).
+ * Evidencia: validacion_informe.derivacion (derivado_por_id / derivado_por) e historial JSON local.
+ */
+export function usuarioParticipoDerivacionValidacion(cot, usuario, userId, opts = {}) {
+  const uid = parseInt(userId, 10);
+  const der = cot?.derivacion || parseInforme(cot).derivacion || {};
+  const dpid = parseInt(der.derivado_por_id, 10);
+  if (Number.isFinite(uid) && uid > 0 && Number.isFinite(dpid) && dpid > 0 && dpid === uid) {
+    return true;
+  }
+  const derivadoPor = String(der.derivado_por || '').trim();
+  const candidatos = candidatosUsuarioAuth(usuario, opts);
+  if (derivadoPor && candidatos.some((c) => nameTokensMatch(c, derivadoPor))) {
+    return true;
+  }
+  const hist = parseJson(cot?.historial, []);
+  if (!Array.isArray(hist)) return false;
+  return hist.some((h) => {
+    const tipo = String(h?.tipo || '');
+    if (tipo !== 'derivacion_validacion' && tipo !== 'validacion_reapertura') return false;
+    const hUid = parseInt(h?.usuario_id, 10);
+    if (Number.isFinite(uid) && uid > 0 && Number.isFinite(hUid) && hUid > 0 && hUid === uid) {
+      return true;
+    }
+    const u = String(h?.usuario || '').trim();
+    return u && candidatos.some((c) => nameTokensMatch(c, u));
+  });
+}
+
 /** Criterio único: visibilidad, Validar, abrir, guardar y derivar. */
 export function canUserValidateExpediente(cot, usuario, userId, opts = {}) {
   const esAdmin = !!opts.esAdmin;
@@ -101,23 +141,20 @@ export function canUserValidateExpediente(cot, usuario, userId, opts = {}) {
     return { puedeVer: true, puedeValidar: editable, sinAsignacion: false, motivo: 'Responsable asignado' };
   }
 
-  const candidatos = [
-    usuario,
-    opts.usuarioNombre,
-    opts.usuarioApellidosNombres,
-    opts.usuarioUsername,
-    opts.usuarioDni,
-  ].filter(Boolean);
-
+  const candidatos = candidatosUsuarioAuth(usuario, opts);
   const matchNombre = candidatos.some((c) => nameTokensMatch(c, respNombre));
+  const participoDerivacion = usuarioParticipoDerivacionValidacion(cot, usuario, userId, opts);
   const v = String(cot.validacion_estado || '').toUpperCase();
   const editable = matchNombre && ['DERIVADA', 'EN_PROCESO'].includes(v);
+  const puedeVer = matchNombre || participoDerivacion;
 
   return {
-    puedeVer: matchNombre,
+    puedeVer,
     puedeValidar: editable,
     sinAsignacion: false,
-    motivo: matchNombre ? (editable ? 'Responsable asignado' : 'Solo lectura') : 'No asignado',
+    motivo: matchNombre
+      ? (editable ? 'Responsable asignado' : 'Solo lectura')
+      : (participoDerivacion ? 'Participó en derivación (solo lectura)' : 'No asignado'),
   };
 }
 
@@ -216,6 +253,9 @@ function mapCotizacionRow(r, ccpFlags = null) {
     requerimientos_texto: r.requerimientos_texto || '',
     centros_texto: r.centros_texto || r.centro || '',
     centro: r.centros_texto || r.centro || '',
+    invitacion_id: r.invitacion_id ?? null,
+    nro_invitacion_presentacion: r.nro_invitacion_presentacion ?? null,
+    nro_invitacion: r.nro_invitacion ?? r.nro_invitacion_presentacion ?? null,
     derivacion: inf.derivacion || null,
     responsable_id: inf.derivacion?.responsable_id || null,
     responsable_nombre: r.validacion_responsable || inf.derivacion?.responsable_nombre || '',
@@ -691,6 +731,11 @@ async function enrichCentrosBandejaValidacion(rows = []) {
 export async function listarValidacionesExpedientes(usuario, userId, opts = {}) {
   const { rows } = await query(`
     SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.requerimiento_id, cot.estado,
+      cot.invitacion_id, cot.nro_invitacion_presentacion,
+      COALESCE(
+        NULLIF(cot.nro_invitacion_presentacion, 0),
+        ip.nro_invitacion
+      ) AS nro_invitacion,
       cot.validacion_estado, cot.validacion_responsable, cot.validacion_informe,
       cot.propuesta_economica, cot.created_at, cot.updated_at,
       to_char(cot.fecha_presentacion, 'YYYY-MM-DD"T"HH24:MI') AS fecha_presentacion,
@@ -729,6 +774,7 @@ export async function listarValidacionesExpedientes(usuario, userId, opts = {}) 
     FROM cotizaciones_proveedor cot
     JOIN proveedores p ON p.id = cot.proveedor_id
     JOIN solicitudes_cotizacion sc ON sc.id = cot.solicitud_id
+    LEFT JOIN invitacion_proveedores ip ON ip.id = cot.invitacion_id
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
       AND UPPER(TRIM(COALESCE(sc.tipo, ''))) NOT LIKE 'LOCAC%'
       AND COALESCE(UPPER(TRIM(cot.validacion_estado)), '') IN (
@@ -1331,7 +1377,7 @@ async function buildItemsFormulario07a(cot) {
   return built.legacyItems;
 }
 
-export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOperador) {
+export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOperador, opts = {}) {
   const {
     submodulo,
     submodulo_label,
@@ -1431,6 +1477,13 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
     || { code: 'VALIDACIONES', label: submodulo_label || 'Validaciones' };
   const prevInf = parseInforme(cot);
   const obsTexto = obsTextoPre;
+  const derivadoPorId = (() => {
+    const fromOpts = parseInt(opts?.operadorUserId, 10);
+    if (Number.isFinite(fromOpts) && fromOpts > 0) return fromOpts;
+    const fromBody = parseInt(body?.derivado_por_id, 10);
+    if (Number.isFinite(fromBody) && fromBody > 0) return fromBody;
+    return null;
+  })();
   const informe = {
     ...prevInf,
     // Conservar matriz/formulario previos al reabrir; limpiar solo salida.
@@ -1444,6 +1497,7 @@ export async function derivarValidacionCotizacion(cotizacionId, body, usuarioOpe
       responsable_nombre: responsableNombre,
       documentos_tecnicos: documentos,
       derivado_por: usuarioOperador,
+      ...(derivadoPorId ? { derivado_por_id: derivadoPorId } : {}),
       derivado_at: new Date().toISOString(),
       reapertura: esReapertura,
     },

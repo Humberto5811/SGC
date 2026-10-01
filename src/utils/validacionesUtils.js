@@ -222,14 +222,22 @@ export function formatCentrosValidacion(c, esc) {
   return `<span class="small" title="${esc(parts.join(', '))}">${esc(parts[0])} <span class="text-muted">+${parts.length - 1}</span></span>`;
 }
 
+/** Etiqueta bandeja Inv.N desde identidad persistida (no posición en array). */
+export function formatInvitacionBandejaLabel(c) {
+  const raw = c?.nro_invitacion_presentacion ?? c?.nro_invitacion;
+  const n = parseInt(raw, 10);
+  if (Number.isFinite(n) && n > 0) return `Inv. ${n}`;
+  return '—';
+}
+
 /**
- * Consolida cotizaciones de validación en una fila por solicitud.
+ * Una fila lógica por cotizacion_id (RC8.17.8H6-C3-D8-C1).
  * Conserva el detalle en `cotizaciones` para el modal Ver.
  */
 export function consolidarExpedientesValidacion(cotizaciones = []) {
   const map = new Map();
-  (cotizaciones || []).forEach((c) => {
-    const key = String(c.solicitud_id || c.solicitud_codigo || '');
+  (cotizaciones || []).forEach((c, idx) => {
+    const key = String(c.id ?? c.cotizacion_id ?? `__row_${idx}`);
     if (!key) return;
     if (!map.has(key)) {
       map.set(key, {
@@ -321,12 +329,18 @@ export function consolidarExpedientesValidacion(cotizaciones = []) {
         modulo: 'VALIDACIONES',
       };
     })();
+    const cotAncla = withOrden || seedCot;
+    const invLabel = formatInvitacionBandejaLabel(cotAncla);
     return {
       ...g,
+      cotizacion_id: cotAncla.id,
+      invitacion_id: cotAncla.invitacion_id ?? null,
+      nro_invitacion: cotAncla.nro_invitacion ?? cotAncla.nro_invitacion_presentacion ?? null,
+      invitacion_label: invLabel,
       solicitud_estado: meta.solicitud_estado,
       estado_cuadro: meta.estado_cuadro,
       centro: g.centros_texto,
-      cantidad_cotizaciones: g.cotizaciones.length,
+      cantidad_cotizaciones: 1,
       estado_bandeja: vigente.label || est.label,
       estado_bandeja_class: est.badge,
       badgeStyle: est.badgeStyle || '',

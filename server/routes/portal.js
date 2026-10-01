@@ -559,7 +559,8 @@ portalAnalistaRouter.post('/validaciones/:id/derivar', async (req, res, next) =>
   try {
     const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
     if (!usuario) return res.status(401).json({ error: 'No autenticado' });
-    const row = await derivarValidacionCotizacion(req.params.id, req.body, usuario);
+    const operadorUserId = req.user?.id ?? '';
+    const row = await derivarValidacionCotizacion(req.params.id, req.body, usuario, { operadorUserId });
     res.json({
       success: true,
       cotizacion: row,
