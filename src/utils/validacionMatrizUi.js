@@ -155,7 +155,9 @@ export function renderMatrizValidacion(opts = {}) {
     return `<tr data-idx="${idx}" data-item-key="${esc(fila.item_key)}">${cells}</tr>`;
   }).join('');
 
-  const fecha = meta.fecha || formatFechaCalendarioLima();
+  const fecha = meta.fecha_instant
+    ? formatFechaCalendarioLima(meta.fecha_instant)
+    : (meta.fecha || formatFechaCalendarioLima());
   const profesional = meta.profesional || '';
 
   return `
@@ -186,7 +188,7 @@ export function renderMatrizValidacion(opts = {}) {
 }
 
 /** Lee matriz desde DOM + filas base. */
-export function collectMatrizFromDom(prefix, matrizBase) {
+export function collectMatrizFromDom(prefix, matrizBase, opts = {}) {
   const tipoKey = matrizBase?.tipo || 'BIENES';
   const filas = (matrizBase?.filas || []).map((fila, idx) => {
     const ev = { ...(fila.evaluacion || {}) };
@@ -229,6 +231,7 @@ export function collectMatrizFromDom(prefix, matrizBase) {
       observacion_global: obsFilas || (calc.ok ? calc.resultado_global : '') || '',
       sustento: '',
       fecha: document.getElementById(`${prefix}_fechaAuto`)?.textContent || formatFechaCalendarioLima(),
+      fecha_instant: opts.fecha_instant ?? matrizBase?.fecha_instant ?? null,
       profesional: document.getElementById(`${prefix}_respAuto`)?.textContent || '',
       producto_adquisicion: '',
       lugar: 'Chorrillos',

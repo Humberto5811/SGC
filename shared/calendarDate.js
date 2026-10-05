@@ -76,32 +76,78 @@ export function formatCalendarDdMmYyyy(value) {
 
 const TZ_LIMA = 'America/Lima';
 
-/**
- * Fecha calendario en America/Lima (DD/MM/YYYY), sin desfase por TZ del runtime.
- * @param {Date|string|number} [value] — default: ahora
- * @returns {string} dd/mm/yyyy o '' si inválido
- */
-export function formatFechaCalendarioLima(value = new Date()) {
-  if (value != null && value !== '') {
-    const asStr = String(value).trim();
-    const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(asStr);
-    if (dmy) {
-      const d = Number(dmy[1]);
-      const m = Number(dmy[2]);
-      const y = Number(dmy[3]);
-      if (isValidParts(y, m, d)) {
-        return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
-      }
-    }
-  }
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
+function formatPartsDdMmYyyy(y, m, d) {
+  return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
+}
+
+function formatInstantLima(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
   return new Intl.DateTimeFormat('es-PE', {
     timeZone: TZ_LIMA,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
   }).format(d);
+}
+
+/**
+ * Fecha calendario en America/Lima (DD/MM/YYYY), sin desfase por TZ del runtime.
+ * Orden: instant ISO → fecha calendario YYYY-MM-DD → DD/MM/YYYY explícito → Date/timestamp.
+ * @param {Date|string|number} [value] — default: ahora
+ * @returns {string} dd/mm/yyyy o '' si inválido
+ */
+export function formatFechaCalendarioLima(value = new Date()) {
+  if (value == null || value === '') return formatInstantLima(new Date());
+
+  const asStr = String(value).trim();
+  if (!asStr) return formatInstantLima(new Date());
+
+  // Instant / timestamp con hora (prioridad sobre DD/MM ya convertido en TZ incorrecta)
+  if (/^\d{4}-\d{2}-\d{2}T/.test(asStr) || /Z$/.test(asStr) || /[+-]\d{2}:\d{2}$/.test(asStr)) {
+    const parsed = new Date(asStr);
+    if (!Number.isNaN(parsed.getTime())) return formatInstantLima(parsed);
+  }
+
+  // Fecha calendario sin hora (contrato / persistencia DATE)
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(asStr);
+  if (ymd) {
+    const y = Number(ymd[1]);
+    const m = Number(ymd[2]);
+    const d = Number(ymd[3]);
+    if (isValidParts(y, m, d)) return formatPartsDdMmYyyy(y, m, d);
+  }
+
+  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(asStr);
+  if (dmy) {
+    const d = Number(dmy[1]);
+    const m = Number(dmy[2]);
+    const y = Number(dmy[3]);
+    if (isValidParts(y, m, d)) return formatPartsDdMmYyyy(y, m, d);
+  }
+
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return formatInstantLima(d);
+}
+
+/** Marca fecha de validación: calendario Lima + instante UTC para PDF/UI. */
+export function stampFechaValidacionCalendarioLima(now = new Date()) {
+  const instant = now instanceof Date ? now : new Date(now);
+  return {
+    fecha: formatFechaCalendarioLima(instant),
+    fecha_instant: instant.toISOString(),
+  };
+}
+
+/**
+ * Fecha para pie PDF / reporte: prioriza fecha_instant (evita DD/MM legacy en TZ UTC).
+ */
+export function resolveFechaValidacionParaPdf(opts = {}) {
+  const instant = opts.fecha_instant || opts.fechaInstant || null;
+  if (instant) return formatFechaCalendarioLima(instant);
+  const raw = opts.fecha;
+  if (raw) return formatFechaCalendarioLima(raw);
+  return formatFechaCalendarioLima();
 }
 
 /**

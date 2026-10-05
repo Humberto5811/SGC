@@ -108,6 +108,7 @@ export function buildValidationReportData(detalle = {}, overrides = {}) {
       ruc: safeStr(detalle.ruc),
       descripcion: safeStr(form.producto_adquisicion || detalle.descripcion || detalle.denominacion),
       fecha: safeStr(form.fecha),
+      fecha_instant: form.fecha_instant || detalle.formulario_07a?.fecha_instant || null,
       profesional: safeStr(form.profesional || detalle.validacion_responsable),
       resultado_global: safeStr(form.resultado_global || calc.resultado_global),
       cumple: safeStr(form.cumple || calc.cumple),

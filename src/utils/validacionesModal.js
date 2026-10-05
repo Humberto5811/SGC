@@ -24,7 +24,10 @@ import {
   showValidacionItemDocumentosModal,
 } from './validacionDocumentosMatriz.js';
 import { buildValidationReportData } from './validacionReportData.js';
-import { formatFechaCalendarioLima } from '../../shared/calendarDate.js';
+import {
+  formatFechaCalendarioLima,
+  resolveFechaValidacionParaPdf,
+} from '../../shared/calendarDate.js';
 import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
 
 export { canDerivarValidacion, buildExpedienteLineaCompacta, formatFaltantesHtml, resolverDestinoCliente };
@@ -327,7 +330,10 @@ function collectFormulario(prefix, baseForm) {
   return {
     items,
     lugar: baseForm.lugar || 'Chorrillos',
-    fecha: baseForm.fecha || formatFechaCalendarioLima(),
+    fecha: baseForm.fecha_instant
+      ? formatFechaCalendarioLima(baseForm.fecha_instant)
+      : (baseForm.fecha || formatFechaCalendarioLima()),
+    fecha_instant: baseForm.fecha_instant || null,
     profesional: baseForm.profesional || '',
     producto_adquisicion: baseForm.producto_adquisicion,
     resultado_global: document.getElementById(`${prefix}_resGlobal`)?.value || '',
@@ -601,7 +607,9 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
 
   const syncStateFromForm = () => {
     if (state.matriz_v2?.filas) {
-      const collected = collectMatrizFromDom(id, state.matriz_v2);
+      const collected = collectMatrizFromDom(id, state.matriz_v2, {
+        fecha_instant: state.detalle?.formulario_07a?.fecha_instant || null,
+      });
       state.matriz_v2 = collected.matriz_v2;
       state.formulario = {
         ...collected.formulario_07a,
@@ -721,7 +729,8 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
       tipoFormato: state.tipoFormato || d.tipo_contratacion,
       readonly,
       meta: {
-        fecha: f.fecha || formatFechaCalendarioLima(),
+        fecha: f.fecha_instant ? formatFechaCalendarioLima(f.fecha_instant) : (f.fecha || formatFechaCalendarioLima()),
+        fecha_instant: f.fecha_instant || state.detalle?.formulario_07a?.fecha_instant || null,
         profesional: f.profesional || state.usuarioActual,
         sustento: f.sustento || '',
         observacion_global: f.observacion_global || '',
@@ -947,6 +956,16 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
             lugar: 'Chorrillos',
           },
           matriz_v2: { ...report.matriz_v2, tipo: report.tipoKey },
+          meta: {
+            fecha_instant: report.cabecera.fecha_instant
+              || report.formulario_07a?.fecha_instant
+              || form.fecha_instant,
+            fecha: resolveFechaValidacionParaPdf({
+              fecha_instant: report.cabecera.fecha_instant || form.fecha_instant,
+              fecha: form.fecha,
+            }),
+            profesional: form.profesional,
+          },
         });
       } catch (err) { showErr(id, err.message); showFooterMsg(esc(err.message)); }
       return;

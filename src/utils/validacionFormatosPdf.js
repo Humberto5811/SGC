@@ -4,15 +4,14 @@
  */
 import { getValidacionConfig, TIPO_VALIDACION } from './validacionFormatosConfig.js';
 import { buildValidationReportData } from './validacionReportData.js';
-import { formatFechaCalendarioLima } from '../../shared/calendarDate.js';
+import { resolveFechaValidacionParaPdf } from '../../shared/calendarDate.js';
 import {
-  ANEXO_07A_TITULO_LINE1,
-  ANEXO_07A_TITULO_LINE2,
+  ANEXO_07A_TITULO_UNA_LINEA,
   CUADRO_INSTITUCIONAL_BIENES,
   buildGroupedHeadBienes,
   buildCabeceraGlobalBienes,
-  columnasPdfBienes,
   computeBienesBlockLayout,
+  bienesPdfColumnBlock,
 } from '../../shared/validacionAnexo07aBienesLayout.js';
 
 function ensureJsPdf() {
@@ -73,14 +72,11 @@ function drawPdfTextCentered(doc, lines, centerX, startY, lineHeight) {
 function paintBienesCabeceraInstitucional(doc, { pageW, usable, cabecera }) {
   const centerX = pageW / 2;
   let y = 28;
-  doc.setFontSize(12);
+  doc.setFontSize(10.5);
   doc.setTextColor(...COLOR_HEAD_TEXT);
   doc.setFont(undefined, 'bold');
-  doc.text(ANEXO_07A_TITULO_LINE1, centerX, y, { align: 'center' });
-  y += 16;
-  doc.setFontSize(10);
-  doc.text(ANEXO_07A_TITULO_LINE2, centerX, y, { align: 'center' });
-  y += 18;
+  const tituloLines = doc.splitTextToSize(ANEXO_07A_TITULO_UNA_LINEA, usable);
+  y = drawPdfTextCentered(doc, tituloLines, centerX, y, 12) + 10;
   doc.setFont(undefined, 'normal');
   doc.setFontSize(8);
   doc.setTextColor(40);
@@ -202,8 +198,31 @@ export function downloadFormatoValidacion(opts = {}) {
     },
     columnStyles: Object.fromEntries(cols.map((_, i) => [i, { cellWidth: colWidths[i] }])),
     didParseCell(data) {
+      const applyBienesBlockStyles = (blockNum, isHeadRow) => {
+        if (blockNum === 1) {
+          data.cell.styles.fillColor = isHeadRow ? COLOR_AUTO : [238, 247, 251];
+          if (isHeadRow) {
+            data.cell.styles.textColor = COLOR_HEAD_TEXT;
+            data.cell.styles.fontStyle = 'bold';
+          }
+        } else if (blockNum === 2 || blockNum === 3) {
+          data.cell.styles.fillColor = isHeadRow ? COLOR_EVAL : [243, 250, 244];
+          if (isHeadRow) {
+            data.cell.styles.textColor = [21, 87, 36];
+            data.cell.styles.fontStyle = 'bold';
+          }
+        }
+      };
+      if (tipoKey === TIPO_VALIDACION.BIENES && bienesLayout?.ok) {
+        const blockNum = bienesPdfColumnBlock(bienesLayout, data.column.index);
+        if (data.section === 'head' && data.row.index === 1) {
+          applyBienesBlockStyles(blockNum, true);
+        } else if (data.section === 'body') {
+          applyBienesBlockStyles(blockNum, false);
+        }
+        return;
+      }
       if (data.section === 'head') {
-        // Fila 0 = grupos; fila 1 = columnas
         if (data.row.index === 1) {
           const col = cols[data.column.index];
           data.cell.styles.fillColor = col?.kind === 'eval' ? COLOR_EVAL : COLOR_AUTO;
@@ -245,8 +264,10 @@ export function downloadFormatoValidacion(opts = {}) {
     y = 48;
   }
 
-  const fechaRaw = meta?.fecha || cabecera.fecha || formulario?.fecha || '';
-  const fecha = fechaRaw ? formatFechaCalendarioLima(fechaRaw) : formatFechaCalendarioLima();
+  const fecha = resolveFechaValidacionParaPdf({
+    fecha_instant: meta?.fecha_instant || formulario?.fecha_instant || cabecera.fecha_instant,
+    fecha: meta?.fecha || cabecera.fecha || formulario?.fecha,
+  });
   const profesional = meta?.profesional || cabecera.profesional || formulario?.profesional || '';
   const lugar = formulario?.lugar || 'Chorrillos';
 
@@ -285,6 +306,7 @@ export function downloadAnexo07A({ solicitud, formulario, matriz_v2 }) {
       formulario,
       meta: {
         fecha: formulario?.fecha,
+        fecha_instant: formulario?.fecha_instant,
         profesional: formulario?.profesional,
       },
     });
@@ -326,6 +348,10 @@ export function downloadAnexo07A({ solicitud, formulario, matriz_v2 }) {
     solicitud: { ...solicitud, tipo_formato: tipoKey },
     matriz_v2: { version: 2, tipo: tipoKey, filas },
     formulario,
-    meta: { fecha: formulario?.fecha, profesional: formulario?.profesional },
+    meta: {
+      fecha: formulario?.fecha,
+      fecha_instant: formulario?.fecha_instant,
+      profesional: formulario?.profesional,
+    },
   });
 }

@@ -4,6 +4,8 @@
 
 export const ANEXO_07A_TITULO_LINE1 = 'ANEXO N.° 07-A: FORMATO DE VALIDACIÓN DE PROPUESTAS TÉCNICAS RECIBIDAS';
 export const ANEXO_07A_TITULO_LINE2 = 'BIENES';
+/** Título en una sola línea visual (centrado en PDF). */
+export const ANEXO_07A_TITULO_UNA_LINEA = `${ANEXO_07A_TITULO_LINE1} — ${ANEXO_07A_TITULO_LINE2}`;
 
 export const CUADRO_INSTITUCIONAL_BIENES = 'CUADRO DE VERIFICACIÓN, VALIDACIÓN Y EVALUACIÓN DE CUMPLIMIENTO DE ESPECIFICACIONES TÉCNICAS, DE LAS PROPUESTAS TÉCNICAS RECIBIDAS PARA LA ADQUISICIÓN DE PRODUCTOS DE:';
 
@@ -59,6 +61,12 @@ export function computeBienesBlockLayout(cols) {
 
   return {
     ok: true,
+    block1Start: iItem,
+    block1End: iCantCot,
+    block2Start: iRazon,
+    block2End: iObsSpecs,
+    block3Start: iAcredita,
+    block3End: iObsFin,
     block1Span: iCantCot - iItem + 1,
     block2Span: iObsSpecs - iRazon + 1,
     block3Span: iObsFin - iAcredita + 1,
@@ -66,6 +74,16 @@ export function computeBienesBlockLayout(cols) {
     block2LastKey: BIENES_BLOCK_2_LAST,
     block3LastKey: BIENES_BLOCK_3_LAST,
   };
+}
+
+/** 1 = detalle, 2 = especificaciones, 3 = validación AU; 0 = fuera de rango. */
+export function bienesPdfColumnBlock(layout, columnIndex) {
+  if (!layout?.ok || columnIndex == null) return 0;
+  const i = Number(columnIndex);
+  if (i >= layout.block1Start && i <= layout.block1End) return 1;
+  if (i >= layout.block2Start && i <= layout.block2End) return 2;
+  if (i >= layout.block3Start && i <= layout.block3End) return 3;
+  return 0;
 }
 
 /** @param {object} [styleOverrides] */
@@ -91,7 +109,7 @@ export function buildGroupedHeadBienes(cols, styleOverrides = {}) {
   return [
     [
       { content: BIENES_GROUP_TITLES.block1, colSpan: layout.block1Span, styles: { ...autoStyle } },
-      { content: BIENES_GROUP_TITLES.block2, colSpan: layout.block2Span, styles: { ...autoStyle } },
+      { content: BIENES_GROUP_TITLES.block2, colSpan: layout.block2Span, styles: { ...evalStyle } },
       { content: BIENES_GROUP_TITLES.block3, colSpan: layout.block3Span, styles: { ...evalStyle } },
     ],
     cols.map((c) => c.label),
