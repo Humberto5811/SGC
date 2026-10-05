@@ -116,9 +116,10 @@ export function renderMatrizValidacion(opts = {}) {
         return `<td class="text-center">
           <button type="button" class="btn btn-sm btn-outline-primary val-mtx-docs-btn"
             data-cot-id="${esc(fila.cotizacion_id)}"
+            data-item-key="${esc(fila.item_key || '')}"
             data-req-id="${esc(fila.requerimiento_id || '')}"
             data-req-codigo="${esc(fila.requerimiento_codigo || '')}"
-            title="Ver documentos técnicos"
+            title="Ver documentos del ítem"
             ${readonly ? '' : ''}>
             <i class="bi bi-eye"></i>
           </button>

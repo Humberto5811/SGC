@@ -18,6 +18,11 @@ import {
   collectMatrizFromDom,
   bindMatrizUi,
 } from './validacionMatrizUi.js';
+import {
+  renderMatrizDocumentalRevision,
+  findMatrizDocumentalFila,
+  showValidacionItemDocumentosModal,
+} from './validacionDocumentosMatriz.js';
 import { buildValidationReportData } from './validacionReportData.js';
 import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
 
@@ -682,74 +687,25 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
     });
   };
 
-  const clearDocsPanel = () => {
-    document.getElementById('valDocsPanel')?.remove();
-  };
-
-  const paintProveedores = () => {
+  const paintDocsMatriz = () => {
     const host = document.getElementById(`${id}_docsHost`);
     if (!host || !state.detalle) return;
-    const filas = state.detalle.proveedores_solicitud || [];
-    const hayVista = !!state.selectedKey;
     host.innerHTML = `
-      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-        <h6 class="fw-semibold mb-0">Empresas que presentaron cotización</h6>
-        <span class="small text-muted">Pulse <strong>Ver documentos</strong> para revisar la documentación de cada proveedor</span>
-      </div>
-      ${renderProveedoresTable(filas, state.selectedKey)}
-      <div id="${id}_docsPanelHost" class="mt-2">
-        ${hayVista ? '' : '<p class="small text-muted mb-0 mt-2">No hay documentación abierta. Seleccione un proveedor con el botón Ver documentos.</p>'}
-      </div>`;
+      <p class="small text-muted mb-2">Una fila por ítem cotizado en esta cotización. Los documentos solicitados aplican a la cotización completa.</p>
+      ${renderMatrizDocumentalRevision(state.detalle.matriz_documental, esc)}`;
+    bindDocButtons(host, (msg) => showErr(id, msg));
   };
 
-  async function loadProveedorDocs(btn) {
+  const openItemDocumentosModal = (btn) => {
     hideErr(id);
-    const cotId = btn.dataset.cotId;
-    const reqId = btn.dataset.reqId || '';
-    const reqCodigo = btn.dataset.reqCodigo || '';
-    const key = `${cotId}:${reqId}`;
-    state.selectedKey = key;
-    paintProveedores();
-    const panelHost = document.getElementById(`${id}_docsPanelHost`);
-    if (panelHost) {
-      panelHost.innerHTML = '<div class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> Cargando documentación…</div>';
-    }
-    try {
-      let detalle = state.cacheDetalle.get(String(cotId));
-      if (!detalle) {
-        const resp = await contratacionesService.getValidacionTrabajo(cotId, esAdmin);
-        detalle = resp.data;
-        state.cacheDetalle.set(String(cotId), detalle);
-      }
-      const docsCot = detalle.documentos_cotizacion || detalle.documentos_tecnicos || [];
-      let docsReq = detalle.documentos_requerimiento || [];
-      if (reqId) {
-        docsReq = docsReq.filter((d) => String(d.requerimiento_id) === String(reqId));
-      } else if (reqCodigo) {
-        docsReq = docsReq.filter((d) => String(d.requerimiento_codigo) === String(reqCodigo));
-      }
-      if (!panelHost) return;
-      panelHost.innerHTML = renderDocsPanel({
-        cotizacion_id: cotId,
-        razon_social: btn.dataset.razon || detalle.razon_social,
-        ruc: btn.dataset.ruc || detalle.ruc,
-        requerimiento_codigo: reqCodigo || detalle.requerimientos,
-        viewing_only: true,
-      }, docsCot, docsReq);
-      bindDocButtons(panelHost, (msg) => showErr(id, msg));
-      panelHost.querySelector('[data-val-ui="cerrar-docs"]')?.addEventListener('click', () => {
-        state.selectedKey = '';
-        clearDocsPanel();
-        paintProveedores();
-      });
-    } catch (err) {
-      if (panelHost) {
-        panelHost.innerHTML = `<div class="alert alert-danger small mb-0">No se pudo cargar proveedor: ${esc(err.message)}</div>`;
-      } else {
-        showErr(id, err.message);
-      }
-    }
-  }
+    const cotId = btn.dataset.cotId || state.cotizacionId;
+    const itemKey = btn.dataset.itemKey || '';
+    const fila = findMatrizDocumentalFila(state.detalle?.matriz_documental, cotId, itemKey);
+    showValidacionItemDocumentosModal(fila, {
+      onBindDocs: (container) => bindDocButtons(container, (msg) => showErr(id, msg)),
+      escFn: esc,
+    });
+  };
 
   async function renderBody() {
     const d = state.detalle;
@@ -809,25 +765,12 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
 
     setFooterEnabled(!readonly);
     paintPdf();
-    // Solo lista de proveedores; documentos se cargan al pulsar "Ver documentos"
-    state.selectedKey = '';
-    paintProveedores();
-
-    document.getElementById(`${id}_docsHost`)?.addEventListener('click', (ev) => {
-      const btn = ev.target.closest('.val-ver-docs');
-      if (btn) loadProveedorDocs(btn);
-    });
+    paintDocsMatriz();
 
     bindMatrizUi(id, {
       readonly,
       onChange: () => { hideFooterMsg(); syncDerivarBtn(); },
-      onDocsClick: (btn) => {
-        const tabBtn = body.querySelector(`[data-bs-target="#${id}_tabDocs"]`);
-        if (tabBtn && window.bootstrap?.Tab) {
-          window.bootstrap.Tab.getOrCreateInstance(tabBtn).show();
-        }
-        loadProveedorDocs(btn);
-      },
+      onDocsClick: (btn) => openItemDocumentosModal(btn),
     });
 
     syncStateFromForm();

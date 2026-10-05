@@ -21,6 +21,7 @@ import {
 } from '../../shared/validacionCentro.js';
 import { resolveEstadoExpedienteVigente } from '../../shared/estadoExpedienteVigente.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
+import { buildMatrizDocumentalValidacion } from './validacionMatrizDocumental.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'VALIDACIONES', label: 'Validaciones' },
@@ -1683,6 +1684,9 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
   const centrosConsolidados = consolidateCentros(
     (built.matriz_v2.filas || []).map((f) => f.automaticos?.centro),
   );
+  const matriz_documental = await buildMatrizDocumentalValidacion(cot, {
+    matriz_v2_filas: built.matriz_v2?.filas || [],
+  });
   return {
     ...mapCotizacionRow(cot),
     requerimientos: reqCodes || mapCotizacionRow(cot).requerimientos || '',
@@ -1710,6 +1714,7 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
     excluye_economica: true,
     proveedores_solicitud: proveedoresSolicitud,
     matriz_v2: built.matriz_v2,
+    matriz_documental,
     formulario_07a: {
       items,
       lugar: inf.formulario_07a?.lugar || 'Chorrillos',
