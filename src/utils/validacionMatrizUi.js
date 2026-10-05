@@ -11,6 +11,7 @@ import {
   validarMatrizCompleta,
   filasV2ToLegacyItems,
 } from './validacionFormatosConfig.js';
+import { formatFechaCalendarioLima } from '../../shared/calendarDate.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -154,7 +155,7 @@ export function renderMatrizValidacion(opts = {}) {
     return `<tr data-idx="${idx}" data-item-key="${esc(fila.item_key)}">${cells}</tr>`;
   }).join('');
 
-  const fecha = meta.fecha || new Date().toLocaleDateString('es-PE');
+  const fecha = meta.fecha || formatFechaCalendarioLima();
   const profesional = meta.profesional || '';
 
   return `
@@ -227,7 +228,7 @@ export function collectMatrizFromDom(prefix, matrizBase) {
       cumple: calc.ok ? calc.cumple : '',
       observacion_global: obsFilas || (calc.ok ? calc.resultado_global : '') || '',
       sustento: '',
-      fecha: document.getElementById(`${prefix}_fechaAuto`)?.textContent || new Date().toLocaleDateString('es-PE'),
+      fecha: document.getElementById(`${prefix}_fechaAuto`)?.textContent || formatFechaCalendarioLima(),
       profesional: document.getElementById(`${prefix}_respAuto`)?.textContent || '',
       producto_adquisicion: '',
       lugar: 'Chorrillos',

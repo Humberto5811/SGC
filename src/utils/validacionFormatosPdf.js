@@ -4,6 +4,16 @@
  */
 import { getValidacionConfig, TIPO_VALIDACION } from './validacionFormatosConfig.js';
 import { buildValidationReportData } from './validacionReportData.js';
+import { formatFechaCalendarioLima } from '../../shared/calendarDate.js';
+import {
+  ANEXO_07A_TITULO_LINE1,
+  ANEXO_07A_TITULO_LINE2,
+  CUADRO_INSTITUCIONAL_BIENES,
+  buildGroupedHeadBienes,
+  buildCabeceraGlobalBienes,
+  columnasPdfBienes,
+  computeBienesBlockLayout,
+} from '../../shared/validacionAnexo07aBienesLayout.js';
 
 function ensureJsPdf() {
   if (!window.jspdf?.jsPDF) throw new Error('Biblioteca PDF no disponible. Recargue la página.');
@@ -44,16 +54,41 @@ function buildGroupedHead(cols, tipoKey) {
       cols.map((c) => c.label),
     ];
   }
-  // Bienes: grupos similares
-  const nAuto = cols.filter((c) => c.kind === 'auto').length;
-  const nEval = cols.filter((c) => c.kind === 'eval').length;
-  return [
-    [
-      { content: 'DATOS DEL ÍTEM / COTIZACIÓN', colSpan: nAuto, styles: { fillColor: COLOR_AUTO, textColor: COLOR_SECTION, halign: 'center', fontStyle: 'bold', fontSize: 7 } },
-      { content: 'VALIDACIÓN DEL ÁREA USUARIA', colSpan: nEval, styles: { fillColor: COLOR_EVAL, textColor: [21, 87, 36], halign: 'center', fontStyle: 'bold', fontSize: 7 } },
-    ],
-    cols.map((c) => c.label),
-  ];
+  return buildGroupedHeadBienes(cols, {
+    autoFill: COLOR_AUTO,
+    sectionText: COLOR_SECTION,
+    evalFill: COLOR_EVAL,
+    evalText: [21, 87, 36],
+  });
+}
+
+function drawPdfTextCentered(doc, lines, centerX, startY, lineHeight) {
+  const list = Array.isArray(lines) ? lines : [lines];
+  list.forEach((line, i) => {
+    doc.text(line, centerX, startY + i * lineHeight, { align: 'center' });
+  });
+  return startY + list.length * lineHeight;
+}
+
+function paintBienesCabeceraInstitucional(doc, { pageW, usable, cabecera }) {
+  const centerX = pageW / 2;
+  let y = 28;
+  doc.setFontSize(12);
+  doc.setTextColor(...COLOR_HEAD_TEXT);
+  doc.setFont(undefined, 'bold');
+  doc.text(ANEXO_07A_TITULO_LINE1, centerX, y, { align: 'center' });
+  y += 16;
+  doc.setFontSize(10);
+  doc.text(ANEXO_07A_TITULO_LINE2, centerX, y, { align: 'center' });
+  y += 18;
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(40);
+  const subLines = doc.splitTextToSize(CUADRO_INSTITUCIONAL_BIENES, usable);
+  y = drawPdfTextCentered(doc, subLines, centerX, y, 10) + 8;
+  doc.setFontSize(7.5);
+  doc.text(buildCabeceraGlobalBienes(cabecera), 36, y);
+  return y + 14;
 }
 
 /**
@@ -87,24 +122,25 @@ export function downloadFormatoValidacion(opts = {}) {
   const pageW = doc.internal.pageSize.getWidth();
   const usable = pageW - 56;
 
-  // ——— Cabecera institucional ———
-  doc.setFontSize(12);
-  doc.setTextColor(...COLOR_HEAD_TEXT);
-  doc.setFont(undefined, 'bold');
-  const tituloLineas = String(config.anexoTitulo || '').split('–').map((s) => s.trim());
-  if (tituloLineas.length >= 2) {
-    doc.text(tituloLineas[0], 36, 28);
-    doc.setFontSize(10);
-    doc.text(tituloLineas.slice(1).join(' – '), 36, 42);
-  } else {
-    doc.text(config.anexoTitulo, 36, 32);
-  }
-  doc.setFont(undefined, 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(40);
-
   let yHead = 56;
-  if (tipoKey === TIPO_VALIDACION.SERVICIOS) {
+  if (tipoKey === TIPO_VALIDACION.BIENES) {
+    yHead = paintBienesCabeceraInstitucional(doc, { pageW, usable, cabecera });
+  } else if (tipoKey === TIPO_VALIDACION.SERVICIOS) {
+    doc.setFontSize(12);
+    doc.setTextColor(...COLOR_HEAD_TEXT);
+    doc.setFont(undefined, 'bold');
+    const tituloLineas = String(config.anexoTitulo || '').split('–').map((s) => s.trim());
+    if (tituloLineas.length >= 2) {
+      doc.text(tituloLineas[0], 36, 28);
+      doc.setFontSize(10);
+      doc.text(tituloLineas.slice(1).join(' – '), 36, 42);
+    } else {
+      doc.text(config.anexoTitulo, 36, 32);
+    }
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(40);
+    yHead = 56;
     const sub = 'CUADRO DE VERIFICACIÓN, VALIDACIÓN Y EVALUACIÓN DE CUMPLIMIENTO DE LOS TÉRMINOS DE REFERENCIA DE LAS PROPUESTAS TÉCNICAS RECIBIDAS PARA LA PRESTACIÓN DE SERVICIO DE:';
     const subLines = doc.splitTextToSize(sub, usable);
     doc.text(subLines, 36, yHead);
@@ -121,26 +157,11 @@ export function downloadFormatoValidacion(opts = {}) {
       yHead,
     );
     yHead += 12;
-  } else {
-    doc.text('CUADRO DE VERIFICACIÓN, VALIDACIÓN Y EVALUACIÓN DE CUMPLIMIENTO', 36, yHead);
-    yHead += 12;
-    doc.text(`ADQUISICIÓN / SERVICIO: ${cabecera.descripcion || ''}`, 36, yHead);
-    yHead += 11;
-    doc.text(
-      `Solicitud: ${cabecera.solicitud_codigo || ''}   REQ: ${cabecera.requerimientos || ''}   Tipo: ${cabecera.tipo_label || ''}   Centro: ${cabecera.centro_label || cabecera.centro || '—'}`,
-      36,
-      yHead,
-    );
-    yHead += 11;
-    doc.text(
-      `Proveedor: ${cabecera.proveedor || ''}   RUC: ${cabecera.ruc || ''}   Resultado: ${cabecera.resultado_global || '—'}`,
-      36,
-      yHead,
-    );
-    yHead += 14;
   }
 
   const head = buildGroupedHead(cols, tipoKey);
+  const bienesLayout = tipoKey === TIPO_VALIDACION.BIENES ? computeBienesBlockLayout(cols) : null;
+  const separatorCols = new Set(bienesLayout?.separatorAfterColumnIndices || []);
   const body = filas.map((fila) => {
     const auto = fila.automaticos || {};
     const ev = fila.evaluacion || {};
@@ -196,6 +217,15 @@ export function downloadFormatoValidacion(opts = {}) {
         data.cell.styles.fillColor = col?.kind === 'eval' ? [243, 250, 244] : [238, 247, 251];
       }
     },
+    didDrawCell(data) {
+      if (tipoKey !== TIPO_VALIDACION.BIENES || !separatorCols.size) return;
+      if (!separatorCols.has(data.column.index)) return;
+      const { cell } = data;
+      doc.setDrawColor(...COLOR_SECTION);
+      doc.setLineWidth(1.2);
+      const x = cell.x + cell.width;
+      doc.line(x, cell.y, x, cell.y + cell.height);
+    },
     margin: { left: 28, right: 28 },
     rowPageBreak: 'auto',
     showHead: 'everyPage',
@@ -215,15 +245,16 @@ export function downloadFormatoValidacion(opts = {}) {
     y = 48;
   }
 
-  const fecha = meta?.fecha || cabecera.fecha || formulario?.fecha || new Date().toLocaleDateString('es-PE');
+  const fechaRaw = meta?.fecha || cabecera.fecha || formulario?.fecha || '';
+  const fecha = fechaRaw ? formatFechaCalendarioLima(fechaRaw) : formatFechaCalendarioLima();
   const profesional = meta?.profesional || cabecera.profesional || formulario?.profesional || '';
   const lugar = formulario?.lugar || 'Chorrillos';
 
   doc.setFontSize(9);
   doc.setTextColor(20);
   doc.setFont(undefined, 'normal');
-  doc.text(lugar, 36, y);
-  doc.text(fecha, 160, y);
+  doc.text(`Lugar: ${lugar}`, 36, y);
+  doc.text(`Fecha: ${fecha}`, 160, y);
   y += 18;
   doc.text('NOMBRE Y APELLIDO DEL PROFESIONAL QUE REALIZÓ LA VALIDACIÓN:', 36, y);
   y += 14;

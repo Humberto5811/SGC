@@ -95,6 +95,7 @@ export function buildValidationReportData(detalle = {}, overrides = {}) {
     cabecera: {
       titulo: config?.anexoTitulo || 'Formato de Validación',
       solicitud_codigo: safeStr(detalle.solicitud_codigo),
+      nro_invitacion: detalle.nro_invitacion ?? detalle.nro_invitacion_presentacion ?? null,
       requerimientos: reqs.join(', ') || safeStr(detalle.requerimientos),
       pedidos_sigamef: pedidos.join(', '),
       area_usuaria: safeStr(detalle.area_usuaria),

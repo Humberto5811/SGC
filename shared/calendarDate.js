@@ -74,6 +74,36 @@ export function formatCalendarDdMmYyyy(value) {
   return `${String(p.d).padStart(2, '0')}/${String(p.m).padStart(2, '0')}/${p.y}`;
 }
 
+const TZ_LIMA = 'America/Lima';
+
+/**
+ * Fecha calendario en America/Lima (DD/MM/YYYY), sin desfase por TZ del runtime.
+ * @param {Date|string|number} [value] — default: ahora
+ * @returns {string} dd/mm/yyyy o '' si inválido
+ */
+export function formatFechaCalendarioLima(value = new Date()) {
+  if (value != null && value !== '') {
+    const asStr = String(value).trim();
+    const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(asStr);
+    if (dmy) {
+      const d = Number(dmy[1]);
+      const m = Number(dmy[2]);
+      const y = Number(dmy[3]);
+      if (isValidParts(y, m, d)) {
+        return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
+      }
+    }
+  }
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('es-PE', {
+    timeZone: TZ_LIMA,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(d);
+}
+
 /**
  * Compara solo año/mes/día.
  * @returns {number} negativo si a < b, 0 si igual, positivo si a > b; NaN si inválido

@@ -22,6 +22,7 @@ import {
 import { resolveEstadoExpedienteVigente } from '../../shared/estadoExpedienteVigente.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 import { buildMatrizDocumentalValidacion } from './validacionMatrizDocumental.js';
+import { formatFechaCalendarioLima } from '../../shared/calendarDate.js';
 
 const SUBMODULOS_VALIDACION = Object.freeze([
   { code: 'VALIDACIONES', label: 'Validaciones' },
@@ -1285,7 +1286,7 @@ async function syncMatrizFilasHermanas({
       items: filasV2ToLegacyItems(filasCot, tipoKey),
       resultado_global: calc.resultado_global || '',
       cumple: calc.cumple || '',
-      fecha: new Date().toLocaleDateString('es-PE'),
+      fecha: formatFechaCalendarioLima(),
       profesional: formBase?.profesional
         || inf.formulario_07a?.profesional
         || responsableNombreDeCot(cot)
@@ -1679,7 +1680,7 @@ export async function getValidacionTrabajoDetalle(cotizacionId, usuario, userId,
   const destinoActual = yaDerivado
     ? resolverDestinoSalidaValidacion(estado)
     : null;
-  const fechaAuto = new Date().toLocaleDateString('es-PE');
+  const fechaAuto = formatFechaCalendarioLima();
   const calc = calcularResultadoExpedienteValidacion(built.tipoKey, built.matriz_v2.filas);
   const centrosConsolidados = consolidateCentros(
     (built.matriz_v2.filas || []).map((f) => f.automaticos?.centro),
@@ -1801,7 +1802,7 @@ export async function guardarValidacionParcial(cotizacionId, body, usuario, user
     ...inf.formulario_07a,
     ...formFromMatriz,
     // Fecha/responsable de trazabilidad (no campos manuales en UI)
-    fecha: new Date().toLocaleDateString('es-PE'),
+    fecha: formatFechaCalendarioLima(),
     profesional: formFromMatriz?.profesional
       || inf.formulario_07a?.profesional
       || responsableNombreDeCot(cot)
@@ -2037,7 +2038,7 @@ export async function enviarValidacionUsuario(cotizacionId, body, usuario, userI
     }
   }
 
-  const fechaAuto = new Date().toLocaleDateString('es-PE');
+  const fechaAuto = formatFechaCalendarioLima();
   const formPersist = {
     ...formulario_07a,
     fecha: fechaAuto,

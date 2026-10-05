@@ -24,6 +24,7 @@ import {
   showValidacionItemDocumentosModal,
 } from './validacionDocumentosMatriz.js';
 import { buildValidationReportData } from './validacionReportData.js';
+import { formatFechaCalendarioLima } from '../../shared/calendarDate.js';
 import { showWorkflowTransicionModal } from '../components/workflowTransicionModal.js';
 
 export { canDerivarValidacion, buildExpedienteLineaCompacta, formatFaltantesHtml, resolverDestinoCliente };
@@ -326,7 +327,7 @@ function collectFormulario(prefix, baseForm) {
   return {
     items,
     lugar: baseForm.lugar || 'Chorrillos',
-    fecha: baseForm.fecha || new Date().toLocaleDateString('es-PE'),
+    fecha: baseForm.fecha || formatFechaCalendarioLima(),
     profesional: baseForm.profesional || '',
     producto_adquisicion: baseForm.producto_adquisicion,
     resultado_global: document.getElementById(`${prefix}_resGlobal`)?.value || '',
@@ -720,7 +721,7 @@ export async function showValidarModal(cotIdInicial, onDone, opts = {}) {
       tipoFormato: state.tipoFormato || d.tipo_contratacion,
       readonly,
       meta: {
-        fecha: f.fecha || new Date().toLocaleDateString('es-PE'),
+        fecha: f.fecha || formatFechaCalendarioLima(),
         profesional: f.profesional || state.usuarioActual,
         sustento: f.sustento || '',
         observacion_global: f.observacion_global || '',
