@@ -32,6 +32,7 @@ import {
   labelRolGeneralUsuario,
   listarUsuariosCoordinadoresEquipoUadSubmodulo,
   listarUsuariosDestinoContMenoresProgramacionAprobada,
+  listarUsuariosDestinoEquipoUadOrganizacional,
   listarUsuariosDestinoEquipoUadSubmodulo,
   listarOperadoresProgramacionAsignables,
   appendEquipoUadCandidato,
@@ -707,6 +708,93 @@ export async function listarCandidatosCoordinacionCmAprobadaInvitaciones(
   };
 }
 
+/**
+ * RC8.17.8H6-D9-A — VALIDACION_COMPLETADA → Cuadro Comparativo (pool UAD Cont.Menores).
+ * Responsable PERSONA por criterios organizacionales + perfil ANALISTA (sin filtro centro REQ).
+ * No exige actividades JSON en CUADRO_COMPARATIVO (asignación de responsable ≠ bandeja).
+ */
+export async function listarCandidatosValidacionCompletadaCuadro(
+  requerimientoId,
+  { search = '', excluirUsuarioId = null } = {},
+  row = null,
+  client = null,
+) {
+  const ev = 'VALIDACION_COMPLETADA';
+  const { transicion, metaDestino, etapaOrigen } = await resolveTransicionWorkflow(
+    requerimientoId,
+    ev,
+    row,
+    client,
+  );
+  const etapaDest = transicion.etapa_destino || 'CUADRO_COMPARATIVO';
+  const submoduloCodigo = metaDestino.submoduloCodigo || 'CUADRO_COMPARATIVO';
+  const perfil = PERFILES_FUNCIONALES.ANALISTA_CONTRATACIONES;
+
+  const { usuarios, uadKeys } = await listarUsuariosDestinoEquipoUadOrganizacional({
+    equipoCodigo: EQUIPOS_UAD.CONT_MENORES,
+    client,
+  });
+
+  const exclUid = excluirUsuarioId != null && Number.isFinite(Number(excluirUsuarioId))
+    ? Number(excluirUsuarioId)
+    : null;
+
+  let elegibles = usuarios.filter((u) => {
+    if (exclUid != null && Number(u.id) === exclUid) return false;
+    if (isAdminSecurityRole(u)) return false;
+    return esOperadorEquipoUad(u, EQUIPOS_UAD.CONT_MENORES, { uadKeys })
+      && hasFunctionalProfile(u, perfil);
+  });
+
+  let candidatos = elegibles.map((u) => appendEquipoUadCandidato(mapCandidato(u), u));
+  candidatos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+
+  let recomendado = null;
+  if (candidatos.length === 1) {
+    recomendado = {
+      ...candidatos[0],
+      etiqueta: 'Analista recomendado',
+      recomendado: true,
+      fuente: 'equipo_uad',
+    };
+    candidatos = [];
+  }
+
+  const q = String(search || '').trim();
+  if (q.length >= 2) {
+    candidatos = candidatos.filter((c) => matchesSearch(c, q));
+    if (recomendado && !matchesSearch(recomendado, q)) recomendado = null;
+  }
+
+  const nTotal = (recomendado ? 1 : 0) + candidatos.length;
+
+  return {
+    soportado: true,
+    evento_codigo: ev,
+    etapa_origen: etapaOrigen,
+    etapa_destino: etapaDest,
+    etapa_destino_label: metaDestino.label || 'Cuadro Comparativo',
+    destinos: [{
+      etapa_codigo: etapaDest,
+      etapa_label: metaDestino.label || 'Cuadro Comparativo',
+      evento_codigo: ev,
+      unica: true,
+    }],
+    perfil_responsable: perfil,
+    submodulo_destino: submoduloCodigo,
+    equipo_uad: EQUIPOS_UAD.CONT_MENORES,
+    equipo_uad_label: labelEquipoUad(EQUIPOS_UAD.CONT_MENORES),
+    alcance: 'UAD_EQUIPO',
+    centro: null,
+    recomendado,
+    candidatos,
+    resolucion_automatica: recomendado
+      ? { usuarioId: recomendado.id, ambiguo: false }
+      : { usuarioId: null, ambiguo: nTotal !== 1, candidatos: nTotal },
+    mensaje_sin_candidatos: 'No hay operadores Cont.Menores elegibles para Cuadro Comparativo.',
+  };
+}
+
 /** RC8.17.8H4 — REASIGNACION_RESPONSABLE en PROGRAMACION → OPERADOR mismo equipo. */
 export async function listarCandidatosReasignacionProgramacion(
   requerimientoId,
@@ -848,6 +936,15 @@ export async function listarCandidatosTransicion(
 
   if (ev === 'COORDINACION_CM_APROBADA') {
     return listarCandidatosCoordinacionCmAprobadaInvitaciones(
+      requerimientoId,
+      { search, excluirUsuarioId },
+      row,
+      client,
+    );
+  }
+
+  if (ev === 'VALIDACION_COMPLETADA') {
+    return listarCandidatosValidacionCompletadaCuadro(
       requerimientoId,
       { search, excluirUsuarioId },
       row,

@@ -95,13 +95,27 @@ export function wireTransicionPicker(id, opts = {}) {
   const renderEtapa = (data) => {
     if (!etapaEl) return;
     const destinos = data?.destinos || [];
+    const etapaWrap = etapaEl.closest('.border.rounded');
     if (destinos.length <= 1) {
+      const d0 = destinos[0];
+      const label = d0?.etapa_label || data?.etapa_destino_label || d0?.etapa_codigo || data?.etapa_destino || '—';
+      const codigo = d0?.etapa_codigo || data?.etapa_destino || '';
       etapaEl.classList.add('d-none');
-      etapaEl.innerHTML = destinos[0]
-        ? `<option value="${esc(destinos[0].etapa_codigo)}" selected>${esc(destinos[0].etapa_label || destinos[0].etapa_codigo)}</option>`
+      etapaEl.innerHTML = codigo
+        ? `<option value="${esc(codigo)}" selected>${esc(label)}</option>`
         : '';
+      if (etapaWrap) {
+        let vis = etapaWrap.querySelector('.wf-etapa-destino-readonly');
+        if (!vis) {
+          vis = document.createElement('div');
+          vis.className = 'wf-etapa-destino-readonly small fw-semibold text-body';
+          etapaWrap.appendChild(vis);
+        }
+        vis.textContent = label;
+      }
       return;
     }
+    etapaWrap?.querySelector('.wf-etapa-destino-readonly')?.remove();
     etapaEl.classList.remove('d-none');
     etapaEl.innerHTML = destinos.map((d) =>
       `<option value="${esc(d.etapa_codigo)}">${esc(d.etapa_label || d.etapa_codigo)}</option>`,
