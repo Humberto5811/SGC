@@ -159,6 +159,7 @@ export async function crearNuevaVersionPorObservacion(cur, {
   const { rows } = await query(`
     INSERT INTO cuadros_comparativos (
       solicitud_id, tipo, version, estado, datos_json,
+      invitacion_id, nro_invitacion, cotizacion_ancla_id,
       proveedor_ganador_id, criterio_seleccion, sustento_decision, valor_adjudicado,
       usuario_adjudicacion, fecha_adjudicacion, modalidad_adjudicacion,
       pdf_nombre, pdf_contenido,
@@ -167,6 +168,7 @@ export async function crearNuevaVersionPorObservacion(cur, {
       creado_por, actualizado_por, creado_at, actualizado_at
     ) VALUES (
       $1, $2, $3, $4, $5::jsonb,
+      $14, $15, $16,
       $6, $7, $8, $9,
       $10, $11, $12,
       NULL, NULL,
@@ -189,6 +191,9 @@ export async function crearNuevaVersionPorObservacion(cur, {
     cur.fecha_adjudicacion,
     cur.modalidad_adjudicacion,
     obsRecord.usuario,
+    cur.invitacion_id ?? null,
+    cur.nro_invitacion ?? null,
+    cur.cotizacion_ancla_id ?? null,
   ]);
 
   return {

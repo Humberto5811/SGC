@@ -46,7 +46,18 @@ import {
 import {
   crearNuevaVersionPorObservacion,
   metaVersionDesdeRow,
+  nextVersionNumber,
 } from './cuadroComparativoVersionado.js';
+import {
+  SQL_FILTER_ELEGIBLE_CUADRO_RONDA,
+  SQL_NRO_INVITACION_COT,
+  cotizacionElegibleCuadroRonda,
+  filtrarDatosJsonPorRonda,
+  loadCotizacionesPresentadasRonda,
+  metaRondaCuadro,
+  nroInvitacionFromCot,
+  resolverInvitacionRondaCuadro,
+} from './cuadroComparativoRonda.js';
 import { emitirObservacion } from './observacionesWorkflow.js';
 import { enrichEstadoResponsableForBandeja } from './enrichEstadoResponsable.js';
 import {
@@ -364,34 +375,95 @@ function mapEstadoDbABandeja(estadoDb) {
   return normalizeCuadroEstado(estadoDb);
 }
 
-async function loadEstadosCuadroPorSolicitudes(solicitudIds) {
+/** Clave bandeja por ronda: solicitud_id + nro_invitacion. */
+function cuadroRondaMapKey(solicitudId, nroInvitacion) {
+  return `${Number(solicitudId)}:${nroInvitacion != null ? Number(nroInvitacion) : 'legacy'}`;
+}
+
+async function loadEstadosCuadroPorRondas(rondas = []) {
   const map = new Map();
-  if (!solicitudIds.length) return map;
+  if (!rondas.length) return map;
+  const solicitudIds = [...new Set(rondas.map((r) => Number(r.solicitud_id)).filter(Number.isFinite))];
   try {
     const { rows } = await query(`
-      SELECT DISTINCT ON (solicitud_id)
-        id, solicitud_id, tipo, estado, version, actualizado_at
+      SELECT id, solicitud_id, tipo, estado, version, actualizado_at, invitacion_id, nro_invitacion
       FROM cuadros_comparativos
       WHERE solicitud_id = ANY($1::int[])
         AND tipo IN ($2, $3)
         AND estado <> 'ANULADO'
-      ORDER BY solicitud_id, version DESC
+      ORDER BY solicitud_id, nro_invitacion NULLS FIRST, version DESC
     `, [solicitudIds, TIPO_BIENES, TIPO_SERVICIOS]);
-    rows.forEach((r) => {
-      map.set(r.solicitud_id, {
-        cuadro_id: r.id,
-        tipo: r.tipo,
-        estado_db: r.estado,
-        estado_cuadro: mapEstadoDbABandeja(r.estado),
-        version: r.version,
-        actualizado_at: r.actualizado_at,
+    rondas.forEach(({ solicitud_id, nro_invitacion }) => {
+      const key = cuadroRondaMapKey(solicitud_id, nro_invitacion);
+      if (map.has(key)) return;
+      const match = rows.find((r) => Number(r.solicitud_id) === Number(solicitud_id)
+        && (nro_invitacion == null
+          ? r.nro_invitacion == null
+          : Number(r.nro_invitacion) === Number(nro_invitacion)));
+      if (!match) return;
+      map.set(key, {
+        cuadro_id: match.id,
+        tipo: match.tipo,
+        estado_db: match.estado,
+        estado_cuadro: mapEstadoDbABandeja(match.estado),
+        version: match.version,
+        actualizado_at: match.actualizado_at,
+        invitacion_id: match.invitacion_id,
+        nro_invitacion: match.nro_invitacion,
       });
     });
   } catch (err) {
-    // Tabla aún no migrada: bandeja sigue operativa como RC8.1
     if (!/cuadros_comparativos/i.test(err.message || '')) throw err;
   }
   return map;
+}
+
+async function resolveContextoRondaCuadro(solicitudId, opts = {}) {
+  const sid = parseInt(solicitudId, 10);
+  const presentadas = await loadCotizacionesPresentadasRonda(sid);
+  const ronda = resolverInvitacionRondaCuadro(presentadas, opts);
+  const cotizaciones = await loadCotizacionesPresentadasRonda(sid, {
+    nroInvitacion: ronda.nro_invitacion,
+  });
+  return { ronda, cotizaciones, presentadas };
+}
+
+function assertCuadroRowConsistenteRonda(cuadroRow, ronda) {
+  if (!cuadroRow || ronda?.nro_invitacion == null) return;
+  const rowNro = cuadroRow.nro_invitacion != null ? Number(cuadroRow.nro_invitacion) : null;
+  if (rowNro != null && rowNro !== Number(ronda.nro_invitacion)) {
+    const err = new Error('El cuadro persistido no corresponde a la invitación/ronda activa');
+    err.code = 'CUADRO_RONDA_MISMATCH';
+    err.status = 409;
+    throw err;
+  }
+}
+
+/** PUT por cuadroId: el cliente no puede redefinir nro_invitacion/contexto persistido. */
+export function assertNoRondaOverrideEnPayload(payload = {}, cuadroRow) {
+  if (!cuadroRow || cuadroRow.nro_invitacion == null) return;
+  const nroBody = payload?.nroInvitacion ?? payload?.nro_invitacion;
+  if (nroBody != null && nroBody !== ''
+    && Number(nroBody) !== Number(cuadroRow.nro_invitacion)) {
+    const err = new Error('No se puede cambiar la agrupación operativa del cuadro persistido');
+    err.code = 'CUADRO_RONDA_MISMATCH';
+    err.status = 409;
+    throw err;
+  }
+}
+
+function cuadroPersistidoAplicaRonda(cuadroRow, ronda) {
+  if (!cuadroRow?.datos_json) return false;
+  const rowNro = cuadroRow.nro_invitacion != null ? Number(cuadroRow.nro_invitacion) : null;
+  if (ronda?.nro_invitacion == null) return rowNro == null;
+  if (rowNro == null) return false;
+  return rowNro === Number(ronda.nro_invitacion);
+}
+
+function attachMetaRondaMatriz(matriz, ronda) {
+  const metaR = metaRondaCuadro(ronda);
+  matriz.meta = { ...(matriz.meta || {}), ronda: metaR };
+  return matriz;
 }
 
 function badgeClassCuadro(estadoCode) {
@@ -512,10 +584,8 @@ export async function listarCuadroComparativo() {
 }
 
 /**
- * Bandeja RC8.1: una fila por Solicitud de Cotización.
- * Inclusión operativa: ≥1 cotización APTO.
- * No extrae JSON de requerimientos.payload (TEXT): evita "text -> unknown".
- * Tampoco carga propuesta_economica / detalle_items (eso es RC8.2).
+ * Bandeja Cuadro: una fila por solicitud + agrupación operativa (nro_invitacion resuelto).
+ * Inclusión: ≥1 cotización elegible (APTO + derivación CUADRO_COMPARATIVO) en ese contexto.
  */
 export async function listarCuadroComparativoExpedientes() {
   const { rows } = await query(`
@@ -528,14 +598,18 @@ export async function listarCuadroComparativoExpedientes() {
       sc.estado AS solicitud_estado,
       sc.area_usuaria,
       sc.updated_at AS solicitud_updated_at,
+      MIN(cot.invitacion_id) FILTER (WHERE ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}) AS invitacion_id_ancla,
+      ${SQL_NRO_INVITACION_COT} AS nro_invitacion,
       COUNT(DISTINCT cot.proveedor_id) FILTER (
         WHERE cot.estado = 'COTIZACION_PRESENTADA'
+          AND ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}
       )::int AS total_proveedores,
       COUNT(cot.id) FILTER (
         WHERE cot.estado = 'COTIZACION_PRESENTADA'
-      )::int AS total_cotizaciones,
+          AND ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}
+      )::int AS total_cotizaciones_ronda,
       COUNT(DISTINCT cot.proveedor_id) FILTER (
-        WHERE cot.validacion_estado = 'APTO'
+        WHERE ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}
       )::int AS proveedores_aptos,
       COUNT(DISTINCT cot.proveedor_id) FILTER (
         WHERE cot.validacion_estado IN ('NO_APTO', 'OBSERVADO')
@@ -545,44 +619,50 @@ export async function listarCuadroComparativoExpedientes() {
           OR COALESCE(cot.validacion_estado, '') = ''
       )::int AS proveedores_pendientes,
       MIN(
-        CASE WHEN cot.validacion_estado = 'APTO' THEN
+        CASE WHEN ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA} THEN
           COALESCE(
+            NULLIF(cot.validacion_informe->'derivacion_salida'->>'derivado_at', '')::timestamptz,
             NULLIF(cot.validacion_informe->>'enviado_at', '')::timestamptz,
             cot.updated_at,
             cot.fecha_presentacion
           )
         END
       ) AS fecha_ingreso_cuadro,
-      STRING_AGG(DISTINCT p.razon_social, ' | ' ORDER BY p.razon_social) AS proveedores_nombres,
-      STRING_AGG(DISTINCT p.ruc, ' | ' ORDER BY p.ruc) AS proveedores_rucs
+      STRING_AGG(DISTINCT p.razon_social, ' | ' ORDER BY p.razon_social)
+        FILTER (WHERE ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}) AS proveedores_nombres,
+      STRING_AGG(DISTINCT p.ruc, ' | ' ORDER BY p.ruc)
+        FILTER (WHERE ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}) AS proveedores_rucs
     FROM solicitudes_cotizacion sc
     JOIN cotizaciones_proveedor cot ON cot.solicitud_id = sc.id
     JOIN proveedores p ON p.id = cot.proveedor_id
+    LEFT JOIN invitacion_proveedores ip ON ip.id = cot.invitacion_id
     WHERE cot.estado = 'COTIZACION_PRESENTADA'
+      AND ${SQL_NRO_INVITACION_COT} IS NOT NULL
       AND UPPER(TRIM(COALESCE(sc.tipo, ''))) NOT LIKE 'LOCAC%'
     GROUP BY sc.id, sc.codigo, sc.denominacion, sc.objeto, sc.tipo, sc.estado,
-      sc.area_usuaria, sc.updated_at
-    HAVING
-      COUNT(DISTINCT cot.proveedor_id) FILTER (WHERE cot.validacion_estado = 'APTO') >= 1
-      OR sc.estado = 'EN_CUADRO_COMPARATIVO'
+      sc.area_usuaria, sc.updated_at, ${SQL_NRO_INVITACION_COT}
+    HAVING COUNT(cot.id) FILTER (WHERE ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}) >= 1
     ORDER BY
       MIN(
-        CASE WHEN cot.validacion_estado = 'APTO' THEN
+        CASE WHEN ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA} THEN
           COALESCE(
+            NULLIF(cot.validacion_informe->'derivacion_salida'->>'derivado_at', '')::timestamptz,
             NULLIF(cot.validacion_informe->>'enviado_at', '')::timestamptz,
             cot.updated_at,
             cot.fecha_presentacion
           )
         END
       ) DESC NULLS LAST,
-      sc.codigo DESC
+      sc.codigo DESC,
+      nro_invitacion DESC NULLS LAST
   `);
 
-  // Regla operativa RC8.1: no listar sin al menos un APTO (aunque haya etapa de cuadro).
-  const elegibles = rows.filter((r) => Number(r.proveedores_aptos) >= 1);
-  const ids = elegibles.map((r) => r.solicitud_id);
+  const elegibles = rows.filter((r) => Number(r.total_cotizaciones_ronda) >= 1);
+  const ids = [...new Set(elegibles.map((r) => r.solicitud_id))];
   const reqMap = await loadRequerimientosPorSolicitudes(ids);
-  const estadoMap = await loadEstadosCuadroPorSolicitudes(ids);
+  const estadoMap = await loadEstadosCuadroPorRondas(
+    elegibles.map((r) => ({ solicitud_id: r.solicitud_id, nro_invitacion: r.nro_invitacion })),
+  );
   const centroBySid = new Map();
   await Promise.all(ids.map(async (sid) => {
     const key = Number(sid);
@@ -601,7 +681,11 @@ export async function listarCuadroComparativoExpedientes() {
 
   const result = elegibles.map((r) => {
     const reqs = reqMap.get(r.solicitud_id) || [];
-    const persisted = estadoMap.get(r.solicitud_id);
+    const rondaKey = cuadroRondaMapKey(r.solicitud_id, r.nro_invitacion);
+    const persisted = estadoMap.get(rondaKey);
+    const nroInv = Number(r.nro_invitacion) || null;
+    const invLabel = nroInv ? `Inv. ${nroInv}` : '—';
+    const totalRonda = Number(r.total_cotizaciones_ronda) || 0;
     const ccpFlags = ccpBySid.get(Number(r.solicitud_id)) || {};
     // RC8.1G — evidencia de recepción de bienes (desde ccpFlags).
     const recepcionEstadoGlobal = ccpFlags.recepcion_estado_global || '';
@@ -663,8 +747,12 @@ export async function listarCuadroComparativoExpedientes() {
       centros_texto: centrosTexto,
       centro: centrosTexto,
       area_usuaria: area,
+      invitacion_id: r.invitacion_id_ancla != null ? Number(r.invitacion_id_ancla) : null,
+      nro_invitacion: nroInv,
+      invitacion_label: invLabel,
       total_proveedores: Number(r.total_proveedores) || 0,
-      total_cotizaciones: Number(r.total_cotizaciones) || Number(r.total_proveedores) || 0,
+      total_cotizaciones: totalRonda,
+      total_cotizaciones_ronda: totalRonda,
       proveedores_aptos: Number(r.proveedores_aptos) || 0,
       proveedores_no_aptos: Number(r.proveedores_no_aptos) || 0,
       proveedores_pendientes: Number(r.proveedores_pendientes) || 0,
@@ -742,6 +830,7 @@ export async function listarCuadroComparativoExpedientes() {
         : 'Elaborar cuadro',
       search_text: [
         r.solicitud_codigo,
+        invLabel,
         reqTexto,
         r.denominacion,
         r.objeto,
@@ -762,31 +851,29 @@ export async function listarCuadroComparativoExpedientes() {
 /**
  * Detalle de expediente para modales Ver expediente / Ver validaciones (sin económica).
  */
-export async function getCuadroComparativoExpediente(solicitudId) {
+export async function getCuadroComparativoExpediente(solicitudId, opts = {}) {
   const sid = parseInt(solicitudId, 10);
   if (!Number.isFinite(sid)) throw new Error('Solicitud inválida');
 
+  const invParam = opts.inviacionId != null ? opts.inviacionId : opts.invitacionId;
   const lista = await listarCuadroComparativoExpedientes();
-  const base = lista.find((e) => e.solicitud_id === sid);
+  let base = lista.find((e) => e.solicitud_id === sid);
+  const nroParam = opts.nroInvitacion != null ? parseInt(opts.nroInvitacion, 10) : null;
+  if (nroParam != null) {
+    base = lista.find((e) => e.solicitud_id === sid
+      && Number(e.nro_invitacion) === nroParam) || base;
+  } else if (invParam != null) {
+    base = lista.find((e) => e.solicitud_id === sid
+      && Number(e.invitacion_id) === parseInt(invParam, 10)) || base;
+  }
   if (!base) throw new Error('Expediente no encontrado en Cuadro Comparativo');
 
-  const { rows } = await query(`
-    SELECT cot.id, cot.proveedor_id, cot.estado, cot.validacion_estado, cot.validacion_responsable,
-      cot.validacion_informe, cot.fecha_presentacion, cot.updated_at,
-      p.ruc, p.razon_social
-    FROM cotizaciones_proveedor cot
-    JOIN proveedores p ON p.id = cot.proveedor_id
-    WHERE cot.solicitud_id = $1
-      AND cot.estado = 'COTIZACION_PRESENTADA'
-    ORDER BY
-      CASE UPPER(COALESCE(cot.validacion_estado, ''))
-        WHEN 'APTO' THEN 1
-        WHEN 'NO_APTO' THEN 2
-        WHEN 'OBSERVADO' THEN 3
-        ELSE 4
-      END,
-      p.razon_social ASC
-  `, [sid]);
+  const { ronda, cotizaciones } = await resolveContextoRondaCuadro(sid, {
+    nroInvitacion: nroParam ?? base.nro_invitacion,
+    invitacionId: invParam ?? base.invitacion_id,
+  });
+
+  const rows = cotizaciones;
 
   const proveedores = rows.map((r) => {
     const inf = parseInforme(r);
@@ -812,6 +899,7 @@ export async function getCuadroComparativoExpediente(solicitudId) {
   return {
     ...base,
     proveedores,
+    ronda: metaRondaCuadro(ronda),
   };
 }
 
@@ -824,67 +912,11 @@ async function loadSolicitudRow(solicitudId) {
   return rows[0];
 }
 
-async function loadCotizacionesPresentadas(solicitudId) {
-  // Fecha / cantidad de invitaciones: misma fuente que pestaña 4 — Invitaciones
-  // (listarProveedoresSolicitud: fecha_envio + proveedores.cantidad_invitaciones).
-  const { rows: scRows } = await query(
-    `SELECT tipo FROM solicitudes_cotizacion WHERE id = $1`,
-    [solicitudId],
-  );
-  const tipoSol = scRows[0]?.tipo || '';
-  const { rows } = await query(`
-    SELECT cot.id, cot.solicitud_id, cot.proveedor_id, cot.estado, cot.validacion_estado,
-      cot.propuesta_tecnica, cot.propuesta_economica, cot.validacion_informe,
-      cot.fecha_presentacion, cot.updated_at,
-      p.ruc, p.razon_social,
-      p.telefono, p.correo, p.persona_contacto, p.emails,
-      p.cantidad_invitaciones AS cantidad_invitaciones_proveedor,
-      inv.fecha_envio_invitacion,
-      inv.n_invitaciones_solicitud
-    FROM cotizaciones_proveedor cot
-    JOIN proveedores p ON p.id = cot.proveedor_id
-    LEFT JOIN LATERAL (
-      SELECT
-        MIN(ip.fecha_envio) AS fecha_envio_invitacion,
-        COUNT(*) FILTER (WHERE ip.fecha_envio IS NOT NULL)::int AS n_invitaciones_solicitud
-      FROM invitacion_proveedores ip
-      WHERE ip.proveedor_id = cot.proveedor_id
-        AND (
-          ip.solicitud_id = cot.solicitud_id
-          OR ip.requerimiento_id IN (
-            SELECT sr.requerimiento_id
-            FROM solicitud_requerimientos sr
-            WHERE sr.solicitud_id = cot.solicitud_id
-          )
-        )
-    ) inv ON TRUE
-    WHERE cot.solicitud_id = $1
-      AND cot.estado = 'COTIZACION_PRESENTADA'
-    ORDER BY
-      CASE UPPER(COALESCE(cot.validacion_estado, ''))
-        WHEN 'APTO' THEN 1
-        WHEN 'NO_APTO' THEN 2
-        WHEN 'OBSERVADO' THEN 3
-        ELSE 4
-      END,
-      p.razon_social ASC
-  `, [solicitudId]);
-  const mapped = rows.map((r) => {
-    const fechaSol = r.fecha_envio_invitacion || null;
-    const nSolicitud = Number(r.n_invitaciones_solicitud) || 0;
-    const nProveedor = Number(r.cantidad_invitaciones_proveedor) || 0;
-    // Prioriza conteo de envíos de esta solicitud; si no hay filas, usa el dato de pestaña 4
-    const reiteraciones = nSolicitud > 0 ? nSolicitud : (fechaSol ? Math.max(nProveedor, 1) : nProveedor);
-    const validacion_estado = resolveValidacionEstadoCotizacion(r, tipoSol);
-    return {
-      ...r,
-      validacion_estado,
-      solicitud_tipo: tipoSol,
-      fecha_solicitud: fechaSol,
-      reiteraciones,
-    };
-  });
-  // Reordenar con el estado resuelto (filas de Validaciones), no solo columna DB.
+async function loadCotizacionesPresentadas(solicitudId, opts = {}) {
+  const mapped = (await loadCotizacionesPresentadasRonda(solicitudId, opts)).map((r) => ({
+    ...r,
+    validacion_estado: resolveValidacionEstadoCotizacion(r, r.solicitud_tipo),
+  }));
   const rank = (est) => {
     const u = String(est || '').toUpperCase();
     if (u === 'APTO') return 1;
@@ -897,13 +929,22 @@ async function loadCotizacionesPresentadas(solicitudId) {
   return mapped;
 }
 
-async function getCuadroActivoRow(solicitudId, tipoDb = TIPO_BIENES) {
+async function getCuadroActivoRow(solicitudId, tipoDb = TIPO_BIENES, nroInvitacion = undefined) {
+  const params = [solicitudId, tipoDb];
+  let invClause = '';
+  if (nroInvitacion === null) {
+    invClause = ' AND nro_invitacion IS NULL';
+  } else if (nroInvitacion !== undefined && Number.isFinite(parseInt(nroInvitacion, 10))) {
+    params.push(parseInt(nroInvitacion, 10));
+    invClause = ' AND nro_invitacion = $3';
+  }
   const { rows } = await query(`
     SELECT * FROM cuadros_comparativos
     WHERE solicitud_id = $1 AND tipo = $2 AND estado <> 'ANULADO'
+      ${invClause}
     ORDER BY version DESC
     LIMIT 1
-  `, [solicitudId, tipoDb]);
+  `, params);
   return rows[0] || null;
 }
 
@@ -967,6 +1008,9 @@ function mapCuadroRow(row) {
   return {
     id: row.id,
     solicitud_id: row.solicitud_id,
+    invitacion_id: row.invitacion_id != null ? Number(row.invitacion_id) : null,
+    nro_invitacion: row.nro_invitacion != null ? Number(row.nro_invitacion) : null,
+    cotizacion_ancla_id: row.cotizacion_ancla_id != null ? Number(row.cotizacion_ancla_id) : null,
     tipo: row.tipo,
     version: row.version,
     estado: row.estado,
@@ -1077,30 +1121,34 @@ export function validarMatrizCuadro(payload) {
  * Detalle completo: matriz fresca + overlay de borrador persistido.
  * No cambia Workflow.
  */
-export async function obtenerDetalleCuadro(solicitudId) {
+export async function obtenerDetalleCuadro(solicitudId, opts = {}) {
   const sid = parseInt(solicitudId, 10);
   if (!Number.isFinite(sid)) throw new Error('Solicitud inválida');
 
   const sc = await loadSolicitudRow(sid);
   assertTipoCuadroHabilitado(sc.tipo);
   const tipoDb = tipoCuadroDb(sc.tipo);
-  const cotizaciones = await loadCotizacionesPresentadas(sid);
-  const aptos = cotizaciones.filter((c) => String(c.validacion_estado || '').toUpperCase() === 'APTO');
-  if (!aptos.length) throw new Error('La solicitud no tiene cotizaciones APTO para el cuadro');
+  const { ronda, cotizaciones } = await resolveContextoRondaCuadro(sid, opts);
+  if (!cotizaciones.length) {
+    throw new Error('La solicitud no tiene cotizaciones APTO derivadas al cuadro en esta invitación');
+  }
 
   const reqMap = await loadRequerimientosPorSolicitudes([sid]);
   const requerimientos = reqMap.get(sid) || [];
   let matriz = buildMatrizFromSources(sc, cotizaciones, requerimientos);
+  matriz = attachMetaRondaMatriz(matriz, ronda);
 
-  let cuadro = null;
+  let cuadroRow = null;
   try {
-    cuadro = await getCuadroActivoRow(sid, tipoDb);
+    cuadroRow = await getCuadroActivoRow(sid, tipoDb, ronda.nro_invitacion);
   } catch (err) {
     if (!/cuadros_comparativos/i.test(err.message || '')) throw err;
   }
 
-  if (cuadro?.datos_json) {
-    const saved = parseJson(cuadro.datos_json, {});
+  if (cuadroRow && cuadroPersistidoAplicaRonda(cuadroRow, ronda)) {
+    assertCuadroRowConsistenteRonda(cuadroRow, ronda);
+    const idSet = new Set(cotizaciones.map((c) => Number(c.id)));
+    let saved = filtrarDatosJsonPorRonda(parseJson(cuadroRow.datos_json, {}), idSet);
     matriz = mergeObservacionesCuadro(matriz, saved);
     matriz = mergeAdjudicacionCuadro(matriz, saved);
     matriz = attachPrimeraFuenteFromCotizaciones(matriz, cotizaciones);
@@ -1108,27 +1156,33 @@ export async function obtenerDetalleCuadro(solicitudId) {
     matriz.meta = {
       ...matriz.meta,
       ...val,
+      ronda: metaRondaCuadro(ronda),
       puede_seleccionar_ganador: val.items_incompletos === 0 && (matriz.items || []).length > 0,
       puede_pdf_oficial: false,
       pdf_modo: 'BORRADOR',
     };
+  } else {
+    cuadroRow = cuadroRow && !cuadroPersistidoAplicaRonda(cuadroRow, ronda) ? null : cuadroRow;
   }
 
   const bandeja = (await listarCuadroComparativoExpedientes())
-    .find((e) => e.solicitud_id === sid) || null;
+    .find((e) => e.solicitud_id === sid
+      && Number(e.nro_invitacion) === Number(ronda.nro_invitacion)) || null;
 
   return {
     expediente: bandeja,
-    cuadro: mapCuadroRow(cuadro),
+    cuadro: mapCuadroRow(cuadroRow),
     matriz,
+    ronda: metaRondaCuadro(ronda),
     validacion: validateEconomiaCuadro(matriz),
     proveedores: cotizaciones.map((c) => ({
       cotizacion_id: c.id,
       proveedor_id: c.proveedor_id,
+      invitacion_id: c.invitacion_id,
       ruc: c.ruc,
       razon_social: c.razon_social,
       validacion_estado: c.validacion_estado || '',
-      cumple_tecnicamente: String(c.validacion_estado || '').toUpperCase() === 'APTO',
+      cumple_tecnicamente: cotizacionElegibleCuadroRonda(c),
     })),
   };
 }
@@ -1136,21 +1190,21 @@ export async function obtenerDetalleCuadro(solicitudId) {
 /**
  * Crea borrador EN_ELABORACION o retorna el activo existente.
  */
-export async function crearOBuscarBorrador(solicitudId, usuario = '') {
+export async function crearOBuscarBorrador(solicitudId, usuario = '', opts = {}) {
   const sid = parseInt(solicitudId, 10);
   if (!Number.isFinite(sid)) throw new Error('Solicitud inválida');
 
   const sc = await loadSolicitudRow(sid);
   assertTipoCuadroHabilitado(sc.tipo);
   const tipoDb = tipoCuadroDb(sc.tipo);
-  const cotizaciones = await loadCotizacionesPresentadas(sid);
-  if (!cotizaciones.some((c) => String(c.validacion_estado || '').toUpperCase() === 'APTO')) {
-    throw new Error('Se requiere al menos una cotización APTO');
+  const { ronda, cotizaciones } = await resolveContextoRondaCuadro(sid, opts);
+  if (!cotizaciones.some((c) => cotizacionElegibleCuadroRonda(c))) {
+    throw new Error('Se requiere al menos una cotización APTO derivada al cuadro en la invitación');
   }
 
   let existing = null;
   try {
-    existing = await getCuadroActivoRow(sid, tipoDb);
+    existing = await getCuadroActivoRow(sid, tipoDb, ronda.nro_invitacion);
   } catch (err) {
     if (/cuadros_comparativos/i.test(err.message || '')) {
       throw new Error('Tabla cuadros_comparativos no disponible. Ejecute migraciones (020).');
@@ -1158,25 +1212,37 @@ export async function crearOBuscarBorrador(solicitudId, usuario = '') {
     throw err;
   }
 
-  if (existing) {
-    const detalle = await obtenerDetalleCuadro(sid);
+  if (existing && cuadroPersistidoAplicaRonda(existing, ronda)) {
+    const detalle = await obtenerDetalleCuadro(sid, { nroInvitacion: ronda.nro_invitacion });
     return { ...detalle, created: false };
   }
 
   const reqMap = await loadRequerimientosPorSolicitudes([sid]);
-  const matriz = buildMatrizFromSources(sc, cotizaciones, reqMap.get(sid) || []);
+  let matriz = buildMatrizFromSources(sc, cotizaciones, reqMap.get(sid) || []);
+  matriz = attachMetaRondaMatriz(matriz, ronda);
   const datos = stripArchivosFromDatosJson(matriz);
   const user = String(usuario || '').slice(0, 150);
+  const version = await nextVersionNumber(sid, tipoDb);
 
   const { rows } = await query(`
     INSERT INTO cuadros_comparativos (
       solicitud_id, tipo, version, estado, datos_json,
+      invitacion_id, nro_invitacion, cotizacion_ancla_id,
       creado_por, actualizado_por, creado_at, actualizado_at
-    ) VALUES ($1, $2, 1, 'CUADRO_BORRADOR', $3::jsonb, $4, $4, NOW(), NOW())
+    ) VALUES ($1, $2, $3, 'CUADRO_BORRADOR', $4::jsonb, $5, $6, $7, $8, $8, NOW(), NOW())
     RETURNING *
-  `, [sid, tipoDb, JSON.stringify(datos), user]);
+  `, [
+    sid,
+    tipoDb,
+    version,
+    JSON.stringify(datos),
+    ronda.invitacion_id,
+    ronda.nro_invitacion,
+    ronda.cotizacion_ancla_id,
+    user,
+  ]);
 
-  const detalle = await obtenerDetalleCuadro(sid);
+  const detalle = await obtenerDetalleCuadro(sid, { nroInvitacion: ronda.nro_invitacion });
   return { ...detalle, cuadro: mapCuadroRow(rows[0]), created: true };
 }
 
@@ -1191,6 +1257,7 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
   const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
+  assertNoRondaOverrideEnPayload(payload, cur);
   const estadoCur = String(cur.estado || '').toUpperCase();
   assertNoMutacionTrasDerivadoCcp(estadoCur, 'guardar borrador');
   // Tras generar PDF / firmar / derivar no se edita borrador (evita degradar GENERADO → EN_ELABORACION).
@@ -1210,11 +1277,23 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
     }
   }
 
-  // Reconstruir matriz fresca y aplicar solo campos editables del payload
   const sc = await loadSolicitudRow(cur.solicitud_id);
-  const cotizaciones = await loadCotizacionesPresentadas(cur.solicitud_id);
+  const nroCuadro = cur.nro_invitacion != null ? Number(cur.nro_invitacion) : null;
+  if (nroCuadro == null) {
+    const err = new Error(
+      'Cuadro legacy sin nro_invitacion: abra el borrador desde la bandeja para crear la ronda actual.',
+    );
+    err.code = 'CUADRO_LEGACY_SIN_RONDA';
+    err.status = 409;
+    throw err;
+  }
+  const { ronda, cotizaciones } = await resolveContextoRondaCuadro(cur.solicitud_id, {
+    nroInvitacion: nroCuadro,
+  });
+  assertCuadroRowConsistenteRonda(cur, ronda);
   const reqMap = await loadRequerimientosPorSolicitudes([cur.solicitud_id]);
   let matriz = buildMatrizFromSources(sc, cotizaciones, reqMap.get(cur.solicitud_id) || []);
+  matriz = attachMetaRondaMatriz(matriz, ronda);
 
   const incoming = payload.datos_json || payload.matriz || {};
   const prevSaved = parseJson(cur.datos_json, {});
@@ -1237,10 +1316,12 @@ export async function guardarBorradorCuadro(cuadroId, payload = {}, usuario = ''
   matriz.meta = {
     ...matriz.meta,
     ...val,
+    ronda: metaRondaCuadro(ronda),
     puede_seleccionar_ganador: val.items_incompletos === 0 && (matriz.items || []).length > 0,
   };
-  const datos = stripArchivosFromDatosJson(matriz);
-  // RC8.7 — conservar metadatos de versión / respuesta a observaciones
+  const cotIdsRonda = new Set(cotizaciones.map((c) => Number(c.id)));
+  let datos = stripArchivosFromDatosJson(matriz);
+  datos = filtrarDatosJsonPorRonda(datos, cotIdsRonda);
   datos.historial_versiones = prevSaved.historial_versiones || datos.historial_versiones;
   datos.historial_revision = prevSaved.historial_revision || datos.historial_revision;
   datos.version_meta = prevSaved.version_meta || datos.version_meta;
@@ -1289,6 +1370,7 @@ export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario 
   const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
   if (!curRows.length) throw new Error('Cuadro no encontrado');
   const cur = curRows[0];
+  assertNoRondaOverrideEnPayload(payload, cur);
   const estadoAdj = String(cur.estado || '').toUpperCase();
   assertNoMutacionTrasDerivadoCcp(estadoAdj, 'guardar adjudicación');
   if (['GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO', 'ANULADO'].includes(estadoAdj)) {
@@ -1308,12 +1390,23 @@ export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario 
   }
 
   const sc = await loadSolicitudRow(cur.solicitud_id);
-  const cotizaciones = await loadCotizacionesPresentadas(cur.solicitud_id);
+  const nroCuadro = cur.nro_invitacion != null ? Number(cur.nro_invitacion) : null;
+  if (nroCuadro == null) {
+    const err = new Error('Cuadro legacy sin nro_invitacion: no admite adjudicación por ronda.');
+    err.code = 'CUADRO_LEGACY_SIN_RONDA';
+    err.status = 409;
+    throw err;
+  }
+  const { ronda, cotizaciones } = await resolveContextoRondaCuadro(cur.solicitud_id, {
+    nroInvitacion: nroCuadro,
+  });
+  assertCuadroRowConsistenteRonda(cur, ronda);
+  const cotIdsRonda = new Set(cotizaciones.map((c) => Number(c.id)));
   const reqMap = await loadRequerimientosPorSolicitudes([cur.solicitud_id]);
   let matriz = buildMatrizFromSources(sc, cotizaciones, reqMap.get(cur.solicitud_id) || []);
-  const saved = parseJson(cur.datos_json, {});
+  matriz = attachMetaRondaMatriz(matriz, ronda);
+  const saved = filtrarDatosJsonPorRonda(parseJson(cur.datos_json, {}), cotIdsRonda);
   const incoming = payload.datos_json || {};
-  // Overlay: datos guardados + payload (dedicado_objeto / segunda fuente del DOM)
   matriz = mergeObservacionesCuadro(matriz, {
     ...saved,
     ...incoming,
@@ -1349,11 +1442,28 @@ export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario 
     observacion_area_usuaria: payload.observacion_area_usuaria,
   }, usuario);
 
-  // Reaplicar AA editable tras adjudicación (no perder «Se dedica al objeto…»)
   matriz = overlayDedicadoObjeto(matriz, incoming.primera_fuente);
 
   const adj = matriz.adjudicacion || {};
-  const datos = stripArchivosFromDatosJson(matriz);
+  const proveedoresRonda = new Set(cotizaciones.map((c) => Number(c.proveedor_id)));
+  const cotIdsRondaAdj = cotIdsRonda;
+  for (const sel of selecciones) {
+    const cid = sel?.cotizacion_id;
+    if (cid != null && !cotIdsRondaAdj.has(Number(cid))) {
+      const err = new Error('La cotización adjudicada no pertenece al contexto elegible del cuadro');
+      err.code = 'ADJUDICACION_INVALIDA';
+      err.status = 400;
+      throw err;
+    }
+  }
+  if (adj.proveedor_ganador_id != null && !proveedoresRonda.has(Number(adj.proveedor_ganador_id))) {
+    const err = new Error('El proveedor adjudicado no pertenece a la invitación/ronda del cuadro');
+    err.code = 'ADJUDICACION_INVALIDA';
+    err.status = 400;
+    throw err;
+  }
+  let datos = stripArchivosFromDatosJson(matriz);
+  datos = filtrarDatosJsonPorRonda(datos, cotIdsRonda);
   const user = String(usuario || '').slice(0, 150);
 
   const { rows } = await query(`
@@ -1412,19 +1522,45 @@ export async function guardarAdjudicacionCuadro(cuadroId, payload = {}, usuario 
   };
 }
 
-export async function listarVersionesCuadro(solicitudId) {
+export async function listarVersionesCuadro(solicitudId, opts = {}) {
   const sid = parseInt(solicitudId, 10);
   if (!Number.isFinite(sid)) throw new Error('Solicitud inválida');
   const sc = await loadSolicitudRow(sid);
   const tipoDb = tipoCuadroDb(sc.tipo) || TIPO_BIENES;
+
+  let nroCtx = opts.nroInvitacion != null ? parseInt(opts.nroInvitacion, 10) : undefined;
+  if (opts.cuadroId != null && Number.isFinite(parseInt(opts.cuadroId, 10))) {
+    const cid = parseInt(opts.cuadroId, 10);
+    const { rows: cRows } = await query(
+      'SELECT nro_invitacion FROM cuadros_comparativos WHERE id = $1 AND solicitud_id = $2',
+      [cid, sid],
+    );
+    if (cRows.length) {
+      nroCtx = cRows[0].nro_invitacion != null ? Number(cRows[0].nro_invitacion) : null;
+    }
+  }
+
+  const params = [sid, tipoDb];
+  let nroClause = '';
+  if (opts.soloLegacySinNro === true) {
+    nroClause = ' AND nro_invitacion IS NULL';
+  } else if (Number.isFinite(nroCtx) && nroCtx > 0) {
+    params.push(nroCtx);
+    nroClause = ` AND nro_invitacion = $${params.length}`;
+  } else if (nroCtx === null && opts.cuadroId != null) {
+    nroClause = ' AND nro_invitacion IS NULL';
+  }
+
   const { rows } = await query(`
     SELECT id, solicitud_id, tipo, version, estado, creado_por, actualizado_por,
       creado_at, actualizado_at, derivado_at, datos_json,
-      proveedor_ganador_id, criterio_seleccion, pdf_nombre, firmado_nombre, firmado_dec_nombre
+      proveedor_ganador_id, criterio_seleccion, pdf_nombre, firmado_nombre, firmado_dec_nombre,
+      nro_invitacion, invitacion_id
     FROM cuadros_comparativos
     WHERE solicitud_id = $1 AND tipo = $2
+    ${nroClause}
     ORDER BY version DESC
-  `, [sid, tipoDb]);
+  `, params);
   return rows.map((r) => {
     const meta = metaVersionDesdeRow(r);
     const mapped = mapCuadroRow(r);
@@ -1443,9 +1579,13 @@ export async function listarVersionesCuadro(solicitudId) {
   });
 }
 
-/** Alias API RC8.2 */
-export async function getDetalleCuadro(solicitudId) {
-  return obtenerDetalleCuadro(solicitudId);
+/**
+ * Alias API RC8.2.
+ * Requiere opts.nroInvitacion / invitacionId si hay 2+ contextos elegibles (409 CUADRO_RONDA_AMBIGUA).
+ * Legacy histórico sin nro_invitacion en cuadro: usar solo rutas por cuadroId o flujos documentados.
+ */
+export async function getDetalleCuadro(solicitudId, opts = {}) {
+  return obtenerDetalleCuadro(solicitudId, opts);
 }
 
 /**
@@ -1464,13 +1604,22 @@ export async function obtenerDatosPdfCuadro(cuadroId) {
   }
   const sc = await loadSolicitudRow(row.solicitud_id);
   assertTipoCuadroHabilitado(sc.tipo);
+  const nroCuadro = row.nro_invitacion != null ? Number(row.nro_invitacion) : null;
+  const { ronda, cotizaciones } = nroCuadro != null
+    ? await resolveContextoRondaCuadro(row.solicitud_id, { nroInvitacion: nroCuadro })
+    : {
+      ronda: null,
+      cotizaciones: await loadCotizacionesPresentadas(row.solicitud_id, { soloElegiblesCuadro: false }),
+    };
+  if (nroCuadro != null) assertCuadroRowConsistenteRonda(row, ronda);
   const reqMap = await loadRequerimientosPorSolicitudes([row.solicitud_id]);
   const requerimientos = reqMap.get(row.solicitud_id) || [];
-  const cotizaciones = await loadCotizacionesPresentadas(row.solicitud_id);
-  const saved = parseJson(row.datos_json, {});
+  const cotIdsRonda = new Set(cotizaciones.map((c) => Number(c.id)));
+  let saved = parseJson(row.datos_json, {});
+  if (nroCuadro != null) saved = filtrarDatosJsonPorRonda(saved, cotIdsRonda);
 
-  // Matriz fresca (AA invitaciones/recepción/validación) + overlay de adjudicación / SF / dedicado_objeto
   let matriz = buildMatrizFromSources(sc, cotizaciones, requerimientos);
+  if (ronda) matriz = attachMetaRondaMatriz(matriz, ronda);
   matriz = mergeObservacionesCuadro(matriz, saved);
   matriz = mergeAdjudicacionCuadro(matriz, saved);
   matriz = attachPrimeraFuenteFromCotizaciones(matriz, cotizaciones);

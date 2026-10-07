@@ -772,9 +772,27 @@ portalAnalistaRouter.get('/cuadro-comparativo/expedientes', async (req, res) => 
   }
 });
 
+function invitacionIdFromReq(req) {
+  const raw = req.query?.invitacionId ?? req.query?.invitacion_id
+    ?? req.body?.invitacionId ?? req.body?.invitacion_id;
+  if (raw == null || raw === '') return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function rondaCuadroOptsFromReq(req) {
+  const nroRaw = req.query?.nroInvitacion ?? req.query?.nro_invitacion
+    ?? req.body?.nroInvitacion ?? req.body?.nro_invitacion;
+  const nro = nroRaw != null && nroRaw !== '' ? parseInt(nroRaw, 10) : undefined;
+  return {
+    invitacionId: invitacionIdFromReq(req),
+    nroInvitacion: Number.isFinite(nro) ? nro : undefined,
+  };
+}
+
 portalAnalistaRouter.get('/cuadro-comparativo/expedientes/:solicitudId', async (req, res, next) => {
   try {
-    const data = await getCuadroComparativoExpediente(req.params.solicitudId);
+    const data = await getCuadroComparativoExpediente(req.params.solicitudId, rondaCuadroOptsFromReq(req));
     res.json({ data });
   } catch (err) { next(err); }
 });
@@ -782,7 +800,7 @@ portalAnalistaRouter.get('/cuadro-comparativo/expedientes/:solicitudId', async (
 /** RC8.2 — matriz Bienes + borrador */
 portalAnalistaRouter.get('/cuadro-comparativo/:solicitudId/detalle', async (req, res, next) => {
   try {
-    const data = await obtenerDetalleCuadro(req.params.solicitudId);
+    const data = await obtenerDetalleCuadro(req.params.solicitudId, rondaCuadroOptsFromReq(req));
     res.json({ data });
   } catch (err) { next(err); }
 });
@@ -790,7 +808,7 @@ portalAnalistaRouter.get('/cuadro-comparativo/:solicitudId/detalle', async (req,
 portalAnalistaRouter.post('/cuadro-comparativo/:solicitudId/borrador', async (req, res, next) => {
   try {
     const usuario = req.headers['x-user-name'] || req.body?.usuario || '';
-    const data = await crearOBuscarBorrador(req.params.solicitudId, usuario);
+    const data = await crearOBuscarBorrador(req.params.solicitudId, usuario, rondaCuadroOptsFromReq(req));
     res.json({ success: true, data });
   } catch (err) { next(err); }
 });
@@ -829,7 +847,11 @@ portalAnalistaRouter.put('/cuadro-comparativo/:cuadroId/adjudicacion', async (re
 
 portalAnalistaRouter.get('/cuadro-comparativo/:solicitudId/versiones', async (req, res, next) => {
   try {
-    const data = await listarVersionesCuadro(req.params.solicitudId);
+    const opts = { ...rondaCuadroOptsFromReq(req) };
+    const cuadroRaw = req.query?.cuadroId ?? req.query?.cuadro_id;
+    const cuadroId = cuadroRaw != null && cuadroRaw !== '' ? parseInt(cuadroRaw, 10) : undefined;
+    if (Number.isFinite(cuadroId)) opts.cuadroId = cuadroId;
+    const data = await listarVersionesCuadro(req.params.solicitudId, opts);
     res.json({ data });
   } catch (err) { next(err); }
 });

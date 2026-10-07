@@ -167,7 +167,7 @@ function extractDocsFromCotDetalle(det) {
 /**
  * @param {number|string} solicitudId
  * @param {() => void} [onSaved]
- * @param {{ modo?: string }} [opts]
+ * @param {{ modo?: string, nroInvitacion?: number, invitacionId?: number }} [opts]
  */
 export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {}) {
   closeBandejaDropdowns();
@@ -293,10 +293,15 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
   let trazaData = null;
   let reqIdTraz = null;
 
+  const rondaCtx = {
+    nroInvitacion: opts.nroInvitacion ?? opts.nro_invitacion,
+    invitacionId: opts.invitacionId ?? opts.invitacion_id,
+  };
+
   try {
     const [expResp, detResp] = await Promise.all([
-      contratacionesService.getCuadroComparativoExpediente(sid),
-      contratacionesService.getCuadroComparativoDetalle(sid),
+      contratacionesService.getCuadroComparativoExpediente(sid, rondaCtx),
+      contratacionesService.getCuadroComparativoDetalle(sid, rondaCtx),
     ]);
     exp = expResp.data || expResp;
     const det = detResp.data || detResp;
@@ -308,7 +313,7 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
     const reqIds = (exp?.requerimientos || []).map((r) => r.id).filter(Boolean);
 
     const parallel = await Promise.allSettled([
-      contratacionesService.listCuadroVersiones(sid),
+      contratacionesService.listCuadroVersiones(sid, rondaCtx),
       adjuntosService.getAdjuntosSolicitud(sid),
       contratacionesService.getSolicitudDetalle(sid),
       contratacionesService.listProveedoresSolicitud(sid),
@@ -511,11 +516,17 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
 
   async function refreshDetalle() {
     try {
-      const detResp = await contratacionesService.getCuadroComparativoDetalle(sid);
+      const detResp = await contratacionesService.getCuadroComparativoDetalle(sid, {
+        ...rondaCtx,
+        cuadroId: cuadro?.id,
+      });
       const det = detResp.data || detResp;
       cuadro = det.cuadro || cuadro;
       matriz = det.matriz || matriz;
-      const vResp = await contratacionesService.listCuadroVersiones(sid);
+      const vResp = await contratacionesService.listCuadroVersiones(sid, {
+        ...rondaCtx,
+        cuadroId: cuadro?.id,
+      });
       versiones = vResp.data || vResp || [];
       if (!Array.isArray(versiones)) versiones = [];
       // RC8.5-D1 — refrescar payload.observaciones para historial institucional
@@ -869,10 +880,16 @@ export async function showExpedienteRevisionModal(solicitudId, onSaved, opts = {
   paint();
 }
 
-export async function showExpedienteCoordinadorModal(solicitudId, onSaved) {
-  return showExpedienteRevisionModal(solicitudId, onSaved, { modo: ROLES_REVISION.COORDINADOR_CM });
+export async function showExpedienteCoordinadorModal(solicitudId, onSaved, rondaCtx = {}) {
+  return showExpedienteRevisionModal(solicitudId, onSaved, {
+    modo: ROLES_REVISION.COORDINADOR_CM,
+    ...rondaCtx,
+  });
 }
 
-export async function showExpedienteDecModal(solicitudId, onSaved) {
-  return showExpedienteRevisionModal(solicitudId, onSaved, { modo: ROLES_REVISION.DEC });
+export async function showExpedienteDecModal(solicitudId, onSaved, rondaCtx = {}) {
+  return showExpedienteRevisionModal(solicitudId, onSaved, {
+    modo: ROLES_REVISION.DEC,
+    ...rondaCtx,
+  });
 }

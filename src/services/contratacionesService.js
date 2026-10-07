@@ -193,14 +193,40 @@ export const contratacionesService = {
   async listCuadroComparativoExpedientes() {
     return api.get('/contrataciones/portal-analista/cuadro-comparativo/expedientes');
   },
-  async getCuadroComparativoExpediente(solicitudId) {
-    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/expedientes/${solicitudId}`);
+  cuadroRondaQueryString(opts = {}) {
+    if (opts == null || typeof opts === 'number' || typeof opts === 'string') {
+      const inv = opts;
+      return inv != null && inv !== '' ? `?invitacionId=${encodeURIComponent(inv)}` : '';
+    }
+    const qs = new URLSearchParams();
+    const inv = opts.invitacionId ?? opts.invitacion_id;
+    const nro = opts.nroInvitacion ?? opts.nro_invitacion;
+    if (inv != null && inv !== '') qs.set('invitacionId', String(inv));
+    if (nro != null && nro !== '') qs.set('nroInvitacion', String(nro));
+    const s = qs.toString();
+    return s ? `?${s}` : '';
   },
-  async getCuadroComparativoDetalle(solicitudId) {
-    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/detalle`);
+  async getCuadroComparativoExpediente(solicitudId, opts = {}) {
+    const q = this.cuadroRondaQueryString(opts);
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/expedientes/${solicitudId}${q}`);
+  },
+  async getCuadroComparativoDetalle(solicitudId, opts = {}) {
+    const q = this.cuadroRondaQueryString(opts);
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/detalle${q}`);
   },
   async crearCuadroBorrador(solicitudId, body = {}) {
-    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/borrador`, body);
+    const inv = body?.invitacionId ?? body?.invitacion_id;
+    const nro = body?.nroInvitacion ?? body?.nro_invitacion;
+    const payload = { ...body };
+    delete payload.invitacionId;
+    delete payload.invitacion_id;
+    delete payload.nroInvitacion;
+    delete payload.nro_invitacion;
+    const qs = new URLSearchParams();
+    if (inv != null) qs.set('invitacionId', String(inv));
+    if (nro != null) qs.set('nroInvitacion', String(nro));
+    const q = qs.toString() ? `?${qs.toString()}` : '';
+    return api.post(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/borrador${q}`, payload);
   },
   async guardarCuadroBorrador(cuadroId, body = {}) {
     return api.put(`/contrataciones/portal-analista/cuadro-comparativo/${cuadroId}/borrador`, body);
@@ -208,8 +234,16 @@ export const contratacionesService = {
   async guardarCuadroAdjudicacion(cuadroId, body = {}) {
     return api.put(`/contrataciones/portal-analista/cuadro-comparativo/${cuadroId}/adjudicacion`, body);
   },
-  async listCuadroVersiones(solicitudId) {
-    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/versiones`);
+  async listCuadroVersiones(solicitudId, opts = {}) {
+    const qs = new URLSearchParams();
+    const nro = opts.nroInvitacion ?? opts.nro_invitacion;
+    const inv = opts.invitacionId ?? opts.invitacion_id;
+    const cuadroId = opts.cuadroId ?? opts.cuadro_id;
+    if (nro != null && nro !== '') qs.set('nroInvitacion', String(nro));
+    if (inv != null && inv !== '') qs.set('invitacionId', String(inv));
+    if (cuadroId != null && cuadroId !== '') qs.set('cuadroId', String(cuadroId));
+    const q = qs.toString() ? `?${qs.toString()}` : '';
+    return api.get(`/contrataciones/portal-analista/cuadro-comparativo/${solicitudId}/versiones${q}`);
   },
   async getCuadroPdfData(cuadroId) {
     return api.get(`/contrataciones/portal-analista/cuadro-comparativo/cuadro/${cuadroId}/pdf-data`);

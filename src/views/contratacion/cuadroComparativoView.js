@@ -362,8 +362,9 @@ async function showVerValidaciones(solicitudId) {
   });
 }
 
-async function openElaborarCuadro(solicitudId) {
-  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
+async function openElaborarCuadro(solicitudId, nroInvitacion = null) {
+  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId)
+    && (nroInvitacion == null || String(e.nro_invitacion) === String(nroInvitacion)));
   const tipo = String(row?.tipo || '').toLowerCase();
   const esBien = !tipo || tipo === 'bien' || tipo === 'bienes' || tipo === 'b';
   const esServicio = tipo === 'servicio' || tipo === 'servicios' || tipo === 's';
@@ -371,37 +372,54 @@ async function openElaborarCuadro(solicitudId) {
     alert(`El cuadro comparativo elabora Bienes (08-A) y Servicios (08-B). Tipo actual: ${row?.tipo || '—'}.`);
     return;
   }
-  await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
+  await showElaborarCuadroModal(solicitudId, () => loadCuadro(false), {
+    nroInvitacion: nroInvitacion ?? row?.nro_invitacion ?? undefined,
+    invitacionId: row?.invitacion_id ?? undefined,
+  });
 }
 
-async function openExpedienteCoordinador(solicitudId) {
-  closeBandejaDropdowns();
-  closeBandejaActionMenus();
-  await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false));
+function rondaCtxFromBandeja(solicitudId, nroInvitacion = null) {
+  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId)
+    && (nroInvitacion == null || String(e.nro_invitacion) === String(nroInvitacion)));
+  return {
+    nroInvitacion: nroInvitacion ?? row?.nro_invitacion ?? undefined,
+    invitacionId: row?.invitacion_id ?? row?.invitacion_id_ancla ?? undefined,
+  };
 }
 
-async function openExpedienteDec(solicitudId) {
+async function openExpedienteCoordinador(solicitudId, nroInvitacion = null) {
   closeBandejaDropdowns();
   closeBandejaActionMenus();
-  await showExpedienteDecModal(solicitudId, () => loadCuadro(false));
+  await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false), rondaCtxFromBandeja(solicitudId, nroInvitacion));
+}
+
+async function openExpedienteDec(solicitudId, nroInvitacion = null) {
+  closeBandejaDropdowns();
+  closeBandejaActionMenus();
+  await showExpedienteDecModal(solicitudId, () => loadCuadro(false), rondaCtxFromBandeja(solicitudId, nroInvitacion));
 }
 
 /** Admin: abre según etapa real (sin simular rol). */
-async function openExpedienteAdmin(solicitudId) {
+async function openExpedienteAdmin(solicitudId, nroInvitacion = null) {
   closeBandejaDropdowns();
   closeBandejaActionMenus();
-  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId));
+  const row = expedientesCache.find((e) => String(e.solicitud_id) === String(solicitudId)
+    && (nroInvitacion == null || String(e.nro_invitacion) === String(nroInvitacion)));
+  const rondaCtx = rondaCtxFromBandeja(solicitudId, nroInvitacion);
   const estado = row?.estado_cuadro || row?.estado || '';
   const sugerido = resolveModoAperturaExpediente(estado, ROLES_REVISION.ADMINISTRADOR);
   if (sugerido === ROLES_REVISION.DEC) {
-    await showExpedienteDecModal(solicitudId, () => loadCuadro(false));
+    await showExpedienteDecModal(solicitudId, () => loadCuadro(false), rondaCtx);
     return;
   }
   if (sugerido === ROLES_REVISION.COORDINADOR_CM) {
-    await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false));
+    await showExpedienteCoordinadorModal(solicitudId, () => loadCuadro(false), rondaCtx);
     return;
   }
-  await showElaborarCuadroModal(solicitudId, () => loadCuadro(false));
+  await showElaborarCuadroModal(solicitudId, () => loadCuadro(false), {
+    invitacionId: row?.invitacion_id ?? undefined,
+    nroInvitacion: rondaCtx.nroInvitacion,
+  });
 }
 
 async function openDescargarCuadro(solicitudId) {
@@ -452,8 +470,9 @@ function buildCuadroTheadHtml() {
 
 function buildCuadroRowHtml(c) {
   return `
-    <tr data-row-id="${c.solicitud_id}">
+    <tr data-row-id="${c.solicitud_id}" data-invitacion-id="${esc(c.invitacion_id ?? '')}">
       <td><strong>${esc(c.solicitud_codigo)}</strong>
+        ${c.invitacion_label ? `<div class="small text-primary">${esc(c.invitacion_label)}</div>` : ''}
         <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
       </td>
       <td>${formatRequerimientosCuadro(c, esc)}</td>
@@ -463,7 +482,9 @@ function buildCuadroRowHtml(c) {
       <td class="small">${renderBandejaCanonicoResponsableCell(c)}</td>
       <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
-          data-id="${esc(c.solicitud_id)}" title="Ver expediente">
+          data-id="${esc(c.solicitud_id)}"
+          data-nro-invitacion="${esc(c.nro_invitacion ?? '')}"
+          title="Ver expediente">
           <i class="bi bi-eye"></i> Ver
         </button>
       </td>
@@ -483,7 +504,7 @@ function cuadroHintText({ modoCoord, modoDec }) {
   if (modoDec) {
     return 'Expedientes derivados desde el Coordinador CM. Use Ver para observar o aprobar y derivar a CCP.';
   }
-  return 'Una fila por Solicitud de Cotización. Use Ver para abrir el expediente. Las acciones de derivación están dentro del detalle.';
+  return 'Una fila por Solicitud e invitación/ronda activa. Use Ver para abrir el cuadro de esa ronda.';
 }
 
 function ensureCuadroChrome(shell, { hint }) {
@@ -501,12 +522,12 @@ function ensureCuadroChrome(shell, { hint }) {
   hintEl.textContent = hint;
 }
 
-function openVerDesdeBandeja(id, { modoCoord, modoDec, modoAdmin }) {
+function openVerDesdeBandeja(id, nroInvitacion, { modoCoord, modoDec, modoAdmin }) {
   closeBandejaActionMenus();
-  if (modoCoord) return openExpedienteCoordinador(id);
-  if (modoDec) return openExpedienteDec(id);
-  if (modoAdmin) return openExpedienteAdmin(id);
-  return openElaborarCuadro(id);
+  if (modoCoord) return openExpedienteCoordinador(id, nroInvitacion);
+  if (modoDec) return openExpedienteDec(id, nroInvitacion);
+  if (modoAdmin) return openExpedienteAdmin(id, nroInvitacion);
+  return openElaborarCuadro(id, nroInvitacion);
 }
 
 function bindCuadroVerButtons(cont, { modoCoord, modoDec, modoAdmin }) {
@@ -514,7 +535,8 @@ function bindCuadroVerButtons(cont, { modoCoord, modoDec, modoAdmin }) {
   cont.querySelectorAll('.cc-ver-exp').forEach((btn) => {
     btn.onclick = (ev) => {
       ev.stopPropagation();
-      openVerDesdeBandeja(btn.dataset.id, { modoCoord, modoDec, modoAdmin });
+      const nro = btn.dataset.nroInvitacion || null;
+      openVerDesdeBandeja(btn.dataset.id, nro || null, { modoCoord, modoDec, modoAdmin });
     };
   });
 }

@@ -602,10 +602,19 @@ function showDerivarCcpPanel({ onConfirm }) {
 /**
  * Abre elaboración / consulta del cuadro.
  */
-export async function showElaborarCuadroModal(solicitudId, onSaved) {
+export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
+  const invitacionId = opts?.invitacionId ?? opts?.invitacion_id ?? null;
+  const nroInvitacion = opts?.nroInvitacion ?? opts?.nro_invitacion ?? null;
+  const rondaCtx = {
+    nroInvitacion: nroInvitacion ?? undefined,
+    invitacionId: invitacionId ?? undefined,
+  };
   let state;
   try {
-    const resp = await contratacionesService.crearCuadroBorrador(solicitudId);
+    const resp = await contratacionesService.crearCuadroBorrador(solicitudId, {
+      invitacionId: invitacionId ?? undefined,
+      nroInvitacion: nroInvitacion ?? undefined,
+    });
     state = resp.data || resp;
   } catch (err) {
     alert(err.message || 'No se pudo abrir el cuadro');
@@ -616,7 +625,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
   let cuadro = state.cuadro;
   let versiones = [];
   try {
-    const vResp = await contratacionesService.listCuadroVersiones(solicitudId);
+    const vResp = await contratacionesService.listCuadroVersiones(solicitudId, { ...rondaCtx, cuadroId: cuadro?.id });
     versiones = (vResp.data || vResp || []);
     if (!Array.isArray(versiones)) versiones = [];
   } catch (_) { versiones = []; }
@@ -814,7 +823,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
   async function refreshVersiones() {
     try {
-      const vResp = await contratacionesService.listCuadroVersiones(solicitudId);
+      const vResp = await contratacionesService.listCuadroVersiones(solicitudId, { ...rondaCtx, cuadroId: cuadro?.id });
       versiones = (vResp.data || vResp || []);
       if (!Array.isArray(versiones)) versiones = [];
     } catch (_) { /* keep previous */ }
@@ -908,7 +917,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         || null;
       if (!reqId) {
         try {
-          const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId);
+          const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId, rondaCtx);
           reqId = (expResp.data || expResp)?.requerimientos?.[0]?.id || null;
         } catch (_) { /* keep */ }
       }
@@ -918,7 +927,10 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
         rolRevision: ROLES_REVISION.COORDINADOR_CM,
         onDone: async () => {
           try {
-            const det = await contratacionesService.getCuadroComparativoDetalle(solicitudId);
+            const det = await contratacionesService.getCuadroComparativoDetalle(solicitudId, {
+              ...rondaCtx,
+              cuadroId: cuadro?.id,
+            });
             const data = det.data || det;
             cuadro = data.cuadro || cuadro;
             matriz = data.matriz || matriz;
@@ -1249,7 +1261,10 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
 
   async function reloadFresh() {
     try {
-      const resp = await contratacionesService.getCuadroComparativoDetalle(solicitudId);
+      const resp = await contratacionesService.getCuadroComparativoDetalle(solicitudId, {
+        ...rondaCtx,
+        cuadroId: cuadro?.id,
+      });
       const data = resp.data || resp;
       matriz = data.matriz;
       cuadro = data.cuadro || cuadro;
@@ -1593,7 +1608,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved) {
       || null;
     if (!reqId && solicitudId) {
       try {
-        const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId);
+        const expResp = await contratacionesService.getCuadroComparativoExpediente(solicitudId, rondaCtx);
         reqId = (expResp.data || expResp)?.requerimientos?.[0]?.id || null;
       } catch (_) { /* keep */ }
     }
