@@ -3,7 +3,12 @@ import { contratacionesService } from '../../services/contratacionesService.js';
 import { bandejaTableStyles, getResponsableVigenteLabel } from '../../utils/trazabilidad.js';
 import { actosBandejaStyles } from '../../utils/actosModals.js';
 import { bindBandejaToolbar, closeBandejaActionMenus } from '../../utils/bandejaUi.js';
-import { renderBandejaCanonicoResponsableCell } from '../../utils/bandejaExpedienteColumns.js';
+import {
+  bandejaExpedienteStandardStyles,
+  renderBandejaCanonicoEtapaCell,
+  renderBandejaCanonicoEstadoCell,
+  renderBandejaCanonicoResponsableCell,
+} from '../../utils/bandejaExpedienteColumns.js';
 import { usePagination } from '../../utils/paginacion.js';
 import {
   formatRequerimientosCuadro,
@@ -456,31 +461,40 @@ async function openTrazabilidadCuadro(solicitudId) {
   await showTrazabilidadModal(reqId);
 }
 
+/** RC8.17.8H6-D10-B — columnas bandeja + ERV canónico (Etapa/Estado/Responsable). */
 function buildCuadroTheadHtml() {
   return `<tr>
-    <th>Solicitud de cotización</th>
-    <th>Requerimiento</th>
-    <th>Centro</th>
-    <th class="text-center">Cantidad</th>
-    <th>Estado</th>
-    <th>Responsable</th>
-    <th class="text-center">Ver</th>
+    <th class="cc-col-solicitud">Solicitud</th>
+    <th class="cc-col-inv text-center">Invitación</th>
+    <th class="cc-col-req">Requerimiento</th>
+    <th class="cc-col-centro">Centro</th>
+    <th class="cc-col-cot text-center">Cotizaciones</th>
+    <th class="req-col-etapa">Etapa</th>
+    <th class="req-col-estado-cell">Estado</th>
+    <th class="req-col-resp">Responsable</th>
+    <th class="cc-col-ver text-center">Ver</th>
   </tr>`;
 }
 
 function buildCuadroRowHtml(c) {
+  const invLabel = c.invitacion_label || (c.nro_invitacion != null ? `Inv. ${c.nro_invitacion}` : '—');
+  // Multi-REQ: enrichEstadoResponsableForBandeja usa requerimiento_id (primer REQ de la SC).
+  // D10-B no redefine esa regla; ver auditoría Obs. 15.
   return `
-    <tr data-row-id="${c.solicitud_id}" data-invitacion-id="${esc(c.invitacion_id ?? '')}">
-      <td><strong>${esc(c.solicitud_codigo)}</strong>
-        ${c.invitacion_label ? `<div class="small text-primary">${esc(c.invitacion_label)}</div>` : ''}
+    <tr data-row-id="${c.solicitud_id}" data-invitacion-id="${esc(c.invitacion_id ?? '')}"
+      data-nro-invitacion="${esc(c.nro_invitacion ?? '')}">
+      <td class="cc-col-solicitud">
+        <strong>${esc(c.solicitud_codigo)}</strong>
         <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
       </td>
-      <td>${formatRequerimientosCuadro(c, esc)}</td>
-      <td class="small">${formatCentroCuadro(c, esc)}</td>
-      <td class="text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
-      <td>${renderBadgeEstadoCuadroHtml(c, labelEstadoExpedienteUnificado(c) || labelCuadroEstado(c.estado_cuadro || c.estado), esc)}</td>
-      <td class="small">${renderBandejaCanonicoResponsableCell(c)}</td>
-      <td class="text-center">
+      <td class="cc-col-inv text-center small fw-semibold text-primary">${esc(invLabel)}</td>
+      <td class="cc-col-req">${formatRequerimientosCuadro(c, esc)}</td>
+      <td class="cc-col-centro small">${formatCentroCuadro(c, esc)}</td>
+      <td class="cc-col-cot text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
+      <td class="req-col-etapa">${renderBandejaCanonicoEtapaCell(c)}</td>
+      <td class="req-col-estado-cell">${renderBandejaCanonicoEstadoCell(c)}</td>
+      <td class="req-col-resp small">${renderBandejaCanonicoResponsableCell(c)}</td>
+      <td class="cc-col-ver text-center">
         <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
           data-id="${esc(c.solicitud_id)}"
           data-nro-invitacion="${esc(c.nro_invitacion ?? '')}"
@@ -489,6 +503,22 @@ function buildCuadroRowHtml(c) {
         </button>
       </td>
     </tr>`;
+}
+
+function cuadroBandejaColumnStyles() {
+  return `
+    ${bandejaExpedienteStandardStyles()}
+    #cuadroCompWrap .req-list-table { min-width: 960px; }
+    #cuadroCompWrap .cc-col-solicitud { max-width: 140px; }
+    #cuadroCompWrap .cc-col-inv { width: 72px; max-width: 80px; white-space: nowrap; }
+    #cuadroCompWrap .cc-col-req { max-width: 120px; }
+    #cuadroCompWrap .cc-col-centro { max-width: 100px; }
+    #cuadroCompWrap .cc-col-cot { width: 88px; max-width: 96px; }
+    #cuadroCompWrap .cc-col-ver { width: 64px; }
+    #cuadroCompWrap .sgc-etapa-badge,
+    #cuadroCompWrap .sgc-estado-badge,
+    #cuadroCompWrap .sgc-responsable-badge { max-width: 100%; }
+  `;
 }
 
 function cuadroEmptyMessage({ modoCoord, modoDec }) {
@@ -504,7 +534,7 @@ function cuadroHintText({ modoCoord, modoDec }) {
   if (modoDec) {
     return 'Expedientes derivados desde el Coordinador CM. Use Ver para observar o aprobar y derivar a CCP.';
   }
-  return 'Una fila por Solicitud e invitación/ronda activa. Use Ver para abrir el cuadro de esa ronda.';
+  return 'Una fila por solicitud y contexto de invitación (cotizaciones elegibles APTO→Cuadro). Etapa, Estado y Responsable reflejan el ERV vigente del requerimiento.';
 }
 
 function ensureCuadroChrome(shell, { hint }) {
@@ -559,9 +589,9 @@ async function loadCuadro(resetPage = false) {
     theadId: 'cuadroCompHead',
     tbodyId: 'cuadroCompBody',
     emptyId: 'cuadroCompEmpty',
-    outerClass: 'sgc-bandeja-wrap',
+    outerClass: 'sgc-bandeja-wrap sgc-bandeja-standard',
     wrapClass: 'table-responsive',
-    tableClass: 'table table-sm table-hover table-bordered mb-0 align-middle',
+    tableClass: 'table table-sm table-hover table-bordered req-list-table mb-0 align-middle',
   });
 
   ensureCuadroChrome(shell, {
@@ -621,7 +651,7 @@ export function renderCuadroComparativoView() {
   const statsHtml = renderCuadroStatsHtml(buildCuadroStats([]), 'cuadroCompStats');
   return `
     <div class="container-fluid actos-bandeja-page">
-      <style>${bandejaTableStyles()}${actosBandejaStyles()}</style>
+      <style>${bandejaTableStyles()}${actosBandejaStyles()}${cuadroBandejaColumnStyles()}</style>
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 class="mb-1"><i class="bi ${esc(icon)}"></i> ${esc(title)}</h3>
