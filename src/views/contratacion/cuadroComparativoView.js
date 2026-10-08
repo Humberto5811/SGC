@@ -461,6 +461,16 @@ async function openTrazabilidadCuadro(solicitudId) {
   await showTrazabilidadModal(reqId);
 }
 
+/** RC8.17.8H6-D10-B1 — tooltip centro (texto completo sin ensanchar columna). */
+function resolveCentroTooltipCuadro(row = {}) {
+  const raw = row.centros_texto || row.centro
+    || (Array.isArray(row.requerimientos)
+      ? row.requerimientos.map((r) => r?.centro).filter(Boolean).join(', ')
+      : '');
+  const t = String(raw || '').trim();
+  return t || '—';
+}
+
 /** RC8.17.8H6-D10-B — columnas bandeja + ERV canónico (Etapa/Estado/Responsable). */
 function buildCuadroTheadHtml() {
   return `<tr>
@@ -478,46 +488,112 @@ function buildCuadroTheadHtml() {
 
 function buildCuadroRowHtml(c) {
   const invLabel = c.invitacion_label || (c.nro_invitacion != null ? `Inv. ${c.nro_invitacion}` : '—');
+  const denom = String(c.denominacion || '');
+  const cotLabel = formatCantidadCotizacionesCuadro(c, esc);
+  const centroTip = resolveCentroTooltipCuadro(c);
   // Multi-REQ: enrichEstadoResponsableForBandeja usa requerimiento_id (primer REQ de la SC).
   // D10-B no redefine esa regla; ver auditoría Obs. 15.
   return `
     <tr data-row-id="${c.solicitud_id}" data-invitacion-id="${esc(c.invitacion_id ?? '')}"
       data-nro-invitacion="${esc(c.nro_invitacion ?? '')}">
       <td class="cc-col-solicitud">
-        <strong>${esc(c.solicitud_codigo)}</strong>
-        <div class="small text-muted">${esc((c.denominacion || '').slice(0, 48))}</div>
+        <strong class="cc-bandeja-truncate d-block" title="${esc(c.solicitud_codigo || '')}">${esc(c.solicitud_codigo)}</strong>
+        <div class="small text-muted cc-bandeja-truncate" title="${esc(denom)}">${esc(denom.slice(0, 48))}${denom.length > 48 ? '…' : ''}</div>
       </td>
-      <td class="cc-col-inv text-center small fw-semibold text-primary">${esc(invLabel)}</td>
+      <td class="cc-col-inv text-center small fw-semibold text-primary" title="${esc(invLabel)}">${esc(invLabel)}</td>
       <td class="cc-col-req">${formatRequerimientosCuadro(c, esc)}</td>
-      <td class="cc-col-centro small">${formatCentroCuadro(c, esc)}</td>
-      <td class="cc-col-cot text-center small">${formatCantidadCotizacionesCuadro(c, esc)}</td>
+      <td class="cc-col-centro small" title="${esc(centroTip)}">${formatCentroCuadro(c, esc)}</td>
+      <td class="cc-col-cot text-center small cc-bandeja-truncate" title="${esc(cotLabel.replace(/<[^>]+>/g, ''))}">${cotLabel}</td>
       <td class="req-col-etapa">${renderBandejaCanonicoEtapaCell(c)}</td>
       <td class="req-col-estado-cell">${renderBandejaCanonicoEstadoCell(c)}</td>
       <td class="req-col-resp small">${renderBandejaCanonicoResponsableCell(c)}</td>
       <td class="cc-col-ver text-center">
-        <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp"
+        <button type="button" class="btn btn-sm btn-outline-primary cc-ver-exp cc-ver-btn"
           data-id="${esc(c.solicitud_id)}"
           data-nro-invitacion="${esc(c.nro_invitacion ?? '')}"
           title="Ver expediente">
-          <i class="bi bi-eye"></i> Ver
+          <i class="bi bi-eye" aria-hidden="true"></i><span class="visually-hidden"> Ver</span>
         </button>
       </td>
     </tr>`;
 }
 
+/** RC8.17.8H6-D10-B1 — bandeja compacta 9 cols, sin scroll horizontal en viewport típico con sidebar. */
 function cuadroBandejaColumnStyles() {
   return `
     ${bandejaExpedienteStandardStyles()}
-    #cuadroCompWrap .req-list-table { min-width: 960px; }
-    #cuadroCompWrap .cc-col-solicitud { max-width: 140px; }
-    #cuadroCompWrap .cc-col-inv { width: 72px; max-width: 80px; white-space: nowrap; }
-    #cuadroCompWrap .cc-col-req { max-width: 120px; }
-    #cuadroCompWrap .cc-col-centro { max-width: 100px; }
-    #cuadroCompWrap .cc-col-cot { width: 88px; max-width: 96px; }
-    #cuadroCompWrap .cc-col-ver { width: 64px; }
+    #cuadroCompOuter .table-responsive { overflow-x: auto; }
+    #cuadroCompWrap .req-list-table {
+      table-layout: fixed;
+      width: 100%;
+      min-width: 0;
+    }
+    #cuadroCompWrap .req-list-table th,
+    #cuadroCompWrap .req-list-table td {
+      padding: 0.28rem 0.35rem;
+      font-size: 0.78rem;
+      line-height: 1.22;
+      overflow: hidden;
+      vertical-align: middle;
+    }
+    #cuadroCompWrap .req-list-table tbody tr {
+      height: auto;
+      min-height: 34px;
+      max-height: none;
+    }
+    #cuadroCompWrap .cc-bandeja-truncate {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    /* Anchos 9 cols: 15+7+12+7+10+13+13+18+5 = 100% (Centro 7%; ERV 44%) */
+    #cuadroCompWrap .cc-col-solicitud { width: 15%; }
+    #cuadroCompWrap .cc-col-inv { width: 7%; white-space: nowrap; }
+    #cuadroCompWrap .cc-col-req { width: 12%; font-size: 0.74rem; line-height: 1.2; }
+    #cuadroCompWrap .cc-col-req .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+    #cuadroCompWrap .cc-col-centro {
+      width: 7%;
+      font-size: 0.72rem;
+      line-height: 1.15;
+    }
+    #cuadroCompWrap .cc-col-centro .small,
+    #cuadroCompWrap .cc-col-centro .req-centro-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: block;
+      max-width: 100%;
+    }
+    #cuadroCompWrap .cc-col-cot { width: 10%; font-size: 0.72rem; line-height: 1.15; }
+    #cuadroCompWrap .req-col-etapa { width: 13%; }
+    #cuadroCompWrap .req-col-estado-cell { width: 13%; }
+    #cuadroCompWrap .req-col-resp { width: 18%; }
+    #cuadroCompWrap .cc-col-ver { width: 5%; min-width: 2.25rem; }
+    #cuadroCompWrap .cc-ver-btn { padding: 0.15rem 0.35rem; line-height: 1; }
     #cuadroCompWrap .sgc-etapa-badge,
     #cuadroCompWrap .sgc-estado-badge,
-    #cuadroCompWrap .sgc-responsable-badge { max-width: 100%; }
+    #cuadroCompWrap .sgc-responsable-badge {
+      max-width: 100%;
+      min-height: 22px;
+      max-height: 24px;
+    }
+    #cuadroCompWrap .sgc-etapa-badge__text,
+    #cuadroCompWrap .sgc-estado-badge__text,
+    #cuadroCompWrap .sgc-responsable-badge__text {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: bottom;
+    }
+    @media (max-width: 991.98px) {
+      #cuadroCompWrap .req-list-table { min-width: 720px; }
+    }
+    @media (max-width: 767.98px) {
+      #cuadroCompWrap .req-list-table { min-width: 640px; }
+    }
   `;
 }
 

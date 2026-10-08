@@ -62,4 +62,38 @@ ok(/enrichEstadoResponsableForBandeja\(result/.test(bandejaSrc), 'D — enrich E
 // Documentación multi-REQ
 ok(/Multi-REQ|primer REQ|requerimiento_id/.test(viewSrc), 'Multi-REQ documentado en vista');
 
+// D10-B1 — layout compacto bandeja (Obs. 16)
+ok(/D10-B1|cuadroBandejaColumnStyles/.test(viewSrc), 'B1 — estilos bandeja compacta documentados');
+ok(/#cuadroCompWrap \.req-list-table[\s\S]*table-layout:\s*fixed/.test(viewSrc),
+  'B1 — table-layout fixed en bandeja cuadro');
+ok(/#cuadroCompWrap \.req-list-table[\s\S]*min-width:\s*0/.test(viewSrc),
+  'B1 — sin min-width forzado en desktop');
+ok(/cc-col-centro[\s\S]*width:\s*7%/.test(viewSrc), 'B1 — columna Centro acotada (~7%)');
+ok(/cc-bandeja-truncate|resolveCentroTooltipCuadro/.test(viewSrc),
+  'B1 — truncamiento / tooltip centro o celdas');
+ok(/buildCuadroRowHtml[\s\S]*cc-col-centro[\s\S]*title=/.test(viewSrc),
+  'B1 — title en celda Centro para texto completo');
+
+const cuadroColWidthRe = /#cuadroCompWrap\s+\.(cc-col-[\w-]+|req-col-[\w-]+)\s*\{[^}]*?\bwidth:\s*([\d.]+)%/g;
+const colWidths = [];
+let colMatch;
+while ((colMatch = cuadroColWidthRe.exec(viewSrc)) !== null) {
+  colWidths.push(Number(colMatch[2]));
+}
+const widthSum = colWidths.reduce((a, b) => a + b, 0);
+ok(colWidths.length === 9 && Math.abs(widthSum - 100) < 0.01,
+  `B1 — 9 columnas suman 100% (suma=${widthSum}, n=${colWidths.length})`);
+
+const etapaBadgeSrc = fs.readFileSync(
+  path.join(__dirname, '../src/ui/workflow/EtapaBadge.js'), 'utf8',
+);
+const estadoBadgeSrc = fs.readFileSync(
+  path.join(__dirname, '../src/ui/workflow/EstadoBadge.js'), 'utf8',
+);
+const respBadgeSrc = fs.readFileSync(
+  path.join(__dirname, '../src/ui/workflow/ResponsableBadge.js'), 'utf8',
+);
+ok(/title=/.test(etapaBadgeSrc) && /title=/.test(estadoBadgeSrc) && /title=/.test(respBadgeSrc),
+  'B1 — badges ERV canónicos exponen title para texto truncado');
+
 console.log('\n✅ RC8.17.8H6-C3-D10-B tests OK (estático, sin BD)\n');
