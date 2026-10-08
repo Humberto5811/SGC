@@ -52,10 +52,10 @@ async function request(path, options = {}) {
         || `Error ${res.status}`;
       if (res.status === 413) {
         message = 'La solicitud supera el tamaño permitido. Revise los archivos adjuntos.';
-      } else if (res.status >= 500 && !error.message && !error.error) {
-        message = 'Error interno del servidor.';
-      } else if (res.status === 400 && (error.message || error.error)) {
-        message = error.message || error.error;
+      } else if (res.status >= 500) {
+        if (!error.message && !error.error) message = 'Error interno del servidor.';
+      } else if (res.status >= 400 && res.status < 500) {
+        message = error.message || error.error || message;
       }
       const err = new Error(message);
       err.status = res.status;

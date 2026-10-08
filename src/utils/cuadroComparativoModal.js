@@ -122,6 +122,17 @@ function esEstadoSinDescargaDinamica(cuadro) {
     || !!cuadro?.tiene_pdf_firmado_dec;
 }
 
+/** Estados que admiten generar y persistir PDF oficial (alineado con guardarPdfCuadro). */
+const ESTADOS_PERMITE_GENERAR_ANEXO8A = Object.freeze([
+  'ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR',
+  'OBSERVADO', 'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC',
+]);
+
+function cuadroPermiteGenerarAnexo8AOficial(cuadro) {
+  const e = String(cuadro?.estado || '').toUpperCase();
+  return !!cuadro?.id && ESTADOS_PERMITE_GENERAR_ANEXO8A.includes(e);
+}
+
 function esFlujoFirmasCompleto(cuadro) {
   return !!(cuadro?.tiene_pdf_firmado || cuadro?.firmado_nombre)
     && !!(cuadro?.tiene_pdf_firmado_dec || cuadro?.firmado_dec_nombre);
@@ -763,7 +774,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
 
     setDis('#ccBtnGuardar', readonly || derivado);
     setDis('#ccBtnAdjudicar', readonly || derivado || e === 'GENERADO' || e === 'GENERADO_PRELIMINAR');
-    setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || !cuadro?.id || sinDinamica);
+    setDis('#ccBtnGenerar8a', derivado || e === 'FIRMADO' || !cuadro?.id || sinDinamica
+      || !cuadroPermiteGenerarAnexo8AOficial(cuadro));
     setDis('#ccBtnPreview8a', derivado || sinDinamica);
     setDis('#ccBtnDescargar8a', derivado || sinDinamica);
     const puedeDerivarCoord = !!cuadro?.id && !derivado && [
@@ -1481,6 +1493,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
     if (!cuadro?.id) return alert('No hay cuadro persistido');
     if (String(cuadro.estado || '').toUpperCase() === 'FIRMADO') {
       return alert('Cuadro firmado: no se puede regenerar sin anular la versión.');
+    }
+    if (!cuadroPermiteGenerarAnexo8AOficial(cuadro)) {
+      return alert('Debe adjudicar el cuadro antes de generar y guardar el Anexo 8-A oficial.');
     }
     const btn = el.querySelector('#ccBtnGenerar8a');
     btn.disabled = true;

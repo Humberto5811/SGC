@@ -1588,19 +1588,46 @@ export async function getDetalleCuadro(solicitudId, opts = {}) {
   return obtenerDetalleCuadro(solicitudId, opts);
 }
 
+const ESTADOS_ANEXO8A_PDF_DATOS = Object.freeze([
+  'ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO',
+  'OBSERVADO', 'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC',
+]);
+
+const ESTADOS_ANEXO8A_PDF_GUARDAR = Object.freeze([
+  'ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR',
+  'OBSERVADO', 'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC',
+]);
+
+function throwPdfCuadroBusinessError(message, { status = 409, code = 'PDF_ESTADO_NO_PERMITIDO' } = {}) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  throw err;
+}
+
+function mensajeEstadoNoPermitePdfOficial(estado) {
+  if (estado === 'CUADRO_BORRADOR' || estado === 'EN_ELABORACION') {
+    return 'El cuadro está en borrador o elaboración: el Anexo 8-A/8-B oficial requiere adjudicar el cuadro primero.';
+  }
+  return `El cuadro en estado ${estado} no admite datos oficiales del Anexo 8-A/8-B. Requiere cuadro adjudicado o generado.`;
+}
+
 /**
  * Payload para Anexo 8A: solo datos persistidos (no reconstruye desde UI).
  */
 export async function obtenerDatosPdfCuadro(cuadroId) {
   const id = parseInt(cuadroId, 10);
-  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  if (!Number.isFinite(id)) {
+    throwPdfCuadroBusinessError('Cuadro inválido', { status: 400, code: 'CUADRO_ID_INVALIDO' });
+  }
   const { rows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
-  if (!rows.length) throw new Error('Cuadro no encontrado');
+  if (!rows.length) {
+    throwPdfCuadroBusinessError('Cuadro no encontrado', { status: 404, code: 'CUADRO_NO_ENCONTRADO' });
+  }
   const row = rows[0];
   const estado = String(row.estado || '').toUpperCase();
-  if (!['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR', 'FIRMADO',
-    'OBSERVADO', 'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC'].includes(estado)) {
-    throw new Error('El Anexo 8A/8B requiere cuadro ADJUDICADO o GENERADO');
+  if (!ESTADOS_ANEXO8A_PDF_DATOS.includes(estado)) {
+    throwPdfCuadroBusinessError(mensajeEstadoNoPermitePdfOficial(estado));
   }
   const sc = await loadSolicitudRow(row.solicitud_id);
   assertTipoCuadroHabilitado(sc.tipo);
@@ -1659,9 +1686,13 @@ export async function obtenerDatosPdfCuadro(cuadroId) {
  */
 export async function guardarPdfCuadro(cuadroId, payload = {}, usuario = '') {
   const id = parseInt(cuadroId, 10);
-  if (!Number.isFinite(id)) throw new Error('Cuadro inválido');
+  if (!Number.isFinite(id)) {
+    throwPdfCuadroBusinessError('Cuadro inválido', { status: 400, code: 'CUADRO_ID_INVALIDO' });
+  }
   const { rows: curRows } = await query('SELECT * FROM cuadros_comparativos WHERE id = $1', [id]);
-  if (!curRows.length) throw new Error('Cuadro no encontrado');
+  if (!curRows.length) {
+    throwPdfCuadroBusinessError('Cuadro no encontrado', { status: 404, code: 'CUADRO_NO_ENCONTRADO' });
+  }
   const cur = curRows[0];
   const estado = String(cur.estado || '').toUpperCase();
   // OD34 — no regenerar ni sobrescribir PDF si ya hay firma o el flujo avanzó
@@ -1681,13 +1712,18 @@ export async function guardarPdfCuadro(cuadroId, payload = {}, usuario = '') {
     err.status = 409;
     throw err;
   }
-  if (!['ADJUDICADO', 'GENERADO', 'GENERADO_PRELIMINAR',
-    'OBSERVADO', 'OBSERVADO_COORDINADOR', 'OBSERVADO_DEC'].includes(estado)) {
-    throw new Error('Debe adjudicar el cuadro antes de generar el Anexo 8A');
+  if (!ESTADOS_ANEXO8A_PDF_GUARDAR.includes(estado)) {
+    throwPdfCuadroBusinessError(
+      estado === 'CUADRO_BORRADOR' || estado === 'EN_ELABORACION'
+        ? 'El cuadro está en borrador: no se puede guardar el PDF oficial del Anexo 8-A hasta adjudicarlo.'
+        : 'Debe adjudicar el cuadro antes de generar el Anexo 8A',
+    );
   }
 
   const base64 = payload.pdf_contenido || payload.base64 || payload.contenido_base64;
-  if (!base64) throw new Error('PDF vacío');
+  if (!base64) {
+    throwPdfCuadroBusinessError('PDF vacío', { status: 422, code: 'PDF_VACIO' });
+  }
   const nombre = String(payload.pdf_nombre || payload.nombre || 'Anexo_08A.pdf').slice(0, 300);
   const user = String(usuario || '').slice(0, 150);
   const datos = parseJson(cur.datos_json, {});
