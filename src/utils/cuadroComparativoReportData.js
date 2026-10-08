@@ -106,6 +106,90 @@ function naInfo(v, isSegunda = false) {
   return s;
 }
 
+/** Estados que admiten previsualización local sin endpoint /pdf-data (D10-E2). */
+export const ESTADOS_ANEXO8A_PREVIEW_BORRADOR = Object.freeze([
+  'CUADRO_BORRADOR',
+  'EN_ELABORACION',
+]);
+
+export function isEstadoPreviewBorradorAnexo8A(cuadroOrEstado) {
+  const estado = typeof cuadroOrEstado === 'string'
+    ? cuadroOrEstado
+    : String(cuadroOrEstado?.estado || cuadroOrEstado || '').toUpperCase();
+  return ESTADOS_ANEXO8A_PREVIEW_BORRADOR.includes(estado);
+}
+
+export function isPreviewBorradorAnexo8A(persistido = {}) {
+  if (persistido.preview_modo === 'BORRADOR' || persistido.borrador_no_oficial === true) return true;
+  const cuadro = persistido.cuadro || persistido;
+  return isEstadoPreviewBorradorAnexo8A(cuadro);
+}
+
+/**
+ * Validación relajada: previsualización borrador (sin persistir PDF ni exigir adjudicación completa).
+ */
+/**
+ * Línea de proveedor para PDF borrador (solo selección por ítem; ignora resumen oficial).
+ */
+export function buildProveedorLineaPreviewBorrador(itemsRaw = [], primera = []) {
+  const ids = [...new Set(
+    itemsRaw.map((it) => it.proveedor_adjudicado_id).filter((id) => id != null && id !== ''),
+  )];
+  if (!ids.length) return 'Pendiente de adjudicación';
+  if (ids.length > 1) {
+    return 'Proveedor propuesto (no adjudicado): Varios (selección parcial por ítem)';
+  }
+  const pid = Number(ids[0]);
+  const fuente = primera.find((p) => Number(p.proveedor_id) === pid);
+  const it = itemsRaw.find((i) => Number(i.proveedor_adjudicado_id) === pid);
+  const of = (it?.ofertas || []).find((o) => Number(o.proveedor_id) === pid);
+  const nombre = optField(fuente?.razon_social || of?.razon_social);
+  const ruc = optField(fuente?.ruc || of?.ruc);
+  if (!nombre || nombre === '—') {
+    return 'Proveedor propuesto (no adjudicado): (selección parcial sin razón social)';
+  }
+  return `Proveedor propuesto (no adjudicado): ${nombre} — RUC ${ruc || '—'}`;
+}
+
+function buildResultadoPreviewBorrador(itemsRaw, primera, adj, cuadro) {
+  return {
+    titulo_seccion: 'Resultado preliminar de la evaluación',
+    proveedor_preliminar_linea: buildProveedorLineaPreviewBorrador(itemsRaw, primera),
+    proveedor_adjudicado: '—',
+    ruc_adjudicado: '—',
+    valor_adjudicado: '—',
+    valor_adjudicado_num: null,
+    criterio: optField(adj.criterio_label || adj.criterio_seleccion || cuadro.criterio_seleccion),
+    metodologia: optField(
+      adj.metodologia_texto || adj.criterio_label || adj.criterio_seleccion || cuadro.criterio_seleccion,
+    ),
+    sustento: optField(adj.sustento_decision || cuadro.sustento_decision),
+    modalidad: optField(adj.modalidad || cuadro.modalidad_adjudicacion, 'POR_ITEM'),
+    segunda_fuente: 'NO APLICA',
+    numeros_orden: 'NO APLICA',
+    resumen_por_proveedor: [],
+    resumen_centro_clasificador: [],
+  };
+}
+
+export function validateCuadroParaAnexo8APreview(cuadroPersistido = {}) {
+  const faltantes = [];
+  const datos = cuadroPersistido.datos_json || cuadroPersistido.matriz
+    || cuadroPersistido.cuadro?.datos_json || {};
+  const items = Array.isArray(datos.items) ? datos.items : [];
+  const primera = Array.isArray(datos.primera_fuente) ? datos.primera_fuente : [];
+  const proveedores = Array.isArray(datos.resumen_proveedores) ? datos.resumen_proveedores : [];
+  if (!items.length && !primera.length && !proveedores.length) {
+    faltantes.push('No hay ítems ni cotizaciones en la matriz para previsualizar');
+  }
+  return {
+    ok: faltantes.length === 0,
+    faltantes,
+    puede_generar: false,
+    modo: 'BORRADOR',
+  };
+}
+
 /**
  * Valida que el cuadro persistido permita generación final del Anexo 8A.
  */
@@ -279,12 +363,20 @@ export function buildCuadroComparativoReportData(persistido = {}) {
   const primera = buildPrimeraFuentes(datos);
   const segunda = buildSegundaFuentes(datos);
 
-  const validation = validateCuadroParaAnexo8A({
-    cuadro,
-    datos_json: datos,
-    adjudicacion: adj,
-    solicitud_codigo: datos.solicitud?.codigo || expediente.solicitud_codigo,
-  });
+  const previewBorrador = isPreviewBorradorAnexo8A(persistido);
+  const validation = previewBorrador
+    ? validateCuadroParaAnexo8APreview({
+      cuadro,
+      datos_json: datos,
+      adjudicacion: adj,
+      solicitud_codigo: datos.solicitud?.codigo || expediente.solicitud_codigo,
+    })
+    : validateCuadroParaAnexo8A({
+      cuadro,
+      datos_json: datos,
+      adjudicacion: adj,
+      solicitud_codigo: datos.solicitud?.codigo || expediente.solicitud_codigo,
+    });
 
   const reqs = (datos.requerimientos || expediente.requerimientos || [])
     .map((r) => safeStr(r.codigo))
@@ -440,8 +532,10 @@ export function buildCuadroComparativoReportData(persistido = {}) {
     segundas: segunda.map((f) => aaValorFuente(f, key, true)),
   }));
 
-  const ganadorPrincipal = (adj.resumen_proveedores || [])[0]
-    || primera.find((p) => Number(p.proveedor_id) === Number(cuadro.proveedor_ganador_id || adj.proveedor_ganador_id));
+  const ganadorPrincipal = previewBorrador
+    ? null
+    : (adj.resumen_proveedores || [])[0]
+      || primera.find((p) => Number(p.proveedor_id) === Number(cuadro.proveedor_ganador_id || adj.proveedor_ganador_id));
 
   const numerosOrden = segunda
     .map((f) => f.referencia)
@@ -492,61 +586,70 @@ export function buildCuadroComparativoReportData(persistido = {}) {
     filas,
     info_adicional,
     acciones_administrativas,
-    resultado: {
-      proveedor_adjudicado: ganadorPrincipal
-        ? optField(ganadorPrincipal.razon_social)
-        : '—',
-      ruc_adjudicado: optField(ganadorPrincipal?.ruc),
-      valor_adjudicado: fmtMoney(adj.valor_adjudicado ?? cuadro.valor_adjudicado),
-      valor_adjudicado_num: adj.valor_adjudicado ?? cuadro.valor_adjudicado ?? null,
-      criterio: optField(adj.criterio_label || adj.criterio_seleccion || cuadro.criterio_seleccion),
-      metodologia: optField(
-        adj.metodologia_texto || adj.criterio_label || adj.criterio_seleccion || cuadro.criterio_seleccion,
-      ),
-      sustento: optField(adj.sustento_decision || cuadro.sustento_decision),
-      modalidad: optField(adj.modalidad || cuadro.modalidad_adjudicacion, 'POR_ITEM'),
-      segunda_fuente: segunda.length
-        ? segunda.map((f) => `${f.referencia !== '—' ? f.referencia : f.denominacion} (${f.tipo_fuente_label})`).join('; ')
-        : 'NO APLICA',
-      numeros_orden: numerosOrden.length ? numerosOrden.join(', ') : 'NO APLICA',
-      resumen_por_proveedor: (adj.resumen_proveedores || []).map((p) => ({
-        razon_social: optField(p.razon_social),
-        ruc: optField(p.ruc),
-        items: p.items,
-        valor: fmtMoney(p.valor_adjudicado),
-      })),
-      resumen_centro_clasificador: (() => {
-        const reqById = new Map();
-        const reqByCode = new Map();
-        (datos.requerimientos || []).forEach((r) => {
-          if (r?.id != null) reqById.set(Number(r.id), r);
-          if (r?.codigo) reqByCode.set(String(r.codigo).toUpperCase(), r);
-        });
-        const buckets = new Map();
-        itemsRaw.forEach((it) => {
-          const req = (it.requerimiento_id != null && reqById.get(Number(it.requerimiento_id)))
-            || (it.requerimiento_codigo && reqByCode.get(String(it.requerimiento_codigo).toUpperCase()))
-            || null;
-          const centro = safeStr(
-            it.centro || req?.centro || req?.centro_nombre || req?.centro_display || '—',
-          ) || '—';
-          const clasificador = safeStr(
-            it.clasificador || it.clasificador_gasto || req?.clasificador || req?.clasificador_gasto || '—',
-          ) || '—';
-          const key = `${centro}|${clasificador}`;
-          const vt = Number(it.valor_adjudicado_item);
-          const prev = buckets.get(key) || { centro, clasificador, valor_num: 0 };
-          prev.valor_num += Number.isFinite(vt) ? vt : 0;
-          buckets.set(key, prev);
-        });
-        return [...buckets.values()].map((b) => ({
-          centro: b.centro,
-          clasificador: b.clasificador,
-          valor: fmtMoney(b.valor_num),
-          valor_num: b.valor_num,
-        }));
-      })(),
-    },
+    resultado: previewBorrador
+      ? {
+        ...buildResultadoPreviewBorrador(itemsRaw, primera, adj, cuadro),
+        segunda_fuente: segunda.length
+          ? segunda.map((f) => `${f.referencia !== '—' ? f.referencia : f.denominacion} (${f.tipo_fuente_label})`).join('; ')
+          : 'NO APLICA',
+        numeros_orden: numerosOrden.length ? numerosOrden.join(', ') : 'NO APLICA',
+      }
+      : {
+        titulo_seccion: 'Resultado de la adjudicación',
+        proveedor_adjudicado: ganadorPrincipal
+          ? optField(ganadorPrincipal.razon_social)
+          : '—',
+        ruc_adjudicado: optField(ganadorPrincipal?.ruc),
+        valor_adjudicado: fmtMoney(adj.valor_adjudicado ?? cuadro.valor_adjudicado),
+        valor_adjudicado_num: adj.valor_adjudicado ?? cuadro.valor_adjudicado ?? null,
+        criterio: optField(adj.criterio_label || adj.criterio_seleccion || cuadro.criterio_seleccion),
+        metodologia: optField(
+          adj.metodologia_texto || adj.criterio_label || adj.criterio_seleccion || cuadro.criterio_seleccion,
+        ),
+        sustento: optField(adj.sustento_decision || cuadro.sustento_decision),
+        modalidad: optField(adj.modalidad || cuadro.modalidad_adjudicacion, 'POR_ITEM'),
+        segunda_fuente: segunda.length
+          ? segunda.map((f) => `${f.referencia !== '—' ? f.referencia : f.denominacion} (${f.tipo_fuente_label})`).join('; ')
+          : 'NO APLICA',
+        numeros_orden: numerosOrden.length ? numerosOrden.join(', ') : 'NO APLICA',
+        resumen_por_proveedor: (adj.resumen_proveedores || []).map((p) => ({
+          razon_social: optField(p.razon_social),
+          ruc: optField(p.ruc),
+          items: p.items,
+          valor: fmtMoney(p.valor_adjudicado),
+        })),
+        resumen_centro_clasificador: (() => {
+          const reqById = new Map();
+          const reqByCode = new Map();
+          (datos.requerimientos || []).forEach((r) => {
+            if (r?.id != null) reqById.set(Number(r.id), r);
+            if (r?.codigo) reqByCode.set(String(r.codigo).toUpperCase(), r);
+          });
+          const buckets = new Map();
+          itemsRaw.forEach((it) => {
+            const req = (it.requerimiento_id != null && reqById.get(Number(it.requerimiento_id)))
+              || (it.requerimiento_codigo && reqByCode.get(String(it.requerimiento_codigo).toUpperCase()))
+              || null;
+            const centro = safeStr(
+              it.centro || req?.centro || req?.centro_nombre || req?.centro_display || '—',
+            ) || '—';
+            const clasificador = safeStr(
+              it.clasificador || it.clasificador_gasto || req?.clasificador || req?.clasificador_gasto || '—',
+            ) || '—';
+            const key = `${centro}|${clasificador}`;
+            const vt = Number(it.valor_adjudicado_item);
+            const prev = buckets.get(key) || { centro, clasificador, valor_num: 0 };
+            prev.valor_num += Number.isFinite(vt) ? vt : 0;
+            buckets.set(key, prev);
+          });
+          return [...buckets.values()].map((b) => ({
+            centro: b.centro,
+            clasificador: b.clasificador,
+            valor: fmtMoney(b.valor_num),
+            valor_num: b.valor_num,
+          }));
+        })(),
+      },
     firmas: {
       elaborado_por: { cargo: 'Analista', nombre: optField(persistido.elaborado_por || adj.usuario_adjudicacion || cuadro.usuario_adjudicacion, '') },
       revisado_por: { cargo: 'Coordinador', nombre: optField(persistido.revisado_por, '') },
@@ -560,7 +663,9 @@ export function buildCuadroComparativoReportData(persistido = {}) {
       // Una sola tabla institucional (todas las cotizaciones en la misma hoja)
       proveedores_por_bloque: Math.max(primera.length, 1),
       formato: 'ANEXO_08A_INSTITUCIONAL_V2',
-      borrador: false,
+      borrador: previewBorrador,
+      nro_invitacion: datos.meta?.nro_invitacion ?? cuadro.nro_invitacion ?? null,
+      pdf_modo: previewBorrador ? 'BORRADOR' : (datos.meta?.pdf_modo || 'OFICIAL'),
     },
   };
 

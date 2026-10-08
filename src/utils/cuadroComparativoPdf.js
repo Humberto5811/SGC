@@ -8,8 +8,12 @@ import {
   ANEXO_8A,
   ANEXO_8B,
   buildCuadroComparativoReportData,
+  isPreviewBorradorAnexo8A,
   validateCuadroParaAnexo8A,
 } from './cuadroComparativoReportData.js';
+
+/** Marca de agua visible en previsualizaciones no oficiales (D10-E2). */
+export const ANEXO8A_BORRADOR_WATERMARK = 'BORRADOR — NO OFICIAL';
 
 function ensureJsPdf() {
   if (!window.jspdf?.jsPDF) throw new Error('Biblioteca PDF no disponible. Recargue la página.');
@@ -52,12 +56,42 @@ function drawHeader(doc, report, pageW, margin) {
     `Solicitud de Cotización: ${c.solicitud_codigo}`,
     `Fecha: ${c.fecha}    Tipo: ${c.tipo}`,
   ];
+  const nroInv = report.meta?.nro_invitacion ?? report.cabecera?.nro_invitacion;
+  if (nroInv != null && nroInv !== '') {
+    lines.push(`Invitación N.° ${nroInv} (agrupación operativa del cuadro)`);
+  }
   lines.forEach((ln) => {
     const wrapped = doc.splitTextToSize(ln, pageW - margin * 2);
     doc.text(wrapped, margin, y);
     y += wrapped.length * 9 + 1;
   });
   return y + 4;
+}
+
+/** Marca de agua en margen (previsualización borrador; no tapa cabecera ni tabla). */
+export function drawAnexo8ABorradorWatermark(doc, pageW, pageH) {
+  const bandY = pageH - 38;
+  doc.setDrawColor(220, 140, 140);
+  doc.setLineWidth(0.4);
+  doc.line(18, bandY - 10, pageW - 18, bandY - 10);
+  doc.setFont(undefined, 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(168, 36, 36);
+  doc.text(ANEXO8A_BORRADOR_WATERMARK, pageW / 2, bandY, { align: 'center' });
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(190, 120, 120);
+  doc.text(ANEXO8A_BORRADOR_WATERMARK, pageW - 22, 20, { align: 'right', angle: 90 });
+}
+
+export function stampAnexo8ABorradorWatermarkAllPages(doc) {
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const total = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= total; p += 1) {
+    doc.setPage(p);
+    drawAnexo8ABorradorWatermark(doc, pageW, pageH);
+  }
 }
 
 function textoCabeceraCotizacionPdf(f) {
@@ -293,15 +327,25 @@ function drawResultadoYFirmas(doc, report, startY, pageW, pageH, margin) {
   doc.setFontSize(9);
   doc.setFont(undefined, 'bold');
   doc.setTextColor(...COLOR_HEAD);
-  doc.text('Resultado de la adjudicación', margin, y);
+  const esBorradorPreview = report.meta?.borrador === true;
+  const r = report.resultado || {};
+  const tituloResultado = esBorradorPreview
+    ? (r.titulo_seccion || 'Resultado preliminar de la evaluación')
+    : (r.titulo_seccion || 'Resultado de la adjudicación');
+  doc.text(tituloResultado, margin, y);
   y += 12;
   doc.setFont(undefined, 'normal');
   doc.setFontSize(8);
   doc.setTextColor(40);
-  const r = report.resultado || {};
+  const proveedorLine = esBorradorPreview
+    ? (r.proveedor_preliminar_linea || 'Pendiente de adjudicación')
+    : `Proveedor ganador: ${r.proveedor_adjudicado || '—'} — RUC ${r.ruc_adjudicado || '—'}`;
+  const valorLine = esBorradorPreview
+    ? 'Valor adjudicado total: — (preliminar, no oficial)'
+    : `Valor adjudicado total: ${String(r.valor_adjudicado || '').startsWith('S/') ? r.valor_adjudicado : `S/ ${r.valor_adjudicado || '—'}`}`;
   const resLines = [
-    `Proveedor ganador: ${r.proveedor_adjudicado || '—'} — RUC ${r.ruc_adjudicado || '—'}`,
-    `Valor adjudicado total: ${String(r.valor_adjudicado || '').startsWith('S/') ? r.valor_adjudicado : `S/ ${r.valor_adjudicado || '—'}`}`,
+    proveedorLine,
+    valorLine,
     `Metodología / criterio: ${r.metodologia || r.criterio || '—'}`,
     `Sustento: ${r.sustento || '—'}`,
   ];
@@ -311,7 +355,9 @@ function drawResultadoYFirmas(doc, report, startY, pageW, pageH, margin) {
     y += w.length * 10 + 2;
   });
 
-  const resumen = Array.isArray(r.resumen_centro_clasificador) ? r.resumen_centro_clasificador : [];
+  const resumen = esBorradorPreview
+    ? []
+    : (Array.isArray(r.resumen_centro_clasificador) ? r.resumen_centro_clasificador : []);
   if (resumen.length) {
     y += 8;
     doc.setFont(undefined, 'bold');
@@ -375,10 +421,15 @@ function drawResultadoYFirmas(doc, report, startY, pageW, pageH, margin) {
  */
 export function generateAnexo8APdf(persistido = {}) {
   const report = buildCuadroComparativoReportData(persistido);
+  const esBorradorPreview = report.meta.borrador === true || isPreviewBorradorAnexo8A(persistido);
   if (!report.meta.validation.ok) {
     const codigo = report.anexo?.codigo || '08';
-    const err = new Error(`No se puede generar el Anexo ${codigo}: ${report.meta.validation.faltantes.join('; ')}`);
-    err.code = 'ANEXO8A_INCOMPLETO';
+    const err = new Error(
+      esBorradorPreview
+        ? `No se puede previsualizar el Anexo ${codigo}: ${report.meta.validation.faltantes.join('; ')}`
+        : `No se puede generar el Anexo ${codigo}: ${report.meta.validation.faltantes.join('; ')}`,
+    );
+    err.code = esBorradorPreview ? 'ANEXO8A_PREVIEW_VACIO' : 'ANEXO8A_INCOMPLETO';
     err.faltantes = report.meta.validation.faltantes;
     throw err;
   }
@@ -430,8 +481,13 @@ export function generateAnexo8APdf(persistido = {}) {
   const finalY = (doc.lastAutoTable?.finalY || 120) + 14;
   drawResultadoYFirmas(doc, report, finalY, pageW, pageH, margin);
 
+  if (esBorradorPreview) {
+    stampAnexo8ABorradorWatermarkAllPages(doc);
+  }
+
   const prefix = report.anexo?.filenamePrefix || ANEXO_8A.filenamePrefix;
-  const filename = `${prefix}_${String(report.cabecera.solicitud_codigo).replace(/\s+/g, '_')}_v${report.meta.version || 1}.pdf`;
+  const filenameSuffix = esBorradorPreview ? '_BORRADOR' : '';
+  const filename = `${prefix}_${String(report.cabecera.solicitud_codigo || 'cuadro').replace(/\s+/g, '_')}_v${report.meta.version || 1}${filenameSuffix}.pdf`;
   const blob = doc.output('blob');
   const dataUri = doc.output('datauristring');
   const base64 = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;

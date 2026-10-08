@@ -31,6 +31,7 @@ import {
   downloadBlobPersistido,
   assertBlobForObjectUrl,
 } from './cuadroComparativoPdf.js';
+import { isEstadoPreviewBorradorAnexo8A } from './cuadroComparativoReportData.js';
 import { triggerPdfUpload } from './validacionAnexo07aPdf.js';
 import { normalizeSegundaFuente, calcPrecioActualizado } from './cuadroComparativoFuentes.js';
 import {
@@ -1420,6 +1421,59 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
     return { entidad, logo_data_url };
   }
 
+  /** D10-E2 — datos desde matriz en pantalla (sin /pdf-data ni escrituras). */
+  async function buildPersistidoParaPreviewBorrador() {
+    if (!cuadro?.id) throw new Error('No hay cuadro persistido');
+    const datos_json = collectObservacionesFromDom(body, matriz);
+    const criterio = el.querySelector('#ccCriterio')?.value || '';
+    const sustento = el.querySelector('#ccSustento')?.value || '';
+    const nroInv = cuadro.nro_invitacion ?? matriz?.meta?.nro_invitacion ?? null;
+    datos_json.meta = {
+      ...(matriz?.meta || {}),
+      ...(datos_json.meta || {}),
+      nro_invitacion: nroInv,
+      pdf_modo: 'BORRADOR',
+      puede_pdf_oficial: false,
+    };
+    if (criterio || sustento || datos_json.adjudicacion) {
+      datos_json.adjudicacion = {
+        ...(matriz?.adjudicacion || {}),
+        ...(datos_json.adjudicacion || {}),
+        ...(criterio ? { criterio_seleccion: criterio } : {}),
+        ...(sustento ? { sustento_decision: sustento } : {}),
+      };
+    }
+    const inst = await loadInstitucional();
+    let elaborado = '';
+    try {
+      const u = JSON.parse(localStorage.getItem('currentUser') || 'null');
+      elaborado = [u?.apellidos, u?.nombres].filter(Boolean).join(' ').trim()
+        || u?.nombre || u?.username || '';
+    } catch (_) { /* noop */ }
+    const sol = datos_json.solicitud || matriz?.solicitud || {};
+    return {
+      cuadro,
+      datos_json,
+      matriz: datos_json,
+      adjudicacion: datos_json.adjudicacion || null,
+      expediente: {
+        solicitud_codigo: sol.codigo,
+        denominacion: sol.denominacion || sol.objeto,
+        area_usuaria: sol.area_usuaria || '',
+        cmn: sol.cmn || '',
+        requerimientos: datos_json.requerimientos || [],
+      },
+      solicitud_codigo: sol.codigo,
+      area_usuaria: sol.area_usuaria || '',
+      cmn: sol.cmn || '',
+      entidad: inst.entidad,
+      logo_data_url: inst.logo_data_url,
+      elaborado_por: elaborado,
+      borrador_no_oficial: true,
+      preview_modo: 'BORRADOR',
+    };
+  }
+
   async function buildPersistidoParaPdf() {
     if (!cuadro?.id) throw new Error('No hay cuadro persistido');
     const resp = await contratacionesService.getCuadroPdfData(cuadro.id);
@@ -1468,20 +1522,25 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
 
   el.querySelector('#ccBtnPreview8a').onclick = async () => {
     try {
-      const persistido = await buildPersistidoParaPdf();
-      persistido.borrador_no_oficial = false;
-      persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'OFICIAL', puede_pdf_oficial: true };
-      if (persistido.datos_json?.meta) {
-        persistido.datos_json.meta = {
-          ...persistido.datos_json.meta,
-          pdf_modo: 'OFICIAL',
-          puede_pdf_oficial: true,
-        };
-      }
-      const val = validateCuadroParaAnexo8A(persistido);
-      if (!val.ok) {
-        alert(`No se puede previsualizar:\n- ${val.faltantes.join('\n- ')}`);
-        return;
+      let persistido;
+      if (isEstadoPreviewBorradorAnexo8A(cuadro)) {
+        persistido = await buildPersistidoParaPreviewBorrador();
+      } else {
+        persistido = await buildPersistidoParaPdf();
+        persistido.borrador_no_oficial = false;
+        persistido.meta = { ...(persistido.meta || {}), pdf_modo: 'OFICIAL', puede_pdf_oficial: true };
+        if (persistido.datos_json?.meta) {
+          persistido.datos_json.meta = {
+            ...persistido.datos_json.meta,
+            pdf_modo: 'OFICIAL',
+            puede_pdf_oficial: true,
+          };
+        }
+        const val = validateCuadroParaAnexo8A(persistido);
+        if (!val.ok) {
+          alert(`No se puede previsualizar:\n- ${val.faltantes.join('\n- ')}`);
+          return;
+        }
       }
       previewAnexo8APdf(persistido);
     } catch (err) {
