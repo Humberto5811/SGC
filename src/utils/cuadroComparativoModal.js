@@ -717,6 +717,11 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
 
   const body = el.querySelector('#ccElaborarBody');
 
+  /** RC8.17.8H6-D10-D1 — editable matriz/SF (misma regla que syncUiLocks → rebind). */
+  function matrizSegundaFuenteEditable({ modoCoord, modoDec, derivado }) {
+    return !readonly && !derivado && !modoCoord && !modoDec;
+  }
+
   function syncUiLocks() {
     const user = currentUser();
     const modoCoord = isModoCoordinador8Uit(user, cuadro);
@@ -800,8 +805,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
       firmaHost.innerHTML = (modoCoord || modoDec) ? '' : renderPanelFirma(cuadro, matriz);
       if (!modoCoord && !modoDec) bindFirmaActions();
     }
-    bindSegundaFuente();
-    refreshMatrizHost(el, matriz, !readonly && !derivado && !modoCoord && !modoDec);
+    rebindMatrizSegundaFuente(matrizSegundaFuenteEditable({ modoCoord, modoDec, derivado }));
     const sustentoHost = el.querySelector('#ccPanelAdjudicacion');
     if (sustentoHost && (readonly || modoCoord || modoDec)) {
       sustentoHost.querySelectorAll('select, textarea, input').forEach((n) => { n.disabled = true; });
@@ -1143,16 +1147,29 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
     }
   }
 
-  function bindSegundaFuente() {
-    const editable = !readonly && !isDerivado(cuadro);
-    el.querySelector('#ccBtnAddSegundaFuente')?.addEventListener('click', async () => {
-      if (!editable) return;
-      const created = await showSegundaFuenteFormModal({ items: matriz.items || [] });
-      if (!created) return;
-      matriz.segunda_fuente = [...(matriz.segunda_fuente || []), created];
-      refreshMatrizHost(el, matriz, editable);
-      bindSegundaFuente();
+  /** RC8.17.8H6-D10-D1 — reconstruir panel SF/matriz y enlazar handlers después del DOM nuevo. */
+  function rebindMatrizSegundaFuente(editable) {
+    refreshMatrizHost(el, matriz, editable);
+    bindSegundaFuente(editable);
+  }
+
+  function bindSegundaFuente(panelEditable) {
+    const user = currentUser();
+    const editable = panelEditable ?? matrizSegundaFuenteEditable({
+      modoCoord: isModoCoordinador8Uit(user, cuadro),
+      modoDec: isModoDec(user, cuadro),
+      derivado: isDerivado(cuadro),
     });
+    const btnAdd = el.querySelector('#ccBtnAddSegundaFuente');
+    if (btnAdd) {
+      btnAdd.onclick = async () => {
+        if (!editable) return;
+        const created = await showSegundaFuenteFormModal({ items: matriz.items || [] });
+        if (!created) return;
+        matriz.segunda_fuente = [...(matriz.segunda_fuente || []), created];
+        rebindMatrizSegundaFuente(editable);
+      };
+    }
     el.querySelectorAll('.cc-sf-edit').forEach((btn) => {
       btn.onclick = async () => {
         if (!editable) return;
@@ -1163,8 +1180,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
         matriz.segunda_fuente = (matriz.segunda_fuente || []).map((f) => (
           String(f.id_fuente || f.id) === String(id) ? updated : f
         ));
-        refreshMatrizHost(el, matriz, editable);
-        bindSegundaFuente();
+        rebindMatrizSegundaFuente(editable);
       };
     });
     el.querySelectorAll('.cc-sf-del').forEach((btn) => {
@@ -1178,8 +1194,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
         if (!ok) return;
         const id = btn.dataset.id;
         matriz.segunda_fuente = (matriz.segunda_fuente || []).filter((f) => String(f.id_fuente || f.id) !== String(id));
-        refreshMatrizHost(el, matriz, editable);
-        bindSegundaFuente();
+        rebindMatrizSegundaFuente(editable);
       };
     });
   }
