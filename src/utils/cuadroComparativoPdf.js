@@ -14,6 +14,10 @@ import {
 
 /** Marca de agua visible en previsualizaciones no oficiales (D10-E2). */
 export const ANEXO8A_BORRADOR_WATERMARK = 'BORRADOR — NO OFICIAL';
+/** Altura de la franja superior de borrador (contenido empieza debajo). */
+export const ANEXO8A_BORRADOR_TOP_BAND_H = 20;
+/** Desplazamiento de cabecera institucional en preview borrador (franja + separador). */
+export const ANEXO8A_BORRADOR_TOP_INSET = 22;
 
 function ensureJsPdf() {
   if (!window.jspdf?.jsPDF) throw new Error('Biblioteca PDF no disponible. Recargue la página.');
@@ -27,13 +31,13 @@ const COLOR_SF = [255, 243, 205];
 const COLOR_ADJ = [255, 236, 179];
 const COLOR_SECTION = [238, 243, 247];
 
-function drawHeader(doc, report, pageW, margin) {
-  let y = 28;
+function drawHeader(doc, report, pageW, margin, topInset = 0) {
+  let y = 28 + topInset;
   const logo = report.entidad?.logo_data_url;
   if (logo && /^data:image\//i.test(logo)) {
     try {
       const fmt = /png/i.test(logo) ? 'PNG' : 'JPEG';
-      doc.addImage(logo, fmt, margin, 16, 46, 46);
+      doc.addImage(logo, fmt, margin, 16 + topInset, 46, 46);
     } catch (_) { /* logo opcional */ }
   }
   const textX = logo ? margin + 54 : margin;
@@ -50,15 +54,14 @@ function drawHeader(doc, report, pageW, margin) {
   doc.setTextColor(40);
   y = 72;
   const c = report.cabecera;
-  // Cabecera institucional sin Requerimientos / Área usuaria / CMN / Fuente de financiamiento
+  // Cabecera institucional sin denominación / requerimientos / área / CMN / fuente
   const lines = [
-    `Denominación: ${c.denominacion}`,
     `Solicitud de Cotización: ${c.solicitud_codigo}`,
     `Fecha: ${c.fecha}    Tipo: ${c.tipo}`,
   ];
   const nroInv = report.meta?.nro_invitacion ?? report.cabecera?.nro_invitacion;
   if (nroInv != null && nroInv !== '') {
-    lines.push(`Invitación N.° ${nroInv} (agrupación operativa del cuadro)`);
+    lines.push(`Invitación N.° ${nroInv}`);
   }
   lines.forEach((ln) => {
     const wrapped = doc.splitTextToSize(ln, pageW - margin * 2);
@@ -68,20 +71,21 @@ function drawHeader(doc, report, pageW, margin) {
   return y + 4;
 }
 
-/** Marca de agua en margen (previsualización borrador; no tapa cabecera ni tabla). */
+/** Marca de agua borrador: visible en todas las páginas sin tapar pie, firmas ni importes. */
 export function drawAnexo8ABorradorWatermark(doc, pageW, pageH) {
-  const bandY = pageH - 38;
-  doc.setDrawColor(220, 140, 140);
-  doc.setLineWidth(0.4);
-  doc.line(18, bandY - 10, pageW - 18, bandY - 10);
+  doc.setFillColor(255, 224, 224);
+  doc.rect(0, 0, pageW, 20, 'F');
+  doc.setDrawColor(200, 60, 60);
+  doc.setLineWidth(0.6);
+  doc.line(0, 20, pageW, 20);
   doc.setFont(undefined, 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(168, 36, 36);
-  doc.text(ANEXO8A_BORRADOR_WATERMARK, pageW / 2, bandY, { align: 'center' });
+  doc.setFontSize(11);
+  doc.setTextColor(165, 0, 0);
+  doc.text(ANEXO8A_BORRADOR_WATERMARK, pageW / 2, 13, { align: 'center' });
   doc.setFont(undefined, 'normal');
-  doc.setFontSize(7);
-  doc.setTextColor(190, 120, 120);
-  doc.text(ANEXO8A_BORRADOR_WATERMARK, pageW - 22, 20, { align: 'right', angle: 90 });
+  doc.setFontSize(8);
+  doc.setTextColor(200, 70, 70);
+  doc.text(ANEXO8A_BORRADOR_WATERMARK, 14, pageH * 0.48, { align: 'left', angle: 90 });
 }
 
 export function stampAnexo8ABorradorWatermarkAllPages(doc) {
@@ -440,9 +444,11 @@ export function generateAnexo8APdf(persistido = {}) {
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 22;
 
-  let y = drawHeader(doc, report, pageW, margin);
+  const borradorTopInset = esBorradorPreview ? ANEXO8A_BORRADOR_TOP_INSET : 0;
+  let y = drawHeader(doc, report, pageW, margin, borradorTopInset);
   const { head, body } = buildMatrizInstitucionalTable(report);
   const usable = pageW - margin * 2;
+  const tableMarginTop = esBorradorPreview ? margin + ANEXO8A_BORRADOR_TOP_BAND_H : margin;
 
   doc.autoTable({
     head,
@@ -451,7 +457,7 @@ export function generateAnexo8APdf(persistido = {}) {
     styles: { fontSize: 5.5, cellPadding: 1.5, overflow: 'linebreak', valign: 'middle', lineColor: [160, 160, 160], lineWidth: 0.3 },
     headStyles: { fontSize: 5, halign: 'center', valign: 'middle', minCellHeight: 48, fillColor: COLOR_BASE, textColor: COLOR_HEAD },
     columnStyles: {},
-    margin: { left: margin, right: margin },
+    margin: { left: margin, right: margin, top: tableMarginTop },
     rowPageBreak: 'avoid',
     showHead: 'everyPage',
     tableWidth: usable,

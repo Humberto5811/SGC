@@ -53,7 +53,9 @@ assert(!/guardarCuadroPdf/.test(previewClick), 'preview no guarda PDF');
 
 assert(ANEXO8A_BORRADOR_WATERMARK === 'BORRADOR — NO OFICIAL', 'texto marca de agua');
 assert(/stampAnexo8ABorradorWatermarkAllPages/.test(pdfSrc), 'marca de agua en todas las páginas');
-assert(!/doc\.rect\(0, 0, pageW, 24/.test(pdfSrc), 'marca sin franja superior que tape cabecera');
+assert(!/Denominación:/.test(pdfSrc.match(/function drawHeader[\s\S]*?(?=\n\/\*\*|\nexport function drawAnexo8ABorradorWatermark)/)?.[0] || ''),
+  'cabecera PDF sin Denominación');
+assert(!/agrupación operativa/.test(pdfSrc), 'cabecera sin agrupación operativa del cuadro');
 assert(/Resultado preliminar de la evaluación/.test(pdfSrc), 'PDF borrador: título preliminar');
 const reportSrc = readFileSync(path.join(root, 'src/utils/cuadroComparativoReportData.js'), 'utf8');
 const drawResultadoFn = pdfSrc.match(
@@ -208,8 +210,10 @@ assert(isPreviewBorradorAnexo8A(borradorPersistido), 'isPreviewBorradorAnexo8A d
       getNumberOfPages: () => 5,
     },
     setPage(p) { pageVisits.push(p); },
+    setFillColor() {},
     setDrawColor() {},
     setLineWidth() {},
+    rect() {},
     line() {},
     setFont() {},
     setFontSize() {},
