@@ -532,6 +532,42 @@ async function loadRequerimientosPorSolicitudes(solicitudIds) {
   return map;
 }
 
+/** D10-E3-C2 — pedidos SIGAMEF por requerimiento (solo lectura para Anexo 8-A). */
+export async function loadPedidosSigamefPorRequerimientoIds(requerimientoIds = []) {
+  const ids = [...new Set((requerimientoIds || []).map((x) => Number(x)).filter(Number.isFinite))];
+  if (!ids.length) return {};
+  const { rows } = await query(`
+    SELECT rp.requerimiento_id, p.id, p.pedido_sigamef, p.nro_pedido, p.codigo_sigamef,
+      p.descripcion, p.especifica, p.centro
+    FROM requerimiento_pedidos rp
+    JOIN pedidos_sigamef p ON p.id = rp.pedido_sigamef_id
+    WHERE rp.requerimiento_id = ANY($1::int[])
+    ORDER BY rp.requerimiento_id, p.id ASC
+  `, [ids]);
+  const out = {};
+  for (const r of rows) {
+    const rid = r.requerimiento_id;
+    if (!out[rid]) out[rid] = [];
+    out[rid].push({
+      id: r.id,
+      pedido_sigamef: r.pedido_sigamef,
+      nro_pedido: r.nro_pedido,
+      codigo_sigamef: r.codigo_sigamef,
+      descripcion: r.descripcion,
+      especifica: r.especifica,
+      centro: r.centro,
+    });
+  }
+  return out;
+}
+
+async function pedidosSigamefLecturaParaSolicitud(solicitudId) {
+  const sid = Number(solicitudId);
+  const reqMap = await loadRequerimientosPorSolicitudes([sid]);
+  const reqs = reqMap.get(sid) || [];
+  return loadPedidosSigamefPorRequerimientoIds(reqs.map((r) => r.id));
+}
+
 function areaUsuariaFromReqs(reqs, scArea) {
   const areas = [...new Set((reqs || []).map((r) => String(r.area_usuaria || '').trim()).filter(Boolean))];
   if (areas.length) return areas.join(', ');
@@ -1169,10 +1205,13 @@ export async function obtenerDetalleCuadro(solicitudId, opts = {}) {
     .find((e) => e.solicitud_id === sid
       && Number(e.nro_invitacion) === Number(ronda.nro_invitacion)) || null;
 
+  const pedidos_sigamef_por_requerimiento = await pedidosSigamefLecturaParaSolicitud(sid);
+
   return {
     expediente: bandeja,
     cuadro: mapCuadroRow(cuadroRow),
     matriz,
+    pedidos_sigamef_por_requerimiento,
     ronda: metaRondaCuadro(ronda),
     validacion: validateEconomiaCuadro(matriz),
     proveedores: cotizaciones.map((c) => ({
@@ -1668,12 +1707,14 @@ export async function obtenerDatosPdfCuadro(cuadroId) {
     cmn: sc.cmn || '',
     requerimientos,
   };
+  const pedidos_sigamef_por_requerimiento = await pedidosSigamefLecturaParaSolicitud(row.solicitud_id);
   return {
     cuadro: mapCuadroRow(row),
     datos_json: matriz,
     matriz,
     adjudicacion: matriz.adjudicacion || null,
     expediente,
+    pedidos_sigamef_por_requerimiento,
     solicitud_codigo: sc.codigo,
     cmn: sc.cmn || '',
     area_usuaria: sc.area_usuaria || '',

@@ -635,6 +635,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
 
   let matriz = state.matriz;
   let cuadro = state.cuadro;
+  let pedidosSigamefPorRequerimiento = state.pedidos_sigamef_por_requerimiento || {};
   let versiones = [];
   try {
     const vResp = await contratacionesService.listCuadroVersiones(solicitudId, { ...rondaCtx, cuadroId: cuadro?.id });
@@ -951,6 +952,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
             const data = det.data || det;
             cuadro = data.cuadro || cuadro;
             matriz = data.matriz || matriz;
+            if (data.pedidos_sigamef_por_requerimiento) {
+              pedidosSigamefPorRequerimiento = data.pedidos_sigamef_por_requerimiento;
+            }
           } catch (_) { /* keep */ }
           const badge = el.querySelector('#ccEstadoBadge');
           if (badge && cuadro) {
@@ -1296,6 +1300,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
       const data = resp.data || resp;
       matriz = data.matriz;
       cuadro = data.cuadro || cuadro;
+      if (data.pedidos_sigamef_por_requerimiento) {
+        pedidosSigamefPorRequerimiento = data.pedidos_sigamef_por_requerimiento;
+      }
       readonly = isReadonlyEstado(cuadro)
         || ['GENERADO', 'GENERADO_PRELIMINAR'].includes(String(cuadro?.estado || '').toUpperCase());
       refreshMatrizHost(el, matriz, !readonly);
@@ -1456,6 +1463,7 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
       datos_json,
       matriz: datos_json,
       adjudicacion: datos_json.adjudicacion || null,
+      pedidos_sigamef_por_requerimiento: pedidosSigamefPorRequerimiento,
       expediente: {
         solicitud_codigo: sol.codigo,
         denominacion: sol.denominacion || sol.objeto,
@@ -1514,6 +1522,8 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
       datos_json,
       matriz: datos_json,
       adjudicacion: datos_json.adjudicacion || null,
+      pedidos_sigamef_por_requerimiento: data.pedidos_sigamef_por_requerimiento
+        || pedidosSigamefPorRequerimiento,
       entidad: inst.entidad,
       logo_data_url: inst.logo_data_url,
       elaborado_por: elaborado,
