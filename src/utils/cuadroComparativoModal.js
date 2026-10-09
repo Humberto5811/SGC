@@ -100,11 +100,24 @@ function currentUser() {
   try { return JSON.parse(localStorage.getItem('currentUser') || '{}'); } catch (_) { return {}; }
 }
 
+function estadoCuadroEfectivoModal(cuadro = {}) {
+  const global = String(cuadro?.estado_cuadro || '').toUpperCase();
+  const doc = String(
+    cuadro?.estado || cuadro?.estado_cuadro_documental || cuadro?.estado_db || '',
+  ).toUpperCase();
+  if (global === 'CUADRO_EN_COORDINACION_CM' || global === 'CUADRO_EN_DEC') return doc || global;
+  return String(cuadro?.estado || cuadro?.estado_cuadro || '').toUpperCase();
+}
+
 function isReadonlyEstado(cuadro) {
-  const e = String(cuadro?.estado || cuadro?.estado_cuadro || '').toUpperCase();
-  if (e === 'FIRMADO' || e === 'DERIVADO_CCP' || e === 'ANULADO' || !!cuadro?.solo_lectura) return true;
-  // RC8.5: Coordinador — sin edición económica mientras está pendiente
-  if (['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'].includes(e)) return true;
+  if (!!cuadro?.solo_lectura) return true;
+  const e = estadoCuadroEfectivoModal(cuadro);
+  if (e === 'FIRMADO' || e === 'DERIVADO_CCP' || e === 'ANULADO') return true;
+  // RC8.5 / C2.5D: sin edición en revisión externa ni fases posteriores
+  if ([
+    'PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR', 'PENDIENTE_DEC',
+    'APROBADO_DEC', 'PENDIENTE_CCP', 'DERIVADO_CCP', 'CCP_REGISTRADA', 'ENVIADA_OPPM',
+  ].includes(e)) return true;
   return false;
 }
 

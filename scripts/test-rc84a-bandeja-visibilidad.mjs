@@ -72,8 +72,8 @@ const uiSrc = fs.readFileSync(path.join(root, 'src/utils/cuadroComparativoUtils.
 assert(!/8 UIT/.test(uiSrc), 'sin 8 UIT en utils UI');
 
 const viewSrc = fs.readFileSync(path.join(root, 'src/views/contratacion/cuadroComparativoView.js'), 'utf8');
-assert(/<th>Estado<\/th>/.test(viewSrc) && /<th>Responsable<\/th>/.test(viewSrc),
-  'columnas bandeja Estado/Responsable');
+assert(/req-col-estado-cell/.test(viewSrc) && /req-col-responsable-cell|Responsable/.test(viewSrc),
+  'columnas bandeja ERV Estado/Responsable (D10-B)');
 assert(!/Responsable actual/i.test(viewSrc) && !/Estado actual/i.test(viewSrc)
   && !/Estado vigente/i.test(viewSrc) && !/Responsable vigente/i.test(viewSrc),
   'sin labels visibles legacy Estado/Responsable');

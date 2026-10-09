@@ -44,6 +44,85 @@ export function esEstadoBandejaHistoricoCuadroAnalista(estado) {
   return ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA.includes(e);
 }
 
+/** Estado global ERV cuando el cuadro está en revisión del Coordinador CM. */
+export const ESTADO_GLOBAL_BANDEJA_COORDINADOR_CM = 'CUADRO_EN_COORDINACION_CM';
+
+/** Estados documentales de ronda en los que el Coordinador CM debe ver la fila como pendiente. */
+export const ESTADOS_DOCUMENTALES_BANDEJA_COORDINADOR_CM = Object.freeze([
+  'PENDIENTE_COORDINADOR',
+  'FIRMADO_COORDINADOR',
+]);
+
+export function esEstadoDocumentalBandejaCoordinadorCm(estado) {
+  const e = String(estado || '').trim().toUpperCase();
+  return ESTADOS_DOCUMENTALES_BANDEJA_COORDINADOR_CM.includes(e);
+}
+
+/**
+ * Visibilidad bandeja Coordinador CM: el listado expone estado_cuadro global (ERV);
+ * validar con estado documental de la ronda cuando el global es CUADRO_EN_COORDINACION_CM.
+ */
+/** Alias ERV de revisión cuadro → resolver políticas con estado documental de ronda. */
+export const ALIAS_GLOBAL_ESTADO_CUADRO_ERV = Object.freeze([
+  ESTADO_GLOBAL_BANDEJA_COORDINADOR_CM,
+  'CUADRO_EN_DEC',
+]);
+
+export function esAliasGlobalEstadoCuadroErv(estado) {
+  const e = String(estado || '').trim().toUpperCase();
+  return ALIAS_GLOBAL_ESTADO_CUADRO_ERV.includes(e);
+}
+
+/** Estado efectivo para permisos/lectura de bandeja (documental si el global es alias ERV). */
+export function resolveEstadoCuadroPoliticaBandeja(fila = {}) {
+  const global = String(fila.estado_cuadro || fila.estado || '').trim().toUpperCase();
+  const doc = String(
+    fila.estado_cuadro_documental || fila.estado_db || '',
+  ).trim().toUpperCase();
+  if (esAliasGlobalEstadoCuadroErv(global) && doc) return doc;
+  return global || doc;
+}
+
+export function esVisibleFilaBandejaAnalista(fila = {}, allowedSet) {
+  const est = String(fila.estado_cuadro || fila.estado || '').trim().toUpperCase();
+  const doc = String(
+    fila.estado_cuadro_documental || fila.estado_db || '',
+  ).trim().toUpperCase();
+  const allowed = allowedSet instanceof Set
+    ? allowedSet
+    : new Set((allowedSet || []).map((s) => String(s).toUpperCase()));
+  if (allowed.has(est)) return true;
+  if (esAliasGlobalEstadoCuadroErv(est) && doc && allowed.has(doc)) return true;
+  return false;
+}
+
+export function esVisibleFilaBandejaDec(fila = {}, allowedSet) {
+  const est = String(fila.estado_cuadro || fila.estado || '').trim().toUpperCase();
+  const doc = String(
+    fila.estado_cuadro_documental || fila.estado_db || '',
+  ).trim().toUpperCase();
+  const allowed = allowedSet instanceof Set
+    ? allowedSet
+    : new Set((allowedSet || []).map((s) => String(s).toUpperCase()));
+  if (allowed.has(est)) return true;
+  if (est === 'CUADRO_EN_DEC' && doc && allowed.has(doc)) return true;
+  return false;
+}
+
+export function esVisibleFilaBandejaCoordinadorCm(fila = {}, allowedSet) {
+  const est = String(fila.estado_cuadro || fila.estado || '').trim().toUpperCase();
+  const doc = String(
+    fila.estado_cuadro_documental || fila.estado_db || '',
+  ).trim().toUpperCase();
+  if (est === ESTADO_GLOBAL_BANDEJA_COORDINADOR_CM) {
+    return esEstadoDocumentalBandejaCoordinadorCm(doc);
+  }
+  const allowed = allowedSet instanceof Set
+    ? allowedSet
+    : new Set((allowedSet || []).map((s) => String(s).toUpperCase()));
+  return allowed.has(est);
+}
+
 export const BANDEJA_ESTADOS_POR_ROL = Object.freeze({
   ANALISTA: [
     'PENDIENTE_ELABORAR', 'CUADRO_BORRADOR', 'EN_ELABORACION', 'BORRADOR',
@@ -53,7 +132,11 @@ export const BANDEJA_ESTADOS_POR_ROL = Object.freeze({
     'APROBADO_DEC', 'PENDIENTE_CCP', 'DERIVADO_CCP', 'OBSERVADO',
     ...ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA,
   ],
-  COORDINADOR_CM: ['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'],
+  COORDINADOR_CM: [
+    'PENDIENTE_COORDINADOR',
+    'FIRMADO_COORDINADOR',
+    ESTADO_GLOBAL_BANDEJA_COORDINADOR_CM,
+  ],
   DEC: ['PENDIENTE_DEC', 'FIRMADO_COORDINADOR'],
   CCP: ['PENDIENTE_CCP', 'DERIVADO_CCP'],
   /** Supervisión: ve todos los estados (sin actuar como Analista silencioso). */

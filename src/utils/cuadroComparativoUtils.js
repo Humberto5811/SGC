@@ -8,7 +8,10 @@ import {
   badgeVisualEstadoVigente,
   esExpedienteDerivadoCcp,
 } from '../../shared/estadoExpedienteVigente.js';
-import { esEstadoBandejaHistoricoCuadroAnalista } from '../../shared/cuadroComparativoRol.js';
+import {
+  esEstadoBandejaHistoricoCuadroAnalista,
+  resolveEstadoCuadroPoliticaBandeja,
+} from '../../shared/cuadroComparativoRol.js';
 import { renderBadgeEstadoVigenteHtml } from '../ui/workflow/index.js';
 
 export { BADGE_COLOR_CCP, badgeVisualEstadoVigente, renderBadgeEstadoVigenteHtml, esExpedienteDerivadoCcp };
@@ -376,7 +379,9 @@ export function isCuadroEnRevisionExterna(estado) {
 }
 
 export function cuadroComparativoMenuItems(row = {}, opts = {}) {
-  const e = normalizeCuadroEstado(row.estado_cuadro);
+  const e = normalizeCuadroEstado(
+    resolveEstadoCuadroPoliticaBandeja(row) || row.estado_cuadro,
+  );
   const rol = String(opts.rol || row.rol_revision || '').toUpperCase();
 
   // RC8.4B — Coordinador CM: abrir expediente completo (no solo el cuadro)

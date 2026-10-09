@@ -21,6 +21,7 @@ console.log('\n=== RC8.4B Bandeja Coordinador CM ===\n');
 
 assert(BANDEJA_ESTADOS_POR_ROL.COORDINADOR_CM.includes('PENDIENTE_COORDINADOR'), 'Coord ve PENDIENTE_COORDINADOR');
 assert(BANDEJA_ESTADOS_POR_ROL.COORDINADOR_CM.includes('FIRMADO_COORDINADOR'), 'Coord ve FIRMADO_COORDINADOR');
+assert(BANDEJA_ESTADOS_POR_ROL.COORDINADOR_CM.includes('CUADRO_EN_COORDINACION_CM'), 'Coord allow-list global ERV');
 assert(!BANDEJA_ESTADOS_POR_ROL.COORDINADOR_CM.includes('CUADRO_BORRADOR'), 'Coord no ve borradores');
 
 const sample = [
@@ -47,14 +48,24 @@ assert(menu.some((m) => m.act === 'trazabilidadCuadro'), 'acción Trazabilidad')
 assert(!menu.some((m) => m.act === 'elaborarCuadro'), 'sin Elaborar para Coordinador');
 
 const viewSrc = fs.readFileSync(path.join(root, 'src/views/contratacion/cuadroComparativoView.js'), 'utf8');
-assert(/Proveedor/.test(viewSrc) && /abrirExpedienteCoord/.test(viewSrc), 'bandeja columnas + handler Coord');
-assert(/showExpedienteCoordinadorModal/.test(viewSrc), 'import modal expediente Coord');
+const utilsSrc = fs.readFileSync(path.join(root, 'src/utils/cuadroComparativoUtils.js'), 'utf8');
+assert(
+  /isModoBandejaCoordinador/.test(viewSrc) && /showExpedienteCoordinadorModal/.test(viewSrc),
+  'vista bandeja Coord abre modal expediente integral',
+);
+assert(/abrirExpedienteCoord/.test(utilsSrc), 'menú bandeja incluye acción Abrir expediente Coord');
 
 const modalSrc = fs.readFileSync(path.join(root, 'src/utils/cuadroComparativoCoordModal.js'), 'utf8');
 assert(/cuadroComparativoExpedienteTabs|renderTabNav|Pedidos SIGAMEF/.test(modalSrc), 'pestañas expediente integral');
 assert(/renderPanelCoordinador/.test(modalSrc), 'panel acciones Coordinador');
-assert(/CONFORMIDAD_COORDINADOR/.test(modalSrc) && /DERIVAR_DEC/.test(modalSrc) && /OBSERVAR_COORDINADOR/.test(modalSrc),
-  'acciones conformidad / observar / derivar DEC');
+assert(
+  /CONFORMIDAD_COORDINADOR/.test(modalSrc) && /DERIVAR_DEC/.test(modalSrc),
+  'acciones conformidad / derivar DEC en modal',
+);
+assert(
+  /observarCuadroConModalInstitucional/.test(modalSrc) && /ccBtnCoordObservar/.test(modalSrc),
+  'observar Coordinador vía componente institucional (RC8.5-D1)',
+);
 assert(/pdf-validacion|cc-exp-pdf-val|Validaciones/.test(modalSrc), 'validación AU en expediente');
 assert(/Trazabilidad|trazabilidad/.test(modalSrc), 'trazabilidad en modal');
 assert(/closeBandejaDropdowns/.test(modalSrc), 'cierra menú bandeja al abrir');

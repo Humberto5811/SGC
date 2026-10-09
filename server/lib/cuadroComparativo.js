@@ -43,6 +43,10 @@ import {
   BANDEJA_ESTADOS_POR_ROL,
   responsableBandejaPorEstado,
   esEstadoBandejaHistoricoCuadroAnalista,
+  esVisibleFilaBandejaCoordinadorCm,
+  resolveEstadoCuadroPoliticaBandeja,
+  esVisibleFilaBandejaAnalista,
+  esVisibleFilaBandejaDec,
 } from './cuadroComparativoRevision.js';
 import {
   crearNuevaVersionPorObservacion,
@@ -747,6 +751,12 @@ export async function listarCuadroComparativoExpedientes() {
       recepcion_bienes_expediente_id: recepcionBienesExpedienteId,
     });
     const estadoCode = vigente.codigo || persisted?.estado_cuadro || ESTADOS_CUADRO.PENDIENTE_ELABORAR;
+    const estadoDocumental = persisted?.estado_cuadro || null;
+    const estPolitica = resolveEstadoCuadroPoliticaBandeja({
+      estado_cuadro: estadoCode,
+      estado_cuadro_documental: estadoDocumental,
+      estado_db: persisted?.estado_db,
+    });
     const estadoLabel = vigente.label || labelCuadroEstado(estadoCode);
     const area = areaUsuariaFromReqs(reqs, r.area_usuaria);
     const reqTexto = requerimientosTexto(reqs);
@@ -800,6 +810,8 @@ export async function listarCuadroComparativoExpedientes() {
         .filter(Boolean)[0] || '—',
       fecha_ingreso_cuadro: r.fecha_ingreso_cuadro || r.solicitud_updated_at || null,
       estado_cuadro: estadoCode,
+      estado_cuadro_documental: estadoDocumental,
+      estado_db: persisted?.estado_db || null,
       estado_cuadro_label: estadoLabel,
       estado_cuadro_badge: badgeClassCuadro(estadoCode),
       estado_codigo: estadoCode,
@@ -824,10 +836,10 @@ export async function listarCuadroComparativoExpedientes() {
       cuadro_id: persisted?.cuadro_id || null,
       version: persisted?.version != null ? Number(persisted.version) : null,
       fecha_actualizacion: persisted?.actualizado_at || r.fecha_ingreso_cuadro || null,
-      responsable_actual: responsableBandejaPorEstado(estadoCode),
+      responsable_actual: responsableBandejaPorEstado(estPolitica),
       solicitud_estado: r.solicitud_estado || '',
-      // RC8.4A: en revisión externa no se edita; Analista solo Ver/Descargar/Trazabilidad
-      puede_elaborar: estadoCode !== ESTADOS_CUADRO.ANULADO
+      // RC8.4A / C2.5D: políticas con estado documental cuando el global es alias ERV
+      puede_elaborar: estPolitica !== ESTADOS_CUADRO.ANULADO
         && !esEstadoBandejaHistoricoCuadroAnalista(estadoCode)
         && ![
           ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
@@ -841,7 +853,7 @@ export async function listarCuadroComparativoExpedientes() {
           'ORDEN_REGISTRADA', 'ORDEN_NOTIFICADA', 'ORDEN_LISTA_NOTIFICACION',
           'REGISTRO_ORDENES', 'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
           'EN_EJECUCION', 'ORDEN_RECEPCION_CONFIRMADA',
-        ].includes(estadoCode),
+        ].includes(estPolitica),
       solo_lectura: esEstadoBandejaHistoricoCuadroAnalista(estadoCode)
         || [
           ESTADOS_CUADRO.DERIVADO_CCP,
@@ -852,12 +864,12 @@ export async function listarCuadroComparativoExpedientes() {
           ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
           ESTADOS_CUADRO.FIRMADO_COORDINADOR,
           ESTADOS_CUADRO.PENDIENTE_DEC,
-        ].includes(estadoCode),
+        ].includes(estPolitica),
       en_revision_externa: [
         ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
         ESTADOS_CUADRO.FIRMADO_COORDINADOR,
         ESTADOS_CUADRO.PENDIENTE_DEC,
-      ].includes(estadoCode),
+      ].includes(estPolitica),
       accion_cuadro_label: (esEstadoBandejaHistoricoCuadroAnalista(estadoCode)
         || [
           ESTADOS_CUADRO.DERIVADO_CCP,
@@ -865,7 +877,7 @@ export async function listarCuadroComparativoExpedientes() {
           ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
           ESTADOS_CUADRO.FIRMADO_COORDINADOR,
           ESTADOS_CUADRO.PENDIENTE_DEC,
-        ].includes(estadoCode))
+        ].includes(estPolitica))
         ? 'Ver cuadro'
         : 'Elaborar cuadro',
       search_text: [
@@ -2918,17 +2930,44 @@ export function filtrarBandejaPorRolRevision(expedientes = [], userCtx = {}) {
       if (rol === 'ADMINISTRADOR') return true;
       // Analista también ve pendientes de elaborar sin cuadro aún
       if (rol === 'ANALISTA' && (!est || est === 'PENDIENTE_ELABORAR')) return true;
+      if (rol === 'COORDINADOR_CM') return esVisibleFilaBandejaCoordinadorCm(e, allowed);
+      if (rol === 'ANALISTA') return esVisibleFilaBandejaAnalista(e, allowed);
+      if (rol === 'DEC') return esVisibleFilaBandejaDec(e, allowed);
       return allowed.has(est);
     }).map((e) => {
-      const est = e.estado_cuadro || e.estado;
+      const estGlobal = e.estado_cuadro || e.estado;
+      const estGlobalUp = String(estGlobal || '').toUpperCase();
+      const estDoc = e.estado_cuadro_documental || e.estado_db || null;
+      const estRevision = (estGlobalUp === 'CUADRO_EN_COORDINACION_CM' && estDoc)
+        ? estDoc
+        : (estGlobalUp === 'CUADRO_EN_DEC' && estDoc)
+          ? estDoc
+          : estGlobal;
+      const estPoliticaFila = resolveEstadoCuadroPoliticaBandeja({
+        ...e,
+        estado_cuadro: estGlobal,
+        estado_cuadro_documental: estDoc,
+      });
+      let accionesRev = accionesDisponiblesRevision(estRevision, rol);
+      if (rol === 'ANALISTA') {
+        const soloLectura = e.solo_lectura === true
+          || e.en_revision_externa === true
+          || esEstadoBandejaHistoricoCuadroAnalista(estGlobalUp)
+          || [
+            ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+            ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+            ESTADOS_CUADRO.PENDIENTE_DEC,
+          ].includes(String(estPoliticaFila || '').toUpperCase());
+        if (soloLectura) accionesRev = [];
+      }
       return {
         ...e,
         rol_revision: rol,
-        acciones_revision: accionesDisponiblesRevision(est, rol),
+        acciones_revision: accionesRev,
         // Responsable del expediente (quién tiene la pelota), no el rol del visor
-        responsable_actual: e.responsable_actual || responsableBandejaPorEstado(est),
-        responsable_revision: responsableBandejaPorEstado(est),
-        modo_apertura: resolveModoAperturaExpediente(est, rol),
+        responsable_actual: e.responsable_actual || responsableBandejaPorEstado(estRevision),
+        responsable_revision: responsableBandejaPorEstado(estRevision),
+        modo_apertura: resolveModoAperturaExpediente(estRevision, rol),
       };
     }),
   };

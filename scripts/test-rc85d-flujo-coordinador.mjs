@@ -93,7 +93,10 @@ assert(/evaluarAccionesCoordinador/.test(ui), 'gates centralizados');
 const modal = fs.readFileSync(path.join(root, 'src/utils/cuadroComparativoCoordModal.js'), 'utf8');
 assert(/enRevisionCoordinador/.test(modal), 'modal usa estado de revisión Coord');
 assert(!/isModoCoordinadorCm\(currentUser/.test(modal), 'bind no bloquea por rol doble-check');
-assert(/DERIVAR_DEC/.test(modal) && /OBSERVAR_COORDINADOR/.test(modal), 'acciones cableadas');
+assert(
+  /DERIVAR_DEC/.test(modal) && /ccBtnCoordObservar/.test(modal) && /observarCuadroConModalInstitucional/.test(modal),
+  'acciones conformidad/derivar/observar cableadas en modal',
+);
 
 const wf = fs.readFileSync(path.join(root, 'core/workflowEngine/WorkflowTransitions.js'), 'utf8');
 assert(/CUADRO_COMPARATIVO/.test(wf), 'Workflow intacto');
