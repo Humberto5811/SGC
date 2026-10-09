@@ -15,6 +15,8 @@ export {
   esEstadoRevisionExterna,
   isRolSistemaAdmin,
   normalizeTextoInstitucional,
+  esEstadoBandejaHistoricoCuadroAnalista,
+  ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA,
 } from '../../shared/cuadroComparativoRol.js';
 
 import {

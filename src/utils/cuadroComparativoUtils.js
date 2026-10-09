@@ -8,6 +8,7 @@ import {
   badgeVisualEstadoVigente,
   esExpedienteDerivadoCcp,
 } from '../../shared/estadoExpedienteVigente.js';
+import { esEstadoBandejaHistoricoCuadroAnalista } from '../../shared/cuadroComparativoRol.js';
 import { renderBadgeEstadoVigenteHtml } from '../ui/workflow/index.js';
 
 export { BADGE_COLOR_CCP, badgeVisualEstadoVigente, renderBadgeEstadoVigenteHtml, esExpedienteDerivadoCcp };
@@ -32,6 +33,7 @@ export const ESTADOS_CUADRO = Object.freeze({
   ENVIADA_OPPM: 'ENVIADA_OPPM',
   CCP_REGISTRADO: 'CCP_REGISTRADO',
   CCP_REGISTRADA: 'CCP_REGISTRADA',
+  CUADRO_COMPARATIVO_APROBADO: 'CUADRO_COMPARATIVO_APROBADO',
 });
 
 /**
@@ -58,6 +60,7 @@ export const ESTADOS_CUADRO_LABEL = Object.freeze({
   [ESTADOS_CUADRO.ENVIADA_OPPM]: 'Solicitud enviada a OPPM',
   [ESTADOS_CUADRO.CCP_REGISTRADO]: 'CCP registrada',
   [ESTADOS_CUADRO.CCP_REGISTRADA]: 'CCP registrada',
+  [ESTADOS_CUADRO.CUADRO_COMPARATIVO_APROBADO]: 'C.C. aprobado',
 });
 
 /**
@@ -95,6 +98,7 @@ export function normalizeCuadroEstado(raw) {
   if (s === 'CCP_REGISTRADO' || s === 'REGISTRADO_CCP' || s === 'CCP_REGISTRADA') {
     return ESTADOS_CUADRO.CCP_REGISTRADA;
   }
+  if (s === 'CUADRO_COMPARATIVO_APROBADO') return ESTADOS_CUADRO.CUADRO_COMPARATIVO_APROBADO;
   if (ESTADOS_CUADRO_LABEL[s]) return s;
   return ESTADOS_CUADRO.PENDIENTE_ELABORAR;
 }
@@ -413,6 +417,8 @@ export function cuadroComparativoMenuItems(row = {}, opts = {}) {
   const verSolo = enRevision
     || e === ESTADOS_CUADRO.DERIVADO_CCP
     || e === ESTADOS_CUADRO.FIRMADO
+    || e === ESTADOS_CUADRO.CUADRO_COMPARATIVO_APROBADO
+    || esEstadoBandejaHistoricoCuadroAnalista(row.estado_cuadro)
     || row.solo_lectura === true;
 
   // RC8.4A — Analista en revisión: solo Ver / Descargar / Trazabilidad

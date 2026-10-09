@@ -42,6 +42,7 @@ import {
   RESPONSABLES_REVISION,
   BANDEJA_ESTADOS_POR_ROL,
   responsableBandejaPorEstado,
+  esEstadoBandejaHistoricoCuadroAnalista,
 } from './cuadroComparativoRevision.js';
 import {
   crearNuevaVersionPorObservacion,
@@ -827,6 +828,7 @@ export async function listarCuadroComparativoExpedientes() {
       solicitud_estado: r.solicitud_estado || '',
       // RC8.4A: en revisión externa no se edita; Analista solo Ver/Descargar/Trazabilidad
       puede_elaborar: estadoCode !== ESTADOS_CUADRO.ANULADO
+        && !esEstadoBandejaHistoricoCuadroAnalista(estadoCode)
         && ![
           ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
           ESTADOS_CUADRO.FIRMADO_COORDINADOR,
@@ -840,28 +842,30 @@ export async function listarCuadroComparativoExpedientes() {
           'REGISTRO_ORDENES', 'ORDEN_RESUELTA', 'EXPEDIENTE_DERIVADO_PAGO',
           'EN_EJECUCION', 'ORDEN_RECEPCION_CONFIRMADA',
         ].includes(estadoCode),
-      solo_lectura: [
-        ESTADOS_CUADRO.DERIVADO_CCP,
-        ESTADOS_CUADRO.CCP_REGISTRADO,
-        ESTADOS_CUADRO.CCP_REGISTRADA,
-        ESTADOS_CUADRO.ENVIADA_OPPM,
-        ESTADOS_CUADRO.FIRMADO,
-        ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
-        ESTADOS_CUADRO.FIRMADO_COORDINADOR,
-        ESTADOS_CUADRO.PENDIENTE_DEC,
-      ].includes(estadoCode),
+      solo_lectura: esEstadoBandejaHistoricoCuadroAnalista(estadoCode)
+        || [
+          ESTADOS_CUADRO.DERIVADO_CCP,
+          ESTADOS_CUADRO.CCP_REGISTRADO,
+          ESTADOS_CUADRO.CCP_REGISTRADA,
+          ESTADOS_CUADRO.ENVIADA_OPPM,
+          ESTADOS_CUADRO.FIRMADO,
+          ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+          ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+          ESTADOS_CUADRO.PENDIENTE_DEC,
+        ].includes(estadoCode),
       en_revision_externa: [
         ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
         ESTADOS_CUADRO.FIRMADO_COORDINADOR,
         ESTADOS_CUADRO.PENDIENTE_DEC,
       ].includes(estadoCode),
-      accion_cuadro_label: ([
-        ESTADOS_CUADRO.DERIVADO_CCP,
-        ESTADOS_CUADRO.FIRMADO,
-        ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
-        ESTADOS_CUADRO.FIRMADO_COORDINADOR,
-        ESTADOS_CUADRO.PENDIENTE_DEC,
-      ].includes(estadoCode))
+      accion_cuadro_label: (esEstadoBandejaHistoricoCuadroAnalista(estadoCode)
+        || [
+          ESTADOS_CUADRO.DERIVADO_CCP,
+          ESTADOS_CUADRO.FIRMADO,
+          ESTADOS_CUADRO.PENDIENTE_COORDINADOR,
+          ESTADOS_CUADRO.FIRMADO_COORDINADOR,
+          ESTADOS_CUADRO.PENDIENTE_DEC,
+        ].includes(estadoCode))
         ? 'Ver cuadro'
         : 'Elaborar cuadro',
       search_text: [

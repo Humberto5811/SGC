@@ -21,11 +21,15 @@ import {
   labelRolRevision,
   puedeMostrarBotonesCcp,
   isRolSistemaAdmin,
+  ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA,
+  esEstadoBandejaHistoricoCuadroAnalista,
 } from '../../shared/cuadroComparativoRol.js';
 
 export {
   ROLES_REVISION,
   BANDEJA_ESTADOS_POR_ROL,
+  ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA,
+  esEstadoBandejaHistoricoCuadroAnalista,
   ROLES_ACTUAR_COMO,
   resolveRolRevision,
   resolveModoAperturaExpediente,

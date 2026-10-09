@@ -20,6 +20,30 @@ export const ROLES_REVISION = Object.freeze({
   ADMINISTRADOR: 'ADMINISTRADOR',
 });
 
+/**
+ * Estados globales posteriores al cuadro: el Analista los ve en bandeja como histórico.
+ * No amplía actuación de Coordinador CM, DEC ni CCP (solo visibilidad + lectura).
+ */
+export const ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA = Object.freeze([
+  'CUADRO_COMPARATIVO_APROBADO',
+  'ENVIADA_OPPM',
+  'CCP_REGISTRADA',
+  'CCP_REGISTRADO',
+  'REGISTRO_ORDENES',
+  'ORDEN_REGISTRADA',
+  'ORDEN_LISTA_NOTIFICACION',
+  'ORDEN_NOTIFICADA',
+  'ORDEN_RECEPCION_CONFIRMADA',
+  'EN_EJECUCION',
+  'ORDEN_RESUELTA',
+  'EXPEDIENTE_DERIVADO_PAGO',
+]);
+
+export function esEstadoBandejaHistoricoCuadroAnalista(estado) {
+  const e = String(estado || '').trim().toUpperCase();
+  return ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA.includes(e);
+}
+
 export const BANDEJA_ESTADOS_POR_ROL = Object.freeze({
   ANALISTA: [
     'PENDIENTE_ELABORAR', 'CUADRO_BORRADOR', 'EN_ELABORACION', 'BORRADOR',
@@ -27,6 +51,7 @@ export const BANDEJA_ESTADOS_POR_ROL = Object.freeze({
     'PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR',
     'OBSERVADO_COORDINADOR', 'PENDIENTE_DEC', 'OBSERVADO_DEC',
     'APROBADO_DEC', 'PENDIENTE_CCP', 'DERIVADO_CCP', 'OBSERVADO',
+    ...ESTADOS_BANDEJA_HISTORICO_CUADRO_ANALISTA,
   ],
   COORDINADOR_CM: ['PENDIENTE_COORDINADOR', 'FIRMADO_COORDINADOR'],
   DEC: ['PENDIENTE_DEC', 'FIRMADO_COORDINADOR'],
