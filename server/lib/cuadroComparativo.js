@@ -2449,6 +2449,38 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
     );
   }
 
+  let usuarioDestinoCoordId = null;
+  if (accion === 'DERIVAR_COORDINADOR') {
+    usuarioDestinoCoordId = parseInt(
+      body.usuario_destino_id || body.responsable_destino_id || body.responsable_id,
+      10,
+    );
+    if (!Number.isFinite(usuarioDestinoCoordId) || usuarioDestinoCoordId <= 0) {
+      throw new Error('Debe seleccionar el Coordinador CM destinatario');
+    }
+    const { rows: reqLinkRows } = await query(`
+      SELECT DISTINCT requerimiento_id AS id
+      FROM solicitud_requerimientos
+      WHERE solicitud_id = $1 AND requerimiento_id IS NOT NULL
+      UNION
+      SELECT DISTINCT requerimiento_id AS id
+      FROM cotizaciones_proveedor
+      WHERE solicitud_id = $1 AND requerimiento_id IS NOT NULL
+    `, [cur.solicitud_id]);
+    const reqIdsValidacion = reqLinkRows.map((r) => r.id).filter(Boolean);
+    if (!reqIdsValidacion.length) {
+      throw new Error('No se encontró requerimiento vinculado a la solicitud');
+    }
+    const { assertUsuarioDestinoTransicionElegible } = await import('./workflowTransicionResponsable.js');
+    for (const reqId of reqIdsValidacion) {
+      await assertUsuarioDestinoTransicionElegible(
+        reqId,
+        'CUADRO_DERIVADO_COORDINACION',
+        usuarioDestinoCoordId,
+      );
+    }
+  }
+
   // RC8.5-D1 — mismo contrato institucional: Motivo (componente unificado)
   let motivoObs = String(body.motivo || body.motivo_observacion || '').trim();
   let observacion = String(body.observacion || body.sustento || '').trim();
@@ -2839,12 +2871,24 @@ export async function transitarRevisionCuadro(cuadroId, body = {}, usuario = '',
   `, [id, tr.to, JSON.stringify(datos), user]);
 
   // Siempre 'derivado' para actualizar responsable_actual (observado no cambia responsable)
+  let syncMetadataExtra = null;
+  if (accion === 'DERIVAR_COORDINADOR' && usuarioDestinoCoordId) {
+    const { buildMetadataSeleccionResponsable } = await import('./workflowTransicionResponsable.js');
+    syncMetadataExtra = buildMetadataSeleccionResponsable(usuarioDestinoCoordId, body, {
+      accion: 'DERIVAR_COORDINADOR',
+      cuadro_id: id,
+      nro_invitacion: cur.nro_invitacion ?? null,
+    });
+  }
   const sync = await syncRevisionCuadroWorkflow(cur.solicitud_id, {
     revisionEstado: tr.to,
     responsable: tr.responsable,
+    usuarioDestinoId: accion === 'DERIVAR_COORDINADOR' ? usuarioDestinoCoordId : null,
     usuario: user,
     observacion: obsAudit || `${accion} → ${tr.to}`,
     accion: 'derivado',
+    evento: accion === 'DERIVAR_COORDINADOR' ? 'CUADRO_DERIVADO_COORDINACION' : null,
+    metadataExtra: syncMetadataExtra,
   });
 
   let eventoAprob = null;

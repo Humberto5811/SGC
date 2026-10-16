@@ -322,10 +322,12 @@ async function requerimientoIdsDeSolicitud(solicitudId) {
 export async function syncRevisionCuadroWorkflow(solicitudId, {
   revisionEstado,
   responsable,
+  usuarioDestinoId = null,
   usuario = 'Sistema',
   observacion = '',
   accion = 'derivado',
   evento = null,
+  metadataExtra = null,
 } = {}) {
   if (!solicitudId || !revisionEstado) return { actualizados: 0 };
   const etapa = ETAPAS.CUADRO_COMPARATIVO;
@@ -349,7 +351,10 @@ export async function syncRevisionCuadroWorkflow(solicitudId, {
       eventoCodigo = 'CUADRO_DERIVADO_COORDINACION';
     }
   }
-  const uid = /^\d+$/.test(String(resp).trim()) ? Number(resp) : null;
+  const uidFromParam = usuarioDestinoId != null && Number.isFinite(Number(usuarioDestinoId))
+    ? Number(usuarioDestinoId)
+    : null;
+  const uid = uidFromParam ?? (/^\d+$/.test(String(resp).trim()) ? Number(resp) : null);
 
   return withTransaction(async (tx) => {
     const ids = await requerimientoIdsDeSolicitud(solicitudId);
@@ -366,6 +371,8 @@ export async function syncRevisionCuadroWorkflow(solicitudId, {
             client_request_id: `cuadro-rev:${solicitudId}:${requerimientoId}:${eventoCodigo}:${revisionEstado}`,
             revisionEstado,
             via: 'syncRevisionCuadroWorkflow',
+            ...(uid != null ? { usuario_destino_id: uid } : {}),
+            ...(metadataExtra && typeof metadataExtra === 'object' ? metadataExtra : {}),
           },
           actorRol: usuario,
           domainMutator: async (client) => {

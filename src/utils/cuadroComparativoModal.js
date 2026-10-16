@@ -1656,8 +1656,19 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
     if (isCuadroObservadoEditable(cuadro) && !respuestaObs) {
       return alert('Debe registrar la respuesta a las observaciones antes de derivar al Coordinador.');
     }
-    if (!confirm('¿Derivar al Coordinador CM? (Tras observación no se deriva al DEC)')) return;
     try {
+      const reqId = await resolveCuadroRequerimientoId();
+      if (!reqId) {
+        return alert('No se encontró el requerimiento del expediente.');
+      }
+      const seleccion = await showWorkflowTransicionModal({
+        requerimientoId: reqId,
+        eventoCodigo: 'CUADRO_DERIVADO_COORDINACION',
+        title: 'Derivar a Coordinador CM',
+        message: 'Seleccione al Coordinador CM responsable. Etapa: Cuadro Comparativo, estado: En trámite.',
+        buttonText: 'Derivar',
+      });
+      if (!seleccion) return;
       // Persistir respuesta si hay observación pendiente
       if (respuestaObs && isCuadroObservadoEditable(cuadro)) {
         const datos = collectObservacionesFromDom(body, matriz);
@@ -1671,6 +1682,9 @@ export async function showElaborarCuadroModal(solicitudId, onSaved, opts = {}) {
       const resp = await contratacionesService.transitarRevisionCuadro(cuadro.id, {
         accion: 'DERIVAR_COORDINADOR',
         respuesta_observaciones: respuestaObs,
+        usuario_destino_id: seleccion.usuario_destino_id,
+        responsable_recomendado_id: seleccion.responsable_recomendado_id,
+        reasignacion_manual: seleccion.reasignacion_manual,
       });
       const data = resp.data || resp;
       cuadro = data.cuadro || cuadro;
