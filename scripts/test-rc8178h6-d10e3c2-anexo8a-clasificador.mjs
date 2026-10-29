@@ -5,6 +5,8 @@ import {
   resolvePedidoSigamefForAnexo8A,
   enrichItemsClasificadorAnexo8A,
   buildResumenCentroClasificador,
+  normalizeClasificadorGasto,
+  clasificadorFromPedido,
 } from '../shared/cuadroClasificadorAnexo8a.js';
 import {
   buildCuadroComparativoReportData,
@@ -17,7 +19,12 @@ function assert(cond, msg) {
   console.log(cond ? 'OK' : 'FAIL', msg);
 }
 
-console.log('\n=== RC8.17.8H6 D10-E3-C2 / C2.1 Clasificador Anexo 8-A ===\n');
+console.log('\n=== RC8.17.8H6 D10-E3-C2 / C2.6B2 Clasificador Anexo 8-A ===\n');
+
+assert(normalizeClasificadorGasto('2.3. 1 1. 1 2') === '2.3.1.1.1.2',
+  'C2.6B2: normaliza especifica con espacios');
+assert(clasificadorFromPedido({ especifica: '2.3. 1 1. 1 2' }) === '2.3.1.1.1.2',
+  'C2.6B2: clasificadorFromPedido normalizado');
 
 const pedA = { id: 10, pedido_sigamef: 'PB-100', codigo_sigamef: '35100001', descripcion: 'ITEM A', especifica: '2.3.2.01' };
 const pedB = { id: 11, pedido_sigamef: 'PB-101', codigo_sigamef: '35100002', descripcion: 'ITEM B', especifica: '2.3.2.02' };
@@ -73,6 +80,37 @@ assert(resolvePedidoSigamefForAnexo8A(
 
 assert(resolvePedidoSigamefForAnexo8A({ pedido_sigamef: 'PB-100' }, [pedA, pedB])?.id === 10,
   'label único PB-100');
+
+{
+  const ped458 = {
+    id: 458,
+    pedido_sigamef: 'PB-694',
+    codigo_sigamef: '080300010275',
+    descripcion: 'REQ-00001 ítem',
+    especifica: '2.3. 1 1. 1 2',
+  };
+  const ped694wrong = {
+    id: 694,
+    pedido_sigamef: 'PB-999-OTRO',
+    codigo_sigamef: '99999999',
+    descripcion: 'Otro pedido',
+    especifica: '9.9.9.9',
+  };
+  const itemSc = {
+    pedido_sigamef_id: 694,
+    pedido_sigamef: 'PB-694',
+    codigo_sigamef: '080300010275',
+  };
+  const resolved = resolvePedidoSigamefForAnexo8A(itemSc, [ped458, ped694wrong]);
+  assert(resolved?.id === 458, 'C2.6B2: id 694 erróneo + PB-694 + código → pedido 458');
+  const enriched = enrichItemsClasificadorAnexo8A(
+    [{ item_key: '1-0', requerimiento_codigo: 'REQ-00001', ...itemSc }],
+    { 1: [ped458, ped694wrong] },
+    [{ id: 1, codigo: 'REQ-00001' }],
+  );
+  assert(enriched[0].clasificador === '2.3.1.1.1.2',
+    'C2.6B2: clasificador enriquecido 2.3.1.1.1.2 sin requerimiento_id');
+}
 
 {
   const map = { 5: [pedA, pedB] };

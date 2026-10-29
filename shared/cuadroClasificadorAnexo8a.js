@@ -7,6 +7,22 @@ function pedidoLabel(p) {
   return String(p?.pedido_sigamef ?? p?.nro_pedido ?? '').trim();
 }
 
+/**
+ * Normaliza clasificador SIGAMEF (especifica): quita espacios entre segmentos numéricos.
+ * Ej.: "2.3. 1 1. 1 2" → "2.3.1.1.1.2"
+ */
+export function normalizeClasificadorGasto(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const parts = s.split(/[\s.]+/).filter(Boolean);
+  if (parts.length && parts.every((p) => /^\d+$/.test(p))) {
+    return parts.join('.');
+  }
+  const compact = s.replace(/\s+/g, '');
+  if (/^[\d.]+$/.test(compact)) return compact.replace(/\.+/g, '.').replace(/^\.|\.$/g, '');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 function itemCodigo(item) {
   return String(item?.codigo_sigamef ?? item?.codigo ?? '').trim();
 }
@@ -26,7 +42,7 @@ function descExactMatch(pedDesc, itemDesc) {
   return pd === id;
 }
 
-function pedMatchesExplicitConstraints(item, ped) {
+function pedMatchesExplicitConstraints(item, ped, pedidos = []) {
   if (!ped) return false;
   const cod = itemCodigo(item);
   const pCod = String(ped.codigo_sigamef || '').trim();
@@ -41,6 +57,18 @@ function pedMatchesExplicitConstraints(item, ped) {
 
   const explicitId = item.pedido_sigamef_id ?? item.pedido_id;
   if (explicitId != null && explicitId !== '' && Number(ped.id) !== Number(explicitId)) {
+    const list = Array.isArray(pedidos) ? pedidos : [];
+    const byId = list.find((p) => Number(p.id) === Number(explicitId));
+    const lblPed = pedidoLabel(ped);
+    const labelOk = pedStr && lblPed === pedStr;
+    const labelStaleOnId = byId && pedStr && pedidoLabel(byId) !== pedStr;
+    if (labelStaleOnId && labelOk && cod && pCod === cod) {
+      return true;
+    }
+    if (byId && cod) {
+      const pCodId = String(byId.codigo_sigamef || '').trim();
+      if (pCodId && cod !== pCodId) return false;
+    }
     return false;
   }
   return true;
@@ -58,12 +86,32 @@ export function resolvePedidoSigamefForAnexo8A(item = {}, pedidos = []) {
   const pedStr = String(item.pedido_sigamef ?? '').trim();
   const explicitId = item.pedido_sigamef_id ?? item.pedido_id;
 
-  const accept = (ped) => (ped && pedMatchesExplicitConstraints(item, ped) ? ped : null);
+  const accept = (ped) => (ped && pedMatchesExplicitConstraints(item, ped, list) ? ped : null);
 
   if (explicitId != null && explicitId !== '') {
     const hit = list.filter((p) => Number(p.id) === Number(explicitId));
-    if (hit.length !== 1) return null;
-    return accept(hit[0]);
+    if (hit.length > 1) return null;
+    if (hit.length === 1) {
+      const accepted = accept(hit[0]);
+      if (accepted) return accepted;
+      const hitPed = hit[0];
+      const lbl = pedidoLabel(hitPed);
+      const nro = String(hitPed.nro_pedido || '').trim();
+      const labelMismatch = pedStr && !pedStr.includes(',')
+        && lbl !== pedStr && nro !== pedStr;
+      const pCodHit = String(hitPed.codigo_sigamef || '').trim();
+      const codMismatch = cod && pCodHit && cod !== pCodHit;
+      const byCod = cod
+        ? list.filter((p) => String(p.codigo_sigamef || '').trim() === cod)
+        : [];
+      const staleIdByCod = codMismatch && byCod.length === 1
+        && Number(byCod[0].id) !== Number(explicitId);
+      if (labelMismatch || (staleIdByCod && pedStr)) {
+        // ID interno obsoleto (p. ej. confundir PB-694 con pk 694): continuar por código/label.
+      } else {
+        return null;
+      }
+    }
   }
 
   if (pedStr && !pedStr.includes(',')) {
@@ -71,9 +119,11 @@ export function resolvePedidoSigamefForAnexo8A(item = {}, pedidos = []) {
       const lbl = pedidoLabel(p);
       return lbl && (lbl === pedStr || String(p.nro_pedido || '').trim() === pedStr);
     });
-    if (byLabel.length === 1) return accept(byLabel[0]);
+    if (byLabel.length === 1) {
+      const accepted = accept(byLabel[0]);
+      if (accepted) return accepted;
+    }
     if (byLabel.length > 1) return null;
-    return null;
   }
 
   if (pedStr && pedStr.includes(',')) {
@@ -102,7 +152,7 @@ export function resolvePedidoSigamefForAnexo8A(item = {}, pedidos = []) {
 
 export function clasificadorFromPedido(ped) {
   const raw = ped?.especifica ?? ped?.clasificador ?? ped?.clasificador_gasto ?? '';
-  const s = String(raw || '').trim();
+  const s = normalizeClasificadorGasto(raw);
   return s || '—';
 }
 
@@ -120,10 +170,22 @@ function pedidosMapFromPayload(pedidosPorRequerimiento) {
  * Copia superficial de ítems con clasificador verificado desde pedido (no altera importes ni adjudicación).
  * Valores heredados en el ítem sin pedido demostrable → «—» en reporte.
  */
-export function enrichItemsClasificadorAnexo8A(items = [], pedidosPorRequerimiento = {}) {
+export function enrichItemsClasificadorAnexo8A(
+  items = [],
+  pedidosPorRequerimiento = {},
+  requerimientos = [],
+) {
   const map = pedidosMapFromPayload(pedidosPorRequerimiento);
+  const reqByCode = new Map();
+  (requerimientos || []).forEach((r) => {
+    if (r?.codigo) reqByCode.set(String(r.codigo).toUpperCase(), r);
+  });
   return (Array.isArray(items) ? items : []).map((it) => {
-    const reqId = it.requerimiento_id;
+    const reqId = it.requerimiento_id != null && it.requerimiento_id !== ''
+      ? Number(it.requerimiento_id)
+      : (it.requerimiento_codigo
+        ? reqByCode.get(String(it.requerimiento_codigo).toUpperCase())?.id
+        : null);
     const pedidos = map.get(Number(reqId)) || [];
     const ped = resolvePedidoSigamefForAnexo8A(it, pedidos);
     const clasificador = ped ? clasificadorFromPedido(ped) : '—';

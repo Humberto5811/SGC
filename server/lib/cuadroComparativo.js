@@ -625,6 +625,28 @@ export async function listarCuadroComparativo() {
 }
 
 /**
+ * Orden bandeja: actividad documental reciente del cuadro (actualizado_at), desempate estable.
+ * @param {Array<{ fecha_actualizacion?, fecha_ingreso_cuadro?, solicitud_codigo?, nro_invitacion? }>} filas
+ */
+export function ordenarFilasBandejaCuadroComparativo(filas = []) {
+  const ts = (f) => {
+    const raw = f?.fecha_actualizacion ?? f?.fecha_ingreso_cuadro ?? null;
+    const t = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(t) ? t : 0;
+  };
+  return [...filas].sort((a, b) => {
+    const tb = ts(b);
+    const ta = ts(a);
+    if (tb !== ta) return tb - ta;
+    const cb = String(b.solicitud_codigo || '');
+    const ca = String(a.solicitud_codigo || '');
+    const cmp = cb.localeCompare(ca, undefined, { numeric: true, sensitivity: 'base' });
+    if (cmp !== 0) return cmp;
+    return (Number(b.nro_invitacion) || 0) - (Number(a.nro_invitacion) || 0);
+  });
+}
+
+/**
  * Bandeja Cuadro: una fila por solicitud + agrupación operativa (nro_invitacion resuelto).
  * Inclusión: ≥1 cotización elegible (APTO + derivación CUADRO_COMPARATIVO) en ese contexto.
  */
@@ -683,19 +705,6 @@ export async function listarCuadroComparativoExpedientes() {
     GROUP BY sc.id, sc.codigo, sc.denominacion, sc.objeto, sc.tipo, sc.estado,
       sc.area_usuaria, sc.updated_at, ${SQL_NRO_INVITACION_COT}
     HAVING COUNT(cot.id) FILTER (WHERE ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA}) >= 1
-    ORDER BY
-      MIN(
-        CASE WHEN ${SQL_FILTER_ELEGIBLE_CUADRO_RONDA} THEN
-          COALESCE(
-            NULLIF(cot.validacion_informe->'derivacion_salida'->>'derivado_at', '')::timestamptz,
-            NULLIF(cot.validacion_informe->>'enviado_at', '')::timestamptz,
-            cot.updated_at,
-            cot.fecha_presentacion
-          )
-        END
-      ) DESC NULLS LAST,
-      sc.codigo DESC,
-      nro_invitacion DESC NULLS LAST
   `);
 
   const elegibles = rows.filter((r) => Number(r.total_cotizaciones_ronda) >= 1);
@@ -897,7 +906,7 @@ export async function listarCuadroComparativoExpedientes() {
   // RC8.4E — anexar estado_responsable_vigente en batch
   await enrichEstadoResponsableForBandeja(result, 'requerimiento_id');
 
-  return result;
+  return ordenarFilasBandejaCuadroComparativo(result);
 }
 
 /**

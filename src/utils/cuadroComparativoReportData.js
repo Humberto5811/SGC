@@ -364,8 +364,11 @@ export function buildCuadroComparativoReportData(persistido = {}) {
   const adj = datos.adjudicacion || {};
   const itemsBase = Array.isArray(datos.items) ? datos.items : [];
   const pedidosPorReq = persistido.pedidos_sigamef_por_requerimiento;
+  const requerimientosReporte = Array.isArray(datos.requerimientos) && datos.requerimientos.length
+    ? datos.requerimientos
+    : (Array.isArray(expediente.requerimientos) ? expediente.requerimientos : []);
   const itemsRaw = pedidosPorReq
-    ? enrichItemsClasificadorAnexo8A(itemsBase, pedidosPorReq)
+    ? enrichItemsClasificadorAnexo8A(itemsBase, pedidosPorReq, requerimientosReporte)
     : itemsBase;
 
   const primera = buildPrimeraFuentes(datos);
